@@ -482,6 +482,97 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   }
 });
 
+const flakyIssues = good
+  .replace(
+    "on: [pull_request, workflow_dispatch]",
+    "on:\n  pull_request:\n  push:\n    branches: [main]",
+  )
+  .replace(
+    "  static:\n",
+    "  flaky-issues:\n    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n",
+  )
+  .replace("      contents: read", "      contents: read\n      issues: write");
+test("issues write is limited to the flaky-issues job in rust.yml", () => {
+  assert.deepEqual(workflowPolicy(flakyIssues, "rust.yml"), []);
+  for (const file of ["ci.yml", "quarantine.yml", "rust.yaml", "nested/rust.yml", ""])
+    assert.match(workflowPolicy(flakyIssues, file).join("\n"), /permissions must grant exactly/);
+  for (const [from, to] of [
+    ["  flaky-issues:", "  rust-linux:"],
+    // The reports come from download-artifact, which needs no token scope.
+    ["      contents: read\n", "      actions: read\n      contents: read\n"],
+    ["      issues: write\n", ""],
+    ["issues: write", "issues: read"],
+    ["      contents: read\n", "      contents: read\n      pull-requests: write\n"],
+  ])
+    assert.match(
+      workflowPolicy(flakyIssues.replace(from, to), "rust.yml").join("\n"),
+      /permissions must grant exactly/,
+      `${from} -> ${to}`,
+    );
+});
+test("flaky-issues runs only for pushes to main outside forks", () => {
+  for (const [term, replacement] of [
+    ["github.event_name == 'push'", "github.event_name != 'pull_request'"],
+    ["github.ref == 'refs/heads/main'", "true"],
+    ["!github.event.repository.fork", "true"],
+  ])
+    assert.match(
+      workflowPolicy(flakyIssues.replace(term, replacement), "rust.yml").join("\n"),
+      new RegExp(`if must require ${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
+  // A top-level || makes the whole expression one term, so no required term counts.
+  const or = flakyIssues.replace(
+    "${{ !cancelled() &&",
+    "${{ github.event_name == 'pull_request' || !cancelled() &&",
+  );
+  assert.match(workflowPolicy(or, "rust.yml").join("\n"), /if must require/);
+  assert.match(
+    workflowPolicy(flakyIssues.replace(/^ {4}if: .*\n/m, ""), "rust.yml").join("\n"),
+    /if must require/,
+  );
+});
+test("Rust test jobs list flaky tests after nextest and only flaky-issues writes issues", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  for (const name of ["rust-macos", "rust-linux"]) {
+    const job = workflow.jobs[name];
+    assert.deepEqual(job.permissions, { contents: "read" });
+    const steps = job.steps;
+    const test = steps.findIndex(
+      (step) => step.run?.includes("cargo nextest run") && !step.run.includes("--no-run"),
+    );
+    const flaky = steps[test + 1];
+    assert.equal(flaky.run, "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml");
+    assert.equal(flaky.if, "(success() || failure()) && steps.compile.outcome == 'success'");
+  }
+  const issues = workflow.jobs["flaky-issues"];
+  assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-macos"]);
+  assert.deepEqual(issues.concurrency, { group: "flaky-issues", "cancel-in-progress": false });
+  assert.ok(issues.steps.every((step) => !/\bcargo\b/.test(step.run ?? "")));
+  const download = issues.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  // Every JUnit upload, and nothing else uploaded, matches the download pattern (* is a glob).
+  const glob = new RegExp(
+    `^${download.with.pattern
+      .split("*")
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+      .join("[^/]*")}$`,
+  );
+  for (const name of ["rust-macos", "rust-linux"]) {
+    const uploads = workflow.jobs[name].steps.filter((step) =>
+      step.uses?.startsWith("actions/upload-artifact@"),
+    );
+    const junit = uploads.filter((step) => step.with.path === "target/nextest/ci/junit.xml");
+    assert.equal(junit.length, 1, name);
+    assert.match(junit[0].with.name, glob, name);
+    for (const step of uploads.filter((step) => step !== junit[0]))
+      assert.doesNotMatch(step.with.name, glob, `${name}: ${step.with.name}`);
+  }
+  assert.equal(
+    download.with.pattern,
+    "rust-*-junit-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  assert.ok(issues.steps.some((step) => step.run?.includes("node scripts/flaky-tests.mjs track")));
+});
+
 test("the open-issue check covers every quarantine ledger file", (t) => {
   const workflow = parse(fs.readFileSync(path.join(directory, "quarantine.yml"), "utf8"));
   const step = workflow.jobs["quarantine-issues"].steps.find(
