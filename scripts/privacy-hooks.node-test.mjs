@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { isPublicRemote, scanPush } from "./privacy-ci.mjs";
+import { isPublicRemote, scanPush, withoutMaintainerTagIdentity } from "./privacy-ci.mjs";
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL = path.join(SCRIPTS, "git-hooks", "install.sh");
@@ -25,6 +25,10 @@ const INVENTORY = {
     classification: "private-only",
   })),
 };
+// The maintainer's identity, built so this file never holds the handle whole.
+const HANDLE = ["alfy", "pops"].join("");
+const NOREPLY = `6836580+${HANDLE}@users.noreply.github.com`;
+const SIGNOFF = `Signed-off-by: ${HANDLE} <${NOREPLY}>`;
 const PUBLIC_URLS = [
   "https://github.com/codesensehq/codesense",
   "https://github.com/CodeSenseHQ/codesense.git",
@@ -70,7 +74,8 @@ const snapshot = (dir) =>
 const realBefore = snapshot(realHooks);
 test.after(() => assert.deepEqual(snapshot(realHooks), realBefore));
 
-function sandbox(t, { inventory = true } = {}) {
+// handle: the fixture inventory blocks the maintainer's handle too, as the real one does.
+function sandbox(t, { inventory = true, handle = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-hooks-test-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home");
@@ -79,7 +84,10 @@ function sandbox(t, { inventory = true } = {}) {
   const other = path.join(root, "other.git");
   fs.mkdirSync(home);
   const terms = path.join(root, "terms.json");
-  fs.writeFileSync(terms, JSON.stringify(INVENTORY));
+  const rules = INVENTORY.rules.map((rule) =>
+    handle && rule.order === 5 ? { ...rule, source: `${TERM}|${HANDLE}` } : rule,
+  );
+  fs.writeFileSync(terms, JSON.stringify({ ...INVENTORY, rules }));
   const env = { ...process.env };
   for (const key of Object.keys(env))
     if (key.startsWith("GIT_") || key.startsWith("CODESENSE_PRIVACY")) delete env[key];
@@ -155,6 +163,12 @@ const blocked = (result) => {
   assert.ok(!result.stdout.includes(TERM), "output is redacted");
 };
 const passed = (result) => assert.equal(result.status, 0, result.stderr);
+// Blocked by one named rule, with the handle never printed.
+const refused = (result, rule) => {
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, new RegExp(`privacy-scan: ${rule} x\\d+`));
+  assert.ok(!result.stderr.includes(HANDLE), "output is redacted");
+};
 // The hook's own stderr lines, without git's.
 const hookLines = (stderr) => stderr.split("\n").filter((line) => line.startsWith("privacy-scan:"));
 const PUBLIC_NOTICE = /privacy hook: public rules only; no private inventory/;
@@ -798,4 +812,242 @@ test("without node or the checkout's hooks, a public commit or push gets a notic
   check(push(dispatcher, "git@github.com:example/project.git"), false, withNode);
   check(push(dispatcher, "git@github.com:CodeSenseHQ/project.git"), true, withNode);
   check(commitMsg(dispatcher), true, withNode);
+});
+
+test("the maintainer's exact sign-off passes, with the identity as author and committer", (t) => {
+  for (const inventory of [true, false]) {
+    const s = sandbox(t, { inventory, handle: true });
+    passed(s.install());
+    s.git("config", "user.name", HANDLE);
+    s.git("config", "user.email", NOREPLY);
+    s.stage("a.txt", "clean\n");
+    passed(s.run(["commit", "-q", "-s", "-m", "Clean subject"]));
+    assert.equal(
+      s.git(
+        "show",
+        "--no-patch",
+        "--format=%an <%ae>%n%cn <%ce>%n%(trailers:key=Signed-off-by,valueonly)",
+        "HEAD",
+      ),
+      `${HANDLE} <${NOREPLY}>\n`.repeat(3) + "\n",
+    );
+    passed(s.run(["push", "-q", "public", "main"]));
+  }
+});
+
+test("the maintainer's handle anywhere else in a message blocks", (t) => {
+  const s = sandbox(t, { handle: true });
+  passed(s.install());
+  const file = path.join(s.root, "message.txt");
+  for (const message of [
+    `Fix ${HANDLE}\n\n${SIGNOFF}\n`,
+    `Clean subject\n\nSee ${HANDLE}\n\n${SIGNOFF}\n`,
+    `Clean subject\n\nSigned-off-by: x <x+${HANDLE}@example.com>\n`,
+    `Clean subject\n\nSigned-off-by: ${HANDLE} <${HANDLE}@example.com>\n`,
+    `Clean subject\n\nSigned-off-by: ${HANDLE} <${NOREPLY}.evil>\n`,
+    `Clean subject\n\nSigned-off-by: ${HANDLE} <x${NOREPLY}>\n`,
+    `Clean subject\n\nCo-authored-by: ${HANDLE} <${NOREPLY}>\n`,
+    `Clean subject\n\n${SIGNOFF} and more\n`,
+    `Clean subject\n\n ${SIGNOFF}\n`,
+  ]) {
+    s.stage("a.txt", `${message.length}\n`);
+    fs.writeFileSync(file, message);
+    refused(s.run(["commit", "-q", "--cleanup=verbatim", "-F", file]), "fixture-5");
+  }
+});
+
+test("the maintainer's handle in an added line blocks a push despite a valid sign-off", (t) => {
+  const s = sandbox(t, { handle: true });
+  passed(s.install());
+  s.commit("a.txt", `see ${HANDLE}\n`, `Clean subject\n\n${SIGNOFF}`);
+  refused(s.run(["push", "-q", "public", "main"]), "fixture-5");
+});
+
+test("the public rules allow only the exact maintainer address in a sign-off", (t) => {
+  const s = sandbox(t, { inventory: false });
+  passed(s.install());
+  s.stage("a.txt", "one\n");
+  passed(s.run(["commit", "-q", "-m", `Clean subject\n\n${SIGNOFF}`]));
+  for (const [i, address] of [
+    `${NOREPLY}.evil`,
+    `1+${HANDLE}@users.noreply.github.com`,
+    `${HANDLE}@users.noreply.github.com`,
+  ].entries()) {
+    s.stage("a.txt", `${i}\n`);
+    refused(
+      s.run(["commit", "-q", "-m", `Clean subject\n\nSigned-off-by: ${HANDLE} <${address}>`]),
+      "email",
+    );
+  }
+});
+
+test("a clone that requires signed commits refuses unsigned or AI co-authored ones", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  const trailer = "Co-authored-by: Claude <noreply@anthropic.com>";
+  // Without the switch, neither is checked: contributors may sign or credit as they like.
+  s.commit("a.txt", "one\n", `Clean subject\n\n${trailer}`);
+  passed(s.run(["push", "-q", "public", "main"]));
+  s.git("config", "codesense.requireSigned", "true");
+  s.commit("a.txt", "two\n");
+  refused(s.run(["push", "-q", "public", "main"]), "unsigned-commit");
+  const key = path.join(s.root, "signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+  s.git("config", "gpg.format", "ssh");
+  s.git("config", "user.signingkey", `${key}.pub`);
+  s.git("commit", "-q", "--amend", "--no-verify", "-S", "--no-edit");
+  passed(s.run(["push", "-q", "public", "main"]));
+  s.stage("a.txt", "three\n");
+  s.git("commit", "-q", "--no-verify", "-S", "-m", `Clean subject\n\n${trailer}`);
+  const result = s.run(["push", "-q", "public", "main"]);
+  refused(result, "ai-co-author");
+  assert.doesNotMatch(result.stderr, /unsigned-commit/);
+  // Any Anthropic address counts; a signature header split by \r is no header.
+  for (const line of [
+    "Co-authored-by: A <x" + "@anthropic.com>",
+    "co-authored-BY : A <x" + "@mail.anthropic.com>",
+  ]) {
+    s.git("commit", "-q", "--amend", "--no-verify", "-S", "-m", `Clean subject\n\n${line}`);
+    refused(s.run(["push", "-q", "public", "main"]), "ai-co-author");
+  }
+  s.git("commit", "-q", "--amend", "--no-verify", "-S", "-m", "Clean subject");
+  passed(s.run(["push", "-q", "public", "main"]));
+  // A signature header only counts at the start of a \n-delimited line.
+  const raw = s.git("cat-file", "commit", "HEAD^^");
+  const forged = raw.replace(/^(committer .*)$/m, "$1\nx-note y\rgpgsig z");
+  const made = s.run(["hash-object", "--literally", "-t", "commit", "-w", "--stdin"], {
+    input: forged,
+  });
+  passed(made);
+  s.git("update-ref", "refs/heads/forged", made.stdout.trim());
+  const shown = s.run(["push", "-q", "public", "forged"], {
+    env: { ...s.env, CODESENSE_PRIVACY_SHOW: "1" },
+  });
+  assert.notEqual(shown.status, 0);
+  // The finding names the commit by its short SHA.
+  assert.match(
+    shown.stdout,
+    new RegExp(`ERROR unsigned-commit commit ${made.stdout.slice(0, 12)}`),
+  );
+  // An unparseable switch fails closed.
+  s.git("config", "codesense.requireSigned", "maybe");
+  s.commit("a.txt", "four\n");
+  refused(s.run(["push", "-q", "public", "main"]), "unsigned-commit");
+});
+
+test("the maintainer's sign-off is masked only as a whole line in the trailer block", (t) => {
+  const s = sandbox(t, { handle: true });
+  passed(s.install());
+  const file = path.join(s.root, "message.txt");
+  const commit = (message, cleanup = "verbatim") => {
+    s.stage("a.txt", `${message.length}\n`);
+    fs.writeFileSync(file, message);
+    return s.run(["commit", "-q", `--cleanup=${cleanup}`, "-F", file]);
+  };
+  // An editor-style message: git's comment block follows the sign-off. Unset,
+  // default or strip cleanup skips it when finding the trailer block; verbatim,
+  // whitespace and scissors publish it, so it is the block.
+  const commented = `Clean subject\n\n${SIGNOFF}\n\n# Please enter the commit message.\n# Lines starting with '#' are ignored.\n`;
+  for (const mode of [null, "default", "strip", "verbatim", "whitespace", "scissors"]) {
+    if (mode) s.git("config", "commit.cleanup", mode);
+    s.stage("a.txt", `${mode}\n`);
+    fs.writeFileSync(file, commented);
+    const result = s.run(["commit", "-q", "-F", file]);
+    if (["verbatim", "whitespace", "scissors"].includes(mode)) refused(result, "fixture-5");
+    else passed(result);
+    if (mode) s.git("config", "--unset", "commit.cleanup");
+  }
+  // A comment block that names the handle is still scanned.
+  s.stage("a.txt", "comment\n");
+  fs.writeFileSync(file, `Clean subject\n\n${SIGNOFF}\n\n# ${HANDLE}\n`);
+  refused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  for (const message of [
+    `${SIGNOFF}\n\nBody\n`,
+    `Clean subject\n\n${SIGNOFF}\n\nA later paragraph\n`,
+    `Clean subject\n\n${SIGNOFF}\r\n`,
+    `Clean subject\n\n${SIGNOFF}\u2028x\n`,
+    `Clean subject\n\nx\u2029${SIGNOFF}\n`,
+  ])
+    refused(commit(message), "fixture-5");
+});
+
+test("the maintainer's annotated or signed tag passes; a tag naming the handle elsewhere blocks", (t) => {
+  const s = sandbox(t, { handle: true });
+  passed(s.install());
+  s.git("config", "user.name", HANDLE);
+  s.git("config", "user.email", NOREPLY);
+  const key = path.join(s.root, "signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+  s.git("config", "gpg.format", "ssh");
+  s.git("config", "user.signingkey", `${key}.pub`);
+  s.commit("a.txt", "clean\n", `Clean subject\n\n${SIGNOFF}`);
+  s.git("tag", "-a", "v1", "-m", `Release\n\n${SIGNOFF}`);
+  s.git("tag", "-s", "v2", "-m", `Release\n\n${SIGNOFF}`);
+  passed(s.run(["push", "-q", "public", "main", "refs/tags/v1", "refs/tags/v2"]));
+  s.git("tag", "-s", "v3", "-m", `Release for ${HANDLE}\n\n${SIGNOFF}`);
+  refused(s.run(["push", "-q", "public", "refs/tags/v3"]), "fixture-5");
+  s.git("config", "user.email", `x+${HANDLE}@example.com`);
+  s.git("tag", "-a", "v4", "-m", "Release");
+  refused(s.run(["push", "-q", "public", "refs/tags/v4"]), "fixture-5");
+});
+
+test("without node, a clone that requires signed commits refuses a public push", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  const head = s.commit("a.txt", "clean\n");
+  const bin = path.join(s.root, "bin");
+  fs.mkdirSync(bin);
+  const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(gitPath, path.join(bin, "git"));
+  const noNode = { ...s.env, PATH: `${bin}:/usr/bin:/bin`, CODESENSE_PRIVACY_PUBLIC_REMOTES: "" };
+  const push = (dir, url) =>
+    spawnSync("sh", [path.join(dir, "pre-push"), "public", url], {
+      cwd: s.work,
+      encoding: "utf8",
+      env: noNode,
+      input: `refs/heads/main ${head} refs/heads/main ${"0".repeat(40)}\n`,
+    });
+  for (const dir of [s.hooks, path.join(SCRIPTS, "git-hooks")]) {
+    s.git("config", "codesense.requireSigned", "true");
+    const result = push(dir, PUBLIC_URLS[0]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /privacy-scan: cannot check commit signatures/);
+    // Read as a git boolean, so an unparseable value refuses too.
+    s.git("config", "codesense.requireSigned", "maybe");
+    assert.notEqual(push(dir, PUBLIC_URLS[0]).status, 0);
+    passed(push(dir, OTHER_URLS[0]));
+    s.git("config", "codesense.requireSigned", "false");
+    const allowed = push(dir, PUBLIC_URLS[0]);
+    passed(allowed);
+    assert.match(allowed.stderr, UNSCANNED);
+    s.git("config", "--unset", "codesense.requireSigned");
+  }
+});
+
+test("a tag's signature starts at its last whole BEGIN line", () => {
+  const begin = "-----BEGIN SSH SIGNATURE-----";
+  const head = `object ${"0".repeat(40)}\ntype commit\ntag v1\ntagger x <x@example.com> 1 +0000\n\n`;
+  const text = `${head}Release\n${begin}\nnot one\n\n${SIGNOFF}\n${begin}\nAAAA\n-----END SSH SIGNATURE-----\n`;
+  assert.equal(withoutMaintainerTagIdentity(text), text.replace(`${SIGNOFF}`, ""));
+  // A BEGIN line that is not a whole \n-delimited line is message text.
+  const inline = `${head}Release\n\n${SIGNOFF}\n\nx\r${begin}\n`;
+  assert.equal(withoutMaintainerTagIdentity(inline), inline);
+});
+
+test("pre-push asks for a reinstall when the dispatcher predates the signed-commit check", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  const hook = path.join(s.hooks, "pre-push");
+  const current = fs.readFileSync(hook, "utf8");
+  fs.writeFileSync(hook, current.replace(/^# codesense-privacy-hook-version: .*\n/m, ""));
+  const stale = s.run(["push", "-q", "public", "main"]);
+  passed(stale);
+  assert.match(stale.stderr, /dispatcher is out of date; rerun scripts\/git-hooks\/install\.sh/);
+  passed(s.install());
+  assert.equal(fs.readFileSync(hook, "utf8"), current);
+  s.commit("a.txt", "again\n");
+  const fresh = s.run(["push", "-q", "public", "main"]);
+  passed(fresh);
+  assert.doesNotMatch(fresh.stderr, /out of date/);
 });

@@ -129,7 +129,14 @@ What you can expect:
 ## AI assistance
 
 AI agents help the maintainer triage issues, review changes and write code.
-The maintainer reviews and is responsible for what is released.
+The maintainer reviews and is responsible for what is released. Maintainer
+commits use the maintainer's own GitHub identity (their GitHub noreply address)
+as author, committer and sign-off, are signed, and carry no AI co-author
+trailer. A maintainer clone sets `git config codesense.requireSigned true`;
+then a push to the public repository is refused if any commit it publishes is
+unsigned or has an Anthropic (Claude) co-author trailer. After this check was
+added, a maintainer clone must rerun `scripts/git-hooks/install.sh` once.
+GitHub's Verified badge shows whose key signed a commit.
 
 You're welcome to use AI tools for your own contributions. You remain
 responsible for what you submit, and your sign-off certifies the DCO for it as
