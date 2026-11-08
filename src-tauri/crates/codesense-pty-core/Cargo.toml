@@ -39,7 +39,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
 socket2 = "0.6"
-sysinfo = "0.32"
+sysinfo = "0.40"
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "macros"] }
 toml = "0.8"
 toml_edit = "0.20"
