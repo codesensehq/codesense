@@ -142,6 +142,7 @@ fn spec(
                 | "markRead"
                 | "markUnread"
                 | "archive"
+                | "unarchive"
                 | "sendAsHuman"
                 | "replyAsHuman"
                 | "react"
@@ -165,7 +166,7 @@ fn capability_for_verb(name: &str) -> &'static str {
         );
     }
     match name {
-        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "modelRates" | "prefs"
+        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "modelRates" | "canPasteToTerminal" | "prefs"
         | "setPrefs" | "setUiState" | "subscribe" | "unsubscribe" | "page" | "moveWorkspace"
         | "openLauncher" | "openRoutineDraft" | "launchUnder" | "dismiss_agent_mark"
         | "showMenu" | "showPopover" | "focusOut" | "focusTerminal" | "commands.register" => {
@@ -181,8 +182,8 @@ fn capability_for_verb(name: &str) -> &'static str {
             "inbox:read:team"
         }
         "inboxRollup" => "inbox:read:all-teams",
-        "loadMedia" | "archive" | "markRead" | "markUnread" | "postMessage" | "replyAsHuman"
-        | "react" | "sendAsHuman" | "setHumanStatus" => "inbox:write",
+        "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -353,6 +354,18 @@ fn register_resources(registry: &mut Registry) {
         "inbox",
         spec(
             "archive",
+            Class::Metadata,
+            false,
+            None,
+            Some("Host operation bound to the rendered dashboard; no identical MCP binding"),
+            true,
+            true,
+        ),
+    );
+    registry.register_existing(
+        "inbox",
+        spec(
+            "unarchive",
             Class::Metadata,
             false,
             None,
@@ -1152,6 +1165,18 @@ mod agent {
                 Some("Agents prompt running agents with send_to_session; this is the person's typed send from a page."),
                 true,
                 true,
+            ),
+        );
+        registry.register(
+            "agent",
+            spec(
+                "canPasteToTerminal",
+                Class::Read,
+                false,
+                None,
+                Some("Pages ask it to enable a paste control; agents address sessions by handle with send_to_session."),
+                false,
+                false,
             ),
         );
         registry.register(

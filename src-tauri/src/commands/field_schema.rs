@@ -10,8 +10,8 @@
 //! `{dev_branch}` firing against a story that lacks it).
 //!
 //! The accepted set = codesense's **official baseline** (auto-included, derived
-//! from the app's own [`FIELD_NAME_MAP`] so there is no second hand-maintained
-//! list to drift) **∪** the team's **custom** fields (declared in
+//! from the story-field registry [`STORY_FIELDS`] so there is no second
+//! hand-maintained list to drift) **∪** the team's **custom** fields (declared in
 //! `{org_root}/{team}/content/field-schema.yml`). The team never re-enumerates the
 //! official fields; adding a custom field is a deliberate edit there.
 //!
@@ -34,7 +34,7 @@ use log::{debug, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::commands::pipeline_format::{canonical_field_key, FIELD_NAME_MAP};
+use crate::commands::pipeline_format::{canonical_field_key, STORY_FIELDS};
 
 /// The ONE `{fieldName}` template-var pattern — `{` + an ASCII identifier (`\w+`, via the
 /// `(?-u)` flag so a unicode token like `{café}` isn't a field reference) + `}`. Shared by
@@ -108,29 +108,23 @@ impl FieldSchema {
     }
 }
 
-/// The codesense-shipped **official** field baseline, DERIVED from the one canonical
-/// field-name enumeration ([`FIELD_NAME_MAP`], the format seam's YAML↔`cs:*` map) — so
-/// there is no second hand-maintained list to drift (the DRY guard the sibling
-/// taxonomy gets from `VALID_STATUSES`). Each distinct top-level YAML key becomes an
-/// optional, non-required official field. Because it is compiled from
-/// the app's own field map, a baseline change is a code change — a git-visible
-/// migration, never silent config drift (AC-1).
+/// The codesense-shipped **official** field baseline: every row of the story-field
+/// registry ([`STORY_FIELDS`]), so there is no second hand-maintained list to drift
+/// (the DRY guard the sibling taxonomy gets from `VALID_STATUSES`). Each
+/// row becomes an optional, non-required official field (the registry's own test keeps
+/// its keys unique). Because it is compiled from the registry, a baseline change is a
+/// code change — a git-visible migration, never silent config drift (AC-1).
 pub fn official_fields() -> Vec<FieldDef> {
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut out = Vec::new();
-    for (yaml, _) in FIELD_NAME_MAP {
-        let name = canonical_field_key(yaml);
-        if seen.insert(name.clone()) {
-            out.push(FieldDef {
-                name,
-                r#type: None,
-                allowed_values: Vec::new(),
-                required: false,
-                official: true,
-            });
-        }
-    }
-    out
+    STORY_FIELDS
+        .iter()
+        .map(|field| FieldDef {
+            name: canonical_field_key(field.yaml),
+            r#type: None,
+            allowed_values: Vec::new(),
+            required: false,
+            official: true,
+        })
+        .collect()
 }
 
 /// The shipped default schema — the official baseline with no custom fields and no
@@ -448,7 +442,7 @@ mod tests {
     // ----- AC-1: loader ------------------------------------------------------
 
     #[test]
-    fn official_baseline_is_derived_from_field_name_map_and_deduped() {
+    fn official_baseline_is_derived_from_the_registry_and_deduped() {
         let base = official_fields();
         // Every official field is non-required, non-custom, and unique.
         assert!(base.iter().all(|f| f.official && !f.required));
@@ -459,7 +453,16 @@ mod tests {
         assert!(!names.contains(&"done"));
         assert!(!names.iter().any(|n| n.contains('.')));
         // A representative spread of known official fields is present.
-        for expected in ["status", "story_id", "source_repo", "sprint", "points"] {
+        for expected in [
+            "status",
+            "story_id",
+            "source_repo",
+            "sprint",
+            "points",
+            "priority",
+            "parent_epic",
+            "epic",
+        ] {
             assert!(
                 names.contains(&expected),
                 "missing official field {expected}"

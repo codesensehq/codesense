@@ -507,6 +507,7 @@ fn audit_targets_preserve_verb_specific_labels_without_payload_text() {
         ("getWorkspaceStatus", json!({"storyId":"S-1"}), "S-1"),
         ("setHumanStatus", json!({"status":"away"}), "away"),
         ("archive", json!({"messageIds":[1,2,3]}), "3 messages"),
+        ("unarchive", json!({"messageIds":[1,2]}), "2 messages"),
         ("markRead", json!({"messageIds":[1]}), "1 messages"),
         (
             "setStatus",
@@ -798,6 +799,17 @@ fn frame_presentation_verbs_have_no_mcp_twin_and_use_native_admission() {
     }
 }
 #[test]
+fn can_paste_to_terminal_is_an_unaudited_read_of_the_paste_target() {
+    let registry = Registry::default();
+    let spec = registry.get("canPasteToTerminal").unwrap();
+    assert_eq!(spec.module, "agent");
+    assert_eq!(spec.class, Class::Read);
+    assert_eq!(spec.grant, "sessions:read");
+    assert!(!spec.action && !spec.confirmable && !spec.audited && spec.mcp_twin.is_none());
+    assert!(spec.presentation_only_reason.is_some());
+    assert_eq!(spec.result_schema, json!({"type":"boolean"}));
+}
+#[test]
 fn commands_register_is_a_frame_scoped_presentation_verb() {
     let registry = Registry::default();
     let spec = registry.get("commands.register").unwrap();
@@ -847,6 +859,39 @@ fn mark_unread_has_the_metadata_contract_and_mcp_twin() {
     assert!(!verb.confirmable);
     assert_eq!(verb.args_schema["required"], json!(["messageIds"]));
     assert_eq!(verb.result_schema["required"], json!(["marked"]));
+}
+
+#[test]
+fn unarchive_has_the_archive_contract() {
+    let registry = Registry::default();
+    let (archive, verb) = (
+        registry.get("archive").unwrap(),
+        registry.get("unarchive").unwrap(),
+    );
+    assert_eq!(
+        (verb.class, &verb.grant, verb.confirmable, verb.inbox_target),
+        (
+            archive.class,
+            &archive.grant,
+            archive.confirmable,
+            archive.inbox_target
+        )
+    );
+    assert_eq!(
+        (verb.action, verb.audited),
+        (archive.action, archive.audited)
+    );
+    assert!(verb.mcp_twin.is_none());
+    assert_eq!(verb.args_schema["required"], json!(["messageIds"]));
+    assert_eq!(verb.result_schema["required"], json!(["unarchived"]));
+    assert!(jsonschema::is_valid(
+        &verb.args_schema,
+        &json!({"messageIds":[1,2],"restoreUnread":[2]})
+    ));
+    assert!(!jsonschema::is_valid(
+        &verb.args_schema,
+        &json!({"messageIds":[],"restoreUnread":[2]})
+    ));
 }
 
 #[test]

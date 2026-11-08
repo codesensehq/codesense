@@ -112,26 +112,11 @@
           lifecycle (open · live · hidden · closed). What differs is
           <strong>what sits on disk</strong> when the tab lands.
         </p>
-        <figure
-          class="cs-docs-card"
-          style="
-            padding: 0;
-            overflow: hidden;
-            aspect-ratio: 16 / 9;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--cs-muted-fg);
-            background: var(--cs-inset);
-          "
-        >
-          <span style="padding: 20px; text-align: center"
-            >Hero — four workspace tabs side by side in the CodeSense window:
-            <code>DEMO-1</code> (story), <code>per-agent-kill-switch</code> (epic),
-            <code>Default</code> (team), <code>sprint-triage</code> (generic). Screenshot
-            coming.</span
-          >
-        </figure>
+        <p>
+          Four workspace tabs can sit side by side in the CodeSense window, one of each kind:
+          <code>DEMO-1</code> (story), <code>per-agent-kill-switch</code> (epic),
+          <code>Default</code> (team), <code>sprint-triage</code> (generic).
+        </p>
       </section>
 
       <!-- =============== The four kinds =============== -->
@@ -314,14 +299,14 @@ _epic/per-agent-kill-switch</code></pre>
             <code>alreadyLive</code> · <code>busy</code> · <code>invalid</code>).
           </p>
           <pre><code>// Story — creates the worktree if it doesn't exist yet
-codesense.invoke('open_workspace', { story_id: 'DEMO-1' })
+open_workspace { story_id: 'DEMO-1' }
 // → { handle, mode, headed, reconciled }
 
 // Launch an agent in that story's worktree, in a new tab
-codesense.invoke('open_workspace', { target: 'story', story_id: 'DEMO-1', name: 'review', agent: 'reviewer' })
+open_workspace { target: 'story', story_id: 'DEMO-1', name: 'review', agent: 'reviewer' }
 
 // Launch an agent in a team workspace
-codesense.invoke('open_workspace', { target: 'team-workspace', name: 'sprint-triage' })</code></pre>
+open_workspace { target: 'team-workspace', name: 'sprint-triage' }</code></pre>
         </details>
       </section>
 

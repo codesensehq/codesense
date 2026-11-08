@@ -12,7 +12,15 @@
 // binary is needed; objects are written directly.
 //
 // Usage: node scripts/build-codesense-docs.mjs [output.tar.gz]
+//        node scripts/build-codesense-docs.mjs --handbook | --check-handbook | --list-inputs
 // Default output: src-tauri/resources/codesense-docs.tar.gz (only rewritten when it changes).
+//
+// The handbook MDX and the agent releases come from the website source: site/ in this checkout, or
+// CODESENSE_SITE_ROOT, an absolute path to a site checked out elsewhere (lib/site-root.mjs). With a
+// site outside this checkout only --check-handbook and --list-inputs run, unless
+// --allow-external-site is passed: that is for refreshing the handbook snapshot in a checkout
+// without site/, from a site checked out beside it (run --handbook there, review and commit the
+// snapshot in that checkout).
 
 import { applyMetadata } from "./generate-docs-metadata.mjs";
 
@@ -33,11 +41,17 @@ import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync, gzipSync } from "node:zlib";
 import { BUILTIN_PANE_EXAMPLES } from "./lib/builtin-panes.mjs";
+import { writeBuildOutput } from "./lib/build-output.mjs";
+import { isMain } from "./lib/is-main.mjs";
+import { HANDBOOK_DIR, siteInside, siteRoot } from "./lib/site-root.mjs";
 import { exampleBytes } from "./generate-builtin-pane-examples.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = join(ROOT, "codesense-docs");
-const HANDBOOK = join(ROOT, "site", "src", "content", "handbook");
+/** The website's source, where the handbook MDX and the agent releases live: site/ here, or
+ *  $CODESENSE_SITE_ROOT (lib/site-root.mjs). */
+const SITE = siteRoot(ROOT);
+const HANDBOOK = join(SITE, HANDBOOK_DIR);
 /** Handbook sections that read well as plain markdown; `reference/` is generated tables. */
 const HANDBOOK_SECTIONS = ["getting-started", "concepts", "guides"];
 
@@ -45,11 +59,16 @@ const bundle = JSON.parse(readFileSync(join(TEMPLATE, "bundle.json"), "utf8"));
 const TEAM = bundle.team;
 const CONTENT = `${TEAM}/content`;
 const PAGE_SDK_REFERENCE = "generated/page-sdk.md";
+/** Site reference pages that ship as a generated page, by their site path. */
+const GENERATED_REFERENCES = {
+  "reference/page-sdk": PAGE_SDK_REFERENCE,
+  "reference/story-fields": "generated/story-fields.md",
+};
 /** The handbook as it ships, committed: generated from the site MDX, which only a private
  *  checkout has, so a build from source ships it as is. Never edit it by hand. */
 const HANDBOOK_SNAPSHOT_LABEL = `codesense-docs/${CONTENT}/handbook`;
 const HANDBOOK_SNAPSHOT = join(TEMPLATE, CONTENT, "handbook");
-const AGENT_RELEASES = join(ROOT, "site", "src", "content", "generated", "agent-releases.json");
+const AGENT_RELEASES = join(SITE, "src", "content", "generated", "agent-releases.json");
 let agentReleases;
 
 /** A `{releases.<cli>}` expression in MDX prose: the snapshot spells out the site's value. */
@@ -60,18 +79,15 @@ function releaseText(name) {
   return agentReleases[name];
 }
 
-// SW-ODC-V bridge-verb allowlist: every verb the shipped docs name in a
-// `<cs-try-this verb="…">` and every verb an ambient right pane (SW-ODC-P) calls
-// or dispatches via its `data-action` JSON. Hand-maintained.
-//
-// A live Try-this calls `window.codesense.invoke(verb)`, which accepts only the
-// page-bridge verbs (`HTML_BRIDGE_ALLOWLIST` in
-// src/features/dashboard/components/html-bridge.ts). MCP tool names are listed
-// here only for `dry-run="true"` buttons, which show the call an agent makes and
-// never invoke it. `subscribeContext` and `onTheme` are page-SDK methods a pane
-// may call directly.
+// SW-ODC-V bridge-verb allowlist: every verb an ambient right pane (SW-ODC-P) calls
+// or dispatches via its `data-action` JSON. Hand-maintained. A pane calls
+// `window.codesense.invoke(verb)`, which accepts only the page-bridge verbs
+// (`HTML_BRIDGE_ALLOWLIST` in src/features/dashboard/components/html-bridge.ts).
+// `<cs-try-this verb="…">` blocks are checked by scripts/check-docs-api-examples.mjs,
+// against the generated page verbs and MCP tools. `subscribeContext` and `onTheme` are
+// page-SDK methods a pane may call directly.
 const BRIDGE_VERB_ALLOWLIST = new Set([
-  // Page-bridge verbs (live Try-this buttons and panes).
+  // Page-bridge verbs.
   "context",
   "worktrees",
   "machines",
@@ -83,14 +99,6 @@ const BRIDGE_VERB_ALLOWLIST = new Set([
   "runSkill",
   "subscribeContext",
   "onTheme",
-  // MCP tool names shown by dry-run buttons only.
-  "invoke",
-  "send_message",
-  "hydrate_story",
-  "open_terminal_tab",
-  "open_remote_tab",
-  "test_machine_connection",
-  "terminal_server_status",
 ]);
 
 // SW-ODC-P: `showsOn` keys a pane manifest may use. Mirrors the taxonomy the
@@ -163,11 +171,7 @@ function rewriteLink(href, fromFile, available) {
   const match = /^\/(?:docs|handbook)\/?([^#)]*?)\/?(#[^)]*)?$/.exec(href);
   if (!match) return href;
   const page =
-    match[1] === "reference/page-sdk"
-      ? PAGE_SDK_REFERENCE
-      : match[1]
-        ? `handbook/${match[1]}.md`
-        : "handbook/README.md";
+    GENERATED_REFERENCES[match[1]] ?? (match[1] ? `handbook/${match[1]}.md` : "handbook/README.md");
   if (!available.has(page)) return null;
   const rel = posix.relative(posix.dirname(fromFile), page);
   return `${rel}${match[2] ?? ""}`;
@@ -250,7 +254,10 @@ export function convertHandbook() {
       }
     }
   }
-  const available = new Set([...pages.map(([, out]) => out), PAGE_SDK_REFERENCE]);
+  const available = new Set([
+    ...pages.map(([, out]) => out),
+    ...Object.values(GENERATED_REFERENCES),
+  ]);
   return new Map(
     pages.map(([source, out]) => [
       out,
@@ -432,7 +439,6 @@ export function lintFactoryPlaybook(files) {
  * Rules:
  *   - Every file under `getting-started/content/arc-*\/` opens with
  *     `<section data-hero>`.
- *   - Every `<cs-try-this verb="X">` resolves to a known bridge verb.
  *   - Every `<img data-annot>` has a sibling `.annot.json` in the bundle.
  *   - Every annotated screenshot has both `-dark.png` and `-light.png`.
  *   - Zero Mermaid / D2 blocks in shipped HTML.
@@ -471,24 +477,7 @@ export function lintShippedHtml(files) {
       }
     }
 
-    // 2. <cs-try-this verb="X"> resolves to a known allowlisted verb.
-    const tryRe = /<cs-try-this\b([^>]*)>/gi;
     let m;
-    while ((m = tryRe.exec(html)) !== null) {
-      const vattr = /\bverb\s*=\s*"([^"]+)"/i.exec(m[1]);
-      if (!vattr) {
-        errors.push(`${path}: <cs-try-this> missing verb attribute.`);
-        continue;
-      }
-      if (!BRIDGE_VERB_ALLOWLIST.has(vattr[1])) {
-        errors.push(
-          `${path}: <cs-try-this verb="${vattr[1]}"> is not in the bridge-verb ` +
-            `allowlist (BRIDGE_VERB_ALLOWLIST in scripts/build-codesense-docs.mjs; ` +
-            `SW-ODC-V lint).`,
-        );
-      }
-    }
-
     // 3. <img data-annot="…"> has a sibling .annot.json in the bundle.
     const annotRe = /<img\b[^>]*\bdata-annot\s*=\s*"([^"]+)"[^>]*>/gi;
     while ((m = annotRe.exec(html)) !== null) {
@@ -1189,6 +1178,7 @@ export function buildInputs() {
     join(ROOT, "scripts/lint-pane-examples.mjs"),
     join(ROOT, "scripts/generate-docs-metadata.mjs"),
     join(ROOT, "scripts/lib/builtin-panes.mjs"),
+    join(ROOT, "scripts/lib/build-output.mjs"),
     join(ROOT, "scripts/generate-builtin-pane-examples.mjs"),
     ...BUILTIN_PANE_EXAMPLES.map(({ source }) => join(ROOT, source)),
     // All of it ships (bundle.json is the build's own config).
@@ -1203,12 +1193,24 @@ export function buildInputs() {
 }
 
 function main() {
-  if (process.argv[2] === "--list-inputs") {
+  const external = process.argv.includes("--allow-external-site");
+  const args = process.argv.slice(2).filter((a) => a !== "--allow-external-site");
+  if (args[0] === "--list-inputs") {
     for (const input of buildInputs()) console.log(input);
     return;
   }
-  if (process.argv[2] === "--handbook" || process.argv[2] === "--check-handbook") {
-    const check = process.argv[2] === "--check-handbook";
+  // A site outside this checkout is read only unless --allow-external-site says the write is the
+  // snapshot refresh it is meant for (header): a stray CODESENSE_SITE_ROOT never rewrites the tree.
+  if (args[0] !== "--check-handbook" && !external && !siteInside(ROOT, SITE)) {
+    console.error(
+      `codesense-docs: the site ${SITE} is outside this checkout; only --check-handbook and --list-inputs read it ` +
+        "(the snapshot refresh passes --allow-external-site)",
+    );
+    process.exitCode = 2;
+    return;
+  }
+  if (args[0] === "--handbook" || args[0] === "--check-handbook") {
+    const check = args[0] === "--check-handbook";
     const drift = syncHandbookSnapshot({ check });
     if (drift === null) {
       console.log("codesense-docs: no site/ handbook here; the committed snapshot is the source");
@@ -1224,9 +1226,7 @@ function main() {
     return;
   }
   syncHandbookSnapshot();
-  const output = resolve(
-    process.argv[2] ?? join(ROOT, "src-tauri", "resources", "codesense-docs.tar.gz"),
-  );
+  const output = resolve(args[0] ?? join(ROOT, "src-tauri", "resources", "codesense-docs.tar.gz"));
   const { commit, entries } = buildRepository(buildTree());
   const archive = tarGz(entries, bundle.committedAt);
   if (existsSync(output) && readFileSync(output).equals(archive)) {
@@ -1234,11 +1234,8 @@ function main() {
     return;
   }
   mkdirSync(dirname(output), { recursive: true });
-  // Temp + rename: concurrent cargo builds in one worktree never read a torn archive.
-  const temp = `${output}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temp, archive);
-  renameSync(temp, output);
+  writeBuildOutput(output, archive, buildInputs());
   console.log(`codesense-docs: ${commit} → ${output} (${archive.length} bytes)`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (isMain(import.meta.url)) main();

@@ -55,9 +55,9 @@ Any `.html` file in your context repo is a live page. It reads your stories, ses
 <div id="out">Loading…</div>
 <script>
 function reload() {
-  codesense.invoke("listOrgsTeams", {}).then(function (data) {
+  codesense.queryContext({ groupBy: "org", limit: 0 }).then(function (r) {
     var out = document.getElementById("out");
-    out.textContent = data.orgs.map(function (o) { return o.name; }).join(", ");
+    out.textContent = r.groups.map(function (g) { return g.value; }).filter(Boolean).join(", ");
   });
 }
 reload();
@@ -78,15 +78,5 @@ An agent builds a page from the live-data contract and the kit, and checks it wi
 A page can show a live agent terminal, and you can type into it. On a shared page, only the owner can drive the terminal.
 
 That makes a review station possible: a page with the story, its diff and the agent’s live terminal side by side, so you can answer it without switching tabs. Buttons on a page can open worktrees, message sessions or type into an agent, and delete or move files. Dashboards are your own files, so open only ones you trust.
-
-## On your own servers
-
-> **Coming: the engine on your own servers**
->
-> The engine on your own servers: publish your dashboards to your own server instead of share.codesense.ai. Teammates reach them through your own private network layer, such as Tailscale or whatever you already use, from a laptop or a phone, and company data stays on company machines.
-
-> **Coming: CodeSense on your phone, from your own servers**
->
-> All of CodeSense on your phone, from your own servers: review plans, chat with your agents, Notes, the pipeline and more. It runs on the CodeSense engine on your own servers, with no CodeSense cloud, and only you can get in.
 
 See the [Roadmap](https://codesense.ai/roadmap) for what’s next and what’s planned.

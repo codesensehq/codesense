@@ -229,7 +229,7 @@
 - name: Backend
   parent_team: null         # root instructions live here
 - name: Auth
-  parent_team: Backend      # inherits unless Auth adds its own CLAUDE.md</code></pre>
+  parent_team: Backend      # inherits it if Backend shares it, unless Auth adds its own</code></pre>
           </div>
         </div>
 
@@ -318,8 +318,8 @@
           chain has one. Read-only.
         </p>
         <cs-try-this
-          verb="invoke"
-          args='{"name": "agent_preview", "args": {"name": "Chain probe", "runtime": "claude", "startup": ["CLAUDE.md"]}}'
+          verb="agent_preview"
+          args='{"name": "Chain probe", "runtime": "claude", "startup": ["CLAUDE.md"]}'
           label="Resolve CLAUDE.md against the team chain"
           dry-run="true"
         ></cs-try-this>
@@ -330,13 +330,13 @@
           <summary><strong>How to do this via MCP</strong></summary>
           <pre><code>// Which team on the chain has CLAUDE.md? Preview is the honest answer —
 // it runs the same resolver as a real launch.
-codesense.invoke('agent_preview', {
+agent_preview {
   name: 'probe', runtime: 'claude', startup: ['CLAUDE.md'],
-})
+}
 // → { manifest: { entries: [{ path: 'CLAUDE.md', source: 'teams/backend/...', bytes: 4821 }] } }
 
 // The chain itself (which teams, in order): describe_setup lists each team and its parent.
-codesense.invoke('describe_setup', {})</code></pre>
+describe_setup {}</code></pre>
         </details>
       </section>
 

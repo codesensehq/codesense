@@ -11,7 +11,7 @@
     <script src="../_shared/try-this.js" defer></script>
     <style>
       /* Arc-B scoped bits. Lift into _shared/cs-docs.css when a second arc wants
-         the same thing; the shared layer stays lean until then. */
+         the same thing. */
       body[data-page^="arc-b-model/"] .cs-main {
         max-width: 1040px;
         padding-bottom: var(--cs-docs-space-7);
@@ -58,8 +58,7 @@
         font-size: 12.5px;
       }
       /* Hero inline-SVG stand-in — mirrors diagrams/arc-b-model.excalidraw.sketch.md
-         coordinate space (1600x1000). Will be swapped for the rendered PNG once
-         render_canvas lands sibling assets. */
+         coordinate space (1600x1000). */
       body[data-page^="arc-b-model/"] .hero-fig {
         display: block;
         width: 100%;
@@ -146,7 +145,8 @@
         <p style="color: var(--cs-muted-fg); max-width: 68ch">
           One <strong>org</strong> is one context repo. A repo holds <strong>teams</strong>,
           and a team can name one <code>parent_team</code>. A team's context is its own
-          content plus everything its parents hold, resolved <strong>per file</strong>:
+          content plus the files its parents share (their <code>config/sharing.yml</code>),
+          resolved <strong>per file</strong>:
           the closest team wins. Nothing copies itself anywhere. Content reaches a
           worktree only when the worktree is created, when an agent launches there (it
           gets what its <code>context</code> asks for), or when an agent explicitly asks
@@ -234,8 +234,7 @@
         </figure>
         <p class="hero-cap" id="hero-cap">
           This is the shape; the live
-          <code>arc-b-model.excalidraw</code> canvas has the editable version —
-          click the diagram to open it.
+          <code>arc-b-model.excalidraw</code> canvas has the editable version.
         </p>
       </section>
 
@@ -251,7 +250,7 @@
           <li>
             <a href="./teams.html"><strong>Teams</strong></a> — <code>teams.yml</code>, the
             single-parent chain (depth cap 64), and how a child team inherits its parents'
-            files one file at a time.
+            shared files one file at a time.
           </li>
           <li>
             <a href="./content-layers.html"><strong>Content layers</strong></a> — the places

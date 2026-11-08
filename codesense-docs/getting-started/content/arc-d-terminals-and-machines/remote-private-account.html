@@ -85,8 +85,10 @@
             box, or you reset the installation), CodeSense refuses until you re-verify.
           </li>
           <li>
-            <strong>Upgrades under control</strong> — <em>Machines → Replace terminal
-            server</em> prepares the new binary alongside the live one, then swaps.
+            <strong>Updates you start</strong> — <em>Machines → Update terminal
+            server…</em> installs the new build. It ends every terminal and agent on
+            that server; tabs reopen as fresh shells, and Agents with
+            <code>resumeAfterRestart</code> relaunch.
             Older servers get a "terminalServerOutdated" refusal for new verbs so
             you know to upgrade.
           </li>
@@ -102,7 +104,6 @@
         <ul>
           <li>Your Mac sleeping or losing Wi-Fi.</li>
           <li>Quitting and re-opening CodeSense.</li>
-          <li>Restarting the host-agent on your Mac.</li>
         </ul>
         <p>
           On reconnect, CodeSense re-attaches, snaps the latest scrollback, and the
@@ -147,7 +148,7 @@
         </p>
         <cs-try-this
           verb="open_remote_tab"
-          args='{"launch":"shell"}'
+          args='{"operation":"create","requestId":"00000000-0000-4000-8000-000000000000","machineId":"build-box-01-ab12cd","teamKey":"acme/team-context:ops","workspaceId":"root:acme/app","cwd":"/home/sam/work/my-repo","launch":"shell"}'
           label="Open a remote terminal tab"
           dry-run="true"
         ></cs-try-this>
@@ -156,17 +157,18 @@
       <section data-search="How to open a remote tab via MCP" id="via-mcp">
         <details>
           <summary><strong>How to do this via MCP</strong></summary>
-          <pre><code>codesense.invoke('open_remote_tab', {
+          <pre><code>open_remote_tab {
+  operation: 'create',
   requestId: crypto.randomUUID(),
   machineId: 'build-box-01-ab12cd',
-  teamKey: 'ops',
+  teamKey: 'acme/team-context:ops',
   workspaceId: '&lt;workspace&gt;',
-  hostCwd: '/home/sam/work/my-repo',
-  launch: 'shell',       // or 'claude' / 'codex' / an agentKey
+  cwd: '/home/sam/work/my-repo',
+  launch: 'shell',       // or 'claude' / 'codex'
   headed: true,
-})</code></pre>
+}</code></pre>
           <p>
-            For a saved agent, pass <code>launch: {agentKey}</code> and
+            For a saved agent, add <code>agentKey</code> and
             <code>preparedWorkspaceHandle</code> from a verified hydration.
           </p>
         </details>

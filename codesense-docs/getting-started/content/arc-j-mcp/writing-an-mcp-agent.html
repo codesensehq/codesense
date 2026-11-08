@@ -129,8 +129,7 @@
       >
         <h1>No UI. Just four calls.</h1>
         <p class="lede">
-          Everything CodeSense does is reachable through MCP: it is
-          <strong>MCP-complete</strong>. We'll build an agent that onboards a new team
+          Most of what CodeSense does is reachable through MCP. We'll build an agent that onboards a new team
           end-to-end without ever touching the UI: pick the active team, add a source repo, list the
           worktrees that are open on it. Four tool calls. The agent's whole surface area is the
           bridge.
@@ -484,12 +483,12 @@ revision: 1</code></pre>
             <p>
               Discovery first. Returns every org / team the local user is a member of and whose
               content is synced. We're looking for
-              <code>{ org: "acme", team: "default" }</code>; if that's not in the reply, the
+              <code>{ org: "acme/team-context", team: "default" }</code>; if that's not in the reply, the
               agent stops — the user hasn't joined the team yet.
             </p>
-            <pre><code>const { entries } = await codesense.invoke('list_orgs_teams', {})
-const target = entries.find(e =&gt; e.org === 'acme' &amp;&amp; e.team === 'default')
-if (!target) throw new Error('team not synced to this Mac')</code></pre>
+            <pre><code>list_orgs_teams {}
+// → { entries: [{ org: "acme/team-context", team: "default", synced: true }, …] }
+// No acme/team-context + default entry: stop, the team isn't synced to this Mac.</code></pre>
           </div>
         </div>
 
@@ -501,12 +500,12 @@ if (!target) throw new Error('team not synced to this Mac')</code></pre>
               Switch the backend focus. The same move as clicking the team switcher: the backend
               re-targets watchers and the UI follows. Changes org if needed.
             </p>
-            <pre><code>const switched = await codesense.invoke('set_active_team', {
-  org:  'acme',
+            <pre><code>set_active_team {
+  org:  'acme/team-context',
   team: 'default'
-})
-// { status: "ok", data: { orgSlug: "acme", team: "default" } }
-if (switched.status !== 'ok') throw new Error(switched.status)</code></pre>
+}
+// → { status: "ok", data: { orgSlug: "acme/team-context", team: "default" } }
+// Any other status: stop and report it.</code></pre>
           </div>
         </div>
 
@@ -520,13 +519,13 @@ if (switched.status !== 'ok') throw new Error(switched.status)</code></pre>
               clone yet, the repo is tracked remote-only until a worktree is opened or
               <code>attach_source_repo_path</code> is called with the clone's path.
             </p>
-            <pre><code>const added = await codesense.invoke('add_source_repo', {
-  org:  'acme',
+            <pre><code>add_source_repo {
+  org:  'acme/team-context',
   team: 'default',
   url:  'acme/sample'
-})
-// { status: "ok", data: { owner, repo, provider, host, remoteKey, remoteName } }
-if (added.status === 'validation') throw new Error(added.message)</code></pre>
+}
+// → { status: "ok", data: { owner, repo, provider, host, remoteKey, remoteName } }
+// status "validation": stop and report its message.</code></pre>
           </div>
         </div>
 
@@ -539,12 +538,9 @@ if (added.status === 'validation') throw new Error(added.message)</code></pre>
               worktrees, orphans. For a brand new source there are no worktrees yet; the result is
               <code>{ rows: [], reaped: 0 }</code>. That empty answer is the "done" signal.
             </p>
-            <pre><code>const trees = await codesense.invoke('list_worktrees', {})
-return {
-  team:      switched.data,
-  source:    added.data,
-  worktrees: trees.rows.length,
-}</code></pre>
+            <pre><code>list_worktrees {}
+// → { rows: [], reaped: 0 }
+// Report the team, the source and the worktree count.</code></pre>
           </div>
         </div>
       </section>
@@ -555,15 +551,15 @@ return {
           <h3>agent output</h3>
           <pre><code>→ list_orgs_teams {}
 ← { entries: [
-    { org: "acme",          team: "default",  synced: true },
-    { org: "acme",          team: "docs",     synced: true },
-    { org: "codesense-docs", team: "getting-started", synced: true }
+    { org: "acme/team-context", team: "default",         synced: true },
+    { org: "acme/team-context", team: "docs",            synced: true },
+    { org: "codesense/docs",    team: "getting-started", synced: true }
   ]}
 
-→ set_active_team { org: "acme", team: "default" }
-← { status: "ok", data: { orgSlug: "acme", team: "default" } }
+→ set_active_team { org: "acme/team-context", team: "default" }
+← { status: "ok", data: { orgSlug: "acme/team-context", team: "default" } }
 
-→ add_source_repo { org: "acme", team: "default", url: "acme/sample" }
+→ add_source_repo { org: "acme/team-context", team: "default", url: "acme/sample" }
 ← { status: "ok",
     data: { owner: "acme", repo: "sample",
             provider: "github", host: "github.com",
@@ -577,17 +573,15 @@ done — team active, source attached, 0 worktrees so far.</code></pre>
         </div>
       </section>
 
-      <section data-search="What this proves — MCP-complete" id="proves">
+      <section data-search="What this proves" id="proves">
         <h2>What this proves</h2>
         <p>
           Zero UI calls. Zero shell calls. Zero filesystem writes outside what the bridge did on
           your behalf — <code>set_active_team</code> and <code>add_source_repo</code> both landed in
           CodeSense's own state, nothing in your source tree moved. The whole workflow is auditable,
-          log-replayable, scriptable on a cron. MCP-complete means:
-          <strong
-            >every UI action has an MCP tool, so every workflow is reproducible via MCP
-            alone.</strong
-          >
+          log-replayable, scriptable on a cron. Most UI actions have an MCP tool, so a
+          workflow like this one runs through MCP alone; the
+          <a href="../ui-mcp-crossref.html">UI ↔ MCP crossref</a> lists the ones that don't.
         </p>
         <p>
           Want a shorter version — an agent whose <em>whole</em> job is this shape, not just this
@@ -626,10 +620,9 @@ done — team active, source attached, 0 worktrees so far.</code></pre>
           needs to pick a team.
         </p>
         <cs-try-this
-          verb="invoke"
-          args='{"name": "list_orgs_teams", "args": {}}'
+          verb="list_orgs_teams"
+          args='{}'
           label="Run list_orgs_teams"
-          dry-run="false"
           dry-run="true"
         ></cs-try-this>
       </section>
@@ -637,30 +630,19 @@ done — team active, source attached, 0 worktrees so far.</code></pre>
       <section data-search="How to do this via MCP" id="via-mcp">
         <details>
           <summary><strong>How to do this via MCP (the full agent body)</strong></summary>
-          <pre><code>async function onboardTeam({ org, team, repo }) {
-  const { entries } = await codesense.invoke('list_orgs_teams', {})
-  const target = entries.find(e =&gt; e.org === org &amp;&amp; e.team === team)
-  if (!target) throw new Error(`team ${org}/${team} not synced here`)
+          <pre><code>// Onboard team default of acme/team-context with the source repo acme/sample.
+list_orgs_teams {}
+// Stop unless entries has { org: 'acme/team-context', team: 'default' }.
 
-  const switched = await codesense.invoke('set_active_team', { org, team })
-  if (switched.status !== 'ok') throw new Error(switched.status)
+set_active_team { org: 'acme/team-context', team: 'default' }
+// Stop unless status is "ok".
 
-  const added = await codesense.invoke('add_source_repo', {
-    org, team, url: repo,
-  })
-  if (added.status === 'validation' &amp;&amp; !/already tracked/.test(added.message)) {
-    throw new Error(added.message)
-  }
+add_source_repo { org: 'acme/team-context', team: 'default', url: 'acme/sample' }
+// Stop on status "validation", unless its message says "already tracked".
 
-  const trees = await codesense.invoke('list_worktrees', {})
-  return {
-    team: switched.data,
-    source: added.data,
-    worktrees: trees.rows.length,
-  }
-}
-
-onboardTeam({ org: 'acme', team: 'default', repo: 'acme/sample' })</code></pre>
+list_worktrees {}
+// Report: the team (set_active_team's data), the source (add_source_repo's data)
+// and the worktree count (rows.length).</code></pre>
           <p>
             See Arc E's
             <a href="../arc-e-agents/mcp-only-agents.html">MCP-only agents</a> for the agent-shape

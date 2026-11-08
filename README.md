@@ -138,9 +138,8 @@ and ask questions in
 
 ## Contributing
 
-We don't accept pull requests yet: this repository is a release snapshot,
-synced from private development. Issues and discussions are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the policy and
+Pull requests, issues and discussions are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute and
 [MAINTAINERS.md](MAINTAINERS.md) for who maintains CodeSense. Everyone taking
 part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 

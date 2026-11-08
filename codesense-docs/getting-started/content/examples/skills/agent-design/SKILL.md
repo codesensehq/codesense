@@ -62,9 +62,8 @@ content the user owns. Record goals, data sensitivity, decisions and their reaso
 seats, tool boundaries, budget, risk tiers, handoffs, proof cases and who approved.
 Keep a list of created ids so the user can change or remove the setup.
 
-The optional `team-design.yaml` and human-readable `DESIGN.md` are the planned
-agent-design team's record of intent. Use the plain note today unless the user
-already has that format. Refer to agents and routines by id. Do not duplicate
+The optional `team-design.yaml` and human-readable `DESIGN.md` are a structured
+record of intent. Use the plain note unless the user already has that format. Refer to agents and routines by id. Do not duplicate
 fields from their real `agent.yaml` and `routine.yml`. Never save data or secrets
 in a design. Keep personal and finance notes in the private layer.
 
@@ -90,8 +89,10 @@ Follow **Build in small steps**, in this order:
    explicit `register_role` in the saved prompt.
 4. Panes: only if needed, use `pane_write` with the agreed capabilities and grants.
 5. Inheritance: only if needed and approved, use `set_team_parent`. Only content
-   follows the parent chain today. Parent config does not become child config.
-   Explicit sharing of inherited content is planned. Preview from the child team.
+   follows the parent chain. Parent config does not become child config.
+   A child receives only the content paths its ancestors declare in `config/sharing.yml`;
+   each team in between must share them onward.
+   Preview from the child team.
 
 Name every resource clearly. Add only startup/context paths that exist for this
 user. Never assume a workflow skill or external MCP server is installed. Use the
@@ -129,12 +130,12 @@ or monthly review, or an optional review routine within the user's budget. Ask
 before scheduling it. Read structured usage and outcome signals, compare with the
 goals, and propose one change at a time. Replay the agreed cases before applying.
 
-The planned agent-design team adds a fresh-context Evaluator and a Steward that
-proposes changes for approval. Its monthly memory prune keeps, merges, summarizes
-or archives notes within a per-agent context budget. It does not auto-apply policy.
-Use small notes with provenance today. Quarantine untrusted-source facts until a
-human promotes them. Keep personal and finance memory private. These planned
-skills are not installed by this skill.
+A fuller loop adds a fresh-context evaluator and a steward that proposes changes
+for approval. Its monthly memory prune keeps, merges, summarizes or archives notes
+within a per-agent context budget. It does not auto-apply policy. Use small notes
+with provenance. Quarantine untrusted-source facts until a human promotes them.
+Keep personal and finance memory private. This skill does not install evaluator or
+steward skills.
 
 ## Guardrails
 

@@ -147,10 +147,18 @@ const ASSIGNED_TO_UNKNOWN: &str = "ASSIGNED_TO_UNKNOWN";
 // Blocking — a metadata field the team's field schema declares
 // `required: true` is absent from the candidate. Presence-only (the value is never
 // type-checked). The default schema declares NO required fields, so this is a no-op
-// until a team opts in; the advisory "unknown field" half is confined to the opt-in
-// pre-run report (`field_schema::validate_run_metadata`) so authoring an ordinary
-// story is never nagged about routine keys (`author`, `parent_epic`, …).
+// until a team opts in.
 const MISSING_REQUIRED_FIELD: &str = "MISSING_REQUIRED_FIELD";
+// Advisory — a metadata key that is neither a registered story field
+// (`pipeline_format::STORY_FIELDS`) nor declared in the team's field schema. A
+// dashboard can only rely on registered fields; this never blocks.
+const UNREGISTERED_FIELD: &str = "UNREGISTERED_FIELD";
+// Advisory — `blocked_reason` is set but the status is not one the team's taxonomy
+// marks blocked, so the board shows a reason on a card that is not blocked.
+const BLOCKED_REASON_NOT_BLOCKED: &str = "BLOCKED_REASON_NOT_BLOCKED";
+// Advisory — `wave` is set but is not a positive whole number; the board ignores it
+// and computes the wave from `depends_on`.
+const INVALID_WAVE: &str = "INVALID_WAVE";
 
 // ----- Configured (dynamic) inputs -------------------------------------------
 
@@ -234,6 +242,9 @@ pub struct ValidatorConfig<'a> {
     /// flagged. Never empty (the loader falls back to the shipped
     /// defaults, giving zero-config parity).
     pub valid_statuses: &'a [String],
+    /// The status ids the team's taxonomy gives the blocked role. Drives the
+    /// `BLOCKED_REASON_NOT_BLOCKED` advisory.
+    pub blocked_statuses: &'a [String],
     /// The `story_id → paths` point-lookup seam that drives
     /// the `DUPLICATE_STORY_ID` blocking finding. The handler backs it with the org-wide
     /// frontmatter cache's `O(1)` aux index (from a lock-free snapshot); the candidate's
@@ -254,7 +265,14 @@ pub struct ValidatorConfig<'a> {
     /// and the default baseline declares no required fields → no finding until a team
     /// opts in (zero regression for existing teams).
     pub schema: &'a crate::commands::field_schema::FieldSchema,
+    /// The org's tag schema (`org.yml` `tag_schema`). A key it declares is declared
+    /// metadata, so it never draws `UNREGISTERED_FIELD`. [`NO_TAGS`] when the org is
+    /// unavailable.
+    pub tag_schema: &'a crate::domain::TagSchema,
 }
+
+/// An empty org tag schema, for callers with no loaded org.
+pub static NO_TAGS: crate::domain::TagSchema = crate::domain::TagSchema { tags: Vec::new() };
 
 /// Story frontmatter still names repositories as `owner/repo`. Keep that
 /// compatibility value only when it identifies one canonical repository within
@@ -718,7 +736,10 @@ pub(crate) fn validate_candidate_for(
         Some(_) => {}
     }
 
-    if let Some(work) = Option::filter(Option::map(Option::as_deref(&fields.work_repo), str::trim), |w| !str::is_empty(w)) {
+    if let Some(work) = Option::filter(
+        Option::map(Option::as_deref(&fields.work_repo), str::trim),
+        |w| !str::is_empty(w),
+    ) {
         if crate::domain::SourceRepoSlug::parse_owner_repo(work).is_none() {
             findings.push(Finding {
                 code: INVALID_WORK_REPO,
@@ -753,15 +774,12 @@ pub(crate) fn validate_candidate_for(
         Some(_) => {}
     }
 
-    // Required-field check against the team's declared field schema.
-    // Presence-only (values are never type-checked). Reuses the pure
-    // `field_schema::validate_story_fields` over the candidate's raw metadata keys
-    // (the same seam the pre-run report uses). With no run context here, only the
-    // BLOCKING `missing_required` bucket is surfaced — referenced-field gaps
-    // (`{fieldName}` vs the story) are the runner's pre-run gate, and the advisory
-    // `extra_unknown` half is confined to that opt-in report so an ordinary story is
-    // never nagged. The default schema declares no required fields → no-op until a
-    // team opts in.
+    // Field-schema checks over the candidate's raw metadata keys, through the pure
+    // `field_schema::validate_story_fields` (the same seam the pre-run report uses).
+    // Presence-only (values are never type-checked). With no run context here,
+    // referenced-field gaps (`{fieldName}` vs the story) stay the runner's pre-run
+    // gate. A declared-required field that is absent blocks; a key the schema does
+    // not know (registered fields ∪ the team's declared fields) is advisory.
     let present_keys = pipeline_format::extract_metadata_keys(format, text);
     let field_report = crate::commands::field_schema::validate_story_fields(
         &present_keys,
@@ -779,6 +797,91 @@ pub(crate) fn validate_candidate_for(
                 name
             ),
         });
+    }
+    for name in field_report
+        .extra_unknown
+        .iter()
+        .filter(|name| cfg.tag_schema.tag(name).is_none())
+    {
+        let label = field_label(format, name);
+        // A Markdown key spelled with hyphens (`depends-on`) is a taught field in the
+        // wrong spelling, not a new one. Retired rows are never suggested.
+        let underscored = name.replace('-', "_");
+        let suggestion = pipeline_format::contract_fields().find(|f| f.yaml == underscored);
+        // field-schema.yml and tag_schema declare the Markdown key, whatever the format.
+        let hint = match suggestion {
+            Some(field) => {
+                format!("did you mean `{}`? Registered fields use underscores", field.yaml)
+            }
+            None => format!(
+                "get_story_format lists the registered fields; if your team uses `{label}`, declare `{name}` in the team's content/field-schema.yml (or the org's tag_schema)"
+            ),
+        };
+        findings.push(Finding {
+            code: UNREGISTERED_FIELD,
+            field: "frontmatter",
+            severity: Severity::Advisory,
+            message: format!("`{label}` is not a registered story field"),
+            hint,
+        });
+    }
+
+    // The board fields with a value rule. They are open tags (where a board reads
+    // them), so their values come from the open-tag walker the scanner uses.
+    let has_rule_field = present_keys
+        .iter()
+        .any(|k| k == "blocked_reason" || k == "wave");
+    let open_tags = if has_rule_field {
+        crate::commands::frontmatter_editor::open_tag_values(format, text)
+    } else {
+        Vec::new()
+    };
+    let open_value = |key: &str| {
+        open_tags
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, items)| items.join(", ").trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    if open_value("blocked_reason").is_some() {
+        let status = fields.status.as_deref().map(str::trim).unwrap_or("");
+        if !cfg
+            .blocked_statuses
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(status))
+        {
+            let label = field_label(format, "blocked_reason");
+            findings.push(Finding {
+                code: BLOCKED_REASON_NOT_BLOCKED,
+                field: "blocked_reason",
+                severity: Severity::Advisory,
+                message: if status.is_empty() {
+                    format!("`{label}` is set but the story has no status")
+                } else {
+                    format!("`{label}` is set but the status `{status}` is not a blocked status")
+                },
+                hint: if cfg.blocked_statuses.is_empty() {
+                    format!("remove `{label}` once the story is unblocked")
+                } else {
+                    format!(
+                        "remove `{label}` once the story is unblocked, or set the status to {}",
+                        comma_list(cfg.blocked_statuses)
+                    )
+                },
+            });
+        }
+    }
+    if let Some(wave) = open_value("wave") {
+        if !wave.parse::<u32>().is_ok_and(|n| n > 0) {
+            let label = field_label(format, "wave");
+            findings.push(Finding {
+                code: INVALID_WAVE,
+                field: "wave",
+                severity: Severity::Advisory,
+                message: format!("`{label}: {wave}` is not a positive whole number, so a board ignores it"),
+                hint: format!("use 1, 2, 3 and so on, or remove `{label}` to let a board compute the wave from depends_on"),
+            });
+        }
     }
 
     // story_id: advisory
@@ -980,6 +1083,19 @@ pub(crate) fn validate_candidate_for(
         None,
         cfg.summary_headings,
     )
+}
+
+/// A field as the candidate's own format spells it: the Markdown key, or the HTML
+/// `cs:*` meta name (registered rows use theirs; any other key takes the `cs:`
+/// convention of hyphens for underscores).
+fn field_label(format: PipelineFileFormat, yaml: &str) -> String {
+    match format {
+        PipelineFileFormat::Markdown => yaml.to_string(),
+        PipelineFileFormat::Html => pipeline_format::fields::story_field(yaml).map_or_else(
+            || format!("cs:{}", yaml.replace('_', "-")),
+            |field| field.cs_meta.to_string(),
+        ),
+    }
 }
 
 /// Build the `MISSING_SUMMARY_HEADING` advisory, naming the effective
@@ -1255,22 +1371,11 @@ pub fn story_format_payload(summary_headings: &[String]) -> Value {
             }
         ],
         "pipeline_story_format": {
-            "note": "Every field below shows its Markdown (YAML) name and its HTML `<meta name=\"cs:*\">` equivalent side by side. Both formats validate identically.",
+            "note": "Every field below shows its Markdown (YAML) name and its HTML `<meta name=\"cs:*\">` equivalent side by side. Both formats validate identically. Any other key gets the UNREGISTERED_FIELD advisory unless the team declares it in content/field-schema.yml or the org declares it in its tag_schema.",
             "quoting": "Put values containing `: ` or ` #` in double quotes. Example: title: \"Inbox: Fix #42\"",
-            "fields": pipeline_format::METADATA_CONTRACT_FIELDS.iter().map(|name| {
-                let description = match *name {
-                    "type" => "The story type. Fixed closed set.",
-                    "source_repo" => "owner/repo. MUST be a configured repo — resolve it, never invent it.",
-                    "status" => "Pipeline column. Free text; unusual values are advisory.",
-                    "depends_on" => "List of story ids (HTML: comma-separated). Must resolve.",
-                    "team" => "Team name. If set, MUST be a configured team.",
-                    "work_repo" => "Optional owner/repo holding the work when it is not `source_repo` (e.g. the context repo); read for story_changes.",
-                    _ => "Metadata CodeSense reads for display, routing or flow.",
-                };
-                let cs_meta = pipeline_format::yaml_to_cs_name(name).map(str::to_string)
-                    .unwrap_or_else(|| format!("cs:{}", name.replace('_', "-")));
-                field_entry(name, &cs_meta, matches!(*name, "type" | "source_repo"), description)
-            }).collect::<Vec<_>>(),
+            "fields": pipeline_format::contract_fields()
+                .map(pipeline_format::StoryField::contract_entry)
+                .collect::<Vec<_>>(),
             "enums": {
                 "type": PIPELINE_DOCUMENT_TYPES,
                 "status": VALID_STATUSES
@@ -1347,15 +1452,6 @@ fn summary_headings_contract(effective: &[String]) -> Value {
             md_summary_marker(first),
             html_summary_marker(first)
         )
-    })
-}
-
-fn field_entry(name: &str, cs_meta: &str, required: bool, description: &str) -> Value {
-    json!({
-        "name": name,
-        "cs_meta": cs_meta,
-        "required": required,
-        "description": description,
     })
 }
 
@@ -1452,6 +1548,21 @@ fn finding_codes() -> Value {
             ASSIGNED_TO_UNKNOWN,
             "advisory",
             "`assigned_to` is set to a login not in the org roster (`people.yml`)."
+        ),
+        code_entry(
+            UNREGISTERED_FIELD,
+            "advisory",
+            "A metadata key is neither a registered story field nor declared in the team's `content/field-schema.yml` or the org's `tag_schema`."
+        ),
+        code_entry(
+            BLOCKED_REASON_NOT_BLOCKED,
+            "advisory",
+            "`blocked_reason` is set but the status is not a blocked status."
+        ),
+        code_entry(
+            INVALID_WAVE,
+            "advisory",
+            "`wave` is set but is not a positive whole number."
         )
     ])
 }
@@ -1599,6 +1710,18 @@ mod tests {
             .as_slice()
     }
 
+    /// The shipped default taxonomy's blocked status ids, for `blocked_statuses`.
+    fn default_test_blocked() -> &'static [String] {
+        static S: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            crate::commands::status_taxonomy::default_taxonomy()
+                .states_for_role(crate::commands::status_taxonomy::StatusRole::Blocked)
+                .map(|s| s.id.clone())
+                .collect()
+        })
+        .as_slice()
+    }
+
     /// The shipped default status ids (== `VALID_STATUSES`, the zero-config
     /// taxonomy) as a `'static` slice, so the `cfg*()` helpers hand `valid_statuses`
     /// out without a per-call temporary. Tests exercising custom states pass their
@@ -1639,9 +1762,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: default_test_headings(),
             valid_statuses: default_test_statuses(),
+            blocked_statuses: default_test_blocked(),
             story_id_index: &NoStoryIdIndex,
             assignee_resolver: &NoAssigneeResolver,
             schema: default_test_schema(),
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -1695,9 +1820,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: default_test_headings(),
             valid_statuses: default_test_statuses(),
+            blocked_statuses: default_test_blocked(),
             story_id_index: &NoStoryIdIndex,
             assignee_resolver: roster,
             schema: default_test_schema(),
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -1715,9 +1842,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: headings,
             valid_statuses: default_test_statuses(),
+            blocked_statuses: default_test_blocked(),
             story_id_index: &NoStoryIdIndex,
             assignee_resolver: &NoAssigneeResolver,
             schema: default_test_schema(),
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -1735,9 +1864,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: default_test_headings(),
             valid_statuses: default_test_statuses(),
+            blocked_statuses: default_test_blocked(),
             story_id_index: index,
             assignee_resolver: &NoAssigneeResolver,
             schema: default_test_schema(),
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -1757,9 +1888,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: default_test_headings(),
             valid_statuses: statuses,
+            blocked_statuses: default_test_blocked(),
             story_id_index: &NoStoryIdIndex,
             assignee_resolver: &NoAssigneeResolver,
             schema: default_test_schema(),
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -1778,9 +1911,11 @@ mod tests {
             epic_repos: &[],
             summary_headings: default_test_headings(),
             valid_statuses: default_test_statuses(),
+            blocked_statuses: default_test_blocked(),
             story_id_index: &NoStoryIdIndex,
             assignee_resolver: &NoAssigneeResolver,
             schema,
+            tag_schema: &NO_TAGS,
         }
     }
 
@@ -2008,7 +2143,11 @@ mod tests {
     #[test]
     fn work_repo_is_a_contract_field_and_only_a_malformed_slug_is_flagged() {
         let fields = story_format_payload(&[])["pipeline_story_format"]["fields"].clone();
-        assert!(fields.as_array().unwrap().iter().any(|f| f["name"] == "work_repo" && f["cs_meta"] == "cs:work-repo"));
+        assert!(fields
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "work_repo" && f["cs_meta"] == "cs:work-repo"));
         let repos = vec!["owner/repo".to_string()];
         let teams = vec!["default".to_string()];
         let story = |work: &str| {
@@ -2382,7 +2521,7 @@ mod tests {
 
     /// The default (baseline-only) schema declares no required fields, so a
     /// normal story never gains a `MISSING_REQUIRED_FIELD` finding — zero regression
-    /// for existing teams, and no nagging about routine keys like `parent_epic`.
+    /// for existing teams.
     #[test]
     fn default_schema_adds_no_required_field_finding() {
         let repos = vec!["owner/repo".to_string()];
@@ -2391,6 +2530,312 @@ mod tests {
                     parent_epic: e\nsub_epic: se\n---\n\n# S\n";
         let v = validate_candidate(text, None, &cfg(&repos, &teams));
         assert!(!finding_codes_of(&v).contains("MISSING_REQUIRED_FIELD"));
+    }
+
+    fn unregistered_findings(v: &Value) -> Vec<&Value> {
+        findings_with(v, UNREGISTERED_FIELD)
+    }
+
+    /// A key that is neither registered nor declared is advisory, never blocking;
+    /// a registered `priority` (in either format) draws nothing.
+    #[test]
+    fn unregistered_field_is_advisory_and_registered_priority_is_quiet() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let md = |extra: &str| {
+            format!("---\ntype: story\nstatus: todo\nstory_id: S-1\nsource_repo: owner/repo\n{extra}\n---\n\n# S\n\n## Purpose\n\nx\n")
+        };
+        let v = validate_candidate(&md("foo: 1"), None, &cfg(&repos, &teams));
+        assert_eq!(v["valid"], true, "{v}");
+        let found = unregistered_findings(&v);
+        assert_eq!(found.len(), 1, "{v}");
+        assert_eq!(found[0]["severity"], "advisory");
+        assert!(found[0]["message"].as_str().unwrap().contains("`foo`"));
+
+        for extra in ["priority: p1", "parent_epic: E", "epic: E", "title: T"] {
+            let v = validate_candidate(&md(extra), None, &cfg(&repos, &teams));
+            assert!(unregistered_findings(&v).is_empty(), "{extra}: {v}");
+        }
+        let html = "<meta name=\"cs:type\" content=\"story\">\n<meta name=\"cs:status\" content=\"todo\">\n\
+                    <meta name=\"cs:story-id\" content=\"S-1\">\n<meta name=\"cs:source-repo\" content=\"owner/repo\">\n\
+                    <meta name=\"cs:priority\" content=\"p1\">\n<meta name=\"cs:parent-epic\" content=\"E\">\n\
+                    <meta name=\"cs:foo\" content=\"1\">\n<title>S</title>\n<section data-cs=\"Purpose\">x</section>\n";
+        let v = validate_candidate(html, None, &cfg(&repos, &teams));
+        let names: Vec<&str> = unregistered_findings(&v)
+            .iter()
+            .map(|f| f["message"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["`cs:foo` is not a registered story field"], "{v}");
+    }
+
+    /// A field the team declares in its field schema is exempt.
+    #[test]
+    fn declared_custom_field_is_not_unregistered() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let mut schema = crate::commands::field_schema::default_schema();
+        schema.fields.push(crate::commands::field_schema::FieldDef {
+            name: "risk_tier".to_string(),
+            r#type: None,
+            allowed_values: Vec::new(),
+            required: false,
+            official: false,
+        });
+        let text = "---\ntype: story\nstatus: todo\nsource_repo: owner/repo\nrisk_tier: high\n---\n\n# S\n";
+        let v = validate_candidate(text, None, &cfg_schema(&repos, &teams, &schema));
+        assert!(unregistered_findings(&v).is_empty(), "{v}");
+        let v = validate_candidate(text, None, &cfg(&repos, &teams));
+        assert_eq!(unregistered_findings(&v).len(), 1, "{v}");
+    }
+
+    /// A key the org declares in its tag schema is declared metadata too.
+    #[test]
+    fn org_tag_schema_key_is_not_unregistered() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let tags: crate::domain::TagSchema =
+            serde_yaml::from_str("tags:\n  - name: risk-tier\n").unwrap();
+        let cfg = ValidatorConfig {
+            tag_schema: &tags,
+            ..cfg(&repos, &teams)
+        };
+        let text = "---\ntype: story\nstatus: todo\nsource_repo: owner/repo\nrisk_tier: high\n---\n\n# S\n";
+        let v = validate_candidate(text, None, &cfg);
+        assert!(unregistered_findings(&v).is_empty(), "{v}");
+    }
+
+    fn findings_with<'v>(v: &'v Value, code: &str) -> Vec<&'v Value> {
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["code"] == code)
+            .collect()
+    }
+
+    fn md_story(extra: &str) -> String {
+        format!("---\ntype: story\nstory_id: S-1\nsource_repo: owner/repo\n{extra}\n---\n\n# S\n\n## Purpose\n\nx\n")
+    }
+
+    /// An HTML todo story with one extra `cs:*` meta.
+    fn html_story(name: &str, content: &str) -> String {
+        format!(
+            "<meta name=\"cs:type\" content=\"story\">\n<meta name=\"cs:status\" content=\"todo\">\n\
+             <meta name=\"cs:story-id\" content=\"S-1\">\n<meta name=\"cs:source-repo\" content=\"owner/repo\">\n\
+             <meta name=\"{name}\" content=\"{content}\">\n<title>S</title>\n<section data-cs=\"Purpose\">x</section>\n"
+        )
+    }
+
+    /// A Markdown key spelled with hyphens is pointed at its registered name.
+    #[test]
+    fn hyphenated_registered_key_gets_a_did_you_mean() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let v = validate_candidate(
+            &md_story("status: todo\ndepends-on: [S-2]"),
+            None,
+            &cfg(&repos, &teams),
+        );
+        let found = unregistered_findings(&v);
+        assert_eq!(found.len(), 1, "{v}");
+        assert_eq!(
+            found[0]["message"],
+            "`depends-on` is not a registered story field"
+        );
+        assert!(
+            found[0]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("did you mean `depends_on`?"),
+            "{v}"
+        );
+    }
+
+    /// A hyphenated retired key gets no did-you-mean, and an HTML story's hint
+    /// names the Markdown key to declare.
+    #[test]
+    fn unregistered_hints_skip_retired_rows_and_name_the_key_to_declare() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let v = validate_candidate(
+            &md_story("status: todo\nscope-context: [a]"),
+            None,
+            &cfg(&repos, &teams),
+        );
+        let found = unregistered_findings(&v);
+        assert_eq!(found.len(), 1, "{v}");
+        assert!(
+            !found[0]["hint"].as_str().unwrap().contains("did you mean"),
+            "{v}"
+        );
+
+        let html = html_story("cs:risk-tier", "high");
+        let v = validate_candidate(&html, None, &cfg(&repos, &teams));
+        let found = unregistered_findings(&v);
+        assert_eq!(
+            found[0]["message"],
+            "`cs:risk-tier` is not a registered story field"
+        );
+        assert!(
+            found[0]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("declare `risk_tier` in the team's content/field-schema.yml"),
+            "{v}"
+        );
+    }
+
+    /// `blocked_reason` is quiet on a blocked story and advisory on any other,
+    /// with the team's own blocked statuses counting as blocked.
+    #[test]
+    fn blocked_reason_is_advisory_unless_the_status_is_blocked() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        let reason = "blocked_reason: \"Waiting on a key\"";
+        let blocked = validate_candidate(
+            &md_story(&format!("status: blocked\n{reason}")),
+            None,
+            &cfg(&repos, &teams),
+        );
+        assert!(
+            findings_with(&blocked, BLOCKED_REASON_NOT_BLOCKED).is_empty(),
+            "{blocked}"
+        );
+        assert!(unregistered_findings(&blocked).is_empty(), "{blocked}");
+
+        let todo = validate_candidate(
+            &md_story(&format!("status: todo\n{reason}")),
+            None,
+            &cfg(&repos, &teams),
+        );
+        assert_eq!(todo["valid"], true, "{todo}");
+        let found = findings_with(&todo, BLOCKED_REASON_NOT_BLOCKED);
+        assert_eq!(found.len(), 1, "{todo}");
+        assert_eq!(found[0]["severity"], "advisory");
+        assert_eq!(
+            found[0]["message"],
+            "`blocked_reason` is set but the status `todo` is not a blocked status"
+        );
+
+        let v = validate_candidate(
+            &md_story(&format!("status: Blocked\n{reason}")),
+            None,
+            &cfg(&repos, &teams),
+        );
+        assert!(
+            findings_with(&v, BLOCKED_REASON_NOT_BLOCKED).is_empty(),
+            "{v}"
+        );
+        let v = validate_candidate(&md_story(reason), None, &cfg(&repos, &teams));
+        assert_eq!(
+            findings_with(&v, BLOCKED_REASON_NOT_BLOCKED)[0]["message"],
+            "`blocked_reason` is set but the story has no status"
+        );
+
+        let on_hold = vec!["on-hold".to_string()];
+        let statuses = vec!["todo".to_string(), "on-hold".to_string()];
+        let custom = ValidatorConfig {
+            blocked_statuses: &on_hold,
+            ..cfg_status(&repos, &teams, &statuses)
+        };
+        let v = validate_candidate(
+            &md_story(&format!("status: on-hold\n{reason}")),
+            None,
+            &custom,
+        );
+        assert!(
+            findings_with(&v, BLOCKED_REASON_NOT_BLOCKED).is_empty(),
+            "{v}"
+        );
+
+        let html = html_story("cs:blocked-reason", "Waiting");
+        let v = validate_candidate(&html, None, &cfg(&repos, &teams));
+        let found = findings_with(&v, BLOCKED_REASON_NOT_BLOCKED);
+        assert_eq!(found.len(), 1, "{v}");
+        assert!(
+            found[0]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("`cs:blocked-reason`"),
+            "{v}"
+        );
+        assert!(unregistered_findings(&v).is_empty(), "{v}");
+    }
+
+    /// `wave` must be a positive whole number; anything else is advisory.
+    #[test]
+    fn wave_must_be_a_positive_whole_number() {
+        let repos = vec!["owner/repo".to_string()];
+        let teams = vec!["default".to_string()];
+        for ok in ["1", "3", "\"2\""] {
+            let v = validate_candidate(
+                &md_story(&format!("status: todo\nwave: {ok}")),
+                None,
+                &cfg(&repos, &teams),
+            );
+            assert!(findings_with(&v, INVALID_WAVE).is_empty(), "{ok}: {v}");
+            assert!(unregistered_findings(&v).is_empty(), "{ok}: {v}");
+        }
+        for bad in ["0", "-1", "1.5", "two"] {
+            let v = validate_candidate(
+                &md_story(&format!("status: todo\nwave: {bad}")),
+                None,
+                &cfg(&repos, &teams),
+            );
+            assert_eq!(v["valid"], true, "{bad}: {v}");
+            let found = findings_with(&v, INVALID_WAVE);
+            assert_eq!(found.len(), 1, "{bad}: {v}");
+            assert_eq!(found[0]["severity"], "advisory");
+        }
+    }
+
+    /// The shipped DEMO stories use only registered fields and pass every field
+    /// rule, so a new user's board reads them with no setup.
+    #[test]
+    fn shipped_demo_stories_use_registered_fields_cleanly() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../codesense-docs/getting-started/content/examples/sample-epic");
+        let repos = vec!["acme/sample-source-repo".to_string()];
+        let teams = vec!["getting-started".to_string()];
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.starts_with("DEMO-") {
+                continue;
+            }
+            seen += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            let v = validate_candidate(&text, None, &cfg(&repos, &teams));
+            assert_eq!(v["detectedKind"], "pipeline_story", "{name}: {v}");
+            for code in [UNREGISTERED_FIELD, BLOCKED_REASON_NOT_BLOCKED, INVALID_WAVE] {
+                assert!(findings_with(&v, code).is_empty(), "{name}: {v}");
+            }
+        }
+        assert_eq!(seen, 5);
+    }
+
+    /// `get_story_format` prints each field straight from its registry row.
+    #[test]
+    fn story_format_fields_come_from_the_registry() {
+        let payload = story_format_payload(&[]);
+        for entry in payload["pipeline_story_format"]["fields"]
+            .as_array()
+            .unwrap()
+        {
+            let name = entry["name"].as_str().unwrap();
+            let row = pipeline_format::fields::story_field(name).unwrap();
+            assert_eq!(entry["cs_meta"], row.cs_meta);
+            assert_eq!(entry["description"], row.description);
+            assert_eq!(entry["required"], row.required);
+        }
+        let priority = payload["pipeline_story_format"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "priority")
+            .unwrap();
+        assert_eq!(priority["values"], json!(["p0", "p1", "p2", "p3", "p4"]));
     }
 
     /// A field the team schema declares `required` but the story lacks

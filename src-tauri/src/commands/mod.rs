@@ -1059,7 +1059,7 @@ pub use async_helpers::await_blocking;
 // it runs 22 behind the Rust count in `commands.contract.test.ts`, which also counts
 // `license::commands` (7), `weft` (5), `renderer_watchdog` (1) and `dashboard_publish` (9).
 // SV-PLG-3 plus frame mint/release/resolve, minus session-secret getter.
-// SV-PLG-5 (dfb6856d9, merged be0ae51c8/#2393): dashboard profile read/write. → 471.
+// SV-PLG-5 (#2393): dashboard profile read/write. → 471.
 // SV-INP-10: independent bundled Inbox recovery.
 // SV-ENG-18: native spend-cap and model-rate acceptance.
 // SV-INP-14: +1 `load_inbox_media` (explicit image loading under inbox grants).
@@ -1073,7 +1073,8 @@ pub use async_helpers::await_blocking;
 // SV-PBF-287: +1 story_totals, the batch story totals read.
 // SV-ENG-120: +1 get_log_debug_enabled, the log-level read behind the bridge-timing logs.
 // SV-PBF-230: +1 `story_default_start_point` (the base a new story branch takes). → 501.
-pub const EXPECTED_COMMAND_COUNT: usize = 501;
+// +1 `agent_inbox::unarchive_inbox_messages` (Inbox Undo for Archive). → 502.
+pub const EXPECTED_COMMAND_COUNT: usize = 502;
 
 #[cfg(test)]
 mod tests {

@@ -13,7 +13,7 @@
   <body class="cs-page cs-docs" data-page="arc-d-terminals-and-machines/local-machine">
     <nav class="cs-topnav" aria-label="CodeSense docs navigation"></nav>
     <main class="cs-main">
-      <section data-hero data-search="Local machine — this Mac — terminal and host-agent" id="hero">
+      <section data-hero data-search="Local machine — this Mac — terminal and the app process" id="hero">
         <p>
           <span class="cs-docs-chip" data-arc="D">Arc D · Local</span>
         </p>
@@ -35,7 +35,7 @@
         <ol>
           <li>
             <strong>You open a tab</strong> — <span class="cs-docs-kbd">⌘</span><span class="cs-docs-kbd">T</span>
-            or <em>Workspace → New terminal</em>, or <code>open_terminal_tab</code>
+            or the <em>New terminal</em> (+) button in the tab bar, or <code>open_terminal_tab</code>
             over MCP. The tab is scoped to the current workspace: its cwd is the
             workspace's hydrated worktree.
           </li>
@@ -58,10 +58,10 @@
         </ol>
       </section>
 
-      <section data-search="The host-agent — only runs locally" id="host-agent">
-        <h2>The host-agent</h2>
+      <section data-search="The app process — only runs locally" id="host-agent">
+        <h2>The app process</h2>
         <p>
-          The host-agent is a background process that runs on the Mac you run
+          The CodeSense app's own process runs on the Mac you run
           CodeSense on. It brokers resources no other process can — notably,
           exposing CodeSense's MCP server to agent CLIs you launch yourself in your own
           Terminal.app, and holding the file watchers for your context repos.
@@ -73,13 +73,13 @@
           <li>
             <strong>There is exactly one.</strong> It lives alongside your profile
             directory. It never runs on a remote machine — remote work gets its
-            parity from the terminal server (next page), not from a second host-agent.
+            parity from the terminal server (next page), not from a second copy of the app.
           </li>
           <li>
             <strong>If it's wedged,</strong> quit CodeSense and relaunch it first. If that
             doesn't help, <em>Restart terminal server</em> (or
-            <code>restart_terminal_server</code>) starts it fresh, and it ends every terminal
-            and agent running on it.
+            <code>restart_terminal_server</code>) starts the terminal server fresh, and that ends
+            every terminal and agent running on it.
           </li>
         </ul>
       </section>
@@ -108,7 +108,7 @@
         <p>Open a fresh terminal tab in your current workspace.</p>
         <cs-try-this
           verb="open_terminal_tab"
-          args='{"launch":"shell"}'
+          args='{"workspaceId":"root:acme/app"}'
           label="Open a local terminal tab"
           dry-run="true"
         ></cs-try-this>
@@ -117,15 +117,17 @@
       <section data-search="How to open a local tab via MCP" id="via-mcp">
         <details>
           <summary><strong>How to do this via MCP</strong></summary>
-          <pre><code>codesense.invoke('open_terminal_tab', {
-  requestId: crypto.randomUUID(),
+          <pre><code>open_terminal_tab {
   workspaceId: '&lt;current workspace&gt;',
-  launch: 'shell',   // or 'claude' / 'codex' / an agentKey
   headed: true,
-})</code></pre>
+}
+// → { handle }
+
+// Type into it.
+run_in_terminal_tab { handle: '&lt;handle&gt;', command: 'git status' }</code></pre>
           <p>
-            Omit <code>machineId</code> and the tab opens on this Mac. Supply a
-            <code>machineId</code> and it goes remote — same shape, different host.
+            The tab opens in that workspace on this Mac. For a tab on another machine, use
+            <code>open_remote_tab</code> with its <code>machineId</code>.
           </p>
         </details>
       </section>

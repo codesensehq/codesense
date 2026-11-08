@@ -514,6 +514,21 @@ function inboxIpc(cmd: string, args: Record<string, any> | undefined): unknown {
       inboxChanged();
       return count;
     }
+    case "unarchive_inbox_messages": {
+      let count = 0;
+      for (const m of crossTeam
+        ? rollup.filter((m) => m.team.org === args?.team.org && m.team.team === args?.team.team)
+        : messages) {
+        const id = m.messageId ?? m.id;
+        if ((m.toHuman ?? m.to === "human") && m.archivedAtMs && args?.messageIds.includes(id)) {
+          m.archivedAtMs = null;
+          if (args?.restoreUnread.includes(id)) m.unread = true;
+          count++;
+        }
+      }
+      inboxChanged();
+      return count;
+    }
     case "reply_as_human":
     case "send_inbox_as_human":
       return sendInvalid
@@ -3036,7 +3051,9 @@ it.each(["summary-only", "partly loaded"])(
     const mia = [...p.doc.querySelectorAll<HTMLElement>(".ib-row")].find((r) =>
       r.textContent?.includes("Mia"),
     )!;
-    await act(async () => mia.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () =>
+      mia.querySelector<HTMLButtonElement>('button[aria-label^="Archive "]')!.click(),
+    );
     await waitFor(() => expect(calls("mark_inbox_messages_archived")).toHaveLength(1));
     const ids = calls("mark_inbox_messages_archived")[0][1].messageIds;
     expect(new Set(ids).size).toBe(total);
@@ -3073,7 +3090,9 @@ it("archives a summary-only role conversation across every represented team", as
   const role = [...p.doc.querySelectorAll<HTMLElement>(".ib-row")].find((r) =>
     r.textContent?.includes("#docs"),
   )!;
-  await act(async () => role.querySelector<HTMLButtonElement>("button")!.click());
+  await act(async () =>
+    role.querySelector<HTMLButtonElement>('button[aria-label^="Archive "]')!.click(),
+  );
   await waitFor(() => expect(calls("mark_inbox_messages_archived")).toHaveLength(2));
   expect(
     calls("mark_inbox_messages_archived").map(([, args]) => [
@@ -3246,8 +3265,14 @@ it.each(["incoming", "outgoing"])(
     );
     inboxChanged();
     await waitFor(() => expect(el(p, "thread-meta").textContent).toBe("601 messages"));
-    if (direction === "incoming")
+    if (direction === "incoming") {
+      await waitFor(() =>
+        expect([
+          ...new Set(calls("mark_inbox_messages_read").flatMap(([, args]) => args.messageIds)),
+        ]).toEqual([601]),
+      );
       await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    }
     const ids = () =>
       [...el(p, "log").querySelectorAll<HTMLElement>(".ib-msg")].map((m) =>
         Number(m.dataset.messageId),
@@ -3265,6 +3290,80 @@ it.each(["incoming", "outgoing"])(
     ).toEqual([undefined, 101]);
   },
 );
+
+it("keeps the badge clear when a refresh read before the open reader's mark landed", async () => {
+  messages = [row(1, "Mia", "human", { unread: false }), row(2, "human", "Mia", { unread: false })];
+  const p = await openInbox(false);
+  await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+  await openThread(p);
+  await waitFor(() => expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(2));
+  let releaseMark!: () => void;
+  let releaseReads!: () => void;
+  const markGate = new Promise<void>((resolve) => (releaseMark = resolve));
+  const readGate = new Promise<void>((resolve) => (releaseReads = resolve));
+  let holdReads = false;
+  let heldReads = 0;
+  tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+    if (cmd === "mark_inbox_messages_read") await markGate;
+    // Answer from the store as it is now, before the mark lands, and hold the answer.
+    const result = stubTauri(cmd, args);
+    if (cmd === "agent_read_inbox" && holdReads && !args?.query?.conversation) {
+      heldReads++;
+      await readGate;
+    }
+    return result;
+  });
+  messages.push(row(3, "Mia", "human"));
+  inboxChanged();
+  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
+  holdReads = true;
+  inboxChanged();
+  // Both inbox reads of the refresh this starts answered while the mark was pending.
+  await waitFor(() => expect(heldReads).toBe(2));
+  holdReads = false;
+  await act(async () => releaseMark());
+  await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+  const topLevelReads = () =>
+    calls("agent_read_inbox").filter(([, args]) => !args.query?.conversation).length;
+  const before = topLevelReads();
+  const badges: unknown[] = [];
+  const unsubscribe = usePaneStore.subscribe((state) => badges.push(state.badges[PANEL]));
+  try {
+    await act(async () => releaseReads());
+    // The next refresh starts only after the held one has drawn.
+    await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before));
+  } finally {
+    unsubscribe();
+  }
+  expect(badges.filter((badge) => badge !== undefined)).toEqual([]);
+  expect(calls("mark_inbox_messages_read").map(([, args]) => args.messageIds)).toEqual([[3]]);
+});
+
+it("shows the badge again when the open reader's held mark fails", async () => {
+  messages = [row(1, "Mia", "human", { unread: false }), row(2, "human", "Mia", { unread: false })];
+  const p = await openInbox(false);
+  await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+  await openThread(p);
+  await waitFor(() => expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(2));
+  let failMark!: () => void;
+  const markGate = new Promise<void>(
+    (_, reject) => (failMark = () => reject(new Error("Store unavailable"))),
+  );
+  tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "mark_inbox_messages_read") await markGate;
+    return stubTauri(cmd, args);
+  });
+  messages.push(row(3, "Mia", "human"));
+  inboxChanged();
+  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
+  // A refresh while the mark is pending keeps the badge clear under the read hold.
+  inboxChanged();
+  await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+  await act(async () => failMark());
+  await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+  expect(el(p, "composer-error").textContent).toContain("Could not mark read");
+  expect(messages[2].unread).toBe(true);
+});
 
 it("replaces open history when archive and growth together are not a verified append", async () => {
   messages = [row(1, "Mia", "human", { unread: false }), row(2, "human", "Mia", { unread: false })];
@@ -3315,13 +3414,14 @@ describe("inbox commands", () => {
       ["Back to list", "arrow-left"],
       ["Reply", "reply"],
       ["Go to session", "square-terminal"],
-      ["Archive conversation", "archive"],
+      ["Archive", "archive"],
+      ["Mark all read", "check-check"],
       ["New message", "square-pen"],
       ["Filter by team", "layers"],
       ["Toggle conversation list", "panel-left"],
     ]);
     const bindings = resolveBindings({});
-    expect(actions.slice(0, 8).every((a) => bindings.get(a.id)?.keystroke === "")).toBe(true);
+    expect(actions.slice(0, 9).every((a) => bindings.get(a.id)?.keystroke === "")).toBe(true);
     expect(bindings.get(commandId("toggle-list"))).toMatchObject({
       keystroke: "",
       unbound: { kind: "conflict", wanted: "CmdOrCtrl+B" },
@@ -4089,15 +4189,17 @@ it("applies the shipped Inbox recipe: fixed team, needs-you summaries, replies a
   await waitFor(() => expect(el(p, "log").textContent).toContain("Use the first plan"));
 });
 
-it("pages the Inbox recipe through more than 500 updates to recover a reply outside both initial windows", async () => {
+it("pages the Inbox recipe through 500 newer sent messages to recover a reply outside both initial windows", async () => {
   messages = [
     row(1, "Mia", "human", { kind: "needs-you", text: "Original decision" }),
     row(2, "human", "Mia", { kind: "update", text: "Older retained reply", unread: false }),
-    ...Array.from({ length: 500 }, (_, index) =>
+    // 100 updates put the reply past the first history page; 500 newer sent rows put it
+    // past the 500-row inbox window.
+    ...Array.from({ length: 100 }, (_, index) =>
       row(index + 3, "Mia", "human", { kind: "update", unread: false }),
     ),
     ...Array.from({ length: 500 }, (_, index) =>
-      row(index + 503, "human", "Other", { kind: "update", unread: false }),
+      row(index + 103, "human", "Other", { kind: "update", unread: false }),
     ),
   ];
   const p = await openInbox(false, recipePane("inbox"));
@@ -4110,10 +4212,10 @@ it("pages the Inbox recipe through more than 500 updates to recover a reply outs
   const control = () => el(p, "log").querySelector<HTMLButtonElement>(".ib-older button")!;
   await waitFor(() => expect(reads()).toHaveLength(1));
   await waitFor(() => expect(control().getAttribute("aria-disabled")).toBe("false"));
-  for (let page = 2; page <= 11; page++) {
+  for (let page = 2; page <= 3; page++) {
     await act(async () => control().click());
     await waitFor(() => expect(reads()).toHaveLength(page));
-    if (page < 11)
+    if (page < 3)
       await waitFor(() => expect(control().getAttribute("aria-disabled")).toBe("false"));
   }
   expect(reads()[0][1].query.before).toBeUndefined();
@@ -4121,9 +4223,9 @@ it("pages the Inbox recipe through more than 500 updates to recover a reply outs
     reads()
       .slice(1)
       .map(([, args]) => args.query.before),
-  ).toEqual([453, 403, 353, 303, 253, 203, 153, 103, 53, 3]);
+  ).toEqual([53, 3]);
   await waitFor(() => expect(el(p, "log").textContent).toContain("Older retained reply"));
-  expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(502);
+  expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(102);
   expect(el(p, "log").textContent).toContain("Start of conversation");
   expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1);
 });
@@ -4288,4 +4390,764 @@ it("an inherited Inbox replacement waits for its hosted message's flush", async 
   }
   await waitFor(() => expect(original.isConnected).toBe(false));
   expect(completed).toBe(true);
+});
+
+describe("Mark all read, the row menu, the toast and row keys", () => {
+  const readIds = () =>
+    calls("mark_inbox_messages_read")
+      .flatMap(([, args]) => args.messageIds as number[])
+      .sort((a, b) => a - b);
+  const unreadIds = () =>
+    calls("mark_inbox_messages_unread")
+      .flatMap(([, args]) => args.messageIds as number[])
+      .sort((a, b) => a - b);
+  const toast = (p: PaneDoc) => el(p, "toast");
+  const undo = (p: PaneDoc) => toast(p).querySelector<HTMLButtonElement>("button")!;
+  // 12 unread across 5 conversations; Mia's four are older than any page the list loads.
+  function twelveUnread() {
+    messages = [
+      ...Array.from({ length: 300 }, (_, n) => row(n + 1, "Mia", "human", { unread: n < 4 })),
+      ...["Ori", "Ada", "Bo", "Cy"].flatMap((name, i) => [
+        row(1000 + i * 10, name, "human"),
+        row(1001 + i * 10, name, "human"),
+      ]),
+    ];
+    return messages.filter((m) => m.unread).map((m) => m.messageId);
+  }
+
+  it("reads every unread conversation, older pages included, and Undo restores exactly those rows", async () => {
+    const unread = twelveUnread();
+    const p = await openInbox(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(5));
+    const button = el(p, "mark-all-read") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-label")).toBeNull();
+    expect(button.textContent?.trim()).toBe("Mark all read");
+    expect(button.getAttribute("aria-describedby")).toBeNull();
+    expect(button.title).toBe("Mark all read");
+    await act(async () => button.click());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    await waitFor(() => expect(readIds()).toEqual(unread));
+    expect(messages.some((m) => m.unread)).toBe(false);
+    expect(toast(p).getAttribute("role")).toBe("status");
+    expect(toast(p).textContent).toBe("Marked 5 conversations read.Undo");
+    await waitFor(() => expect(button.disabled).toBe(true));
+    await act(async () => undo(p).click());
+    await waitFor(() => expect(unreadIds()).toEqual(unread));
+    expect(toast(p).textContent).toBe("");
+    expect(
+      messages
+        .filter((m) => m.unread)
+        .map((m) => m.messageId)
+        .sort((a, b) => a - b),
+    ).toEqual(unread);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(5));
+  });
+
+  it("holds the restored badge through a refresh that read before Undo's write landed", async () => {
+    twelveUnread();
+    const p = await openInbox(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(5));
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(undo(p)).toBeTruthy());
+    let releaseUnread!: () => void;
+    const unreadGate = new Promise<void>((resolve) => (releaseUnread = resolve));
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "mark_inbox_messages_unread") await unreadGate;
+      return stubTauri(cmd, args);
+    });
+    const badges: unknown[] = [];
+    const unsubscribe = usePaneStore.subscribe((state) => badges.push(state.badges[PANEL]));
+    try {
+      await act(async () => undo(p).click());
+      await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(5));
+      const topLevelReads = () =>
+        calls("agent_read_inbox").filter(([, args]) => !args.query?.conversation).length;
+      const before = topLevelReads();
+      // This refresh answers from the store while the unread write is still pending.
+      inboxChanged();
+      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before));
+      await act(async () => releaseUnread());
+      await waitFor(() => expect(calls("mark_inbox_messages_unread").length).toBeGreaterThan(0));
+      await waitFor(() => expect(messages.filter((m) => m.unread)).toHaveLength(12));
+    } finally {
+      unsubscribe();
+    }
+    const afterUndo = badges.slice(badges.findIndex((b) => b !== undefined));
+    expect(afterUndo.every((b) => (b as { count: number } | undefined)?.count === 5)).toBe(true);
+  });
+
+  it("keeps the badge clear when the reads after the write still return the old counts", async () => {
+    twelveUnread();
+    const p = await openInbox(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(5));
+    // The real host's next read can trail the write: replay pre-write rows to the first
+    // top-level reads that follow it.
+    let stale: typeof messages | null = null;
+    let staleReads = 0;
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "mark_inbox_messages_read" && !stale) {
+        stale = messages.map((m) => ({ ...m }));
+        staleReads = 2;
+      }
+      if (cmd === "agent_read_inbox" && stale && staleReads > 0 && !args?.query?.conversation) {
+        staleReads--;
+        const fresh = messages;
+        messages = stale;
+        try {
+          return stubTauri(cmd, args);
+        } finally {
+          messages = fresh;
+        }
+      }
+      return stubTauri(cmd, args);
+    });
+    const badges: unknown[] = [];
+    const unsubscribe = usePaneStore.subscribe((state) => badges.push(state.badges[PANEL]));
+    try {
+      await act(async () => el(p, "mark-all-read").click());
+      await waitFor(() => expect(staleReads).toBe(0));
+      inboxChanged();
+      await waitFor(() =>
+        expect(
+          calls("agent_read_inbox").filter(([, args]) => !args.query?.conversation).length,
+        ).toBeGreaterThan(3),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      unsubscribe();
+    }
+    expect(messages.some((m) => m.unread)).toBe(false);
+    expect(badges.filter((badge) => badge !== undefined)).toEqual([]);
+  });
+
+  // Every top-level read from the mark on answers with the pre-write rows, as a read source
+  // that never catches up would.
+  function staleForever() {
+    let stale: typeof messages | null = null;
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "mark_inbox_messages_read" && !stale) stale = messages.map((m) => ({ ...m }));
+      if (cmd === "agent_read_inbox" && stale && !args?.query?.conversation) {
+        const fresh = messages;
+        messages = stale;
+        try {
+          return stubTauri(cmd, args);
+        } finally {
+          messages = fresh;
+        }
+      }
+      return stubTauri(cmd, args);
+    });
+  }
+  const topLevelReads = () =>
+    calls("agent_read_inbox").filter(([, args]) => !args.query?.conversation).length;
+
+  it("the hidden badge refresh keeps a fresh Mark all read held", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    staleForever();
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
+    await act(async () =>
+      p.win.dispatchEvent(
+        new p.win.MessageEvent("message", {
+          source: p.win.parent,
+          data: { type: "codesense:visibility", visible: false },
+        }) as never,
+      ),
+    );
+    const before = topLevelReads();
+    inboxChanged();
+    await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(usePaneStore.getState().badges[PANEL]).toBeUndefined();
+  });
+
+  it("a hold the server never reaches lets go after the settle ceiling", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    staleForever();
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    // Within the ceiling the hold stands against the stale count...
+    inboxChanged();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(usePaneStore.getState().badges[PANEL]).toBeUndefined();
+    // ...and after it the server's own count stands, without any new event.
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2), {
+      timeout: 8000,
+    });
+  }, 15000);
+
+  it("new mail still raises the badge while a Mark all read hold is in place", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    messages.push(row(3, "Ori"));
+    inboxChanged();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+  });
+
+  it("says so when Mark all read fails and offers no Undo", async () => {
+    const p = await openInbox();
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "mark_inbox_messages_read") throw new Error("Store unavailable");
+      return stubTauri(cmd, args);
+    });
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(toast(p).textContent).toBe("Couldn't mark read. Try again."));
+    expect(toast(p).querySelector("button")).toBeNull();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+  });
+
+  it("keeps Undo while it has focus, past the 6 s, and Escape dismisses the toast", async () => {
+    const p = await openInbox();
+    expect(el(p, "conversations").getAttribute("aria-keyshortcuts")).toBe("E U Shift+F10");
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(undo(p)).toBeTruthy());
+    act(() => undo(p).focus());
+    await new Promise((resolve) => setTimeout(resolve, 6300));
+    expect(toast(p).textContent).toBe("Marked 2 conversations read.Undo");
+    fireEvent.keyDown(undo(p), { key: "Escape" });
+    expect(toast(p).textContent).toBe("");
+    expect(p.doc.activeElement).toBe(el(p, "conversations"));
+    expect(calls("mark_inbox_messages_unread")).toHaveLength(0);
+  }, 15000);
+
+  const rowNamed = (p: PaneDoc, name: string) =>
+    [...p.doc.querySelectorAll<HTMLElement>(".ib-row")].find((r) => r.textContent?.includes(name));
+  const archiveRow = (p: PaneDoc, name: string) =>
+    act(async () =>
+      rowNamed(p, name)!
+        .querySelector<HTMLButtonElement>(`button[aria-label="Archive ${name}"]`)!
+        .click(),
+    );
+  const hidePane = (p: PaneDoc) =>
+    act(async () =>
+      p.win.dispatchEvent(
+        new p.win.MessageEvent("message", {
+          source: p.win.parent,
+          data: { type: "codesense:visibility", visible: false },
+        }) as never,
+      ),
+    );
+
+  it("a new toast commits the previous one, and hiding the pane commits it", async () => {
+    const p = await openInbox();
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(toast(p).textContent).toBe("Marked 2 conversations read.Undo"));
+    await archiveRow(p, "Mia");
+    await waitFor(() => expect(toast(p).textContent).toBe("Archived conversation with Mia.Undo"));
+    // A second archive within the 6 s commits the first: only the newest has an Undo.
+    await archiveRow(p, "Ori");
+    await waitFor(() => expect(toast(p).textContent).toBe("Archived conversation with Ori.Undo"));
+    await hidePane(p);
+    await waitFor(() => expect(toast(p).textContent).toBe(""));
+    expect(calls("mark_inbox_messages_unread")).toHaveLength(0);
+    expect(calls("unarchive_inbox_messages")).toHaveLength(0);
+    expect(messages.every((m) => m.archivedAtMs)).toBe(true);
+  });
+
+  // The pane with a short toast, so the 6 s rules run in well under a second.
+  const SHORT_TOAST = PANE.replace("const TOAST_MS = 6000;", "const TOAST_MS = 250;");
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("pauses the toast while pointed at or focused and re-arms it on leave and blur", async () => {
+    expect(SHORT_TOAST).not.toBe(PANE);
+    const p = await openInbox(true, SHORT_TOAST);
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(undo(p)).toBeTruthy());
+    fireEvent.pointerEnter(toast(p));
+    await sleep(500);
+    expect(toast(p).textContent).toBe("Marked 2 conversations read.Undo");
+    fireEvent.pointerLeave(toast(p));
+    await sleep(100);
+    expect(undo(p)).toBeTruthy();
+    await waitFor(() => expect(toast(p).textContent).toBe(""), { timeout: 1000 });
+    await archiveRow(p, "Mia");
+    await waitFor(() => expect(undo(p)).toBeTruthy());
+    act(() => undo(p).focus());
+    await sleep(500);
+    expect(undo(p)).toBeTruthy();
+    act(() => el(p, "conversations").focus());
+    await sleep(100);
+    expect(undo(p)).toBeTruthy();
+    await waitFor(() => expect(toast(p).textContent).toBe(""), { timeout: 1000 });
+    expect(calls("unarchive_inbox_messages")).toHaveLength(0);
+  });
+
+  it("the hidden badge refresh keeps an archive Undo's conversation while reads trail the write", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await archiveRow(p, "Mia");
+    await waitFor(() => expect(undo(p)).toBeTruthy());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    // Every top-level read from the unarchive on answers with the still-archived rows.
+    let stale: typeof messages | null = null;
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "unarchive_inbox_messages" && !stale) stale = messages.map((m) => ({ ...m }));
+      if (cmd === "agent_read_inbox" && stale && !args?.query?.conversation) {
+        const fresh = messages;
+        messages = stale;
+        try {
+          return stubTauri(cmd, args);
+        } finally {
+          messages = fresh;
+        }
+      }
+      return stubTauri(cmd, args);
+    });
+    await act(async () => undo(p).click());
+    await waitFor(() => expect(calls("unarchive_inbox_messages")).toHaveLength(1));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await hidePane(p);
+    const before = topLevelReads();
+    inboxChanged();
+    await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before));
+    await sleep(100);
+    expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2);
+  });
+
+  it("Undo of an archive brings the conversation back with exactly its unread, without a badge flash", async () => {
+    // Mia has two unread and one read message; Ori one unread.
+    messages = [
+      row(1, "Mia"),
+      row(2, "Mia", "human", { unread: false }),
+      row(3, "Mia"),
+      row(4, "Ori"),
+    ];
+    const p = await openInbox(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    const order = () =>
+      [...p.doc.querySelectorAll(".ib-row .who .trunc")].map((n) => n.textContent);
+    const before = order();
+    await archiveRow(p, "Mia");
+    await waitFor(() => expect(toast(p).textContent).toBe("Archived conversation with Mia.Undo"));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    expect(order()).toEqual(["Ori"]);
+    // The unarchive write is held while a refresh reads the still-archived store.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "unarchive_inbox_messages") await gate;
+      return stubTauri(cmd, args);
+    });
+    const badges: unknown[] = [];
+    const rowCounts: number[] = [];
+    const unsubscribe = usePaneStore.subscribe((state) => badges.push(state.badges[PANEL]));
+    const observer = new p.win.MutationObserver(() =>
+      rowCounts.push(p.doc.querySelectorAll(".ib-row").length),
+    );
+    observer.observe(el(p, "conversations") as never, { childList: true, subtree: true });
+    try {
+      await act(async () => undo(p).click());
+      await waitFor(() => expect(order()).toEqual(before));
+      await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+      const reads = topLevelReads();
+      inboxChanged();
+      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(reads));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(order()).toEqual(before);
+      await act(async () => release());
+      await waitFor(() => expect(messages.every((m) => !m.archivedAtMs)).toBe(true));
+      inboxChanged();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      unsubscribe();
+      observer.disconnect();
+    }
+    expect(calls("unarchive_inbox_messages").map(([, args]) => args)).toEqual([
+      { team: { org: ORG, team: TEAM }, messageIds: [1, 2, 3], restoreUnread: [1, 3] },
+    ]);
+    expect(messages.filter((m) => m.unread).map((m) => m.messageId)).toEqual([1, 3, 4]);
+    expect(badges.every((b) => (b as { count: number } | undefined)?.count === 2)).toBe(true);
+    expect(rowCounts.every((n) => n === 2)).toBe(true);
+    expect(order()).toEqual(before);
+    await waitFor(() =>
+      expect(rowNamed(p, "Mia")!.querySelector(".ib-count")?.textContent).toBe("2"),
+    );
+  });
+
+  it("archives from the row menu with an Undo, and a failed Undo archives it again", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await menuAction(p, "archive", { kind: "conversation", key: "Mia" });
+    await waitFor(() => expect(toast(p).textContent).toBe("Archived conversation with Mia.Undo"));
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === "unarchive_inbox_messages") throw new Error("Store unavailable");
+      return stubTauri(cmd, args);
+    });
+    await act(async () => undo(p).click());
+    await waitFor(() => expect(toast(p).textContent).toBe("Couldn't undo the archive.Retry"));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    expect(rowNamed(p, "Mia")).toBeUndefined();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    expect(undo(p).getAttribute("aria-label")).toBe("Retry: Couldn't undo the archive.");
+    // Retry runs the same unarchive again, and now it lands.
+    tauriInvoke.mockImplementation(stubTauri);
+    await act(async () => undo(p).click());
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    expect(messages.find((m) => m.from === "Mia")?.archivedAtMs).toBeNull();
+  });
+
+  it("the row's … button sends the same host menu request as right-clicking the row", async () => {
+    const p = await openInbox();
+    const mia = [...p.doc.querySelectorAll<HTMLElement>(".ib-row")].find((r) =>
+      r.textContent?.includes("Mia"),
+    )!;
+    const more = mia.querySelector<HTMLButtonElement>(
+      'button[aria-label="Actions for conversation with Mia"]',
+    )!;
+    const menus = () => p.sent.filter((m) => m.type === "codesense:contextmenu");
+    fireEvent.contextMenu(mia.querySelector(".prev")!, { clientX: 40, clientY: 50 });
+    await waitFor(() => expect(menus()).toHaveLength(1));
+    await new Promise((resolve) => p.win.setTimeout(resolve, 0));
+    await act(async () => more.click());
+    await waitFor(() => expect(menus()).toHaveLength(2));
+    const [right, button] = menus();
+    expect(button.target).toBe("row");
+    expect(button.row).toEqual(right.row);
+    expect(button.row).toMatchObject({ kind: "conversation", key: "Mia" });
+    // The click on … does not open the conversation.
+    expect(el(p, "inbox").dataset.view).toBe("list");
+  });
+
+  it("U toggles a focused row read and unread; E archives it, keeps the list position and Undo brings it back", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    const list = el(p, "conversations");
+    list.focus();
+    const activeName = () =>
+      p.doc.querySelector(".ib-row.kbd-active")?.querySelector(".who .trunc")?.textContent;
+    const name = activeName()!;
+    const first = messages.find((m) => m.from === name)!;
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() => expect(first.unread).toBe(false));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    expect(el(p, "inbox").dataset.view).toBe("list");
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() => expect(first.unread).toBe(true));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    expect(calls("mark_inbox_messages_unread").at(-1)![1].messageIds).toEqual([first.messageId]);
+    // Caps Lock gives "E" without Shift: it archives too.
+    fireEvent.keyDown(list, { key: "E" });
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe(`Archived conversation with ${name}.Undo`),
+    );
+    expect(undo(p).getAttribute("aria-label")).toBe(`Undo: Archived conversation with ${name}.`);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    expect(activeName()).toBe(name === "Ori" ? "Mia" : "Ori");
+    expect(first.archivedAtMs).toBeTruthy();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    await act(async () => undo(p).click());
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
+    await waitFor(() => expect(first.archivedAtMs).toBeNull());
+    expect(first.unread).toBe(true);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    // Undo puts the keyboard back on the restored row.
+    expect(activeName()).toBe(name);
+  });
+
+  it("a held E archives one row, and E on the last row moves focus up", async () => {
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    const activeName = () =>
+      p.doc.querySelector(".ib-row.kbd-active")?.querySelector(".who .trunc")?.textContent;
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    const [first, last] = [...p.doc.querySelectorAll(".ib-row .who .trunc")].map(
+      (n) => n.textContent,
+    );
+    expect(activeName()).toBe(last);
+    // Auto-repeat from a held key does nothing: only the first press acts.
+    fireEvent.keyDown(list, { key: "e", repeat: true });
+    await sleep(50);
+    expect(calls("mark_inbox_messages_archived")).toHaveLength(0);
+    fireEvent.keyDown(list, { key: "e" });
+    fireEvent.keyDown(list, { key: "e", repeat: true });
+    fireEvent.keyDown(list, { key: "e", repeat: true });
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe(`Archived conversation with ${last}.Undo`),
+    );
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    expect(calls("mark_inbox_messages_archived")).toHaveLength(1);
+    expect(activeName()).toBe(first);
+  });
+
+  it("a second U before the first lands marks the rows unread once and the badge settles", async () => {
+    messages = [row(1, "Mia"), row(2, "Ori", "human", { unread: false })];
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    const list = el(p, "conversations");
+    list.focus();
+    fireEvent.keyDown(list, { key: "u" });
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() => expect(messages[1].unread).toBe(true));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    expect(calls("mark_inbox_messages_unread").map(([, args]) => args.messageIds)).toEqual([[2]]);
+    const ori = [...p.doc.querySelectorAll<HTMLElement>(".ib-row")].find((r) =>
+      r.textContent?.includes("Ori"),
+    )!;
+    await waitFor(() => expect(ori.querySelector(".ib-count")?.textContent).toBe("1"));
+  });
+
+  it("anchors the … menu just below its button, from the box it has when clicked", async () => {
+    const p = await openInbox();
+    const more = p.doc.querySelector<HTMLButtonElement>(
+      'button[aria-label="Actions for conversation with Mia"]',
+    )!;
+    more.getBoundingClientRect = () =>
+      ({
+        left: 300,
+        top: 396,
+        right: 324,
+        bottom: 420,
+        width: 24,
+        height: 24,
+        x: 300,
+        y: 396,
+      }) as DOMRect;
+    const menus = () => p.sent.filter((m) => m.type === "codesense:contextmenu");
+    await act(async () => more.click());
+    await waitFor(() => expect(menus()).toHaveLength(1));
+    expect(menus()[0]).toMatchObject({
+      target: "row",
+      row: { kind: "conversation", key: "Mia" },
+      anchorRect: { x: 300, y: 420 },
+    });
+  });
+
+  it("keys typed on a row's own buttons stay with the button", async () => {
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    const more = p.doc.querySelector<HTMLButtonElement>(".ib-row.kbd-active .rowact button")!;
+    more.focus();
+    for (const key of ["Enter", " ", "u", "e", "ArrowDown"]) fireEvent.keyDown(more, { key });
+    expect(el(p, "inbox").dataset.view).toBe("list");
+    expect(calls("mark_inbox_messages_read")).toHaveLength(0);
+    expect(calls("mark_inbox_messages_archived")).toHaveLength(0);
+  });
+
+  it("the ContextMenu key and Shift+F10 open the active row's menu", async () => {
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    const key = JSON.parse(
+      p.doc.querySelector(".ib-row.kbd-active")!.getAttribute("data-codesense-row")!,
+    ).key;
+    const menus = () => p.sent.filter((m) => m.type === "codesense:contextmenu");
+    fireEvent.keyDown(list, { key: "ContextMenu" });
+    await waitFor(() => expect(menus()).toHaveLength(1));
+    await new Promise((resolve) => p.win.setTimeout(resolve, 0));
+    fireEvent.keyDown(list, { key: "F10", shiftKey: true });
+    await waitFor(() => expect(menus()).toHaveLength(2));
+    for (const menu of menus()) expect(menu).toMatchObject({ target: "row", row: { key } });
+  });
+
+  it("the palette's Mark all read command reads the listed conversations", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await act(async () =>
+      p.win.dispatchEvent(
+        new p.win.MessageEvent("message", {
+          source: p.win.parent,
+          data: { type: "codesense:command", id: "mark-all-read" },
+        }) as never,
+      ),
+    );
+    await waitFor(() => expect(readIds()).toEqual([1, 2]));
+    await waitFor(() => expect(toast(p).textContent).toBe("Marked 2 conversations read.Undo"));
+  });
+
+  it("is a palette command with no default chord and disables with nothing unread", async () => {
+    messages = [row(1, "Mia", "human", { unread: false })];
+    const p = await openInbox(false);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    expect((el(p, "mark-all-read") as HTMLButtonElement).disabled).toBe(true);
+    const commands = JSON.parse(
+      p.doc.querySelector('meta[name="codesense:commands"]')!.getAttribute("content")!,
+    ) as { id: string; label: string; defaultChord?: string }[];
+    expect(commands.find((c) => c.id === "mark-all-read")).toEqual({
+      id: "mark-all-read",
+      label: "Mark all read",
+      icon: "check-check",
+      scope: "slot-focused",
+    });
+  });
+});
+
+describe("cross-team Mark all read", () => {
+  beforeEach(() => {
+    crossTeam = true;
+    rollup = [
+      { ...row(1), id: 1, team: { org: ORG, team: TEAM }, toRole: null },
+      { ...row(1, "Ori"), id: 1, team: { org: ORG, team: "web" }, toRole: null },
+    ];
+  });
+  const toast = (p: PaneDoc) => el(p, "toast");
+  it("reads only the filtered team's conversations and counts them in the toast", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    fireEvent.click(el(p, "team-filter"));
+    fireEvent.click(
+      [...p.doc.querySelectorAll<HTMLElement>("#filter-menu button")].find((b) =>
+        b.textContent?.includes("web"),
+      )!,
+    );
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    const button = el(p, "mark-all-read");
+    expect(button.getAttribute("aria-describedby")).toBe("mark-all-scope");
+    expect(el(p, "mark-all-scope").textContent).toBe("Marks the conversations in web");
+    await act(async () => button.click());
+    await waitFor(() => expect(toast(p).textContent).toBe("Marked 1 conversation read.Undo"));
+    expect(calls("mark_inbox_messages_read").map(([, args]) => args)).toEqual([
+      { team: { org: ORG, team: "web" }, messageIds: [1] },
+    ]);
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(true);
+    expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+  });
+
+  const failIn = (failing: string, team: string) =>
+    tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, any>) => {
+      if (cmd === failing && args?.team.team === team) throw new Error("Store unavailable");
+      return stubTauri(cmd, args);
+    });
+
+  it("keeps the teams that were marked when another team fails, and Undo restores only those", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    failIn("mark_inbox_messages_read", "web");
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe(
+        "Marked 1 conversation read. Couldn't mark the conversations in web read.Undo",
+      ),
+    );
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(false);
+    expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(true);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    await act(async () => toast(p).querySelector("button")!.click());
+    await waitFor(() => expect(calls("mark_inbox_messages_unread")).toHaveLength(1));
+    expect(calls("mark_inbox_messages_unread")[0][1]).toEqual({
+      team: { org: ORG, team: TEAM },
+      messageIds: [1],
+    });
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+  });
+
+  it("names the team whose Undo of Mark all read failed and keeps it read", async () => {
+    const p = await openInbox();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
+    await act(async () => el(p, "mark-all-read").click());
+    await waitFor(() => expect(toast(p).textContent).toBe("Marked 2 conversations read.Undo"));
+    failIn("mark_inbox_messages_unread", "web");
+    await act(async () => toast(p).querySelector("button")!.click());
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe(
+        "Couldn't mark the conversations in web unread. Try again.",
+      ),
+    );
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(true);
+    expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(false);
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+  });
+
+  it("Undo of a two-team archive keeps the team that unarchived and names the one that failed", async () => {
+    rollup = [
+      { ...row(1, "human", null), id: 1, team: { org: ORG, team: TEAM }, toRole: "docs" },
+      { ...row(1, "human", null), id: 1, team: { org: ORG, team: "web" }, toRole: "docs" },
+      { ...row(2, "Mia"), id: 2, team: { org: ORG, team: TEAM }, inReplyTo: 1 },
+      { ...row(2, "Ori"), id: 2, team: { org: ORG, team: "web" }, inReplyTo: 1 },
+    ];
+    const p = await openInbox(false);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    await menuAction(p, "archive", { kind: "conversation", key: "#docs" });
+    await waitFor(() => expect(toast(p).textContent).toBe("Archived conversation with #docs.Undo"));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(0));
+    failIn("unarchive_inbox_messages", "web");
+    await act(async () => toast(p).querySelector("button")!.click());
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe("Couldn't undo the archive in web.Retry"),
+    );
+    expect(calls("unarchive_inbox_messages").map(([, args]) => args)).toEqual(
+      expect.arrayContaining([
+        { team: { org: ORG, team: TEAM }, messageIds: [2], restoreUnread: [2] },
+        { team: { org: ORG, team: "web" }, messageIds: [2], restoreUnread: [2] },
+      ]),
+    );
+    const stillArchived = rollup.filter((m) => m.archivedAtMs).map((m) => m.team.team);
+    expect(stillArchived).toEqual(["web"]);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    // Locally too, only the team that unarchived is back: Mia's reply, not Ori's.
+    expect(p.doc.querySelector(".ib-row")?.textContent).toContain(TEAM);
+    expect(p.doc.querySelector(".ib-row")?.textContent).not.toContain("web");
+    await openThread(p, "#docs");
+    await waitFor(() => expect(el(p, "log").textContent).toContain("Mia"));
+    expect(el(p, "log").textContent).not.toContain("Ori");
+    // Retry unarchives only the team that failed, and then it lands.
+    tauriInvoke.mockImplementation(stubTauri);
+    const before = calls("unarchive_inbox_messages").length;
+    await act(async () => toast(p).querySelector("button")!.click());
+    await waitFor(() => expect(rollup.some((m) => m.archivedAtMs)).toBe(false));
+    expect(
+      calls("unarchive_inbox_messages")
+        .slice(before)
+        .map(([, args]) => args),
+    ).toEqual([{ team: { org: ORG, team: "web" }, messageIds: [2], restoreUnread: [2] }]);
+    await waitFor(() => expect(el(p, "log").textContent).toContain("Ori"));
+    expect(toast(p).textContent).toBe("");
+  });
+
+  const docsInTwoTeams = () => [
+    { ...row(1, "human", null), id: 1, team: { org: ORG, team: TEAM }, toRole: "docs" },
+    { ...row(1, "human", null), id: 1, team: { org: ORG, team: "web" }, toRole: "docs" },
+    { ...row(2, "Mia"), id: 2, team: { org: ORG, team: TEAM }, inReplyTo: 1 },
+    { ...row(2, "Ori"), id: 2, team: { org: ORG, team: "web" }, inReplyTo: 1 },
+  ];
+
+  it("opening a two-team conversation names the team whose read failed", async () => {
+    rollup = docsInTwoTeams();
+    const p = await openInbox(false);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    failIn("mark_inbox_messages_read", "web");
+    await openThread(p, "#docs");
+    await waitFor(() =>
+      expect(el(p, "composer-error").textContent).toBe("Could not mark read in web."),
+    );
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(false);
+    expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(true);
+  });
+
+  it("U on a two-team row names the team it could not mark read or unread", async () => {
+    rollup = docsInTwoTeams();
+    const p = await openInbox(false);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    const list = el(p, "conversations");
+    list.focus();
+    failIn("mark_inbox_messages_read", "web");
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe("Couldn't mark the conversations in web read. Try again."),
+    );
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(false);
+    rollup.find((m) => m.from === "Ori")!.unread = false;
+    inboxChanged();
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    failIn("mark_inbox_messages_unread", "web");
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() =>
+      expect(toast(p).textContent).toBe(
+        "Couldn't mark the conversations in web unread. Try again.",
+      ),
+    );
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(true);
+    expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(false);
+  });
 });

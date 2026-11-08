@@ -350,14 +350,15 @@
           <div>
             <h3>codesense_overview</h3>
             <p>
-              <strong>Always start here.</strong> One read-only call. You see every active org,
-              every team, every source repo, every machine, every open session and routine. Most
-              agent tasks are answered from this reply alone — "which teams does this user have?",
-              "which source repo is bound to this team?", "is there already a session doing X?"
+              <strong>Always start here.</strong> One read-only call. You see the active org and
+              team, machines, sessions, saved Agents, routines, the inbox, role queues and open
+              workspaces, each with the tools that return its full data. Many agent tasks are
+              answered from this reply alone — "who needs me?", "is there already a session doing
+              X?"
             </p>
             <p class="caption">
-              In <code>tools/list</code> with every other tool. Takes no args.
-              Nothing writes.
+              In <code>tools/list</code> with every other tool. Needs no args
+              (<code>{guide: true}</code> returns the concepts guide instead). Nothing writes.
             </p>
           </div>
         </div>
@@ -454,12 +455,11 @@
         </table>
       </section>
 
-      <section data-search="Why this shape — short answer and the MCP-complete rule" id="invariant">
+      <section data-search="Why this shape — short answer" id="invariant">
         <h2>Why this shape</h2>
         <p>
-          The MCP server has every CodeSense verb — the
-          <strong>MCP-complete</strong> rule says every UI action has a tool, and
-          <code>tools/list</code> advertises all of them so strict hosts can call any of them. With
+          The MCP server has most CodeSense actions as tools, and
+          <code>tools/list</code> advertises all its tools so strict hosts can call any of them. With
           a few hundred tools, an agent rarely knows a name up front, and hosts that load schemas lazily
           show names only. Search and schema close that gap.
         </p>
@@ -472,10 +472,9 @@
           shows how name-match beats description-match.
         </p>
         <cs-try-this
-          verb="invoke"
-          args='{"name": "codesense_search_tools", "args": {"query": "add source repo"}}'
+          verb="codesense_search_tools"
+          args='{"query": "add source repo"}'
           label="Search for add_source_repo"
-          dry-run="false"
           dry-run="true"
         ></cs-try-this>
       </section>
@@ -494,7 +493,7 @@ codesense_get_tool_schema { name: 'add_source_repo' }
 
 // 4. Call it.
 add_source_repo {
-  org: 'acme',
+  org: 'acme/team-context',
   team: 'default',
   url: 'owner/repo'
 }</code></pre>

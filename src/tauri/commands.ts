@@ -1232,6 +1232,14 @@ export const markInboxMessagesUnread = (team: InboxTeam, messageIds: readonly nu
 export const markInboxMessagesArchived = (team: InboxTeam, messageIds: readonly number[]) =>
   invoke<number>("mark_inbox_messages_archived", { team, messageIds });
 
+/** Undo an archive in one transaction: unarchive human-directed messages and make the ones in
+ *  `restoreUnread` unread again. Resolves how many were unarchived. */
+export const unarchiveInboxMessages = (
+  team: InboxTeam,
+  messageIds: readonly number[],
+  restoreUnread: readonly number[],
+) => invoke<number>("unarchive_inbox_messages", { team, messageIds, restoreUnread });
+
 /** Outcome of `withdrawInboxMessage`. */
 export type WithdrawInboxMessageResult =
   | { status: "withdrawn"; withdrawnAtMs: number }
@@ -9707,7 +9715,7 @@ export const listMoveIntentsBridge = () => invoke<MoveIntentView[]>("list_move_i
  *
  *  `archivedAtMs` is epoch-ms when the operator marked the workspace archived,
  *  or `null` for an active workspace. The entry is keyed by the viewer
- *  workspace id string (`root:<path>` / `story:<id>` / `generic:<path>` —
+ *  workspace id string (`root:<owner>/<repo>` / `story:<id>` / `generic:<path>` —
  *  the same form `OpenTerminalTabParams.workspaceId` carries).
  *
  *  See `_bmad-output/21-workspace-chat/stories/SW-WC-1-workspace-archive.md`.

@@ -377,6 +377,9 @@ declare namespace CodesenseSdk {
     onRoutinesChanged(cb: () => void): Unsubscribe;
     onMachinesChanged(cb: () => void): Unsubscribe;
     onWorktreesChanged(cb: () => void): Unsubscribe;
+    /** Runs `cb` when the answer to canPasteToTerminal() flips between true and false.
+     * Re-read then. */
+    onPasteTargetChanged(cb: () => void): Unsubscribe;
     sprints(): Promise<unknown>;
     taxonomy(): Promise<unknown>;
 
@@ -825,6 +828,8 @@ declare namespace CodesenseSdk {
     analyze(args?: Record<string, unknown>): Promise<unknown>;
     /** metadata · inbox:write */
     archive(args?: Record<string, unknown>): Promise<unknown>;
+    /** read · sessions:read */
+    canPasteToTerminal(args?: Record<string, unknown>): Promise<boolean>;
     /** manage · sessions:stop · confirmable · MCP twin close_terminal_tab */
     closeTerminalTab(args: {
       handle: string;
@@ -1578,6 +1583,17 @@ declare namespace CodesenseSdk {
       window?: [number, number];
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write */
+    unarchive(args: {
+      messageIds: number[];
+      org?: string;
+      restoreUnread?: number[];
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      unarchived: number;
+      [key: string]: unknown;
+    }>;
     /** read · sessions:read */
     unsubscribe(args: {
       collection?: string;

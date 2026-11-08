@@ -14,10 +14,10 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 105,
-    "actionVerbs": 54,
-    "readVerbs": 51,
-    "surfaceMembers": 51
+    "bridgeMethods": 107,
+    "actionVerbs": 55,
+    "readVerbs": 52,
+    "surfaceMembers": 52
   },
   "sdk": [
     {
@@ -401,6 +401,14 @@
       "owner": "Surface",
       "signature": "onWorktreesChanged(cb: () => void): Unsubscribe;",
       "description": "",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "onPasteTargetChanged",
+      "owner": "Surface",
+      "signature": "onPasteTargetChanged(cb: () => void): Unsubscribe;",
+      "description": "Runs `cb` when the answer to canPasteToTerminal() flips between true and false.\nRe-read then.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -967,6 +975,14 @@
       "feature": null
     },
     {
+      "name": "onPasteTargetChanged",
+      "owner": "Surface",
+      "signature": "onPasteTargetChanged(cb: () => void): Unsubscribe;",
+      "description": "Runs `cb` when the answer to canPasteToTerminal() flips between true and false.\nRe-read then.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
       "name": "sprints",
       "owner": "Surface",
       "signature": "sprints(): Promise<unknown>;",
@@ -1082,6 +1098,29 @@
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "canPasteToTerminal",
+      "owner": "VerbMethods",
+      "signature": "canPasteToTerminal(args?: Record<string, unknown>): Promise<boolean>;",
+      "description": "read · sessions:read",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "sessions:read",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Pages ask it to enable a paste control; agents address sessions by handle with send_to_session.",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "type": "boolean"
+      },
+      "action": false,
       "confirmable": false,
       "feature": null
     },
@@ -5523,6 +5562,64 @@
       "feature": null
     },
     {
+      "name": "unarchive",
+      "owner": "VerbMethods",
+      "signature": "unarchive(args: {\n      messageIds: number[];\n      org?: string;\n      restoreUnread?: number[];\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      unarchived: number;\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Host operation bound to the rendered dashboard; no identical MCP binding",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "restoreUnread": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "unarchived": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unarchived"
+        ],
+        "type": "object"
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
       "name": "unsubscribe",
       "owner": "VerbMethods",
       "signature": "unsubscribe(args: {\n      collection?: string;\n      topic: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
@@ -6033,6 +6130,27 @@
       "audited": true,
       "action": true,
       "module": "inbox"
+    },
+    {
+      "name": "canPasteToTerminal",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "type": "boolean"
+      },
+      "grant": "sessions:read",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Pages ask it to enable a paste control; agents address sessions by handle with send_to_session.",
+      "audited": false,
+      "action": false,
+      "module": "agent"
     },
     {
       "name": "closeTerminalTab",
@@ -10286,6 +10404,62 @@
       ]
     },
     {
+      "name": "unarchive",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "restoreUnread": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "unarchived": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unarchived"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Host operation bound to the rendered dashboard; no identical MCP binding",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
       "name": "unsubscribe",
       "class": "read",
       "argsSchema": {
@@ -10591,6 +10765,22 @@
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "grant": "context:read",
+      "mcpTwin": null
+    },
+    {
+      "verb": "canPasteToTerminal",
+      "tier": "read",
+      "description": "read · sessions:read",
+      "args": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "result": {
+        "type": "boolean"
+      },
+      "grant": "sessions:read",
       "mcpTwin": null
     },
     {
@@ -13601,12 +13791,33 @@
       },
       "grant": "sessions:stop",
       "mcpTwin": null
+    },
+    {
+      "verb": "unarchive",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"messageIds\":{\"items\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"minItems\":1,\"type\":\"array\"},\"org\":{\"type\":\"string\"},\"restoreUnread\":{\"items\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"type\":\"array\"},\"team\":{\"type\":\"string\"}},\"required\":[\"messageIds\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "properties": {
+          "unarchived": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unarchived"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
     }
   ],
   "tiers": [
     {
       "tier": "metadata",
-      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, loadMedia, markRead, markUnread, react, records.create, records.delete, records.restore, records.setFields, records.write, routeToContext, setField, setHumanStatus, setModelRate, setStatus",
+      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, loadMedia, markRead, markUnread, react, records.create, records.delete, records.restore, records.setFields, records.write, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive",
       "note": "metadata class; Rust checks the effective grant on every call."
     },
     {
@@ -13636,12 +13847,12 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "a48d6714751b6ebde0d2dca532e2ed7b2d8cfe7ea4309e8d2ce43442fcdf220f",
-    "src-tauri/src/verbs/registry.generated.json": "5dbd84256de4d213a93eb8afd3e955063a24d4b13d33316b27b9b60491f6f3a9",
-    "src-tauri/src/verbs/registry.rs": "3e6945361b475ab01ebda7df4e029dacc86a4a51c0c56a2141249a5b4ab81317",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "111ff4b262955069e6f5e3d2922eeeeea38d90b5383d2de9170c8e9de42ed7b0",
+    "src-tauri/src/verbs/registry.generated.json": "e80d878c6e9007af20d746241f9fdc384d05ab1e67efa115af3f997e5fc16487",
+    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "24edc3966808bf25b3744c733aeb3ba731aba84bb5bf802fb8b9e491ab0d06c7",
-    "src-tauri/src/http/routes/viewer.rs": "8612bfbcadfea4c08b99d5ac63995077696a3960486412f54cbb997ffb464df1",
+    "src-tauri/src/http/routes/viewer.rs": "4ad626a372fd2197923eeaa684a0723aceb3180a48b06af49cca0f58bb0a75f0",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

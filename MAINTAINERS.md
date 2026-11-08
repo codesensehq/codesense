@@ -20,25 +20,6 @@ maintainers, and this file will say how.
 
 ## How an outside change gets in
 
-This repository is a release snapshot: CodeSense is developed in the
-maintainer's private repository, and each release is synced here as one commit.
-We don't accept pull requests yet (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-Once we do, an accepted change gets in like this:
-
-1. The maintainer accepts the change in its pull request here.
-2. The maintainer applies it as a patch in the private repository, keeping your
-   `Signed-off-by:` line and adding a trailer that credits you:
-
-   ```text
-   Co-authored-by: Your Name <you@example.com>
-   ```
-
-3. The patch goes through a pull request and review in the private repository,
-   like every other change.
-4. It ships here in the next release sync. This repository gets one commit per
-   release, so you're credited by name in that release's `CHANGELOG.md` entry.
-   The `Co-authored-by:` trailer stays on the commit in the private history.
-5. The maintainer closes your pull request with a note saying which release
-   carries it.
-
-Releases are not on a fixed schedule, so a change can take a while to appear.
+Outside changes come in as pull requests on this repository, reviewed and
+merged here; [CONTRIBUTING.md](CONTRIBUTING.md#how-a-pull-request-lands)
+describes how.

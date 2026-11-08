@@ -87,6 +87,27 @@
     "module": "inbox"
   },
   {
+    "name": "canPasteToTerminal",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "resultSchema": {
+      "type": "boolean"
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Pages ask it to enable a paste control; agents address sessions by handle with send_to_session.",
+    "audited": false,
+    "action": false,
+    "module": "agent"
+  },
+  {
     "name": "closeTerminalTab",
     "class": "manage",
     "argsSchema": {
@@ -4120,6 +4141,62 @@
     "audited": false,
     "action": false,
     "module": "sessions"
+  },
+  {
+    "name": "unarchive",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "messageIds": {
+          "items": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "org": {
+          "type": "string"
+        },
+        "restoreUnread": {
+          "items": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageIds"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "properties": {
+        "unarchived": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unarchived"
+      ],
+      "type": "object"
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Host operation bound to the rendered dashboard; no identical MCP binding",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
   },
   {
     "name": "unsubscribe",

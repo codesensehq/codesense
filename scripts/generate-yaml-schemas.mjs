@@ -122,7 +122,7 @@ const SCHEMAS = [
     validator: null,
     fields: [],
     example:
-      "id: reviewer\nname: Review\nicon: builtin-chess:knight\ndefaultHandler: acme/dev/reviewer\n",
+      "id: reviewer\nname: Review\nicon: builtin-chess:knight\ndefaultHandler: acme/team-context/dev/reviewer\n",
   },
 
   {
@@ -521,7 +521,7 @@ High-level context for the pipeline viewer epic...
     kind: "json",
     icon: "package",
     description:
-      "Agent launch bundle. Pre-wired agent + startup config a user can one-click launch. Fields inferred from DashboardLaunchState; the full schema is not generated yet.",
+      "Agent launch bundle. Pre-wired agent + startup config a user can one-click launch. Fields inferred from DashboardLaunchState; CodeSense doesn't generate a full schema for it.",
     path: "<context repo>/<team>/bundles/<bundle-id>/bundle.json",
     sourceRef: "dashboard_launch.rs",
     sourceFile: SOURCES.bundle,

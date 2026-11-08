@@ -23,7 +23,7 @@ The **mode** says what a fire does:
 - **wake** types the task into the agent's running session once it is idle, so the agent keeps everything it already knows. It never starts a second copy. If none is running, it starts one with the task as its first prompt. It types only when the agent is idle, nobody has typed in that tab for 3 seconds, and no prompt is waiting on you. The tab's caption then says which routine woke it.
 - **start a new** (`mode: fresh` in the file) starts a new session of the agent on every fire, with the task as its whole prompt. Use it for a nightly report or a digest that wants a clean slate.
 
-A wake into a busy agent waits for it to go idle, 30 minutes by default (`max_wait`), and fires that come meanwhile fold into it. Wake works for a saved agent that launches in a tab. Idle detection for Codex isn't qualified yet, so a wake into a Codex session may come back undelivered.
+A wake into a busy agent waits for it to go idle, 30 minutes by default (`max_wait`), and fires that come meanwhile fold into it. Wake works for a saved agent that launches in a tab. CodeSense can't tell when a Codex session is idle, so a wake into a Codex session may come back undelivered.
 
 ## Limits
 
@@ -57,11 +57,11 @@ routine_create({
 
 > **Beta**
 >
-> On its schedule the agent reads each source through its own MCP servers, triages what's new into stories, and can start an agent on an urgent one with `open_workspace`. CodeSense never talks to Slack, Jira, GitHub or Datadog itself; the agent does, with the access you gave it. A full triage run like this hasn't been recorded end to end yet.
+> On its schedule the agent reads each source through its own MCP servers, triages what's new into stories, and can start an agent on an urgent one with `open_workspace`. CodeSense never talks to Slack, Jira, GitHub or Datadog itself; the agent does, with the access you gave it. No full triage run like this has been recorded end to end.
 
 ## Where a routine fires
 
-A routine's clock runs in the CodeSense app on your Mac. A shared job (`runsOn: one_mac`, the default) runs once for the team, from one Mac. A recipe (`each_mac`) is off everywhere until each teammate turns it on for their own Mac with **Run on my Mac**. Turning a routine on or off is a setting on your Mac, never a git change.
+A routine's clock runs in the CodeSense app on your Mac, or on a machine's terminal server when `routine_arm_on` arms it there (schedule triggers only, `one_mac`, no `budget_usd`). A shared job (`runsOn: one_mac`, the default) runs once for the team, from one Mac or machine. A recipe (`each_mac`) runs on Macs only, and is off everywhere until each teammate turns it on for their own Mac with **Run on my Mac**. The one exception: a shared job converted to a recipe stays on for the Mac that ran it. Turning a routine on or off is a setting on your Mac, never a git change.
 
 `machine` says where a wake looks for its agent: `local` (this Mac), a machine id, or `any`.
 

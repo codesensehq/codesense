@@ -13,7 +13,7 @@ CodeSense has a single maintainer.
   [SECURITY.md](SECURITY.md).
 - **Conduct problems:** email [conduct@codesense.ai](mailto:conduct@codesense.ai)
   (see the [Code of Conduct](CODE_OF_CONDUCT.md)).
-- **Contributing:** we don't accept pull requests yet; see
+- **Contributing:** pull requests are welcome; see
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
 There is no paid support.

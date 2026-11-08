@@ -94,7 +94,7 @@ Label `context repo` at `(105, 350)`, `caption` `(105, 370)` reading
 
 | id       | icon       | x   | y   | w   | h  | label             | caption                      | fill    | stroke          |
 | -------- | ---------- | --- | --- | --- | -- | ----------------- | ---------------------------- | ------- | --------------- |
-| `call`   | `plug-zap` | 380 | 200 | 220 | 110| `open_workspace`  | `target: 'DEMO-1'`        | surface | `--arc-agent` 2px|
+| `call`   | `plug-zap` | 380 | 200 | 220 | 110| `open_workspace`  | `story_id: 'DEMO-1'`        | surface | `--arc-agent` 2px|
 
 ### 3.2 Launcher caption
 
@@ -116,7 +116,7 @@ own icon and `step N` tag on the left in `--muted` 11px caps:
 
 | id        | step | y   | icon          | label                        | stroke             |
 | --------- | ---- | --- | ------------- | ---------------------------- | ------------------ |
-| `d-fetch` | 1    | 140 | `cloud-download` | `git fetch (if reachable)` | `--arc-repo` 1.2px |
+| `d-fetch` | 1    | 140 | `cloud-download` | `resolve branch (local refs)` | `--arc-repo` 1.2px |
 | `d-add`   | 2    | 200 | `git-branch` | `git worktree add`           | `--arc-repo` 1.2px |
 | `d-link`  | 3    | 260 | `link`       | `link the story`             | `--arc-signal` 1.2px|
 | `d-setup` | 4    | 320 | `terminal`   | `run worktree.yaml · setup`  | `--arc-agent` 1.2px|

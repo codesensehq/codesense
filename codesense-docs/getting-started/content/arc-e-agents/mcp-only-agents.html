@@ -425,8 +425,8 @@ revision: 1</code></pre>
           CodeSense's own completion signalling.
         </p>
         <cs-try-this
-          verb="invoke"
-          args='{"name": "agent_preview", "args": {"name": "Sprint reporter", "runtime": "claude", "launch": "headless", "startup": ["CLAUDE.md"], "permissions": {"claude": {"allow": ["Read", "Grep", "Glob", "mcp__codesense__*"], "deny": ["Edit", "Write", "Bash"]}}, "defaultPrompt": "/sprint-report"}}'
+          verb="agent_preview"
+          args='{"name": "Sprint reporter", "runtime": "claude", "launch": "headless", "startup": ["CLAUDE.md"], "permissions": {"claude": {"allow": ["Read", "Grep", "Glob", "mcp__codesense__*"], "deny": ["Edit", "Write", "Bash"]}}, "defaultPrompt": "/sprint-report"}'
           label="Preview an MCP-only draft"
           dry-run="true"
         ></cs-try-this>
@@ -436,7 +436,7 @@ revision: 1</code></pre>
         <details>
           <summary><strong>How to do this via MCP</strong></summary>
           <pre><code>// Preview, then create. Nothing writes until agent_create fires.
-codesense.invoke('agent_preview', {
+agent_preview {
   name: 'Sprint reporter',
   runtime: 'claude', launch: 'headless',
   startup: ['CLAUDE.md', '.claude/skills/sprint-report/'],
@@ -444,12 +444,12 @@ codesense.invoke('agent_preview', {
     allow: ['Read', 'Grep', 'Glob', 'mcp__codesense__*'],
     deny:  ['Edit', 'Write', 'Bash'],
   }},
-})
+}
 
 // The three bridge calls an MCP-only reporter typically makes:
-codesense.invoke('list_sessions', { teamId })
-codesense.invoke('describe_setup', {})
-codesense.invoke('send_message', { to: 'human', body })</code></pre>
+list_sessions {}
+describe_setup {}
+send_message { to: 'human', text }</code></pre>
           <p>
             See <a href="../mcp-explorer.html">mcp-explorer</a> for every
             CodeSense tool, and
@@ -653,12 +653,12 @@ codesense.invoke('send_message', { to: 'human', body })</code></pre>
         <ul>
           <li><code>exact</code>: a git-ai note records the lines, including human lines. Blame follows renamed and moved lines to their introducing commit before reading its note.</li>
           <li><code>associated</code>: the introducing commit has no note, but its story-prefixed squash subject or pull-request merge branch identifies a story. <code>candidateSessions</code> lists up to 20 sessions associated with that story; it never claims one session wrote the lines. GitHub-side squash and rebase merges can lose exact attribution. This fallback is a story association, not recovered exact evidence.</li>
-          <li><code>unknown</code>: the lines have no readable attribution. Notes are read from <code>refs/notes/sense</code> (CodeSense&#39;s local notes) first, then <code>refs/notes/ai</code>. If the local copy has neither, every range is unknown with <code>no git-ai notes in local copy</code> and <code>notesRef: null</code>. For a repo whose notes stay local, a missing note adds &quot;notes for this repo stay on the machine that wrote them (local-only)&quot;; a note that does not cover a line says <code>no attribution in note</code>. Lines a session of a CLI CodeSense cannot capture yet (OpenCode, Hermes) committed have no note by design and read as <code>unknown</code> with that CLI as <code>tool</code> and reason <code>unsupported_cli</code>, while a local reflog still records the commit. They are never credited to a person; while a local reflog records the commit they are also never associated with a story.</li>
+          <li><code>unknown</code>: the lines have no readable attribution. Notes are read from <code>refs/notes/sense</code> (CodeSense&#39;s local notes) first, then <code>refs/notes/ai</code>. If the local copy has neither, every range is unknown with <code>no git-ai notes in local copy</code> and <code>notesRef: null</code>. For a repo whose notes stay local, a missing note adds &quot;notes for this repo stay on the machine that wrote them (local-only)&quot;; a note that does not cover a line says <code>no attribution in note</code>. Lines a session of a CLI CodeSense doesn't capture (OpenCode, Hermes) committed have no note by design and read as <code>unknown</code> with that CLI as <code>tool</code> and reason <code>unsupported_cli</code>, while a local reflog still records the commit. They are never credited to a person; while a local reflog records the commit they are also never associated with a story.</li>
         </ul>
         <p>An exact agent range is <code>linked</code> when its native id resolves to a durable CodeSense record. Its <code>sessionId</code> keys one facts-only <code>session_read</code> result in <code>sessions</code>, shared by all ranges from that session. This includes models, tools, account, cost, story and run facts, without conversation text. Otherwise <code>sessionId</code> is null and <code>link</code> is <code>unlinked</code>, with <code>no session record (hand-started or older session)</code>, <code>human</code>, or <code>no native session id in note</code>. Unknown and associated ranges retain their basis-specific explanation.</p>
         <p>Unavailable reads return <code>{status: &quot;unavailable&quot;, reason}</code>: <code>no local copy</code>, <code>revision not in local copy</code>, <code>path not in revision</code>, <code>objects not in local copy</code> (including missing promised objects in a partial clone), <code>notes changed during read</code> after bounded retries, <code>origin default branch not known locally; call refresh_history</code> (no <code>origin/HEAD</code>, <code>origin/main</code> or <code>origin/master</code> here), or <code>history past shallow boundary; call refresh_history</code> (a story with no branch whose merge lies past the boundary). An explicit rev that is not here is <code>revision not in local copy</code>. In a shallow copy, ranges that blame folds into a boundary commit are <code>unknown</code> with that same reason. The reader never fetches missing commits, blobs or notes.</p>
         <h3 id="tool-refresh_history"><code>refresh_history</code>: fetch an attached checkout&#39;s history</h3>
-        <p>Reads never touch the network. When history is missing, call <code>refresh_history({repo, storyId?, timeoutMs?})</code> (an MCP tool; pages have no verb for it yet). It runs <code>git fetch origin</code> into <code>refs/remotes/origin/*</code> only (no tags, notes or local branches; the working tree, index and <code>HEAD</code> are untouched) and sets a missing <code>origin/HEAD</code> from origin. With the <code>storyId</code> of a landed story, a shallow copy deepens only until that story&#39;s merge scan (2000 first-parent commits) is inside the boundary, then unshallows if that was not enough; for a story still in progress it is a plain fetch. <code>timeoutMs</code> bounds the call (default 60000, from 1000 to 300000). When the first fetch landed but a deepen did not, the answer has <code>status: &quot;partial&quot;</code> with the reason, and <code>fetchedAt</code> is recorded. It never prompts: terminal and askpass prompts are off and ssh runs in batch mode (added to <code>GIT_SSH_COMMAND</code> or <code>core.sshCommand</code>; a <code>GIT_SSH</code> program is left as you set it), while your credential helper still answers. It returns <code>{repo, historyAsOf, shallow, deepened}</code>, or <code>{status: &quot;unavailable&quot;, reason}</code> with <code>fetch needs credentials</code>, <code>fetch skipped, repo busy</code> (another git command holds a lock; there is no retry), <code>fetch timed out</code> or <code>fetch failed</code>. CodeSense also fetches once, in the background, when you attach a checkout.</p>
+        <p>Reads never touch the network. When history is missing, call <code>refresh_history({repo, storyId?, timeoutMs?})</code> (an MCP tool; pages have no verb for it). It runs <code>git fetch origin</code> into <code>refs/remotes/origin/*</code> only (no tags, notes or local branches; the working tree, index and <code>HEAD</code> are untouched) and sets a missing <code>origin/HEAD</code> from origin. With the <code>storyId</code> of a landed story, a shallow copy deepens only until that story&#39;s merge scan (2000 first-parent commits) is inside the boundary, then unshallows if that was not enough; for a story still in progress it is a plain fetch. <code>timeoutMs</code> bounds the call (default 60000, from 1000 to 300000). When the first fetch landed but a deepen did not, the answer has <code>status: &quot;partial&quot;</code> with the reason, and <code>fetchedAt</code> is recorded. It never prompts: terminal and askpass prompts are off and ssh runs in batch mode (added to <code>GIT_SSH_COMMAND</code> or <code>core.sshCommand</code>; a <code>GIT_SSH</code> program is left as you set it), while your credential helper still answers. It returns <code>{repo, historyAsOf, shallow, deepened}</code>, or <code>{status: &quot;unavailable&quot;, reason}</code> with <code>fetch needs credentials</code>, <code>fetch skipped, repo busy</code> (another git command holds a lock; there is no retry), <code>fetch timed out</code> or <code>fetch failed</code>. CodeSense also fetches once, in the background, when you attach a checkout.</p>
         <pre data-tool-example="refresh_history"><code>{
   &quot;tool&quot;: &quot;refresh_history&quot;,
   &quot;arguments&quot;: {

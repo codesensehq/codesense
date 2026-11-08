@@ -103,7 +103,7 @@
         <p>
           The Mac checks before running a query. The relay checks before serving live or cached
           answers, and never serves a cache fallback for this refusal. Edits take effect when the
-          watcher saves the block, without republishing; until then asks fail closed. Changing a
+          watcher saves the block, without republishing; asks fail closed until it does. Changing a
           query's pins deletes its cached answers. Unknown live keys and invalid pin declarations
           are refused. These pins cover queries only; streams are unchanged.
         </p>
@@ -648,8 +648,8 @@ window.addEventListener('pagehide', () =&gt; { if (view) view.stop(); }, {once: 
             a size cut. Pass it back as <code>cursor</code> with the same other arguments until
             <code>nextCursor</code> is absent. If the index changes, the cursor is refused; restart
             without a cursor, or use <a href="#paged-lists">queryAll/subscribeAll</a> for bounded recovery and status. Narrow with <code>filters</code>, <code>match</code> and
-            <code>where.kinds</code> when needed. A hosted collection or folder selector is not
-            available yet.
+            <code>where.kinds</code> when needed. There is no hosted collection or folder
+            selector.
           </li>
           <li>
             <strong>Freshness.</strong> A hosted query repeats by polling, no faster than every 15

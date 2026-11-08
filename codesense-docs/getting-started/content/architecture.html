@@ -471,7 +471,7 @@
             <h1>Architecture</h1>
             <p class="sub">
               One picture of how CodeSense is wired. The <strong>Tauri webview</strong>
-              calls the app's backend, the <strong>host-agent</strong>, through Tauri
+              calls the app's <strong>backend</strong> through Tauri
               commands; it owns your files, routines, and inboxes, and a
               <strong>local HTTP server</strong> serves the HTML docs and dashboards.
               Agents reach the same backend through the <strong>CodeSense MCP</strong>.
@@ -547,20 +547,20 @@
                   <text class="cap" x="556" y="208">injects window.codesense</text>
                   <text class="cap" x="556" y="330" style="font-style:italic">serves /kit + docs</text>
 
-                  <!-- host-agent -->
+                  <!-- app backend -->
                   <rect class="shape ag" x="80" y="420" width="700" height="160"/>
                   <use href="#i-bot" x="96" y="438" width="22" height="22" style="color: var(--arc-agent)"/>
-                  <text class="lbl" x="124" y="455">Host-agent</text>
+                  <text class="lbl" x="124" y="455">App backend</text>
                   <text class="cap" x="96" y="478">The app's Rust backend · Tauri commands, MCP, context IO, routines.</text>
                   <text class="cap" x="96" y="498">Only runs on the Mac you run CodeSense on.</text>
-                  <text class="cap" x="96" y="542" style="font-style:italic">the one place writes to disk originate</text>
+                  <text class="cap" x="96" y="542" style="font-style:italic">where CodeSense's own writes on this Mac originate</text>
 
                   <!-- mcp -->
                   <rect class="shape ag" x="300" y="640" width="480" height="100" style="stroke-width: 2"/>
                   <use href="#i-plug" x="316" y="658" width="22" height="22" style="color: var(--arc-agent)"/>
                   <text class="lbl" x="344" y="675">CodeSense MCP</text>
                   <text class="cap" x="316" y="695">The agent bridge · every tool</text>
-                  <text class="cap" x="316" y="713">every UI action also lives here (MCP-complete invariant)</text>
+                  <text class="cap" x="316" y="713">most UI actions also live here as MCP tools</text>
 
                   <text class="cap" x="80" y="800" style="font-size:12px; opacity:.8">
                     Local machine · macOS filesystem · ~/.codesense/… + bound user repos
@@ -596,7 +596,7 @@
                   <rect class="shape ag" x="1040" y="770" width="500" height="170"/>
                   <use href="#i-clock" x="1056" y="788" width="22" height="22" style="color: var(--arc-agent)"/>
                   <text class="lbl" x="1084" y="805">Routine engine</text>
-                  <text class="cap" x="1056" y="828">triggers:  each_mac  ·  inbox_idle  ·  cron  ·  manual</text>
+                  <text class="cap" x="1056" y="828">triggers:  cron  ·  manual  ·  events</text>
                   <text class="cap" x="1056" y="848">wakes agents, posts messages, moves pipeline status</text>
                   <text class="cap" x="1056" y="900" style="font-style:italic">routine-owned storage</text>
 
@@ -675,7 +675,7 @@
 
                   <rect class="shape ag" x="40" y="420" width="580" height="160"/>
                   <use href="#i-bot" x="56" y="438" width="22" height="22" style="color: var(--arc-agent)"/>
-                  <text class="lbl" x="84" y="455">Host-agent (local)</text>
+                  <text class="lbl" x="84" y="455">App backend (local)</text>
                   <text class="cap" x="56" y="478">app backend · terminals in the terminal server</text>
 
                   <rect class="shape ag" x="220" y="640" width="400" height="100" style="stroke-width: 2"/>
@@ -707,7 +707,7 @@
                   <rect class="shape ag" x="780" y="770" width="300" height="170"/>
                   <use href="#i-clock" x="796" y="788" width="22" height="22" style="color: var(--arc-agent)"/>
                   <text class="lbl" x="824" y="805">Routine engine</text>
-                  <text class="cap" x="796" y="828">each_mac fires on every participating machine</text>
+                  <text class="cap" x="796" y="828">each_mac: every Mac that turned it on</text>
 
                   <!-- Remote mirror -->
                   <rect class="shape remote" x="1140" y="120" width="420" height="240"/>
@@ -718,9 +718,9 @@
 
                   <rect class="shape remote" x="1140" y="420" width="420" height="160"/>
                   <use href="#i-bot" x="1156" y="438" width="22" height="22" style="color: var(--arc-remote)"/>
-                  <text class="lbl" x="1184" y="455" style="fill: var(--arc-remote)">Host-agent (remote)</text>
+                  <text class="lbl" x="1184" y="455" style="fill: var(--arc-remote)">Terminal server (remote)</text>
                   <text class="cap" x="1156" y="478">terminal server · owns remote terminals</text>
-                  <text class="cap" x="1156" y="498">reaches shared git over ssh</text>
+                  <text class="cap" x="1156" y="498">gets its git copy from your Mac</text>
 
                   <rect class="shape remote" x="1140" y="640" width="420" height="100" style="stroke-width:2"/>
                   <use href="#i-plug" x="1156" y="658" width="22" height="22" style="color: var(--arc-remote)"/>
@@ -766,7 +766,7 @@
                   <g data-shape="dashboards"    data-family="signal" tabindex="0" role="button" aria-label="Dashboards"><rect x="100"  y="200" width="180" height="140"/></g>
                   <g data-shape="agent-cli"     data-family="agent"  tabindex="0" role="button" aria-label="Agent CLI"><rect x="300"  y="200" width="180" height="140"/></g>
                   <g data-shape="http-server"   data-family="signal" tabindex="0" role="button" aria-label="Local HTTP server"><rect x="540"  y="120" width="240" height="240"/></g>
-                  <g data-shape="host-agent"    data-family="agent"  tabindex="0" role="button" aria-label="Host-agent"><rect x="80"   y="420" width="700" height="160"/></g>
+                  <g data-shape="host-agent"    data-family="agent"  tabindex="0" role="button" aria-label="App backend"><rect x="80"   y="420" width="700" height="160"/></g>
                   <g data-shape="mcp"           data-family="agent"  tabindex="0" role="button" aria-label="CodeSense MCP"><rect x="300"  y="640" width="480" height="100"/></g>
                   <g data-shape="context-repo"  data-family="repo"   tabindex="0" role="button" aria-label="Context repo"><rect x="1040" y="100" width="500" height="140"/></g>
                   <g data-shape="worktree"      data-family="repo"   tabindex="0" role="button" aria-label="Worktree"><rect x="1040" y="270" width="500" height="110"/></g>
@@ -780,7 +780,7 @@
                   <g data-shape="dashboards"    data-family="signal" tabindex="0" role="button" aria-label="Dashboards"><rect x="56"   y="200" width="140" height="140"/></g>
                   <g data-shape="agent-cli"     data-family="agent"  tabindex="0" role="button" aria-label="Agent CLI"><rect x="212"  y="200" width="140" height="140"/></g>
                   <g data-shape="http-server"   data-family="signal" tabindex="0" role="button" aria-label="Local HTTP server"><rect x="380"  y="120" width="240" height="240"/></g>
-                  <g data-shape="host-agent"    data-family="agent"  tabindex="0" role="button" aria-label="Host-agent (local)"><rect x="40"   y="420" width="580" height="160"/></g>
+                  <g data-shape="host-agent"    data-family="agent"  tabindex="0" role="button" aria-label="App backend (local)"><rect x="40"   y="420" width="580" height="160"/></g>
                   <g data-shape="mcp"           data-family="agent"  tabindex="0" role="button" aria-label="CodeSense MCP"><rect x="220"  y="640" width="400" height="100"/></g>
                   <g data-shape="context-repo"  data-family="repo"   tabindex="0" role="button" aria-label="Context repo (shared)"><rect x="780"  y="100" width="300" height="140"/></g>
                   <g data-shape="worktree"      data-family="repo"   tabindex="0" role="button" aria-label="Worktree (local)"><rect x="780"  y="270" width="300" height="110"/></g>
@@ -791,7 +791,7 @@
 
                   <g data-shape="machine-remote"    data-family="remote" tabindex="0" role="button" aria-label="Remote machine · private account"><rect x="1120" y="60"  width="460" height="900"/></g>
                   <g data-shape="agent-cli-remote"  data-family="remote" tabindex="0" role="button" aria-label="Remote agent CLI"><rect x="1140" y="120" width="420" height="240"/></g>
-                  <g data-shape="host-agent-remote" data-family="remote" tabindex="0" role="button" aria-label="Host-agent (remote)"><rect x="1140" y="420" width="420" height="160"/></g>
+                  <g data-shape="host-agent-remote" data-family="remote" tabindex="0" role="button" aria-label="Terminal server (remote)"><rect x="1140" y="420" width="420" height="160"/></g>
                   <g data-shape="mcp-remote"        data-family="remote" tabindex="0" role="button" aria-label="CodeSense MCP (remote)"><rect x="1140" y="640" width="420" height="100"/></g>
                   <g data-shape="worktree-remote"   data-family="remote" tabindex="0" role="button" aria-label="Worktree + source (remote)"><rect x="1140" y="770" width="420" height="170"/></g>
                   <g data-shape="ssh"               data-family="remote" tabindex="0" role="button" aria-label="SSH boundary"><rect x="1095" y="100" width="30"  height="820"/></g>
@@ -808,7 +808,7 @@
               <div class="toc" aria-label="Quick jump">
                 <button type="button" data-jump="webview">webview</button>
                 <button type="button" data-jump="http-server">http</button>
-                <button type="button" data-jump="host-agent">host-agent</button>
+                <button type="button" data-jump="host-agent">app backend</button>
                 <button type="button" data-jump="mcp">MCP</button>
                 <button type="button" data-jump="context-repo">context</button>
                 <button type="button" data-jump="worktree">worktree</button>
@@ -914,9 +914,8 @@
         "role": "HTML docs rendered inside the webview.",
         "description": "Every shipped HTML doc — this architecture page included — renders through the html-viewer with the LIVE sandbox. Dashboards talk to the app via window.codesense (invoke, kit) and subscribe to live context. They are your own files and run with the app's page APIs; each call is limited by the dashboard's grants and write budget.",
         "tools": [
-          { "name": "queryContext",           "what": "scoped context query" },
-          { "name": "setStatus",              "what": "act: move a story's status" },
-          { "name": "openWorkspace",          "what": "act: open a workspace" },
+          { "name": "query_context",          "what": "scoped context query" },
+          { "name": "open_workspace",         "what": "open a workspace" },
           { "name": "validate_live_data_doc", "what": "check a page before saving it" }
         ],
         "arcs": [ ["I", "Dashboards & primitives"], ["J", "MCP full reference"] ],
@@ -928,24 +927,21 @@
         "title": "Local HTTP server",
         "role": "Axum, bound to localhost:<port>.",
         "description": "An Axum server bound to a loopback port on your Mac. It serves every HTML doc, the shared kit, the generated reference JSON, and the dashboard routes. It is also where window.codesense is injected into each doc, giving dashboards an origin-matched bridge to the app without extensions.",
-        "tools": [
-          { "name": "get_http_api_port", "what": "the loopback port it bound" }
-        ],
+        "tools": [],
         "arcs": [ ["I", "Dashboards & primitives"], ["A", "First touch"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "host-agent": {
         "icon": "bot",
         "tint": "agent",
-        "title": "Host-agent",
-        "role": "The app's backend — the only place writes originate.",
+        "title": "App backend",
+        "role": "The app's backend — where CodeSense's own writes on this Mac originate.",
         "description": "The CodeSense app's own backend on this Mac: the Rust side of the Tauri app. Its Tauri commands do the work behind the UI: context-repo reads and writes, worktrees, inboxes, routines and pipeline status. Every MCP tool call runs here too. Terminals are kept by a separate process, the terminal server (codesense-session-server), so a terminal and the agent in it keep running when the app quits. A remote machine runs only a terminal server, not a second app backend.",
         "tools": [
-          { "name": "terminal_open_tab",      "what": "start a terminal" },
-          { "name": "read_file",              "what": "read a context-repo file" },
-          { "name": "write_content_file",     "what": "write a context-repo file" },
-          { "name": "open_workspace",         "what": "create a story's worktree on first open" },
-          { "name": "update_pipeline_status", "what": "move pipeline status" }
+          { "name": "open_terminal_tab",      "what": "start a terminal" },
+          { "name": "read_content_file",      "what": "read a context-repo file" },
+          { "name": "create_content_file",    "what": "create a context-repo file" },
+          { "name": "open_workspace",         "what": "create a story's worktree on first open" }
         ],
         "arcs": [ ["D", "Terminals & machines"], ["K", "Sync & agent-driven git"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
@@ -954,8 +950,8 @@
         "icon": "plug",
         "tint": "agent",
         "title": "CodeSense MCP",
-        "role": "The agent bridge — one invariant.",
-        "description": "Every UI action in CodeSense also exists as an MCP tool. Agents never need to see the UI. The MCP server runs in the app backend on this Mac, on a Unix socket (~/.codesense/mcp.sock). An agent CLI reaches it through codesense-bridge, a small stdio relay. Progressive discovery via codesense_overview → codesense_search_tools → codesense_get_tool_schema keeps the surface navigable despite its size.",
+        "role": "The agent bridge.",
+        "description": "Most UI actions in CodeSense also exist as MCP tools, so agents rarely need to see the UI. The MCP server runs in the app backend on this Mac, on a Unix socket (~/.codesense/mcp.sock). An agent CLI reaches it through codesense-bridge, a small stdio relay. Progressive discovery via codesense_overview → codesense_search_tools → codesense_get_tool_schema keeps the surface navigable despite its size.",
         "tools": [
           { "name": "codesense_overview",        "what": "entry point" },
           { "name": "codesense_search_tools",    "what": "find a tool by concept" },
@@ -963,7 +959,7 @@
           { "name": "apply_canvas",              "what": "author Excalidraw" },
           { "name": "render_canvas",             "what": "render PNG sidecar" }
         ],
-        "arcs": [ ["J", "MCP full reference"], ["M", "UI ↔ MCP crossref"] ],
+        "arcs": [ ["J", "MCP full reference"], ["N", "Reference"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "agent-cli": {
@@ -1006,7 +1002,7 @@
           { "name": "hydrate_story",         "what": "copy a story's epic in, on request" },
           { "name": "reverse_sync_worktree", "what": "publish an edit back, after a preview" }
         ],
-        "arcs": [ ["C", "Workspaces & worktrees"], ["H", "The factory"] ],
+        "arcs": [ ["C", "Workspaces & worktrees"], ["L", "The factory"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "source-repo": {
@@ -1017,10 +1013,9 @@
         "description": "The actual source repository your team ships from (acme/codesense in the demo). It is mounted inside each worktree, so edits touch the source repo without disturbing anyone else's parallel work. CodeSense supports multiple git forge providers through its own provider interface — the UI is honest about which providers are current.",
         "tools": [
           { "name": "list_source_repos",         "what": "repos the team works in" },
-          { "name": "read_epic_repos",           "what": "repos an epic workspace assembles" },
-          { "name": "source_worktree_changeset", "what": "worktree diff vs base" }
+          { "name": "read_epic_repos",           "what": "repos an epic workspace assembles" }
         ],
-        "arcs": [ ["C", "Workspaces & worktrees"], ["H", "The factory"] ],
+        "arcs": [ ["C", "Workspaces & worktrees"], ["L", "The factory"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "inbox": {
@@ -1028,29 +1023,29 @@
         "tint": "agent",
         "title": "Inbox",
         "role": "Per-team threads + messages + role queues.",
-        "description": "The async spine of the factory. Threads carry messages with role labels (builder, resolver, reviewer, analyst, …). Any participant — human or agent — can post or read. Inboxes are the thing routines watch: an inbox_idle trigger fires a worker when a role queue has pending work and nobody is on it.",
+        "description": "The async spine of the factory. Threads carry messages with role labels (builder, resolver, reviewer, analyst, …). Any participant — human or agent — can post or read. Inboxes are the thing routines watch: a role_pending trigger fires a worker when a role queue gets work, and an inbox_idle trigger fires when a session idles with unread mail.",
         "tools": [
           { "name": "inbox_list",          "what": "list messages without marking them read" },
           { "name": "send_message",        "what": "message an agent or the human" },
           { "name": "claim_role_messages", "what": "take messages off a role queue" },
           { "name": "read_messages",       "what": "drain your unread mail" }
         ],
-        "arcs": [ ["F", "Inbox flows"], ["H", "The factory"] ],
+        "arcs": [ ["F", "Inbox flows"], ["L", "The factory"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "routines": {
         "icon": "clock",
         "tint": "agent",
         "title": "Routine engine",
-        "role": "each_mac · inbox_idle · cron · manual.",
-        "description": "A scheduler that fires routines on four trigger shapes. each_mac runs on every participating machine. inbox_idle fires when a role queue has work and no worker. cron runs on a wall-clock schedule. manual runs on button or MCP call. Routines own their own storage, can wake agents, post messages, and write dashboards.",
+        "role": "cron · manual · events.",
+        "description": "A scheduler that fires routines. Triggers are cron, manual and events (metadata_change, agent_done, inbox_idle, role_pending). each_mac is a runs_on value, not a trigger: an each_mac routine fires on every Mac that turned it on. inbox_idle fires when a session idles with unread mail; role queues use role_pending. A routine runs on the Mac it's armed on, or on a machine's terminal server with routine_arm_on. Routines own their own storage, can wake agents, post messages, and write dashboards.",
         "tools": [
           { "name": "routine_list",    "what": "enumerate routines you can see" },
           { "name": "routine_run_now", "what": "fire a routine by hand" },
           { "name": "routine_runs",    "what": "run history, newest first" },
           { "name": "routine_result",  "what": "the last published result" }
         ],
-        "arcs": [ ["G", "Routines"], ["H", "The factory"] ],
+        "arcs": [ ["G", "Routines"], ["L", "The factory"] ],
         "canvasPath": "./diagrams/architecture.excalidraw"
       },
       "machine-local": {
@@ -1078,7 +1073,7 @@
           { "name": "connect_machine", "what": "connect a saved machine" },
           { "name": "open_remote_tab", "what": "remote terminal tab" }
         ],
-        "arcs": [ ["D", "Terminals & machines"], ["H", "The factory"] ],
+        "arcs": [ ["D", "Terminals & machines"], ["L", "The factory"] ],
         "canvasPath": "./diagrams/architecture-remote.excalidraw"
       },
       "ssh": {
@@ -1111,9 +1106,9 @@
       "host-agent-remote": {
         "icon": "bot",
         "tint": "remote",
-        "title": "Host-agent (remote)",
+        "title": "Terminal server (remote)",
         "role": "The terminal server, remote side.",
-        "description": "On a remote machine there is no second app backend. The terminal server (codesense-session-server) owns the remote terminals and the agents in them, and the desktop app reaches it over SSH (codesense-session-server attach --stdio). codesense-bridge beside it carries remote agents' MCP calls back to this Mac. Context-repo IO and routine scheduling stay in the desktop app.",
+        "description": "On a remote machine there is no second app backend. The terminal server (codesense-session-server) owns the remote terminals and the agents in them, and the desktop app reaches it over SSH (codesense-session-server attach --stdio). codesense-bridge beside it carries remote agents' MCP calls back to this Mac. Context-repo IO stays in the desktop app. Routines armed here with routine_arm_on fire on its clock.",
         "tools": [
           { "name": "install_terminal_server",         "what": "install the terminal server there" },
           { "name": "restart_machine_terminal_server", "what": "restart it (ends its sessions)" },
@@ -1156,9 +1151,9 @@
       /* =============================================================
        * Click-to-detail, variant swap, deep-link, keyboard flow
        *
-       * No external imports — this script is self-contained so the
-       * doc renders identically under file://, inside the viewer, and
-       * for an agent previewing through the MCP.
+       * No external imports. The only outside input is the arc list the
+       * shared docs nav (_shared/nav.js, loaded on every page, file://
+       * included) publishes for the "Covered in" links.
        * ============================================================= */
       (function () {
         "use strict";
@@ -1255,22 +1250,29 @@
           el.role.textContent  = spec.role;
           el.desc.textContent  = spec.description;
 
-          el.tools.innerHTML = (spec.tools || []).map(function (t) {
+          el.tools.innerHTML = !(spec.tools || []).length
+            ? '<li><span class="what">None for this part.</span></li>'
+            : spec.tools.map(function (t) {
             return '<li><code>' + t.name + '</code><span class="what">' + t.what + '</span></li>';
           }).join("");
 
+          // Arc landing pages come from the docs nav's arc list (_shared/nav.js).
+          var navArcs = (window.initDocsNav && window.initDocsNav.arcs) || [];
           el.arcs.innerHTML = (spec.arcs || []).map(function (a) {
-            return '<a href="#arc-' + a[0] + '"><span class="k">Arc ' + a[0] + '</span> · ' + a[1] + '</a>';
+            var arc = navArcs.find(function (n) { return n.letter === a[0]; });
+            return '<a href="' + (arc ? arc.href : "./README.html") + '"><span class="k">Arc ' + a[0] + '</span> · ' + a[1] + '</a>';
           }).join("");
 
           el.open.onclick = function () {
             var path = spec.canvasPath;
-            if (window.codesense && typeof window.codesense.invoke === "function") {
-              window.codesense.invoke("openWorkspace", { path: path });
+            if (window.codesense && typeof window.codesense.openFile === "function") {
+              window.codesense.openFile({ path: path }).catch(function (err) {
+                console.log("[architecture] openFile failed", path, err);
+              });
             } else {
               // Fallback preview — surface the intended bridge call so the
               // doc previews cleanly outside the viewer.
-              if (typeof console !== "undefined") console.log("[architecture] openWorkspace", { path: path, shape: id });
+              if (typeof console !== "undefined") console.log("[architecture] openFile", { path: path, shape: id });
               el.open.animate(
                 [ { transform: "translateY(0)" }, { transform: "translateY(-2px)" }, { transform: "translateY(0)" } ],
                 { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" }
@@ -1384,9 +1386,11 @@
         // First paint: the shape-list picker in the empty state.
         renderShapeList();
 
-        // Deep-link on load. Remote-only ids flip to the remote variant first.
-        var initial = location.hash.slice(1);
-        if (initial && SHAPES[initial]) {
+        // Deep-link on load. Remote-only ids flip to the remote variant first. Wait for
+        // DOMContentLoaded so the deferred nav.js has published the arc links.
+        function deepLink() {
+          var initial = location.hash.slice(1);
+          if (!initial || !SHAPES[initial]) return;
           var remoteOnly = [
             "machine-remote", "agent-cli-remote", "host-agent-remote",
             "mcp-remote", "worktree-remote", "ssh"
@@ -1397,6 +1401,8 @@
           }
           selectShape(initial, { pushHash: false });
         }
+        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", deepLink);
+        else deepLink();
 
         // The probe-and-promote flow for
         // the `.excalidraw.png` sidecar was removed with the sidecar itself.

@@ -60,7 +60,7 @@ The fields that drive the app:
 | `supporting_docs` | Relative paths to documents that go with the story, such as a design or a spec. |
 | `sprint`, `points`, `assigned_to` | Planning metadata (see [Stories and sprints](board-and-sprints.md)). |
 
-Any other key, such as `area`, `risk` or `tags`, is kept as metadata. You can filter and group on it in queries and dashboards, and an agent can filter on it with `query_context`. The full list is in Story and epic fields.
+The full list of registered fields, such as `tags`, `priority` and `parent_epic`, is in [Story and epic fields](../../generated/story-fields.md). Any other key, such as `area` or `risk`, is kept as metadata: you can filter and group on it in queries and dashboards, and an agent can filter on it with `query_context`. `validate_story` flags such a key with the advisory `UNREGISTERED_FIELD` until your team declares it in `content/field-schema.yml`.
 
 CodeSense reads the first `## Purpose` or `## Story` section as the story's summary (in HTML, `<section data-cs="purpose">` or `<section data-cs="story">`). Without one, the summary is blank.
 
@@ -89,9 +89,7 @@ Agents can check their own work. The CodeSense MCP tools `get_story_format` and 
 
 You can also create a story from **New story…** on an epic's right-click menu in the left nav. The form asks for a title, epic, story id, repo, status and dependencies, checks for problems as you type, and writes the file into the epic.
 
-> **Coming: configurable work-item types**
->
-> Declaring your own work-item types per team. Today the types are fixed to story, bug and spike. Your folders, statuses, phases and metadata are already yours to shape.
+The work-item types are story, bug and spike. Your folders, statuses, phases and metadata are yours to shape.
 
 The full guide ships in the app's docs: **Pipelines → Phase 5 · Story graph**.
 

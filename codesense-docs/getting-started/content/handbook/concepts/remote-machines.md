@@ -10,7 +10,7 @@ The whole feature is in beta.
 
 > **Beta**
 >
-> Open **Machines** (**⌘⌥C**, or **Go → Machines**) and add one, or run **Add machine…** from ⌘K. CodeSense connects with ordinary OpenSSH and your own SSH setup: your SSH agent or a key file. It never asks for a private key, a password or a token. The first connection test shows the machine's host key fingerprint; once you confirm it, CodeSense pins it and refuses a machine whose key changes.
+> Open **Machines** (**⌘⌥C**, or **Go → Machines**) and add one, or run **Add machine…** from the command palette (**⌘⇧P**). CodeSense connects with ordinary OpenSSH and your own SSH setup: your SSH agent or a key file. It never asks for a private key, a password or a token. The first connection test shows the machine's host key fingerprint; once you confirm it, CodeSense pins it and refuses a machine whose key changes.
 >
 > You can keep a machine to yourself or share it with a team. Sharing shares where the machine is, never how to log in: each teammate signs in with their own account on it.
 >
@@ -94,14 +94,10 @@ Your git keys stay on your Mac. CodeSense seeds each clone over SSH, and commits
 
 Remote agents pull more context through MCP and preview changes before they send them back. Their commits come back to your Mac with `remote_workspace_fetch`, and you push them yourself.
 
-Cost from remote sessions already counts like local ones.
-
-> **Coming: attribution on remote machines**
->
-> Lines traced on your Linux boxes the way they are on your Mac: the session, the model and the cost behind each one.
+Cost from remote sessions already counts like local ones. Line attribution covers Claude Code and Codex agents on your Mac.
 
 ## Update every server
 
-Update every terminal server at once, with tabs reopened.
+Update every terminal server at once.
 
-When a terminal server is out of date, the Machines tab says so. `update_terminal_servers` updates them all, and the tabs that were open come back.
+When a terminal server is out of date, the Machines tab says so. `update_terminal_servers` updates them all. That ends every terminal and agent on them; the tabs that were open come back as fresh shells, and an Agent with `resumeAfterRestart` relaunches.

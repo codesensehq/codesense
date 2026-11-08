@@ -91,7 +91,7 @@
       <section data-search="How to read the matrix" id="legend">
         <p>
           The one page where we tell the whole truth about what works, what has a caveat,
-          and what doesn't yet. Every workflow in CodeSense is listed; both machine
+          and what doesn't. Every workflow in CodeSense is listed; both machine
           sides get a cell; the rightmost column names the caveat or gap and the
           workaround if we have one. If a cell changes, this page is where it changes
           first.
@@ -102,7 +102,7 @@
           <span class="cs-docs-chip cs-docs-chip--danger">✕ gap</span>
           <span style="color: var(--cs-muted-fg); font-size: var(--cs-docs-text-xs)">
             Caveats are documented differences you can live with; gaps are things
-            CodeSense doesn't yet do remotely at all.
+            CodeSense doesn't do remotely at all.
           </span>
         </div>
       </section>
@@ -163,7 +163,8 @@
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--ok">✓</span></span></td>
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--warn">⚠</span></span></td>
               <td class="parity-notes">
-                <code>launch: { agentKey }</code> works on either side. Caveat:
+                A saved agent launches on either side (<code>agent</code> on
+                <code>open_workspace</code>, <code>agentKey</code> on <code>open_remote_tab</code>). Caveat:
                 remote launches require <code>preparedWorkspaceHandle</code> from a
                 verified hydration (not just a path), and the account's runtime +
                 sign-in must be present. The terminal server pins its identity;
@@ -196,11 +197,10 @@
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--ok">✓</span></span></td>
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--warn">⚠</span></span></td>
               <td class="parity-notes">
-                Routines execute in whichever account owns the triggering workspace.
-                Caveat: cron-style schedules depend on the owner being online — your
-                Mac for local-owned routines, the remote account's terminal server
-                for remote-owned ones. If you want "always on", own the routine on
-                the always-on machine.
+                A routine runs on the Mac it's armed on, or on a machine's terminal
+                server when <code>routine_arm_on</code> arms it there. Caveat: schedules
+                depend on that side being up. If you want "always on", arm the routine
+                on the always-on machine (schedule triggers only, <code>one_mac</code>, no <code>budget_usd</code>).
               </td>
             </tr>
             <tr>
@@ -262,11 +262,10 @@
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--ok">✓</span></span></td>
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--warn">⚠</span></span></td>
               <td class="parity-notes">
-                Scheduled triggers fire in the terminal server's wall clock on the
-                owning side. Caveat: if the Mac is asleep for a local-scheduled
-                routine, that fire is skipped (standard Mac behavior). Remote
-                schedules on an always-on box don't skip. Workaround: own
-                "must-fire" schedules on the always-on machine.
+                Scheduled triggers fire on the clock of the side the routine is armed
+                on. Caveat: fires missed while the Mac was asleep or the app was closed are recorded as one skipped run; with <code>policy.missed: run_once</code>, one of them also runs as a catch-up. A machine-armed routine applies the same
+                policy. Workaround: arm "must-fire" schedules on an always-on machine
+                with <code>routine_arm_on</code>.
               </td>
             </tr>
             <tr>
@@ -292,14 +291,14 @@
               </td>
             </tr>
             <tr>
-              <td><strong>Host-agent (process broker)</strong></td>
+              <td><strong>The app (process broker)</strong></td>
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--ok">✓</span></span></td>
               <td><span class="parity-cell"><span class="cs-docs-chip cs-docs-chip--danger">✕</span></span></td>
               <td class="parity-notes">
-                <strong>By design.</strong> The host-agent runs exactly once, on the
+                <strong>By design.</strong> The app runs exactly once, on the
                 Mac you run CodeSense on. Remote machines use the
                 terminal server for the equivalent brokering. No workaround needed
-                because every workflow the host-agent fronts has a terminal-server
+                because every workflow the app fronts has a terminal-server
                 equivalent — this gap is where parity is defined, not broken.
               </td>
             </tr>

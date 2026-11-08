@@ -217,7 +217,7 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         verb: "sendPrompt",
         tier: "send",
         args: "{handle: string, text: string, submit?: boolean}",
-        purpose: "Type into any running agent by its handle, locally or on a remote machine, without a dashboard launch controller. Submits by default; submit:false types without Enter. Returns {status, submitted, machine, code, message}; a rejected command returns status:invalid. An unknown delivery may have arrived: never retry it automatically. Agents prompt running agents with send_to_session; this is the person's typed send from a page.",
+        purpose: "Type into any running agent by its handle, locally or on a remote machine, without a dashboard launch controller. Submits by default; submit:false types without Enter. Returns {status, submitted, machine, code, message}; a rejected command returns status:invalid. An unknown delivery may have arrived: never retry it automatically. handle:\"active\" with submit:false pastes into the person's active terminal (the selected terminal tab of the focused workspace while its process runs, still the target while focus is in a pane): text is written as typed; a newline in it acts as Enter. It returns status typed, no-workspace or no-terminal; message is null when typed, else the reason the host showed. Ask codesense.canPasteToTerminal() first. Agents prompt running agents with send_to_session; this is the person's typed send from a page.",
         deny_example: "denied: send budget",
     },
     ActionVerbDoc {
@@ -266,7 +266,7 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         verb: "closeWorkspace",
         tier: "manage",
         args: "{target: string, removeWorktree?: boolean, discardUnsaved?: boolean}",
-        purpose: "The CLOSE half of a board-owned session lifecycle, with an optional DESTRUCTIVE escalation. Base behavior: close a session the board opened, addressed by the SAME opaque handle it opened/sends with (a storyId, a `{repo}#{branch}`, or an epicDocPath). Kills the handle-bound session (freeing the concurrency cap + writing one Kill audit line) AND evicts its terminal tab. Resolved CodeSense-side, so a raw session id from the doc can never close another session. Idempotent: a handle with no live binding (already closed / never opened) is a typed no-op, NOT an error — a board can call it defensively. The DEFAULT closes the SESSION, not the worktree — the worktree persists for the next open. The typical loop: `openWorkspace → (runPrompt/sendToSession) → poll getWorkspaceStatus until !live → closeWorkspace`. A still-live target is stopped mid-turn. **DESTRUCTIVE opt-in**: pass `removeWorktree: true` to ALSO reap the managed worktree (git worktree remove + registry prune) — the symmetric close of an `openWorkspace({storyId})`. DIRTY-GUARDED: a worktree with uncommitted tracked/untracked edits or unpushed commits is refused with `{closed: false, reason: \"dirty\", dirty: {uncommittedFiles, unpushedCommits}}` and nothing is removed. ESCALATION: pass `discardUnsaved: true` on TOP of `removeWorktree: true` to force the removal over that dirty state; the response lists what was lost in `discardedUnsavedWork`. CodeSense-managed hydrated files (CLAUDE.md, .claude/skills, …) are always excluded from the dirty check (AC-8). A team-workspace close with `removeWorktree: true` returns `{worktreeRemoved: false, reason: \"noManagedWorktree\"}` — the content root is NEVER removed. A remote-machine workspace returns `{worktreeRemoved: false, reason: \"remoteWorktreeReapDeferred\"}` — removing the worktree directory on a remote machine is not supported yet. Rate-guarded like every other `codesense.act(...)` surface.",
+        purpose: "The CLOSE half of a board-owned session lifecycle, with an optional DESTRUCTIVE escalation. Base behavior: close a session the board opened, addressed by the SAME opaque handle it opened/sends with (a storyId, a `{repo}#{branch}`, or an epicDocPath). Kills the handle-bound session (freeing the concurrency cap + writing one Kill audit line) AND evicts its terminal tab. Resolved CodeSense-side, so a raw session id from the doc can never close another session. Idempotent: a handle with no live binding (already closed / never opened) is a typed no-op, NOT an error — a board can call it defensively. The DEFAULT closes the SESSION, not the worktree — the worktree persists for the next open. The typical loop: `openWorkspace → (runPrompt/sendToSession) → poll getWorkspaceStatus until !live → closeWorkspace`. A still-live target is stopped mid-turn. **DESTRUCTIVE opt-in**: pass `removeWorktree: true` to ALSO reap the managed worktree (git worktree remove + registry prune) — the symmetric close of an `openWorkspace({storyId})`. DIRTY-GUARDED: a worktree with uncommitted tracked/untracked edits or unpushed commits is refused with `{closed: false, reason: \"dirty\", dirty: {uncommittedFiles, unpushedCommits}}` and nothing is removed. ESCALATION: pass `discardUnsaved: true` on TOP of `removeWorktree: true` to force the removal over that dirty state; the response lists what was lost in `discardedUnsavedWork`. CodeSense-managed hydrated files (CLAUDE.md, .claude/skills, …) are always excluded from the dirty check (AC-8). A team-workspace close with `removeWorktree: true` returns `{worktreeRemoved: false, reason: \"noManagedWorktree\"}` — the content root is NEVER removed. A remote-machine workspace returns `{worktreeRemoved: false, reason: \"remoteWorktreeReapDeferred\"}` — removing the worktree directory on a remote machine is not supported. Rate-guarded like every other `codesense.act(...)` surface.",
         deny_example: "unavailable:",
     },
     ActionVerbDoc {
@@ -358,6 +358,13 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         tier: "metadata",
         args: "{org?: string, team?: string, messageIds: number[]}",
         purpose: "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Archive and mark read human-directed messages in the page team in one transaction and at most one inbox change event. Resolves `{archived: n}`, counting newly archived rows once; agent mail, already archived and unknown ids are unchanged. Requires a non-empty array of positive safe integer ids. Store failures reject verbatim so a page can roll back optimistic state.",
+        deny_example: "denied: write budget",
+    },
+    ActionVerbDoc {
+        verb: "unarchive",
+        tier: "metadata",
+        args: "{org?: string, team?: string, messageIds: number[], restoreUnread?: number[]}",
+        purpose: "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Undo `archive`: unarchive human-directed messages in one transaction and at most one inbox change event, with the same grant as archive. Archive also marks messages read, so pass the ids that were unread before archiving as `restoreUnread` to make them unread again; the others keep their read state. Resolves `{unarchived: n}`, counting rows that were archived; agent mail, unarchived and unknown ids are unchanged. Store failures reject verbatim.",
         deny_example: "denied: write budget",
     },
     ActionVerbDoc {
@@ -485,6 +492,9 @@ pub(crate) const READ_VERBS: &[&str] = &[
     // The stored rates that price it: the seeded list prices and the ones setModelRate set. The
     // same as the MCP tool model_rates.
     "modelRates",
+    // Whether sendPrompt({handle:"active"}) has a terminal to paste into; the host pushes
+    // `codesense:paste-target-changed` when the answer changes.
+    "canPasteToTerminal",
     // Validate a YAML / frontmatter / JSON snippet against the shape
     // named by `kind` (one of the slugs in `generated/schemas.json`). Pure
     // parsing, audit-exempt. The Rust validator wiring lands under a later
@@ -560,6 +570,7 @@ fn sdk_section() -> Value {
             "read": "codesense.sessions() → the list_sessions rows: [{handle, displayName, state, launchedBy, unread, oldestUnreadAt, subagents?, story?, workspace?, machine?, role?, avatar?, agent?, progress?}]. subagents: how many of its agent's subagents run now (absent at none); state stays the agent's own, so one whose turn ended while they work is idle with subagents: N. progress: its latest signal_progress, {phase: planning|dev|review|pr|blocked|done, step?, total? (step of total), note?, atMs}, present once it reported one. state: running | idle (turn finished) | needs-you (awaiting permission) | exited | offline (its machine is disconnected; it may still run there) | unknown. unread: unread messages to its own handle (null when unreadable); oldestUnreadAt: RFC 3339. machine: 'This Mac' or the machine's label. agent: the saved Agent id it runs. role/avatar: display labels its launcher gave it.",
             "live": "const off = codesense.onSessions((list, err) => render(list)) — runs now and again whenever the roster changes; call off() to stop.",
             "stop": "await codesense.act('stopSession', {handle}) stops any listed session.",
+            "paste": "await codesense.canPasteToTerminal() → boolean: true when the person's active terminal (the selected terminal tab of the focused workspace) exists and its process runs. const off = codesense.onPasteTargetChanged(() => …) runs on the payloadless codesense:paste-target-changed nudge when that answer changes; re-read then. await codesense.sendPrompt({handle: 'active', text, submit: false}) writes text there: text is written as typed; a newline in it acts as Enter → {status: 'typed' | 'no-workspace' | 'no-terminal', message (the toast the host showed, null when typed)}. Feature-detect both (typeof codesense.canPasteToTerminal === 'function') so the page still works on an older CodeSense.",
         },
         "agents": "codesense.agents() → [{key, name, description, runtime, scope (personal|team|builtin), team, runningNow}] — every agent you can launch, including builtin/claude and builtin/codex.",
         "live_hub": {
@@ -583,7 +594,7 @@ fn sdk_section() -> Value {
             "human_status": "await codesense.humanStatus() [get_human_status] → {status: online|away|busy|offline, note?, updatedAtMs (0 = never set)}.",
             "media_messages": "inbox() and inboxRollup() image attachments carry {kind:'image', sha256?, mime?, width?, height?, bytes?, alt, sourceUrl?, sourceHost?, state:'cached'|'pending'|'blocked'|'failed', reason?, retryable}. Render cached bytes from same-origin /media/v1/<sha256>, never from sourceUrl. Pending or retryable failed rows can call act('loadMedia', {org?,team?,messageId}) after the person taps. Blocked means remote media is off in team config; offer a source link, not a fetch. Respect OS Reduce Motion with a still first frame and explicit play/pause.",
             "html_messages": "Open an agent HTML message to the human with act('openMessage', {messageId}); do not render a live message frame inside the page. Markdown/plain conversations render in the page.",
-            "human_writes": "As the human, through act(): act('sendAsHuman', {to, text, contentType?, onClick?, attachFile?, replyTo?, summary?, inReplyTo?}) (to = a session handle, else a role), act('replyAsHuman', {messageId, text, contentType?, summary?}), act('react', {messageId, emoji, remove?}), act('markRead', {messageIds}), act('markUnread', {messageIds}), act('archive', {messageIds}), act('setHumanStatus', {status, note?}). sendAsHuman, replyAsHuman, react, markRead, markUnread, archive and openMessage accept optional {org, team} together, subject to the Rust inbox:read:all-teams grant; use the team of the rollup row. Omit both to keep the pinned team. A partial pair or unsynced target rejects with the verb named. Under open, any dashboard may target another synced team; team-safe checks the frame's grant before any inbox I/O. See the action verbs for results.",
+            "human_writes": "As the human, through act(): act('sendAsHuman', {to, text, contentType?, onClick?, attachFile?, replyTo?, summary?, inReplyTo?}) (to = a session handle, else a role), act('replyAsHuman', {messageId, text, contentType?, summary?}), act('react', {messageId, emoji, remove?}), act('markRead', {messageIds}), act('markUnread', {messageIds}), act('archive', {messageIds}), act('unarchive', {messageIds, restoreUnread?}) (Undo of archive; restoreUnread = the ids that were unread before archiving), act('setHumanStatus', {status, note?}). sendAsHuman, replyAsHuman, react, markRead, markUnread, archive, unarchive and openMessage accept optional {org, team} together, subject to the Rust inbox:read:all-teams grant; use the team of the rollup row. Omit both to keep the pinned team. A partial pair or unsynced target rejects with the verb named. Under open, any dashboard may target another synced team; team-safe checks the frame's grant before any inbox I/O. See the action verbs for results.",
             "live": "const off = codesense.onAgentsChanged(() => reread()) follows versioned agentDefinitions rows when saved definitions or running counts change, plus compatibility revisions for role registrations, queues and the human's status; codesense.onInboxChanged((change?) => …) when a message is stored, read, claimed or reacted to (change.changes, when present: [{team: {org, team}, messageIds}] names the messages the committed update re-read, only your team's when you are team-scoped; re-read just those); window message `codesense:agent-activity-changed` when an update is posted. Each returns an unsubscribe. Re-read with the calls above. Registrations and claims also lapse with time, so a queue view may re-read on a slow timer (e.g. every 30s while visible).",
             "times": "Every *AtMs field is epoch milliseconds.",
             "example": "const off = codesense.onAgentsChanged(render); render(); async function render() { const [list, {roles}, {messages}] = await Promise.all([codesense.sessions(), codesense.roles(), codesense.inbox({scope: 'to-human', limit: 20})]); /* draw with textContent */ }",
@@ -662,7 +673,7 @@ fn action_section() -> Value {
         "policy": crate::verbs::contract(),
         "tiers": {
             "prefs": "Dashboard-local preferences: separate 30 calls per 10 s budget, no audit line.",
-            "metadata": "Silent frontmatter/file and inbox-state writes (setStatus/setField/routeToContext/draft, markRead/markUnread/archive/setHumanStatus). A runaway guard caps a burst of write calls (a batch `setStatus` is one call); past it the call rejects `denied: write budget` until the burst window passes.",
+            "metadata": "Silent frontmatter/file and inbox-state writes (setStatus/setField/routeToContext/draft, markRead/markUnread/archive/unarchive/setHumanStatus). A runaway guard caps a burst of write calls (a batch `setStatus` is one call); past it the call rejects `denied: write budget` until the burst window passes.",
             "spawn": "Opens a workspace / drives an agent (openWorkspace/runPrompt/runSkill/openTab), or opens a file in the viewer (openFile) — bounded by a concurrency cap (`busy` when saturated). Opens that take no cap slot (openFile, openTab, a headed dir/epic openWorkspace) are bounded by a runaway guard instead: past a burst the call rejects `denied: spawn budget` until the window passes.",
             "send": "Injects a chat turn into an already-running agent (sendToSession/sendToWorkspaceTab, and runPrompt), or sends an inbox message (postMessage, sendAsHuman, replyAsHuman) — rate-limited (anti-flood; `denied: send budget`).",
             "read": "Reads a file / lists a dir CONFINED to the doc's own directory subtree (readWorkspace), or observes a workspace — AUDITED (read:true), never budgeted.",
@@ -978,7 +989,7 @@ fn hosted_guide() -> Value {
             "publish.state": "draft or published. publish_dashboard sets published, unpublish_dashboard sets draft; do not edit it by hand.",
             "publish.visibility": "private or team. team is reserved and is currently the same as private: only invited viewers get in.",
             "publish.files": "Every file the pages use, as relative paths inside the folder (no leading /, no ./ or .., no backslash, no symlink or hard link, each listed once). At most 50 files, 5 MB each, 25 MB in all. Types: html, css, js, json, csv, txt, png, jpg/jpeg, webp, gif. No SVG and no font files.",
-            "publish.entry": "Decided but not built: the manifest has no entry field yet. The hosted viewer opens index.html, else the first .html in sorted order. Always have an index.html.",
+            "publish.entry": "Not a manifest field. The hosted viewer opens index.html, else the first .html in sorted order. Always have an index.html.",
             "live": "Optional. Absent: a static dashboard. queries: [] shows only whether the owner's Mac is online; queries: [names] or all allows live answers (see declare, queries, fields and pins above)."
         },
         "rules": [
@@ -991,7 +1002,7 @@ fn hosted_guide() -> Value {
             "Each page load is a fresh document: keep state in the URL fragment or reload it from data files.",
             "Per page the viewer allows 8 data requests at once and 25 MB of data read in all, so read the data once on load instead of polling; the viewer reloads the page itself when a new version arrives."
         ],
-        "not_built": "Decided but not built: publish does not yet scan pages for references to unlisted or outside files, and it does not yet report linked dashboards that are unpublished. Today such a reference just fails to load in the hosted viewer, so check the references yourself.",
+        "unchecked_references": "Publish does not scan pages for references to unlisted or outside files, and it does not report linked dashboards that are unpublished. Such a reference just fails to load in the hosted viewer, so check the references yourself.",
         "fresh_data": "A dashboard is as fresh as its listed files. An agent or a routine rewrites a data file (for example a routine that calls session_usage and writes data/usage.json); there is no built-in usage source. While CodeSense is open on the owner's Mac, a change to a listed file is pushed about 60 s after the last write, and every 15 minutes the Mac checks in or pushes. Viewers see 'Page updated N minutes ago' from server time: when the files were last published (a check-in alone does not change it, nor does a live answer; a live page can show its answers' answered_at), and a stale warning when the Mac has not checked in for 30 minutes. The viewer checks for a new version every 60 s and reloads the page. Adding a file means adding it to publish.files.",
         "answer_size": "An answer is at most 256 KB as JSON. The list queries (sessionUsage, sessions, runs, inbox, queryContext) keep the first rows that fit, measured as sent (after redaction), and cut from the end of their own order: sessionUsage newest activity first, runs newest first, inbox newest first, sessions in handle order (not by recency), queryContext the sort you asked for (or its default). A limit of 500 is safe to ask. Every list answers as an object, and when the Mac had to cut rows, by the limit or by size, the object carries truncated: true, returned (the rows sent) and total (the rows before the cut), the same on every list: runs answers {runs: [...]}, sessionUsage {sessions, days, totals, total}, sessions {sessions}, inbox {messages}, queryContext {rows} (its total and truncated are always present; sessionUsage and queryContext pages always carry returned and total too). The totals and days of sessionUsage still cover everything. Test truncated and say so on the page. To read past the cut, page: sessionUsage and queryContext answer nextCursor when rows follow the last one sent (it points after that row even when the cut was by size); pass it back as cursor with the same other args to get the next page, until nextCursor is absent. A cursor from other args is refused (query_invalid). Every page carries total (all matches), returned (the rows on this page) and truncated (this page is not everything); sessionUsage total, totals and days count the current matches on every page. During a walk a session that becomes active moves to the first page; a walk is complete when its distinct sessionIds equal total, otherwise walk again from page 1 through continuation, merging by sessionId, up to 2 recovery rewalks; after that report the truthful latest N of M. queryContext's pages read one index snapshot, kept 30 s after each page and 120 s at most; past that, or after the Mac's app restarted, the cursor answers stale_cursor, so restart without a cursor. Other lists have no cursor: sessionUsage also takes a window (sinceMs, untilMs); runs takes only limit, sessions only launchedBy, and inbox has no time or cursor (narrow it with scope, agentId, sessionId or role); queryContext narrows with match, filters or where. Say on the page when it shows part of the list. Rough bytes per row: sessionUsage 600 to 850 (more with several models), sessions 350, runs 450, inbox 400 plus the text of each message when fields.inbox lists text, queryContext 150 plus about 30 per frontmatter field; the totals and days of sessionUsage and the rest of the answer are counted first. Only a single row or value over the cap fails, as answer_too_large.",
         "live_answers": "A page gets live answers only through live_page_api. Declared live queries are asked of the owner's Mac through codesense.ai while the Mac is connected (CodeSense open, a published dashboard with a live block). A person must confirm a new or wider live block once in the CodeSense app (publish_dashboard returns live: pending_confirmation until they do, and live data stays paused); a narrower or removed block takes effect within seconds. Answers are read-only and redacted, at most 256 KB, 10 s timeout, 60 asks per minute per viewer session. When the Mac is offline the last answer to the same query and args is returned with source 'cache' and its answered_at time, and the viewer shows 'Live data unavailable, showing data from N minutes ago' above the page until a live answer comes; with no cached answer the error is mac_offline. The cache is deleted on unpublish, when a query leaves the list, and for a query whose live.args pins change. Pin refusals never use the cache. Cached and in-flight answers must match the current query pin revision and the viewer permission computed on the Mac. Selector queries use a cache fallback only while the Mac is offline, never for online rate limits, timeout, failure or oversized answers. An authoritative arg_not_allowed or not_approved discards that exact cached answer and prevents pending older answers from restoring it.",
@@ -1016,7 +1027,7 @@ fn hosted_guide() -> Value {
             "write anything as an invited viewer (only the owner can type into terminals)",
             "type into a terminal unless you are the owner and the dashboard allows control (live.control: owner), and only after Take control in the viewer's top bar",
             "send invite emails yourself: they are reviewed before they are sent",
-            "set a different entry page yet (publish.entry is decided, not built)"
+            "set a different entry page: the viewer opens index.html first"
         ]
     })
 }
@@ -1030,7 +1041,20 @@ fn local_contract_base() -> Value {
         "analyze": "invoke('analyze') uses the configured agent CLI; handle unavailable, timeout and busy errors, and render model output as text.",
         "inbox_messages": "An agent can send the human a dashboard as a message: send_message with {to:\"human\", contentType:\"html\", text:<the HTML>}. It renders in the Inbox exactly like a dashboard file — scripts, window.codesense (reads, act() through the same action gate) and pushed events — sized to its content, with Open in tab. Always pass {summary}: one plain-text line (≤280 chars) the Inbox and lists show for it, since a line derived from the markup reads badly. Team-scoped calls act in the message's team. Example text: `<p id=o>…</p><script>codesense.sessions().then(s=>{o.textContent=s.length+' sessions running'})</script>`.",
         "retired_services": "Built-in provider connections, connector polling and /api/v1/proxy are unavailable. Publish external data through a routine and read its result.",
+        "story_fields": story_fields_section(),
         "see_also": ["validate_live_data_doc", "routine_result", "routine_publish_result"]
+    })
+}
+
+/// Story fields a dashboard can read: the registered fields `get_story_format`
+/// publishes, printed from the story-field registry.
+fn story_fields_section() -> Value {
+    let fields: Vec<Value> = crate::commands::pipeline_format::contract_fields()
+        .map(|f| f.contract_entry())
+        .collect();
+    json!({
+        "what": "Story fields a dashboard can read. Use the Markdown name in codesense.queryContext filters, sort, groupBy and select, and as a row's fields key; HTML stories carry the same field as the cs_meta tag. A team's own fields, declared in content/field-schema.yml or the org's tag_schema, read the same way. Rely only on these and declared fields: validate_story flags any other key with the UNREGISTERED_FIELD advisory.",
+        "fields": fields
     })
 }
 
@@ -1523,7 +1547,7 @@ mod tests {
             "layout",
             "manifest",
             "rules",
-            "not_built",
+            "unchecked_references",
             "fresh_data",
             "live_answers",
             "live_page_api",
@@ -1552,11 +1576,11 @@ mod tests {
         assert!(text.contains("posts to its own window, not to parent"));
         assert!(text.contains("team's context repo"));
         assert!(text.contains("every call returns {slug, viewers, notOnList}"));
-        // Decided but not built is said plainly.
+        // The entry page is index.html; there is no entry field.
         assert!(guide["manifest"]["publish.entry"]
             .as_str()
             .unwrap()
-            .contains("not built"));
+            .starts_with("Not a manifest field. The hosted viewer opens index.html"));
         // The example manifest is one the app accepts.
         let dir = tempfile::tempdir().unwrap();
         for f in [
@@ -1811,6 +1835,7 @@ mod tests {
             "replyAsHuman",
             "markRead",
             "archive",
+            "unarchive",
             "setHumanStatus",
         ] {
             assert!(
@@ -1852,6 +1877,24 @@ mod tests {
         }
         let updates = serde_json::to_string(&c["sdk"]["agents_and_inbox"]["updates"]).unwrap();
         assert!(updates.contains("inbox({kind:'update'})"), "{updates}");
+    }
+
+    /// The contract teaches the terminal paste: its read, its nudge and sendPrompt's active mode.
+    #[test]
+    fn contract_teaches_the_terminal_paste() {
+        let c = local_contract_payload();
+        let paste = serde_json::to_string(&c["sdk"]["sessions"]["paste"]).unwrap();
+        for call in [
+            "codesense.canPasteToTerminal()",
+            "codesense.onPasteTargetChanged(",
+            "codesense:paste-target-changed",
+            "handle: 'active'",
+            "'typed' | 'no-workspace' | 'no-terminal'",
+            "text is written as typed; a newline in it acts as Enter",
+        ] {
+            assert!(paste.contains(call), "sessions.paste teaches `{call}`");
+        }
+        assert!(READ_VERBS.contains(&"canPasteToTerminal"));
     }
 
     /// A dashboard over routines, runs, worktrees and machines can be written from the

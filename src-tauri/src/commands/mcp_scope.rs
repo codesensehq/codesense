@@ -3038,7 +3038,7 @@ mod tests {
             settings["permissions"].get("defaultMode").is_none(),
             "an interactive launch keeps its mode"
         );
-        // SV-CDE-8 d2e84d9c6 (#2691) intentionally adds credential deny rules.
+        // SV-CDE-8 (#2691) intentionally adds credential deny rules.
         assert_eq!(
             settings["permissions"]["deny"],
             json!(codesense_pty_core::notify_hook::deny_rules())
@@ -4221,7 +4221,7 @@ mod tests {
     /// authenticated via the symlinked `auth.json`. Run with:
     ///   `cargo test --lib live_smoke_codex_scoped -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "live smoke test requires Codex installed and authenticated"]
     fn live_smoke_codex_scoped_via_env_dir() {
         let _home_env = crate::routines::test_support::TempHome::new();
         use std::process::Command;
@@ -4343,7 +4343,7 @@ mod tests {
     /// list the codesense bridge — the user's own Codex config is never read or written. Run:
     ///   `cargo test --lib live_smoke_codex_default_profile_lists_bridge -- --ignored`
     #[test]
-    #[ignore]
+    #[ignore = "live smoke test requires the Codex binary on PATH"]
     fn live_smoke_codex_default_profile_lists_bridge() {
         let home = tempfile::TempDir::new().unwrap();
         let bridge = std::path::Path::new("/opt/codesense/bin/codesense-bridge");
