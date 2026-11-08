@@ -20,8 +20,10 @@ const HOSTED_RUNNERS = new Set([
 
 // Exact grants are scoped by file and job; each exception also needs its own constraints.
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
+const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
 const JOB_PERMISSIONS = new Map([
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
+  [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
   [
     `${SCORECARD.file}:${SCORECARD.job}`,
     { contents: "read", "security-events": "write", "id-token": "write" },
@@ -35,7 +37,7 @@ const SCORECARD_ACTIONS = new Set([
 
 // The terms joined by && outside parentheses and quotes, after unwrapping ${{ }} and redundant outer
 // parentheses. A top-level || keeps the expression whole, so `a || b` or `!(b)` never counts as b.
-function topLevelConjuncts(expression) {
+export function topLevelConjuncts(expression) {
   let e = expression
     .trim()
     .replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
@@ -149,6 +151,17 @@ export function workflowPolicy(text, file = "") {
       if (typeof step.id === "string") earlierIds.add(step.id);
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
+    // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
+    if (file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job) {
+      const terms = topLevelConjuncts(String(job.if ?? ""));
+      for (const required of [
+        "github.event_name == 'push'",
+        "github.ref == 'refs/heads/main'",
+        "!github.event.repository.fork",
+      ])
+        if (!terms.includes(required))
+          errors.push(`${name}: if must require ${required} at the top level`);
+    }
     const requiredPermissions = JOB_PERMISSIONS.get(`${file}:${name}`) ?? { contents: "read" };
     if (
       !mapping(job.permissions) ||
