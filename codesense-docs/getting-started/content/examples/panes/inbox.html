@@ -144,7 +144,8 @@
         align-items: center;
         gap: var(--cs-space-2);
         height: 40px;
-        padding: 0 var(--cs-space-2) 0 var(--cs-space-3);
+        /* New's icon and the presence dot line up with the rows' avatar column (4 + 8px) */
+        padding: 0 var(--cs-space-1);
         border-bottom: 1px solid var(--cs-border);
         flex: none;
       }
@@ -202,7 +203,7 @@
         align-items: center;
         gap: 6px;
         height: 26px;
-        padding: 0 6px 0 8px;
+        padding: 0 8px;
         border-radius: var(--cs-radius-full);
         font-size: var(--cs-text-sm);
         color: var(--cs-muted-fg);
@@ -401,19 +402,45 @@
         color: var(--cs-accent-fg);
         flex: none;
       }
+      /* Row actions sit at the preview line's end, out of the grid: the name, count and time
+         on line 1 never move, and the preview ellipsises before the actions. */
       .ib-row .rowact {
         position: absolute;
-        right: 6px;
-        top: 50%;
-        translate: 0 -50%;
+        right: 8px;
+        bottom: 7px;
         display: none;
-        background: var(--cs-bg);
-        border-radius: var(--cs-radius);
-        box-shadow: 0 0 0 1px var(--cs-border);
+        gap: 2px;
+      }
+      .ib-row .rowact .ib-btn {
+        height: 22px;
+      }
+      .ib-row .rowact .ib-btn.icon {
+        width: 22px;
       }
       .ib-row:hover .rowact,
+      .ib-row:focus-within .rowact,
       .ib-rows:focus-visible .ib-row.kbd-active .rowact {
         display: flex;
+      }
+      .ib-row:hover .prev,
+      .ib-row:focus-within .prev,
+      .ib-rows:focus-visible .ib-row.kbd-active .prev {
+        padding-right: 52px;
+      }
+      /* E acts on the keyboard-active row of the focused list, so its hint shows only there. */
+      .ib-row .rowact kbd {
+        display: none;
+      }
+      .ib-rows:focus-visible .ib-row.kbd-active .rowact .ib-btn:has(kbd) {
+        width: auto;
+        gap: 4px;
+        padding: 0 3px 0 4px;
+      }
+      .ib-rows:focus-visible .ib-row.kbd-active .rowact kbd {
+        display: inline;
+      }
+      .ib-rows:focus-visible .ib-row.kbd-active .prev {
+        padding-right: 76px;
       }
       #mark-all-read[disabled] {
         color: var(--cs-muted-fg);
@@ -1792,9 +1819,6 @@
         }
       }
 
-      .ib-row:focus-within .rowact {
-        display: flex;
-      }
       .ib-rows .ib-row button {
         cursor: pointer;
       }
@@ -1846,6 +1870,20 @@
         display: inline;
       }
       .ib[data-layout="stack"] .ib-new-full {
+        display: none;
+      }
+      #mark-all-read .i {
+        display: none;
+      }
+      .ib[data-layout="stack"] #mark-all-read {
+        width: 26px;
+        padding: 0;
+        justify-content: center;
+      }
+      .ib[data-layout="stack"] #mark-all-read .i {
+        display: block;
+      }
+      .ib[data-layout="stack"] .ib-mar-label {
         display: none;
       }
       .ib-msg.ib-target {
@@ -2413,6 +2451,10 @@
         <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
         <path d="M10 12h4" />
       </symbol>
+      <symbol id="i-check-check" viewBox="0 0 24 24">
+        <path d="M18 6 7 17l-5-5" />
+        <path d="m22 10-7.5 7.5L13 16" />
+      </symbol>
       <symbol id="i-more" viewBox="0 0 24 24">
         <circle cx="5" cy="12" r="1" />
         <circle cx="12" cy="12" r="1" />
@@ -2516,9 +2558,6 @@
         >
           All teams
         </button>
-        <button type="button" class="ib-btn" id="mark-all-read" title="Mark all read" disabled>
-          Mark all read
-        </button>
         <span class="vh" id="mark-all-scope"></span>
         <span id="filter-status" class="ib-status" role="status" aria-live="polite"></span>
         <div
@@ -2529,6 +2568,16 @@
           hidden
         ></div>
         <span class="sp"></span>
+        <button
+          type="button"
+          class="ib-btn"
+          id="mark-all-read"
+          title="Mark all read"
+          disabled
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-check-check" /></svg
+          ><span class="ib-mar-label">Mark all read</span>
+        </button>
         <button
           class="ib-presence"
           id="presence"
@@ -2795,8 +2844,10 @@
           newIds = new Set();
         // Others' mail that landed below the reader while scrolled up: counted by
         // Jump to latest and held unread until they jump or scroll back down.
-        // Architecture: an explicit Mark as unread survives refresh, layout and passive scrolling.
+        // Architecture: an explicit Mark unread survives refresh, layout and passive scrolling.
         const explicitlyUnread = new Set();
+        // Rows U is marking unread, shown unread before the write lands (unreadThread).
+        const markingUnread = new Set();
         let held = new Set(),
           logScope = null,
           logNewest = -Infinity;
@@ -3264,6 +3315,7 @@
             return;
           }
           rebuildThreads();
+          for (const t of threads) if (!t.unread && markingUnread.has(t.key)) t.unread = 1;
           if (crossTeam) drawFilter();
           const list = $("conversations");
           const rows = threads.map((t) => {
@@ -3320,6 +3372,7 @@
                 "archive",
               ),
             );
+            if (t.key === active) actions.lastChild.append(decor("kbd", "", "E"));
             li.append(
               avatar(t.key),
               who,
@@ -5995,38 +6048,54 @@
             }
           });
         }
-        // The row menu's Mark unread, from the keyboard: every read message to you in the
-        // conversation, as the host menu marks it.
+        // The newest message to you in a conversation, across every team it merges; your own
+        // messages never count.
+        async function latestToYou(t) {
+          let latest = null;
+          for (const c of t.summaries)
+            for await (const page of toYouPages(c)) {
+              const m = page.find((m) => unread({ ...m, unread: true }));
+              if (!m) continue;
+              if (!latest || m.createdAtMs > latest.createdAtMs) latest = m;
+              break;
+            }
+          return latest;
+        }
+        // The row menu's Mark unread, from the keyboard: the newest message to you turns
+        // unread, as the host menu marks it. A conversation with none has nothing to mark.
+        // A loaded message to you proves there is one, so the row shows unread at once; with
+        // none loaded, it waits for the lookup and so never shows a state it takes back.
         const unreading = new Set();
         async function unreadThread(t) {
-          if (unreading.has(t.key)) return;
           unreading.add(t.key);
-          t.summaries.forEach(releaseHold);
-          explicitlyUnread.add(t.key);
-          if (t.key === selected) readDone = false;
-          drawLatest();
+          if (t.messages.some((m) => unread({ ...m, unread: true }))) {
+            markingUnread.add(t.key);
+            drawList();
+          }
           try {
-            const rows = [];
-            for (const c of t.summaries)
-              for await (const page of toYouPages(c))
-                rows.push(...page.filter((m) => unread({ ...m, unread: true }) && !m.unread));
-            const failed = rows.length ? await unreadRows(rows) : null;
-            if (failed?.size) showToast(retryIn(failed, "unread"));
-            if (!failed) {
-              explicitlyUnread.delete(t.key);
-              drawLatest();
-            }
+            const latest = await latestToYou(t);
+            if (!latest || latest.unread) return;
+            t.summaries.forEach(releaseHold);
+            explicitlyUnread.add(t.key);
+            if (t.key === selected) readDone = false;
+            drawLatest();
+            // One message is one write: it lands or it throws.
+            await unreadRows([latest]);
           } catch {
             explicitlyUnread.delete(t.key);
             drawLatest();
             showToast("Couldn't mark unread. Try again.");
           } finally {
             unreading.delete(t.key);
+            if (markingUnread.delete(t.key)) drawList();
           }
         }
-        // U on a row: read it if anything is unread, else mark it unread.
+        // U on a row: read it if anything is unread, else mark it unread. A press while the
+        // row is still being marked unread does nothing more. A read role queue offers no
+        // Mark unread, so U does nothing on it.
         function toggleRead(t) {
-          if (!t.unread) return void unreadThread(t);
+          if (unreading.has(t.key)) return;
+          if (!t.unread) return isRole(t.key) ? undefined : void unreadThread(t);
           explicitlyUnread.delete(t.key);
           readThreads([t]).then(
             ({ failed }) =>

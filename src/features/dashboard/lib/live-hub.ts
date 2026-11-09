@@ -353,23 +353,22 @@ export class LiveHub {
       if (changes.length && !deliverable(frame, { ...message, changes })) continue;
       if (!frame.visible) {
         // An invalidation can change data outside the delta stream, so consumers must reread.
-        const held = frame.invalidations.get(type);
+        // Keep broad inbox changes and named row hints independently: a broad change must
+        // not discard the ids a consumer needs to refresh older retained rows.
+        const key = type === "inbox-changed" && changes.length ? `${type}:rows` : type;
+        const held = frame.invalidations.get(key);
         frame.invalidations.set(
-          type,
+          key,
           type === "context-changed" && held
             ? { ...message, allOrgs: true }
-            : type === "inbox-changed"
-              ? // A change that names no rows could be anything, so once one is held the
-                // folded change stays unnamed; naming rows would narrow what consumers reread.
-                !changes.length || (held && !held.changes)
-                ? message
-                : {
-                    ...message,
-                    changes: unionChanges(
-                      (held?.changes as InboxChange[] | undefined) ?? [],
-                      changes,
-                    ),
-                  }
+            : type === "inbox-changed" && changes.length
+              ? {
+                  ...message,
+                  changes: unionChanges(
+                    (held?.changes as InboxChange[] | undefined) ?? [],
+                    changes,
+                  ),
+                }
               : message,
         );
         // A paste-target flip changes no hub data, so it never makes a hidden page resync.
