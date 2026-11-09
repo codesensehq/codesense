@@ -148,18 +148,16 @@ describe("inbox pane refresh pacing", () => {
     "coalesces 100 nudges for agents' mail in one second into at most two reads (%s)",
     async (scope) => {
       const p = await shown([MIA], scope);
-      const start = performance.now();
       for (let i = 0; i < 100; i++) {
         p.nudge([100 + i]);
         await settle(10);
       }
-      expect(p.readAt.filter((at) => at < start + 1000)).toHaveLength(2);
       await settle(2000);
-      // One trailing read for the nudges after the second read, then idle: no timer keeps reading.
-      expect(p.reads()).toBe(3);
+      // A leading read and one trailing read, then idle: no timer keeps reading.
+      expect(p.reads()).toBe(2);
       expect(vi.getTimerCount()).toBe(0);
       await settle(10_000);
-      expect(p.reads()).toBe(3);
+      expect(p.reads()).toBe(2);
     },
   );
 
@@ -183,7 +181,7 @@ describe("inbox pane refresh pacing", () => {
     p.nudge([2]);
     await settle(300);
     expect(p.reads()).toBe(1);
-    await settle(500);
+    await settle(700);
     expect(p.reads()).toBe(2);
   });
 
@@ -206,7 +204,7 @@ describe("inbox pane refresh pacing", () => {
     await settle(30);
     vi.setSystemTime(Date.now() - 60_000);
     p.nudge([101]);
-    await settle(800);
+    await settle(1000);
     expect(p.reads()).toBe(2);
   });
 
@@ -227,7 +225,7 @@ describe("inbox pane refresh pacing", () => {
     expect(p.listRows()).toBe(2);
   });
 
-  it("shows the human's mail within 750 ms inside a burst of agents' mail", async () => {
+  it("shows the human's mail within a second of its nudge inside a burst of agents' mail", async () => {
     const p = await shown([MIA]);
     p.nudge([100]);
     await settle(30);
@@ -238,8 +236,8 @@ describe("inbox pane refresh pacing", () => {
       await settle(10);
     }
     expect(p.listRows()).toBe(1);
-    // 750 ms after the human's mail was nudged, leaving the rest of the second for the read.
-    await settle(550);
+    // 1,000 ms after the human's mail was nudged, leaving a quarter second for the read.
+    await settle(800);
     expect(p.listRows()).toBe(2);
     expect(p.reads()).toBe(2);
   });
@@ -257,17 +255,18 @@ describe("inbox pane refresh pacing", () => {
     expect(p.reads()).toBe(2);
   });
 
-  it("counts a refresh the human starts toward the two reads a second", async () => {
+  it("leaves a refresh the human starts out of the two-reads-a-second cap", async () => {
     const p = await shown([MIA, SENT]);
     p.nudge([100]);
     await settle(30);
     p.intent({ conversation: "Mia", org: TEAM.org, team: TEAM.team });
     await settle(30);
     expect(p.reads()).toBe(2);
+    // 250 ms after the human's read, not a second after the nudge read before it.
     p.nudge([1]);
-    await settle(400);
+    await settle(200);
     expect(p.reads()).toBe(2);
-    await settle(600);
+    await settle(60);
     expect(p.reads()).toBe(3);
   });
 
@@ -405,6 +404,81 @@ describe("inbox pane refresh pacing", () => {
       expect(p.reads()).toBe(2);
       expect(p.view()).toBe("thread");
       expect(document.getElementById("thread-name")!.textContent).toBe("Lee");
+    });
+
+    it("opening a message whose mail lands while the read is in flight", async () => {
+      const p = await shown([MIA], "team");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const read = p.cs.inbox.getMockImplementation()!;
+      p.cs.inbox.mockImplementation(async (query) => {
+        const result = await read(query);
+        if (query.scope === "to-human") await held;
+        return result;
+      });
+      p.nudge([100]);
+      await settle(30);
+      p.intent({ messageId: 3, conversation: "Mia", org: TEAM.org, team: TEAM.team });
+      p.rows.push({ id: 3, from: "Mia", to: "human", unread: true });
+      p.nudge([3]);
+      release();
+      p.cs.inbox.mockImplementation(read);
+      await settle(30);
+      // The read that missed the message waits for one more before it opens the thread.
+      expect(p.reads()).toBe(2);
+      expect(document.getElementById("message-3")?.classList.contains("ib-target")).toBe(true);
+    });
+
+    it("gives a new host intent its own wait for its mail", async () => {
+      const p = await shown([MIA]);
+      const read = p.cs.inboxRollup.getMockImplementation()!;
+      const gates: Array<() => void> = [];
+      p.cs.inboxRollup.mockImplementation(async () => {
+        const result = await read();
+        await new Promise<void>((resolve) => gates.push(resolve));
+        return result;
+      });
+      p.nudge([100]);
+      await settle(30);
+      // Lee isn't listed when the first read lands, so the intent waits for one more read.
+      p.intent({ conversation: "Lee", org: TEAM.org, team: TEAM.team });
+      p.nudge([101]);
+      gates.shift()!();
+      await settle(30);
+      expect(p.reads()).toBe(2);
+      // A new intent arrives during that read, and Ori's mail lands after it took its snapshot.
+      p.intent({ conversation: "Ori", org: TEAM.org, team: TEAM.team });
+      p.rows.push({ id: 4, from: "Ori", to: "human", unread: true });
+      p.nudge([4]);
+      gates.shift()!();
+      await settle(30);
+      p.cs.inboxRollup.mockImplementation(read);
+      gates.splice(0).forEach((open) => open());
+      await settle(30);
+      expect(p.view()).toBe("thread");
+      expect(document.getElementById("thread-name")!.textContent).toBe("Ori");
+    });
+
+    it("keeps an intent parked through failing reads without retrying at once", async () => {
+      const p = await shown([MIA]);
+      let fail!: (error: Error) => void;
+      p.cs.inboxRollup.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+      p.nudge([100]);
+      await settle(30);
+      expect(p.reads()).toBe(1);
+      p.intent({ conversation: "Lee", org: TEAM.org, team: TEAM.team });
+      p.nudge([101]);
+      // A failing host still takes a moment to answer, so nudges land during each read.
+      p.cs.inboxRollup.mockImplementation(
+        () => new Promise((_, reject) => setTimeout(() => reject(new Error("offline")), 20)),
+      );
+      fail(new Error("offline"));
+      for (let i = 0; i < 100; i++) {
+        p.nudge([102 + i]);
+        await settle(10);
+      }
+      // Paced retries only: one a second, not one per 25 ms.
+      expect(p.reads()).toBeLessThanOrEqual(2);
     });
 
     it("sending", async () => {

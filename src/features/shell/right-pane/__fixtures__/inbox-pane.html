@@ -2774,14 +2774,16 @@
           refreshing = false,
           sending = false;
         // A nudge's read waits this long after the last read started (the skip's shorter wait
-        // for loaded mail to the human), and never makes three reads start within a second.
-        const REFRESH_PACE_MS = 750,
+        // for loaded mail to the human), and never makes three nudge reads start within a second;
+        // reads the human starts don't count toward that.
+        const REFRESH_PACE_MS = 1000,
           REFRESH_SKIP_MS = 250,
           REFRESH_CAP_MS = 1000;
         let badgeStale = true,
           urgentRefresh = false,
           refreshStartedAt = -Infinity,
-          priorRefreshStartedAt = -Infinity,
+          nudgeReadAt = -Infinity,
+          priorNudgeReadAt = -Infinity,
           skipQueued = false,
           intentWaited = false,
           refreshDue = 0;
@@ -5727,7 +5729,9 @@
         }
         function intentListed(intent) {
           if (intent.focusList) return true;
-          const { key } = intentTarget(intent);
+          const { t, key } = intentTarget(intent);
+          // A message intent waits for its message, not just its conversation.
+          if (intent.messageId != null) return !!t;
           return !!key && threads.some((t) => t.key === key);
         }
         // The host calls this with the intent alone; a read that lands passes whether to apply.
@@ -6723,10 +6727,17 @@
                 const waited = intentWaited;
                 pendingIntent = undefined;
                 intentWaited = false;
-                // Mail for the intent's thread may land just after this read started; if the
-                // list doesn't hold its target yet, it waits for one more read that lands.
-                applyIntent(intent, (waited && landed) || intentListed(intent));
-                if (pendingIntent) intentWaited = landed || waited;
+                if (landed) {
+                  // Mail for the intent's thread may land just after this read started; if the
+                  // list doesn't hold its target yet, it waits for one more read.
+                  applyIntent(intent, waited || intentListed(intent));
+                  if (pendingIntent) intentWaited = true;
+                } else if (!dirty) applyIntent(intent, true);
+                else {
+                  // A failed read keeps the intent for the next read, paced like any retry.
+                  pendingIntent = intent;
+                  intentWaited = waited;
+                }
               }
               flushHostCommands();
               if (!dirty) markVisible(true);
@@ -6781,8 +6792,11 @@
         }
         // A read that starts serves every request queued so far and opens a new pacing window.
         function startRead() {
-          priorRefreshStartedAt = refreshStartedAt;
           refreshStartedAt = performance.now();
+          if (!urgentRefresh) {
+            priorNudgeReadAt = nudgeReadAt;
+            nudgeReadAt = refreshStartedAt;
+          }
           urgentRefresh = skipQueued = false;
         }
         // A refresh the human starts (or that follows the human's own write) runs at once.
@@ -6808,7 +6822,7 @@
             : Math.max(
                 now,
                 refreshStartedAt + (skipQueued ? REFRESH_SKIP_MS : REFRESH_PACE_MS),
-                priorRefreshStartedAt + REFRESH_CAP_MS,
+                priorNudgeReadAt + REFRESH_CAP_MS,
               );
           if (refreshTimer && refreshDue <= due) return;
           clearTimeout(refreshTimer);
@@ -7300,9 +7314,9 @@
         }
         // A change names the rows it touched; the next refresh re-reads those it has loaded.
         // Nudges carry only row ids, so new mail can't be told from agents' own traffic and
-        // waits for the pacing window (750 ms after the last read started). A change to loaded
-        // mail to the human (a read, reaction or archive) waits only 250 ms. Either way no
-        // third read starts within a second of the read two before it. While hidden, only a
+        // waits for the pacing window (a second after the last read started). A change to loaded
+        // mail to the human (a read, reaction or archive) waits only 250 ms, but no third nudge
+        // read starts within a second of the nudge read two before it. While hidden, only a
         // change that names no rows, names a row this pane hasn't loaded, or names mail to the
         // human can touch the human's unread set. A change without `changes` could be anything;
         // an empty `changes` (the host's sessions re-read) names no inbox rows.
