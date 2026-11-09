@@ -1028,7 +1028,7 @@
         "handling": "The page decides what to do with a drop. The host does not ingest files or change a composer automatically. Drag enter/over/leave carry no paths; only an actual drop discloses paths."
       },
       "focus": "codesense.focusOut({direction}) returns to the previous host element or terminal; codesense.focusTerminal() focuses the active workspace terminal. Both pass through frame admission and have no MCP twin.",
-      "focus_return": "When the host UI closes, the host focuses the iframe and sends codesense:focus-return {anchorId}. The shim focuses that id, else its first focusable control. codesense.onFocusReturn(cb) passes {anchorId} and returns an unsubscribe; any registered handler replaces default focus.",
+      "focus_return": "When the host UI closes, the host focuses the iframe and sends codesense:focus-return {anchorId}. The shim focuses that id without scrolling, else the document (no control). codesense.onFocusReturn(cb) passes {anchorId} and returns an unsubscribe; any registered handler replaces default focus.",
       "menus": "await codesense.showMenu({anchorRect, anchorId, row, items}) renders in the host. Rectangles are frame-relative. Returns {itemId, row} or {closed:true}; a second request closes the first.",
       "popovers": "await codesense.showPopover({kind:'agent-quick-send', sessionId, anchorRect, anchorId}) uses the host quick-send popup; kind 'agent-inbox-chat' opens the agent's inbox chat. Both resolve {closed:true}. Unknown kinds reject."
     },

@@ -15,7 +15,10 @@ import { FullscreenOverlayShell } from "../../../src/features/viewer/components/
 import { flushAll } from "../../../src/features/dashboard/lib/frame-lifecycle";
 import { useOrgStore } from "../../../src/shared/stores/org-store";
 import { requestFrameFocus } from "../../../src/features/dashboard/lib/frame-lifecycle";
-import { DOCK_FRAME_PANEL_ID } from "../../../src/features/shell/slots/slot-registry";
+import {
+  DOCK_FRAME_PANEL_ID,
+  FILE_NAV_FRAME_PANEL_ID,
+} from "../../../src/features/shell/slots/slot-registry";
 import { installFakeTauri } from "../../frame-security/fixtures/fake-tauri";
 import type { PaneHostFixtures, PaneTheme } from "../harness";
 
@@ -80,7 +83,11 @@ function Host() {
       flushAll,
       focus: () =>
         requestFrameFocus(
-          fixtures?.slotId === "dock" ? DOCK_FRAME_PANEL_ID : `harness:${fixtures?.id}`,
+          fixtures?.slotId === "dock"
+            ? DOCK_FRAME_PANEL_ID
+            : fixtures?.slotId === "file-nav"
+              ? FILE_NAV_FRAME_PANEL_ID
+              : `harness:${fixtures?.id}`,
         ),
       setTeam: (org: string, team: string) =>
         useOrgStore.setState({ activeOrgSlug: org, activeTeamName: team }),

@@ -192,14 +192,26 @@ const focusedInFrame = (frame: Frame) =>
       ? el.tagName.toLowerCase() + (el.id ? `#${el.id}` : "")
       : null;
   }, FOCUSABLE);
+const focusIns = async (pane: MountedPane) =>
+  (await pane.probe()).messages.filter((type) => type === "codesense:focus-in").length;
+/** Enters the pane through the host's focus path, as the app does: one focus-in, one control. */
 async function focusIn(pane: MountedPane, check: string) {
   const frame = await settle(pane, check);
-  await pane.page.locator("iframe").focus();
+  await pane.page.locator("#terminal").focus();
+  const before = await focusIns(pane);
+  await pane.focus();
+  try {
+    await expect.poll(() => focusIns(pane), { timeout: 2_000 }).toBe(before + 1);
+  } catch {
+    fail(check, "the host's focus hand-off did not post exactly one codesense:focus-in");
+  }
   try {
     await expect.poll(() => focusedInFrame(frame), { timeout: 2_000 }).not.toBeNull();
   } catch {
     fail(check, "focus-in left focus on <body>: no focusable control took it");
   }
+  if ((await focusIns(pane)) !== before + 1)
+    fail(check, "the host's focus hand-off posted more than one codesense:focus-in");
   return frame;
 }
 const hostFocusIsFrame = (pane: MountedPane) =>

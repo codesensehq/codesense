@@ -10,7 +10,10 @@ import {
   acknowledgeFlush,
   retireAfterFlush,
   markFrameLive,
+  markFrameReady,
   postDashboardCommand,
+  requestFrameFocus,
+  retryFrameFocus,
 } from "./frame-lifecycle";
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -251,4 +254,45 @@ it("a hidden team's late-ready page leaves a queued command for the page on scre
   expect(shown.mock.calls.map(([m]) => m.id)).toEqual(["find"]);
   warmScopes.forget("o:a");
   warmScopes.forget("o:b");
+});
+it("keeps only the latest focus request, and drops it when its panel's last frame goes", () => {
+  const focusFrame = (id: string, panelId: string) => {
+    let canTake = false;
+    const focus = vi.fn(() => canTake);
+    const off = registerFrame({
+      frameId: id,
+      dashboard: id,
+      panelId,
+      post: vi.fn(),
+      hide: vi.fn(),
+      focus,
+    });
+    markFrameReady(id);
+    return { focus, off, allow: () => (canTake = true) };
+  };
+  // The panel's only frame is torn down while it still cannot take focus.
+  const gone = focusFrame("gone", "panel:gone");
+  requestFrameFocus("panel:gone");
+  gone.off();
+  const next = focusFrame("next", "panel:gone");
+  next.allow();
+  retryFrameFocus("next");
+  expect(next.focus).not.toHaveBeenCalled();
+  next.off();
+  // Two requests while neither page can take focus: the newer one wins, whichever is ready first.
+  const older = focusFrame("older", "panel:older");
+  const newer = focusFrame("newer", "panel:newer");
+  requestFrameFocus("panel:older");
+  requestFrameFocus("panel:newer");
+  older.allow();
+  retryFrameFocus("older");
+  expect(older.focus).toHaveBeenCalledTimes(1);
+  newer.allow();
+  retryFrameFocus("newer");
+  expect(newer.focus).toHaveBeenCalledTimes(2);
+  // Once it has landed, nothing is left waiting.
+  retryFrameFocus("newer");
+  expect(newer.focus).toHaveBeenCalledTimes(2);
+  older.off();
+  newer.off();
 });
