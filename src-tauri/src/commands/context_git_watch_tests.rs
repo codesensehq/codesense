@@ -6,6 +6,8 @@ use std::sync::mpsc;
 use super::*;
 use crate::content_engine::WatchSetup;
 
+/// Git for the fixtures. Auto maintenance is off: newer git runs it detached after a commit,
+/// and its lock files under `.git/objects` would land in a later test's snapshot window.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
@@ -14,6 +16,10 @@ fn git(dir: &Path, args: &[&str]) -> String {
             "commit.gpgsign=false",
             "-c",
             "core.hooksPath=/dev/null",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
         ])
         .args(args)
         .current_dir(dir)
