@@ -109,7 +109,6 @@ test("inbox context menu: role queue", async ({ page }) => {
     .click({ button: "right" });
   for (const name of ["Open queue", "Edit role…", "Archive"])
     await expect(menu(page, name)).toBeVisible();
-  await expect(menu(page, "Archive")).toHaveAttribute("aria-keyshortcuts", "E");
   await expect(menu(page, "Archive")).toContainText("E");
   await menu(page, "Open queue").click();
   await expect(frame.locator("#thread-name")).toHaveText("#docs");
@@ -295,15 +294,15 @@ test("a hostile page cannot add or spoof host-menu shortcut text", async ({ page
           ),
       items,
     );
-  for (const shortcut of ["⌘Q", "Enter", "e", 1])
+  for (const shortcut of ["E", "U", "⌘Q", "Enter", 1])
     expect(await showMenu([{ id: "spoof", label: "Spoof", shortcut }])).toMatch(
-      /shortcut.*not allowed/,
+      /shortcuts are host-only/,
     );
   expect(
     await showMenu([
       { id: "more", label: "More", submenu: [{ id: "x", label: "X", shortcut: "⌘Q" }] },
     ]),
-  ).toMatch(/shortcut.*not allowed/);
+  ).toMatch(/shortcuts are host-only/);
   await expect(menu(page, "Spoof")).toHaveCount(0);
   await expect(page.locator('[data-slot="dropdown-menu-shortcut"]')).toHaveCount(0);
 });

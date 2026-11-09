@@ -47,13 +47,11 @@ export function builtinMenuId(id: string): BuiltinMenuId | null {
     throw new Error(`unknown built-in "${id}"`);
   return id as BuiltinMenuId;
 }
-/** Policy: the only shortcut text a menu item may show, so a page can't spoof host-menu keys. */
-export const MENU_SHORTCUTS: readonly string[] = ["E", "U"];
 export function validateMenuItems(items: Array<HostMenuItem | string>, grouped = false): void {
   for (const item of items) {
     const value = typeof item === "string" ? { id: item } : item;
-    if (value.shortcut !== undefined && !MENU_SHORTCUTS.includes(value.shortcut))
-      throw new Error(`menu shortcut "${String(value.shortcut)}" is not allowed`);
+    // Policy: shortcut text is host-built only, so a page can't spoof host-menu keys.
+    if (value.shortcut !== undefined) throw new Error("menu shortcuts are host-only");
     const builtin = builtinMenuId(value.id);
     if (builtin && (grouped || value.radioGroup))
       throw new Error(`built-in "${value.id}" cannot be used in grouped choices`);

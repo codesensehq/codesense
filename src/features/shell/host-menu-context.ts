@@ -14,6 +14,9 @@ export type HostMenuGlyph =
       still?: boolean;
     }
   | { kind: "fileKindIcon"; fileKind: import("@/shared/lib/icons/file-kind").FileKind };
+/** The list keys a host-built row menu may show beside an item (display only). */
+export const MENU_SHORTCUTS = ["E", "U"] as const;
+export type MenuShortcut = (typeof MENU_SHORTCUTS)[number];
 export type HostMenuItem = {
   id: string;
   label?: string;
@@ -25,8 +28,8 @@ export type HostMenuItem = {
   submenu?: Array<HostMenuItem | string>;
   checked?: boolean;
   enabled?: boolean;
-  /** Display only: the list key this item repeats (MENU_SHORTCUTS). */
-  shortcut?: string;
+  /** Display only, host-built only: the list key this item repeats. Pages can't set it. */
+  shortcut?: MenuShortcut;
 };
 export type HostMenuResult = { closed: true } | { itemId: string; row: unknown; builtin?: true };
 export type HostMenuRun = (

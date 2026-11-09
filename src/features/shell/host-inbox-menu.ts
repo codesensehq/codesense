@@ -9,7 +9,7 @@ import type {
 import { openRoleEditor } from "@/features/agents/stores/role-editor-store";
 import { ROLE_QUEUE_MENU_ITEMS } from "@/features/inbox/lib/role-queue-menu-items";
 import { buildTeamKey } from "@/shared/lib/team-key";
-import type { HostMenuItem, HostMenuRequest } from "./host-menu-context";
+import type { HostMenuItem, HostMenuRequest, MenuShortcut } from "./host-menu-context";
 
 type StoredMessage = InboxMessageRow & { team?: InboxTeam };
 export type InboxMenu = {
@@ -32,7 +32,7 @@ const pageItems = (request: HostMenuRequest, items: readonly HostMenuItem[]) =>
   request.page?.enabled() ? [...items] : [];
 const received = (m: StoredMessage) => m.toHuman && m.from !== "human";
 // The row menus show the list's keys: U toggles read and E archives the row.
-const keyed = (item: HostMenuItem, shortcut?: "E" | "U"): HostMenuItem =>
+const keyed = (item: HostMenuItem, shortcut?: MenuShortcut): HostMenuItem =>
   shortcut ? { ...item, shortcut } : item;
 const markItem = (unread: boolean, shortcut?: "U") =>
   keyed(
