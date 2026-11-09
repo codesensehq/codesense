@@ -6,7 +6,7 @@ import { ChevronRight, Network } from "lucide-react";
 
 import { useTeamAgentCounts } from "@/features/viewer/hooks/use-team-agents";
 import {
-  focusAgentsList,
+  focusDockPage,
   requestAgentsFocus,
   takeAgentsFocus,
 } from "@/features/viewer/lib/agents-list-focus";
@@ -40,7 +40,7 @@ export function AgentsDockToggle({ teamKey }: { teamKey: string }): React.JSX.El
     }
     if (!hadFocus.current) return;
     hadFocus.current = false;
-    focusAgentsList(teamKey);
+    focusDockPage();
   }, [listShown, teamKey]);
 
   if (listShown) return null;

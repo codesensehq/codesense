@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
+import { DOCK_FRAME_PANEL_ID } from "@/features/shell/slots/slot-registry";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 /**
@@ -31,6 +33,12 @@ export function hideAgentsDock(teamKey: string): void {
 /** The id of a team's agents list, for the control that shows and hides it. */
 export function agentsListId(teamKey: string): string {
   return `agents-list-${teamKey.replace(/[^\w-]/g, "_")}`;
+}
+
+/** Focus into the dock's page (the built-in HTML agent list unless another is chosen), now or
+ *  as soon as it is ready. */
+export function focusDockPage(): void {
+  requestFrameFocus(DOCK_FRAME_PANEL_ID);
 }
 
 /** Focus into a team's built-in Agents list: its first agent row, else its first control. */
