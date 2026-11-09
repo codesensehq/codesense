@@ -399,10 +399,10 @@ for (const index of [2, 4]) {
     // An IP literal is never declared, so every load below is outside the frame's policy.
     const origin = undeclared();
     const result = await frame.evaluate(async (origin) => {
-      const violation = (match: (uri: string) => boolean) =>
+      const violation = (match: (uri: string, directive: string) => boolean) =>
         new Promise<string>((resolve) =>
           document.addEventListener("securitypolicyviolation", function seen(e) {
-            if (!match(e.blockedURI)) return;
+            if (!match(e.blockedURI, e.effectiveDirective)) return;
             document.removeEventListener("securitypolicyviolation", seen);
             resolve(e.effectiveDirective);
           }),
@@ -417,7 +417,10 @@ for (const index of [2, 4]) {
         violation((uri) => uri.includes("/outside-script")),
         violation((uri) => uri.includes("/outside-image")),
         violation((uri) => /^wss?:/.test(uri)),
-        violation((uri) => uri.includes("/outside-frame")),
+        // Browsers strip the path from a blocked frame's blockedURI, leaving only its origin.
+        violation(
+          (uri, directive) => directive === "frame-src" || uri.replace(/\/$/, "") === origin,
+        ),
       ]);
       const script = document.createElement("script");
       script.src = `${origin}/outside-script`;
