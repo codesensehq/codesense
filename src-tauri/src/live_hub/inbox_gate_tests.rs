@@ -288,11 +288,46 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     assert_eq!(host.take_changed(), 1, "the sender's name changed");
+
+    // A session that joins the team shows in its counts, with no mail of its own.
+    set_rows(
+        &app,
+        vec![
+            row("worker", "Renamed", SessionState::Idle),
+            row("helper", "Helper", SessionState::Idle),
+        ],
+    );
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(host.take_changed(), 1, "the team's counts changed");
+
+    // A team that is no longer synced retires from the inbox.
+    let mut elsewhere = row("visitor", "Visitor", SessionState::Idle);
+    elsewhere.team = Some(LaunchTeam {
+        org: "acme".into(),
+        team: "elsewhere".into(),
+    });
+    set_rows(&app, vec![elsewhere]);
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    host.take_changed();
+    set_rows(&app, vec![]);
+    refresh_inbox_with_host(app.handle(), &host, true)
+        .await
+        .unwrap();
+    assert!(!hub.model.lock().unwrap().inbox.contains_team(&LaunchTeam {
+        org: "acme".into(),
+        team: "elsewhere".into(),
+    }));
+    assert_eq!(host.take_changed(), 1, "a retired team is announced");
 }
 
-#[tokio::test]
-async fn an_incomplete_pass_runs_again_after_a_pause() {
+#[tokio::test(start_paused = true)]
+async fn an_incomplete_pass_wakes_a_quiet_hub_and_backs_off() {
     let app = app();
+    let hub = app.state::<LiveHub>();
     let host = CountingHost::new();
     let mut gate = InboxGate::default();
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
@@ -301,21 +336,40 @@ async fn an_incomplete_pass_runs_again_after_a_pause() {
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1);
-    assert!(gate.retry_at.is_some(), "a skipped team store is a retry");
+    assert_eq!(
+        gate.retry_delay, INBOX_RETRY,
+        "a skipped team store is a retry"
+    );
 
-    // The retry waits out its pause, so a failing store cannot run a pass every batch.
     inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 0, "the retry is not due yet");
 
-    host.store_failed.store(false, Ordering::Relaxed);
-    gate.retry_at = Some(tokio::time::Instant::now());
-    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+    // Nothing else happens: the retry's own timer wakes the hub.
+    let started = tokio::time::Instant::now();
+    let flags = hub.next_batch().await;
+    assert!(started.elapsed() >= INBOX_RETRY);
+    inbox_pass(app.handle(), &host, flags, &mut gate)
         .await
         .unwrap();
-    assert_eq!(host.take_passes(), 1, "a due retry runs on any batch");
+    assert_eq!(host.take_passes(), 1, "a due retry runs");
+    assert_eq!(
+        gate.retry_delay,
+        INBOX_RETRY * 2,
+        "a second failure waits longer"
+    );
+
+    host.store_failed.store(false, Ordering::Relaxed);
+    let started = tokio::time::Instant::now();
+    let flags = hub.next_batch().await;
+    assert!(started.elapsed() >= INBOX_RETRY * 2);
+    inbox_pass(app.handle(), &host, flags, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(host.take_passes(), 1);
     assert!(gate.retry_at.is_none(), "the pass completed");
+    assert_eq!(gate.retry_delay, Duration::ZERO);
 
     inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
         .await
@@ -328,8 +382,54 @@ async fn an_incomplete_pass_runs_again_after_a_pause() {
 }
 
 #[tokio::test]
+async fn no_active_team_is_not_a_failure() {
+    use crate::commands::agent_inbox::InboxHost as _;
+    struct NoActiveTeam(CountingHost);
+    #[async_trait::async_trait]
+    impl crate::commands::agent_inbox::InboxHost for NoActiveTeam {
+        async fn team_store(&self, team: &LaunchTeam) -> Result<std::path::PathBuf, String> {
+            self.0.team_store(team).await
+        }
+        async fn active_team(&self) -> Result<LaunchTeam, String> {
+            Err("no active team selected".into())
+        }
+        async fn synced_teams(&self) -> Result<Vec<LaunchTeam>, String> {
+            self.0.synced_teams().await
+        }
+        fn launch_team(&self, _handle: &str) -> Option<LaunchTeam> {
+            None
+        }
+        fn handle_for_session(&self, _session_id: &str) -> Option<String> {
+            None
+        }
+        async fn sessions(&self) -> Result<crate::commands::agent_inbox::KnownSessions, String> {
+            self.0.sessions().await
+        }
+        fn has_handle(&self, _handle: &str) -> bool {
+            false
+        }
+        fn display_name(&self, _handle: &str) -> Option<String> {
+            None
+        }
+        fn inbox_changed(&self) {}
+    }
+    let app = app();
+    let mut gate = InboxGate::default();
+    inbox_pass(
+        app.handle(),
+        &NoActiveTeam(CountingHost::new()),
+        REBUILD,
+        &mut gate,
+    )
+    .await
+    .unwrap();
+    assert!(gate.retry_at.is_none());
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_team_set_change_whose_pass_fails_still_reconciles_on_the_retry() {
     let app = app();
+    let hub = app.state::<LiveHub>();
     let host = CountingHost::new();
     let mut gate = InboxGate::default();
     host.discovery_failed.store(true, Ordering::Relaxed);
@@ -342,8 +442,13 @@ async fn a_team_set_change_whose_pass_fails_still_reconciles_on_the_retry() {
     );
 
     host.discovery_failed.store(false, Ordering::Relaxed);
-    gate.retry_at = Some(tokio::time::Instant::now());
-    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+    let flags = hub.next_batch().await;
+    assert_eq!(
+        flags & FOOTPRINT,
+        0,
+        "the retry's wake carries no team-set change"
+    );
+    inbox_pass(app.handle(), &host, flags, &mut gate)
         .await
         .unwrap();
     assert!(!gate.reconcile, "the retry reconciled the team set");
@@ -351,9 +456,13 @@ async fn a_team_set_change_whose_pass_fails_still_reconciles_on_the_retry() {
 }
 
 #[tokio::test]
-async fn a_finished_sync_reconciles_the_inbox_teams() {
+async fn a_reported_context_sync_reconciles_the_inbox_teams() {
     let app = app();
     listen_sources(app.handle());
-    app.emit(SYNC_WAVE_COMPLETED_EVENT, ()).unwrap();
+    app.emit(
+        crate::commands::context_repo_git::CONTEXT_REPO_STATUS_CHANGED,
+        "/repo",
+    )
+    .unwrap();
     assert_eq!(app.state::<LiveHub>().next_batch().await, FOOTPRINT);
 }

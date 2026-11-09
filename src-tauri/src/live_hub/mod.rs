@@ -53,7 +53,6 @@ const FILES: u8 = 64;
 const INBOX: u8 = 2;
 const HOSTS: u8 = 4;
 const FOOTPRINT: u8 = 8;
-const SYNC_WAVE_COMPLETED_EVENT: &str = "sync-wave-completed";
 const DOMAIN_EVENTS: &[&str] = &[
     crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
     "sessions-waiter-changed",
@@ -595,11 +594,15 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
         }
     });
-    // A finished sync can bring a team's content onto disk: the inbox reconciles its teams.
+    // A context repo sync (reported by the agent that ran it) can bring a team's content
+    // onto disk: the inbox reconciles its teams.
     let handle = app.clone();
-    app.listen(SYNC_WAVE_COMPLETED_EVENT, move |_| {
-        handle.state::<LiveHub>().invalidate(FOOTPRINT);
-    });
+    app.listen(
+        crate::commands::context_repo_git::CONTEXT_REPO_STATUS_CHANGED,
+        move |_| {
+            handle.state::<LiveHub>().invalidate(FOOTPRINT);
+        },
+    );
     let handle = app.clone();
     app.listen(inbox_events::INBOX_EVENT, move |event| {
         if let Ok(event) = serde_json::from_str::<inbox_events::InboxEvent>(event.payload()) {
@@ -1702,15 +1705,19 @@ fn inbox_inputs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> InboxInputs {
     InboxInputs { active, rows }
 }
 
-/// How long after a failed or incomplete inbox pass the next batch runs it again.
+/// How long after a failed or incomplete inbox pass it runs again; each further failure
+/// doubles the pause, up to `INBOX_RETRY_MAX`.
 const INBOX_RETRY: Duration = Duration::from_secs(5);
+const INBOX_RETRY_MAX: Duration = Duration::from_secs(60);
 
 /// What the last inbox pass read, and what it still owes.
 #[derive(Default)]
 struct InboxGate {
     inputs: Option<InboxInputs>,
-    /// A pass failed or could not read every team: the first batch after this runs it again.
+    /// A pass failed or could not read every team: a timer wakes the hub to run it again.
     retry_at: Option<tokio::time::Instant>,
+    /// The pause before that retry.
+    retry_delay: Duration,
     /// A team-set change whose pass did not complete: the retry still reconciles teams.
     reconcile: bool,
 }
@@ -1735,7 +1742,20 @@ async fn inbox_pass<R: tauri::Runtime>(
     let result = refresh_inbox_with_host(app, host, reconcile).await;
     let complete = matches!(result, Ok(true));
     gate.reconcile = reconcile && !complete;
-    gate.retry_at = (!complete).then(|| tokio::time::Instant::now() + INBOX_RETRY);
+    if complete {
+        gate.retry_at = None;
+        gate.retry_delay = Duration::ZERO;
+    } else {
+        gate.retry_delay = (gate.retry_delay * 2).clamp(INBOX_RETRY, INBOX_RETRY_MAX);
+        let at = tokio::time::Instant::now() + gate.retry_delay;
+        gate.retry_at = Some(at);
+        // Wake an otherwise quiet hub when the retry is due.
+        let wake = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(at).await;
+            wake.state::<LiveHub>().invalidate(0);
+        });
+    }
     // A failed pass keeps the old inputs, so changed inputs still run the next batch.
     if result.is_ok() {
         gate.inputs = Some(inputs);
@@ -1752,7 +1772,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
 ) -> Result<bool, String> {
     use crate::commands::{
         agent_inbox::{KnownSession, KnownSessions},
-        agent_read_model,
+        dashboard_launch::LaunchTeam,
     };
     let hub = app.state::<LiveHub>();
     let (mut pending, mut rows, inbox) = {
@@ -1765,8 +1785,13 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     };
     let had_pending = !pending.is_empty();
     let active = host.active_team().await.ok();
-    let synced = host.synced_teams().await.ok();
-    let mut complete = active.is_some() && synced.is_some();
+    let synced = host.synced_teams().await;
+    if let Err(error) = &synced {
+        log::warn!(target: "inbox", "synced teams unreadable, reading active/session teams: {error}");
+    }
+    let synced = synced.ok();
+    // No team selected is a state, not a failure; failed discovery is retried.
+    let mut complete = synced.is_some();
     // Store resolution is best-effort; only successful discovery can retire a team.
     let allowed = if reconcile_teams {
         synced.as_ref().map(|teams| {
@@ -1781,21 +1806,20 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     } else {
         None
     };
-    let mut stores = match agent_read_model::team_stores(host, active, true).await {
-        Ok(stores) => stores,
-        Err(error) => {
-            restore_pending(&hub, pending);
-            return Err(error);
+    if synced.is_none() && active.is_none() {
+        restore_pending(&hub, pending);
+        return Err("no inbox to read: synced teams and active team unreadable".into());
+    }
+    // The synced teams and the active one, one store each: teams sharing a store read it once.
+    let mut stores: Vec<(LaunchTeam, std::path::PathBuf)> = Vec::new();
+    for team in synced.iter().flatten().chain(active.iter()) {
+        if stores.iter().any(|(t, _)| t == team) {
+            continue;
         }
-    };
-    // A synced team missing here failed its store lookup, or shares another team's store.
-    for team in synced.iter().flatten() {
-        if !stores.iter().any(|(t, _)| t == team) {
-            match host.team_store(team).await {
-                Ok(path) if stores.iter().any(|(_, p)| *p == path) => {}
-                Ok(path) => stores.push((team.clone(), path)),
-                Err(_) => complete = false,
-            }
+        match host.team_store(team).await {
+            Ok(path) if stores.iter().any(|(_, p)| *p == path) => {}
+            Ok(path) => stores.push((team.clone(), path)),
+            Err(_) => complete = false,
         }
     }
     for team in rows
@@ -1885,8 +1909,8 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     let counts = inbox.count_rows();
     // What inbox readers show changed, whether or not an inbox view is open. Agent-list
     // deltas published below are not news to them.
-    let notify_legacy =
-        had_pending || hydrated || renamed || !removes.is_empty() || counts != counts_before;
+    // A retired team drops its counts row, so the counts comparison covers removals too.
+    let notify_legacy = had_pending || hydrated || renamed || counts != counts_before;
     updates.extend(counts);
 
     // Publish the finished projection briefly under the model lock, then drop
