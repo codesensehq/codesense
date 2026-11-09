@@ -11,13 +11,17 @@ const SCRIPT = [...page.querySelectorAll("script:not([src])")].map((s) => s.text
 
 const TEAM = { org: "acme", team: "web" };
 type Row = { id: number; from: string; to: string; unread: boolean };
+type Scope = "all-teams" | "team";
 
-function boot(rows: Row[]) {
+function boot(rows: Row[], scope: Scope) {
   const nudges = new Set<(change: unknown) => void>();
   const shows = new Set<(shown: boolean) => void>();
+  const intents = new Set<(intent: unknown) => void>();
   const view = () => {
     const messages = rows.map((m) => ({
       ...m,
+      messageId: m.id,
+      toHuman: m.to === "human",
       fromName: m.from,
       toName: m.to,
       team: TEAM,
@@ -39,30 +43,43 @@ function boot(rows: Row[]) {
       Object.assign(c, { lastMessageId: m.id, lastAt: m.createdAtMs, lastPreview: m.text });
       conversations.set(m.conversation, c);
     }
-    return { messages, conversations: [...conversations.values()] };
+    return { messages, conversations: [...conversations.values()], hasMore: false };
   };
   const cs = {
     context: vi.fn(async () => ({
       org: TEAM.org,
-      team: null,
-      inboxScope: "all-teams",
+      team: scope === "team" ? TEAM.team : null,
+      inboxScope: scope,
       activeTeam: TEAM,
       inboxTeams: [TEAM],
     })),
     prefs: vi.fn(async () => ({})),
     setPrefs: vi.fn(async () => ({})),
     inboxRollup: vi.fn(async () => view()),
-    inbox: vi.fn(async () => ({ messages: [], conversations: [], hasMore: false })),
+    inbox: vi.fn(async (query: { scope?: string }) => {
+      const all = view();
+      if (query.scope === "to-human")
+        return { ...all, messages: all.messages.filter((m) => m.toHuman) };
+      if (query.scope === "to-agents")
+        return { ...all, messages: all.messages.filter((m) => !m.toHuman) };
+      return all;
+    }),
     roles: vi.fn(async () => ({ roles: [] })),
     humanStatus: vi.fn(async () => ({ status: "online", note: "" })),
     agents: vi.fn(async () => []),
-    subscribe: vi.fn(async () => ({})),
+    // Mia runs, so the composer can reply to her.
+    subscribe: vi.fn(async (_topic: string, { onChange }: { onChange: (s: unknown) => void }) => {
+      onChange({ snapshot: [{ handle: "Mia", state: "idle" }] });
+      return {};
+    }),
     unsubscribe: vi.fn(async () => {}),
-    act: vi.fn(async () => ({})),
+    act: vi.fn(async (verb: string) =>
+      verb === "sendAsHuman" || verb === "replyAsHuman" ? { status: "sent" } : {},
+    ),
     setBadge: vi.fn(),
     onInboxChanged: (cb: (change: unknown) => void) => nudges.add(cb),
     onVisibility: (cb: (shown: boolean) => void) => shows.add(cb),
-    onIntent: () => {},
+    onIntent: (cb: (intent: unknown) => void) => intents.add(cb),
     onCommand: () => {},
     onMenuAction: () => {},
     onFocusIn: () => {},
@@ -75,13 +92,21 @@ function boot(rows: Row[]) {
   document.body.innerHTML = page.body.innerHTML;
   (window as unknown as { codesense: typeof cs }).codesense = cs;
   new Function(SCRIPT)();
+  // The list read each refresh makes: the rollup across teams, or the team's to-human page.
+  const reads = () =>
+    scope === "all-teams"
+      ? cs.inboxRollup.mock.calls.length
+      : cs.inbox.mock.calls.filter(([q]) => q.scope === "to-human").length;
   return {
     cs,
     rows,
-    nudge: (ids?: number[]) =>
-      nudges.forEach((cb) => cb(ids ? { changes: [{ team: TEAM, messageIds: ids }] } : {})),
+    reads,
+    nudge: (ids?: number[], team = TEAM) =>
+      nudges.forEach((cb) => cb(ids ? { changes: [{ team, messageIds: ids }] } : {})),
     show: (shown: boolean) => shows.forEach((cb) => cb(shown)),
+    intent: (intent: unknown) => intents.forEach((cb) => cb(intent)),
     listRows: () => document.querySelectorAll(".ib-row").length,
+    view: () => document.getElementById("inbox")!.dataset.view,
   };
 }
 
@@ -95,55 +120,103 @@ afterEach(() => {
 });
 
 describe("inbox pane refresh pacing", () => {
-  async function shown(rows: Row[]) {
-    const p = boot(rows);
+  async function shown(seed: Row[], scope: Scope = "all-teams") {
+    const rows = seed.map((r) => ({ ...r }));
+    const p = boot(rows, scope);
     p.show(true);
     await settle(50);
     expect(p.listRows()).toBe(new Set(rows.map((r) => (r.from === "human" ? r.to : r.from))).size);
     await settle(2000);
-    p.cs.inboxRollup.mockClear();
+    vi.clearAllMocks();
     return p;
   }
+  const MIA: Row = { id: 1, from: "Mia", to: "human", unread: true };
+  const SENT: Row = { id: 2, from: "human", to: "Mia", unread: false };
 
-  it("coalesces 100 change nudges in one second into at most two reads", async () => {
-    const p = await shown([{ id: 1, from: "Mia", to: "human", unread: true }]);
-    for (let i = 0; i < 100; i++) {
+  it.each<Scope>(["all-teams", "team"])(
+    "coalesces 100 nudges for agents' mail in one second into at most two reads (%s)",
+    async (scope) => {
+      const p = await shown([MIA], scope);
+      for (let i = 0; i < 100; i++) {
+        p.nudge([100 + i]);
+        await settle(10);
+      }
+      await settle(2000);
+      expect(p.reads()).toBeGreaterThanOrEqual(1);
+      expect(p.reads()).toBeLessThanOrEqual(2);
+      // Idle afterwards: no timer keeps reading.
+      expect(vi.getTimerCount()).toBe(0);
+      await settle(10_000);
+      expect(p.reads()).toBeLessThanOrEqual(2);
+    },
+  );
+
+  it("caps nudges for loaded rows at one window-skipping read a second", async () => {
+    const p = await shown([MIA, SENT]);
+    for (let i = 0; i < 300; i++) {
       p.nudge([1]);
       await settle(10);
     }
     await settle(2000);
-    expect(p.cs.inboxRollup.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(p.cs.inboxRollup.mock.calls.length).toBeLessThanOrEqual(2);
-    // Idle afterwards: no timer keeps reading.
+    // Three seconds of nudges: a leading read, at most one skip and one trailing read a second.
+    expect(p.reads()).toBeLessThanOrEqual(7);
+  });
+
+  it("skips nudges that name only another team's rows on a single-team pane", async () => {
+    const p = await shown([MIA], "team");
+    p.nudge([9], { org: "acme", team: "ops" });
+    await settle(2000);
+    expect(p.reads()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
-    await settle(10_000);
-    expect(p.cs.inboxRollup.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it("shows new mail at once on the first nudge after a quiet second", async () => {
-    const p = await shown([{ id: 1, from: "Mia", to: "human", unread: true }]);
-    p.rows.push({ id: 2, from: "Lee", to: "human", unread: true });
-    p.nudge([2]);
+    const p = await shown([MIA]);
+    p.rows.push({ id: 3, from: "Lee", to: "human", unread: true });
+    p.nudge([3]);
     await settle(30);
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(1);
     expect(p.listRows()).toBe(2);
   });
 
+  it("shows the human's mail within a second inside a burst of agents' mail", async () => {
+    const p = await shown([MIA]);
+    p.nudge([100]);
+    await settle(30);
+    p.rows.push({ id: 3, from: "Lee", to: "human", unread: true });
+    p.nudge([3]);
+    for (let i = 0; i < 20; i++) {
+      p.nudge([101 + i]);
+      await settle(10);
+    }
+    expect(p.listRows()).toBe(1);
+    await settle(1000);
+    expect(p.listRows()).toBe(2);
+    expect(p.reads()).toBe(2);
+  });
+
+  it("skips the window for a change to a loaded row of the human's mail", async () => {
+    const p = await shown([MIA]);
+    p.nudge([100]);
+    await settle(30);
+    expect(p.reads()).toBe(1);
+    p.rows[0].unread = false;
+    p.nudge([1]);
+    await settle(30);
+    expect(p.reads()).toBe(2);
+  });
+
   it("does no list refresh while hidden, re-reads the badge only for unread changes, and refreshes once on show", async () => {
-    const p = await shown([
-      { id: 1, from: "Mia", to: "human", unread: true },
-      { id: 2, from: "human", to: "Mia", unread: false },
-    ]);
+    const p = await shown([MIA, SENT]);
     p.show(false);
     await settle(2000);
-    p.cs.inboxRollup.mockClear();
-    p.cs.setBadge.mockClear();
+    vi.clearAllMocks();
     const listBefore = document.querySelector(".ib-rows")!.innerHTML;
 
     // A change to the human's own sent message cannot change their unread set.
     for (let i = 0; i < 20; i++) p.nudge([2]);
     await settle(2000);
-    expect(p.cs.inboxRollup).not.toHaveBeenCalled();
+    expect(p.reads()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
 
     // New mail for the human: badge reads only, paced like the list.
@@ -153,43 +226,113 @@ describe("inbox pane refresh pacing", () => {
       await settle(10);
     }
     await settle(2000);
-    expect(p.cs.inboxRollup.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(p.cs.inboxRollup.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(p.reads()).toBeGreaterThanOrEqual(1);
+    expect(p.reads()).toBeLessThanOrEqual(2);
     expect(p.cs.setBadge).toHaveBeenLastCalledWith({ count: 2 });
     expect(document.querySelector(".ib-rows")!.innerHTML).toBe(listBefore);
     expect(vi.getTimerCount()).toBe(0);
 
     // A nudge that names no rows could be anything, so it re-reads the badge.
-    p.cs.inboxRollup.mockClear();
+    vi.clearAllMocks();
     p.nudge();
     await settle(30);
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(1);
 
-    p.cs.inboxRollup.mockClear();
+    vi.clearAllMocks();
     p.show(true);
     await settle(30);
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(1);
     expect(p.listRows()).toBe(2);
     await settle(2000);
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(1);
   });
 
-  it("runs a refresh the human starts at once, inside the pacing window", async () => {
-    const p = await shown([{ id: 1, from: "Mia", to: "human", unread: true }]);
+  it("re-reads a hidden badge when a loaded row of the human's mail changes", async () => {
+    const p = await shown([MIA, SENT]);
+    p.show(false);
+    await settle(2000);
+    vi.clearAllMocks();
+    p.rows[0].unread = false;
+    p.nudge([1]);
+    await settle(30);
+    expect(p.reads()).toBe(1);
+    expect(p.cs.setBadge).toHaveBeenLastCalledWith(null);
+  });
+
+  it("retries a failed hidden badge read on the next nudge, without a timer meanwhile", async () => {
+    const p = await shown([MIA, SENT]);
+    p.show(false);
+    await settle(2000);
+    vi.clearAllMocks();
     p.cs.inboxRollup.mockRejectedValueOnce(new Error("offline"));
-    p.nudge([1]);
+    p.nudge([3]);
     await settle(30);
-    const retry = [...document.querySelectorAll<HTMLButtonElement>("#list-notice button")].find(
-      (b) => b.textContent === "Retry",
-    );
-    expect(retry).toBeDefined();
-    p.nudge([1]);
+    expect(p.reads()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    // This change alone couldn't touch the unread set, but the owed read runs.
+    await settle(2000);
+    p.nudge([2]);
     await settle(30);
-    // The nudge waits for the window; Retry doesn't.
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(1);
-    retry!.click();
-    await settle(30);
-    expect(p.cs.inboxRollup).toHaveBeenCalledTimes(2);
-    expect(document.querySelector("#list-notice")!.textContent).not.toContain("offline");
+    expect(p.reads()).toBe(2);
+    expect(p.cs.setBadge).toHaveBeenLastCalledWith({ count: 1 });
+  });
+
+  describe("refreshes the human starts run at once inside the pacing window", () => {
+    async function insideWindow() {
+      const p = await shown([MIA, SENT]);
+      p.nudge([100]);
+      await settle(30);
+      p.nudge([101]);
+      await settle(30);
+      expect(p.reads()).toBe(1);
+      return p;
+    }
+
+    it("Retry", async () => {
+      const p = await shown([MIA]);
+      p.cs.inboxRollup.mockRejectedValueOnce(new Error("offline"));
+      p.nudge([100]);
+      await settle(30);
+      const retry = [...document.querySelectorAll<HTMLButtonElement>("#list-notice button")].find(
+        (b) => b.textContent === "Retry",
+      );
+      expect(retry).toBeDefined();
+      p.nudge([101]);
+      await settle(30);
+      // The nudge waits for the window; Retry doesn't.
+      expect(p.reads()).toBe(1);
+      retry!.click();
+      await settle(30);
+      expect(p.reads()).toBe(2);
+      expect(document.querySelector("#list-notice")!.textContent).not.toContain("offline");
+    });
+
+    it("opening a thread from a host intent", async () => {
+      const p = await insideWindow();
+      expect(p.view()).not.toBe("thread");
+      p.intent({ conversation: "Mia", org: TEAM.org, team: TEAM.team });
+      await settle(30);
+      expect(p.reads()).toBe(2);
+      expect(p.view()).toBe("thread");
+    });
+
+    it("sending", async () => {
+      const p = await shown([MIA, SENT]);
+      p.intent({ conversation: "Mia", org: TEAM.org, team: TEAM.team, focusComposer: true });
+      await settle(30);
+      expect(p.view()).toBe("thread");
+      await settle(2000);
+      vi.clearAllMocks();
+      p.nudge([100]);
+      await settle(30);
+      expect(p.reads()).toBe(1);
+      const draft = document.getElementById("draft") as HTMLTextAreaElement;
+      draft.value = "On it";
+      draft.dispatchEvent(new Event("input"));
+      document.getElementById("composer")!.dispatchEvent(new Event("submit", { cancelable: true }));
+      await settle(30);
+      expect(p.cs.act).toHaveBeenCalledWith("replyAsHuman", expect.anything());
+      expect(p.reads()).toBe(2);
+    });
   });
 });
