@@ -151,9 +151,35 @@ it("defaults to the listed inbox only when the right-pane profile has no choice"
     "pane:acme:dev/inbox",
   );
 });
-it("reveals the dock like the tray's Agents control and focuses the chosen page", async () => {
+async function dockFrame(dashboard: string) {
   const { registerFrame, markFrameReady } =
     await import("@/features/dashboard/lib/frame-lifecycle");
+  const element = document.createElement("iframe");
+  const focus = vi.spyOn(element, "focus");
+  const unregister = registerFrame({
+    frameId: "dock-frame",
+    dashboard,
+    panelId: "slot:dock",
+    slotId: "dock",
+    element,
+    post: () => {},
+    hide: () => {},
+  });
+  return { focus, unregister, ready: () => markFrameReady("dock-frame") };
+}
+function showDock() {
+  useViewerStore.setState({
+    layoutMode: "split",
+    terminalVisible: true,
+    workspacePanelCollapsed: false,
+  } as never);
+  const list = document.createElement("div");
+  list.id = "agents-list-acme_dev";
+  list.innerHTML = `<div class="ag-scroll"><button>worker</button></div>`;
+  document.body.append(list);
+  return list;
+}
+it("reveals the dock like the tray's Agents control and focuses the chosen page", async () => {
   const revealTerminalInPlace = vi.fn(() => useViewerStore.setState({ terminalVisible: true }));
   useViewerStore.setState({
     layoutMode: "split",
@@ -169,41 +195,39 @@ it("reveals the dock like the tray's Agents control and focuses the chosen page"
   useDashboardProfileStore.setState({
     profile: { ...useDashboardProfileStore.getState().profile!, slots: { dock: agents } },
   });
-  const element = document.createElement("iframe");
-  const focus = vi.spyOn(element, "focus");
-  const unregister = registerFrame({
-    frameId: "dock-frame",
-    dashboard: "agents",
-    panelId: "slot:dock",
-    slotId: "dock",
-    element,
-    post: () => {},
-    hide: () => {},
-  });
+  const frame = await dockFrame("agents");
   try {
     revealSlot("dock", { focus: true });
-    expect(focus).not.toHaveBeenCalled();
-    markFrameReady("dock-frame");
-    expect(focus).toHaveBeenCalled();
+    expect(frame.focus).not.toHaveBeenCalled();
+    frame.ready();
+    expect(frame.focus).toHaveBeenCalled();
   } finally {
-    unregister();
+    frame.unregister();
   }
 });
-it("focuses the built-in Agents list when no dock dashboard is chosen", () => {
+it("focuses the built-in HTML agent list when no dock dashboard is chosen", async () => {
+  const list = showDock();
+  const frame = await dockFrame("agent-list");
+  try {
+    revealSlot("dock", { focus: true });
+    frame.ready();
+    expect(frame.focus).toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(list.querySelector("button"));
+  } finally {
+    frame.unregister();
+    list.remove();
+  }
+});
+it("focuses the classic Agents list when the dock is set to it", () => {
+  useDashboardProfileStore.setState({
+    profile: { ...useDashboardProfileStore.getState().profile!, slots: { dock: "native" } },
+  });
   expect(resolveSlot("dock", { surface: "agent-list" })).toMatchObject({
     dashboard: undefined,
     panelId: null,
     native: { entry: "component", label: "Agents list" },
   });
-  useViewerStore.setState({
-    layoutMode: "split",
-    terminalVisible: true,
-    workspacePanelCollapsed: false,
-  } as never);
-  const list = document.createElement("div");
-  list.id = "agents-list-acme_dev";
-  list.innerHTML = `<div class="ag-scroll"><button>worker</button></div>`;
-  document.body.append(list);
+  const list = showDock();
   try {
     revealSlot("dock", { focus: true });
     expect(document.activeElement).toBe(list.querySelector("button"));
