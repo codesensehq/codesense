@@ -10,6 +10,8 @@ pub mod files;
 pub mod inbox;
 pub mod inbox_events;
 #[cfg(test)]
+mod inbox_gate_tests;
+#[cfg(test)]
 mod inbox_offlock_tests;
 pub(crate) mod machine_stats;
 pub mod pane_sources;
@@ -639,6 +641,10 @@ pub fn start(app: &tauri::AppHandle) {
             log::warn!("agent marks: {error}");
         }
         hub.invalidate(REBUILD | INBOX | HOSTS | DEFINITIONS);
+        let host = AppInboxHost {
+            app: handle.clone(),
+        };
+        let mut inbox_inputs = None;
         loop {
             let flags = next_updates(&handle).await;
             if flags & MACHINE_STATS != 0 {
@@ -660,7 +666,7 @@ pub fn start(app: &tauri::AppHandle) {
                     log::warn!("sessions projection: {e}");
                 }
             }
-            if let Err(e) = refresh_inbox(&handle, flags & FOOTPRINT != 0).await {
+            if let Err(e) = inbox_pass(&handle, &host, flags, &mut inbox_inputs).await {
                 log::warn!("inbox projection: {e}");
             }
         }
@@ -1657,9 +1663,56 @@ fn publish_subscriptions<R: tauri::Runtime>(
         );
     }
 }
-async fn refresh_inbox(app: &tauri::AppHandle, reconcile_teams: bool) -> Result<(), String> {
-    let host = AppInboxHost { app: app.clone() };
-    refresh_inbox_with_host(app, &host, reconcile_teams).await
+/// What an inbox pass reads besides the mail itself: the active team, and for each session
+/// row it joins, the session as messages name it, its team and its group chat.
+#[derive(PartialEq)]
+struct InboxInputs {
+    active: Option<crate::mcp::state::ActiveTeam>,
+    rows: Vec<(
+        crate::commands::agent_inbox::KnownSession,
+        Option<crate::commands::dashboard_launch::LaunchTeam>,
+        Option<String>,
+    )>,
+}
+
+fn inbox_inputs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> InboxInputs {
+    use crate::commands::agent_inbox::KnownSession;
+    let active = app
+        .try_state::<crate::mcp::state::ActiveTeamState>()
+        .and_then(|state| state.get());
+    let hub = app.state::<LiveHub>();
+    let model = hub.model.lock().unwrap();
+    let rows = model
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                KnownSession::from(row),
+                row.team.clone(),
+                row.chat_workspace_id.clone(),
+            )
+        })
+        .collect();
+    InboxInputs { active, rows }
+}
+
+/// Refreshes the inbox for a batch with mail or a team-set change, or when its inputs
+/// changed since the last pass. Other batches (machine stats, files, agent activity that
+/// leaves the joined rows alone) skip it.
+async fn inbox_pass<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    host: &dyn crate::commands::agent_inbox::InboxHost,
+    flags: u8,
+    last: &mut Option<InboxInputs>,
+) -> Result<(), String> {
+    let inputs = inbox_inputs(app);
+    if flags & (INBOX | FOOTPRINT) == 0 && last.as_ref() == Some(&inputs) {
+        return Ok(());
+    }
+    // A failed pass keeps the old inputs, so the next batch tries again.
+    refresh_inbox_with_host(app, host, flags & FOOTPRINT != 0).await?;
+    *last = Some(inputs);
+    Ok(())
 }
 
 async fn refresh_inbox_with_host<R: tauri::Runtime>(
@@ -1789,12 +1842,13 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
 
     // Publish the finished projection briefly under the model lock, then drop
     // the replaced Arc (and any inner maps it frees) after releasing it.
-    let (deltas, resets) = {
+    let (deltas, resets, inbox_changed) = {
         let mut model = hub.model.lock().unwrap();
         model.inbox = std::sync::Arc::new(inbox);
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;
+        let inbox_changed = !deltas.is_empty();
         deltas.extend(project_agent_views(&mut model)?);
         if hydrated {
             // Initial history is loaded through bounded snapshots, never arrival deltas.
@@ -1805,12 +1859,14 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
                     .filter(|delta| delta.topic != "inbox")
                     .collect(),
                 resets,
+                inbox_changed,
             )
         } else {
-            (deltas, Vec::new())
+            (deltas, Vec::new(), inbox_changed)
         }
     };
-    let notify_legacy = had_pending || hydrated || !deltas.is_empty();
+    // Agent-list deltas ride along in `deltas`; only inbox changes are news to inbox readers.
+    let notify_legacy = had_pending || hydrated || inbox_changed;
     if hydrated {
         publish_subscriptions(app, resets);
     }
