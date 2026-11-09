@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-# Fails when a commit on main from the last 26 hours has an author or committer
-# email outside the allowlist in scripts/commit-email-audit.mjs. Read-only: a
-# failed run is the alert, and its log names only short SHAs and fields.
+# Fails when a commit pushed to main, or on main from the last 26 hours, has an
+# author or committer email outside the allowlist in scripts/commit-email-audit.mjs.
+# Read-only: a failed run is the alert, and its log names only short SHAs and fields.
 name: Commit emails
 
 on:
@@ -35,5 +35,16 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - name: Audit commit emails from the last 26 hours
-        run: node scripts/commit-email-audit.mjs --hours 26
+      # A push audits exactly the pushed range, so a backdated commit cannot fall outside a
+      # window; a new branch (all-zero before) and the schedule audit the last 26 hours.
+      - name: Audit commit emails
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          if [ "$EVENT_NAME" = push ]; then
+            node scripts/commit-email-audit.mjs --hours 26 "$BEFORE..$AFTER"
+          else
+            node scripts/commit-email-audit.mjs --hours 26
+          fi

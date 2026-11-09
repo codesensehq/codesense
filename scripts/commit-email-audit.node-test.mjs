@@ -148,6 +148,29 @@ test("the default window skips older commits, and a range covers merged ones", (
   assert.equal(run.stdout.trim(), `${side.short} committer`);
 });
 
+test("a pushed range checks a backdated commit; an all-zero base falls back to the window", (t) => {
+  const f = fixture(t);
+  const before = f.commit();
+  const backdated = f.commit({ author: PERSONAL, date: "2001-01-01T00:00:00Z" });
+  const after = f.commit();
+  // The window alone misses the backdated commit; the pushed range does not.
+  assert.equal(f.cli("--hours", "26").status, 0);
+  const range = f.cli("--hours", "26", `${before.full}..${after.full}`);
+  assert.equal(range.status, 1);
+  assert.equal(range.stdout.trim(), `${backdated.short} author\n${backdated.short} committer`);
+  // A new branch: the window up to the pushed head, not HEAD.
+  const recent = f.commit({ committer: PERSONAL });
+  for (const zeros of ["0".repeat(40), "0".repeat(64)]) {
+    const fallback = f.cli("--hours", "26", `${zeros}..${after.full}`);
+    assert.equal(fallback.status, 0, fallback.stdout);
+    // git stops the window's walk at the backdated commit, as on the schedule.
+    assert.match(fallback.stdout, /^commit-email-audit: 1 commits OK$/m);
+    const head = f.cli(`${zeros}..HEAD`);
+    assert.equal(head.status, 1);
+    assert.equal(head.stdout.trim(), `${recent.short} committer`);
+  }
+});
+
 test("bad arguments exit 2 without running git on them", (t) => {
   const f = fixture(t);
   f.commit();

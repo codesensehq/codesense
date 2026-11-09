@@ -6,7 +6,7 @@
 // A violation prints only the short SHA and the field, never an email or name.
 //
 //   node scripts/commit-email-audit.mjs [--hours N]   commits on HEAD from the last N hours (26)
-//   node scripts/commit-email-audit.mjs <base>..<head>
+//   node scripts/commit-email-audit.mjs <base>..<head>       (an all-zero base: the window up to head)
 //   node scripts/commit-email-audit.mjs --all         the full history of HEAD, with counts
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -38,14 +38,18 @@ export const allowedEmail = (email) => {
 // The rev-list arguments for one of the three modes; refs never start an option.
 export function revisionArgs({ all = false, range, hours = DEFAULT_HOURS, now = Date.now() }) {
   if (all) return ["HEAD"];
+  let head = "HEAD";
   if (range !== undefined) {
     if (!/^[^\s-][^\s]*\.\.[^\s-][^\s]*$/.test(range) || range.includes("..."))
       throw new Error("commit-email-audit: the range must be <base>..<head>");
-    return [range];
+    const [base, tip] = range.split("..");
+    // A push that creates a branch has an all-zero base: audit the window up to its head.
+    if (!/^(?:0{40}|0{64})$/.test(base)) return [range];
+    head = tip;
   }
   if (!Number.isFinite(hours) || hours <= 0)
     throw new Error("commit-email-audit: --hours must be a positive number");
-  return [`--since=${new Date(now - hours * 3_600_000).toISOString()}`, "HEAD"];
+  return [`--since=${new Date(now - hours * 3_600_000).toISOString()}`, head];
 }
 
 // [{ sha, field }] for each disallowed email, and the number of commits read.
@@ -89,8 +93,8 @@ export function parseArgs(argv) {
     } else if (!arg.startsWith("-") && mode.range === undefined) mode.range = arg;
     else throw new Error("usage: commit-email-audit.mjs [--hours N | <base>..<head> | --all]");
   }
-  if ([mode.all, mode.range !== undefined, mode.hours !== undefined].filter(Boolean).length > 1)
-    throw new Error("commit-email-audit: use one of --hours, a range or --all");
+  if (mode.all && (mode.range !== undefined || mode.hours !== undefined))
+    throw new Error("commit-email-audit: --all takes no range or --hours");
   return mode;
 }
 
