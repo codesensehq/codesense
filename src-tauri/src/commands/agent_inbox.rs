@@ -2720,7 +2720,8 @@ impl InboxHost for AppInboxHost {
     ) -> Result<Vec<crate::queue_roles::RoleConfig>, String> {
         let scope = scope.clone();
         let ctx =
-            super::route_to_context::derive_context_for(&self.app, &team.org, &team.team).await?;
+            super::team_resolution_cache::derive_context_cached(&self.app, &team.org, &team.team)
+                .await?;
         super::await_blocking("role_configs", move || {
             crate::queue_roles::list_for(&super::roles::content(&ctx)?, &scope)
         })
@@ -2777,7 +2778,8 @@ impl InboxHost for AppInboxHost {
     }
     async fn team_store(&self, team: &LaunchTeam) -> Result<PathBuf, String> {
         let resolution =
-            super::route_to_context::derive_context_for(&self.app, &team.org, &team.team).await?;
+            super::team_resolution_cache::derive_context_cached(&self.app, &team.org, &team.team)
+                .await?;
         team_store_path(resolution, team)
     }
 
