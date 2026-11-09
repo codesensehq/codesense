@@ -25,6 +25,8 @@ export type HostMenuItem = {
   submenu?: Array<HostMenuItem | string>;
   checked?: boolean;
   enabled?: boolean;
+  /** Display only: the list key this item repeats (MENU_SHORTCUTS). */
+  shortcut?: string;
 };
 export type HostMenuResult = { closed: true } | { itemId: string; row: unknown; builtin?: true };
 export type HostMenuRun = (

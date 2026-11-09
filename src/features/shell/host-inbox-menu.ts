@@ -30,6 +30,16 @@ const notify = (request: HostMenuRequest, id: string, waitForPage = false) =>
   request.page?.enabled() ? request.page.notify(id, request.row ?? {}, waitForPage) : undefined;
 const pageItems = (request: HostMenuRequest, items: readonly HostMenuItem[]) =>
   request.page?.enabled() ? [...items] : [];
+const received = (m: StoredMessage) => m.toHuman && m.from !== "human";
+// The row menus show the list's keys: U toggles read and E archives the row.
+const keyed = (item: HostMenuItem, shortcut?: "E" | "U"): HostMenuItem =>
+  shortcut ? { ...item, shortcut } : item;
+const markItem = (unread: boolean, shortcut?: "U") =>
+  keyed(
+    unread ? { id: "mark-read", label: "Mark read" } : { id: "mark-unread", label: "Mark unread" },
+    shortcut,
+  );
+const archiveItem = (shortcut?: "E") => keyed({ id: "archive", label: "Archive" }, shortcut);
 
 async function conversationMessages(request: HostMenuRequest): Promise<StoredMessage[]> {
   const row = request.row ?? {};
@@ -76,28 +86,25 @@ async function writeBatch(request: HostMenuRequest, verb: string, rows: StoredMe
       messageIds: batch.map((m) => m.messageId),
     });
 }
-async function terminalItem(request: HostMenuRequest, handle: string | undefined, label?: string) {
+async function terminalItem(request: HostMenuRequest, handle: string | undefined) {
   if (!handle || handle === "human" || handle.startsWith("#") || handle.startsWith("role:"))
     return undefined;
   const sessions = (await runOf(request)("sessions", {}).catch(() => [])) as SessionListRow[];
   const session = sessions.find((s) => s.handle === handle && s.state !== "exited");
-  return (
-    session && {
-      id: "go-to-terminal",
-      label: label ?? `Go to ${session.displayName || handle}’s terminal`,
-    }
-  );
+  return session && { id: "go-to-terminal", label: "Go to session" };
 }
 function commonChoose(request: HostMenuRequest, rows: StoredMessage[], handle?: string) {
   return async (id: string): Promise<void | (() => void)> => {
     if (id === "mark-unread") {
       // Architecture: establish the page's explicit hold before a persisted change can refresh it.
       await notify(request, id, true);
-      await writeBatch(
-        request,
-        "markUnread",
-        rows.filter((m) => m.toHuman),
-      );
+      // Only the newest message to you turns unread, across every team the row merges.
+      const latest = rows
+        .filter(received)
+        .reduce<
+          StoredMessage | undefined
+        >((newest, m) => (!newest || m.createdAtMs > newest.createdAtMs ? m : newest), undefined);
+      if (latest) await writeBatch(request, "markUnread", [latest]);
     } else if (id === "mark-read") {
       notify(request, id);
       await writeBatch(
@@ -118,12 +125,10 @@ function commonChoose(request: HostMenuRequest, rows: StoredMessage[], handle?: 
 async function conversationMenu(request: HostMenuRequest): Promise<InboxMenu | null> {
   const rows = await conversationMessages(request);
   if (!rows.length) return null;
-  const handle =
-    rows.find((m) => m.toHuman && m.from !== "human")?.from ??
-    rows.find((m) => m.to !== "human")?.to;
-  const terminal = await terminalItem(request, handle, "Go to session");
+  const handle = rows.find(received)?.from ?? rows.find((m) => m.to !== "human")?.to;
+  const terminal = await terminalItem(request, handle);
   const self = rows.every((m) => m.from === "human" && m.to === "human");
-  const readable = rows.filter((m) => m.toHuman && m.from !== "human");
+  const readable = rows.filter(received);
   const items: HostMenuItem[] = pageItems(request, [
     { id: "open", label: "Open" },
     ...(!self ? [{ id: "reply", label: "Reply" }] : []),
@@ -131,13 +136,14 @@ async function conversationMenu(request: HostMenuRequest): Promise<InboxMenu | n
   if (items.length && (readable.length || terminal)) items.push(separator);
   if (readable.length)
     items.push(
-      readable.some((m) => m.unread)
-        ? { id: "mark-read", label: "Mark read" }
-        : { id: "mark-unread", label: "Mark unread" },
+      markItem(
+        readable.some((m) => m.unread),
+        "U",
+      ),
     );
   if (terminal) items.push(terminal);
   if (items.length) items.push(separator);
-  items.push({ id: "archive", label: "Archive" });
+  items.push(archiveItem("E"));
   return { items, choose: commonChoose(request, rows, handle) };
 }
 // Architecture: Copy text extracts readable HTML content without executable or styling source.
@@ -170,25 +176,20 @@ async function messageMenu(request: HostMenuRequest): Promise<InboxMenu | null> 
   const stored = result.messages.find((m) => m.messageId === id);
   if (!stored) return null;
   const m = { ...stored, team };
-  const received = m.from !== "human" && m.toHuman;
-  const terminal = received ? await terminalItem(request, m.from) : undefined;
+  const toYou = received(m);
+  const terminal = toYou ? await terminalItem(request, m.from) : undefined;
   // The page opens its tapback picker for React…; HTML messages take no reactions there.
   const items = pageItems(request, [
     ...(m.contentType !== "html" ? [{ id: "react", label: "React…" }] : []),
-    ...(received ? [{ id: "reply", label: "Reply" }] : []),
+    ...(toYou ? [{ id: "reply", label: "Reply" }] : []),
   ]);
   items.push({ id: "copy-text", label: "Copy text" });
-  if (received) {
-    items.push(
-      separator,
-      m.unread
-        ? { id: "mark-read", label: "Mark as read" }
-        : { id: "mark-unread", label: "Mark as unread" },
-    );
+  if (toYou) {
+    items.push(separator, markItem(m.unread));
     if (terminal) items.push(terminal);
     if (m.contentType === "html") items.push({ id: "open-in-tab", label: "Open in tab" });
   }
-  items.push(separator, { id: "archive", label: "Archive message" });
+  items.push(separator, archiveItem());
   const choose = commonChoose(request, [m], m.from);
   return {
     items,
@@ -236,9 +237,8 @@ async function roleQueueMenu(request: HostMenuRequest): Promise<InboxMenu | null
   const items: HostMenuItem[] = ROLE_QUEUE_MENU_ITEMS.filter(
     (item) => item.id !== "open-queue" || request.page?.enabled(),
   ).map((item) => ({ ...item }));
-  if (rows.some((m) => m.toHuman && m.unread))
-    items.push(separator, { id: "mark-read", label: "Mark read" });
-  items.push(separator, { id: "archive", label: "Archive" });
+  if (rows.some((m) => m.toHuman && m.unread)) items.push(separator, markItem(true, "U"));
+  items.push(separator, archiveItem("E"));
   const choose = commonChoose(request, rows);
   return {
     items,
