@@ -171,12 +171,12 @@ impl Drop for RestampEnd<'_> {
 
 impl Default for TeamResolutionCache {
     fn default() -> Self {
-        Self::with(Arc::new(LocalDisk), Arc::new(Instant::now))
+        Self::with_disk(Arc::new(LocalDisk), Arc::new(Instant::now))
     }
 }
 
 impl TeamResolutionCache {
-    pub(crate) fn with(disk: Arc<dyn Disk>, clock: Clock) -> Self {
+    pub(crate) fn with_disk(disk: Arc<dyn Disk>, clock: Clock) -> Self {
         let window = clock();
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -326,9 +326,10 @@ pub(crate) async fn derive_context_cached<R: tauri::Runtime>(
     team: &str,
 ) -> Result<ContextResolution, String> {
     use tauri::Manager;
-    let cache = app
+    let cache: &TeamResolutionCache = app
         .try_state::<TeamResolutionCache>()
-        .ok_or("team resolution cache unavailable")?;
+        .ok_or("team resolution cache unavailable")?
+        .inner();
     let (home, user_id) = resolve_ambient(app).await?;
     cache.resolve(home, user_id, org, team).await
 }
@@ -340,7 +341,7 @@ pub(crate) fn listen<R: tauri::Runtime>(app: &AppHandle<R>) {
         return;
     };
     for event in INVALIDATING_EVENTS {
-        let cache = cache.inner().clone();
+        let cache: TeamResolutionCache = cache.inner().clone();
         app.listen(*event, move |_| cache.invalidate());
     }
 }

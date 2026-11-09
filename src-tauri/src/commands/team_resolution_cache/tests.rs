@@ -107,7 +107,7 @@ impl Fixture {
     fn new() -> Self {
         let disk = Arc::new(CountingDisk::default());
         let clock = ManualClock::new();
-        let cache = TeamResolutionCache::with(disk.clone(), clock.clock());
+        let cache = TeamResolutionCache::with_disk(disk.clone(), clock.clock());
         Self {
             home: home_with_org(),
             disk,
@@ -468,7 +468,7 @@ async fn the_inbox_host_reads_through_the_cache() {
         }
     }
     let mut f = Fixture::new();
-    f.cache = TeamResolutionCache::with(
+    f.cache = TeamResolutionCache::with_disk(
         Arc::new(FixtureHome(f.disk.clone(), f.home().to_path_buf())),
         f.clock.clock(),
     );
