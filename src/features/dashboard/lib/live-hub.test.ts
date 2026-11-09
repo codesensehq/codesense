@@ -1996,7 +1996,6 @@ it("unions the committed ids per team while a frame is hidden and delivers them 
   post.mockClear();
   const committed = events.get("agent-inbox-changed")!;
   committed({ payload: { changes: [{ team, messageIds: [5, 6] }] } });
-  committed({ payload: null });
   committed({
     payload: {
       changes: [
@@ -2017,6 +2016,23 @@ it("unions the committed ids per team while a frame is hidden and delivers them 
     },
   ]);
 });
+
+it.each([
+  ["before", [null, { changes: [{ team: { org: "acme", team: "backend" }, messageIds: [5] }] }]],
+  ["after", [{ changes: [{ team: { org: "acme", team: "backend" }, messageIds: [5] }] }, null]],
+])(
+  "keeps a held inbox change unnamed when a change that names no rows lands %s one that does",
+  async (_order, payloads) => {
+    const post = vi.fn();
+    const frame = hub.attach("inbox", "all", post, true);
+    await vi.advanceTimersByTimeAsync(0);
+    frame.visible(false);
+    post.mockClear();
+    for (const payload of payloads) events.get("agent-inbox-changed")!({ payload });
+    frame.visible(true);
+    expect(inboxChanges(post)).toEqual([{ type: "codesense:inbox-changed" }]);
+  },
+);
 
 it("drops held ids for another team when the frame is rekeyed before it shows", async () => {
   const post = vi.fn();

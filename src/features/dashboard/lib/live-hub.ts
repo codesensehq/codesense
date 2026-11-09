@@ -351,17 +351,17 @@ export class LiveHub {
           type === "context-changed" && held
             ? { ...message, allOrgs: true }
             : type === "inbox-changed"
-              ? {
-                  ...message,
-                  ...(changes.length || held?.changes
-                    ? {
-                        changes: unionChanges(
-                          (held?.changes as InboxChange[] | undefined) ?? [],
-                          changes,
-                        ),
-                      }
-                    : {}),
-                }
+              ? // A change that names no rows could be anything, so once one is held the
+                // folded change stays unnamed; naming rows would narrow what consumers reread.
+                !changes.length || (held && !held.changes)
+                ? message
+                : {
+                    ...message,
+                    changes: unionChanges(
+                      (held?.changes as InboxChange[] | undefined) ?? [],
+                      changes,
+                    ),
+                  }
               : message,
         );
         // A paste-target flip changes no hub data, so it never makes a hidden page resync.
