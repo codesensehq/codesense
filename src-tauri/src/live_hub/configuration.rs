@@ -356,6 +356,8 @@ pub(crate) fn path_changed<R: tauri::Runtime>(
         .file_name()
         .is_some_and(|name| name == "app-state.json")
     {
+        // Keep the dashboard policy verbs read in step with the file, own saves included.
+        crate::commands::system::profile_workspace::outside_change(path);
         if let Some(profile) = app.try_state::<crate::commands::local_profile::LocalProfileState>()
         {
             let Some(active) = profile.peek_active() else {

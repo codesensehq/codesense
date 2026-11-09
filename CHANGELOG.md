@@ -14,6 +14,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Private machines changed elsewhere say so.** One clear message shows on save, connect and the machine list, and only that machine is affected. Renaming a personal private machine now saves; renaming a team private machine is refused, since every teammate's setup shares its name.
 - Mark unread on a conversation now marks only its newest message to you, and the inbox menus use one short wording.
 
+### Fixed
+
+- Dashboards keep loading while the app is busy: their actions no longer wait behind saving app state to read their permissions.
+
 ### Privacy
 
 - Clarified: the app has no sign-in and no usage tracking; sharing a dashboard uses owner and viewer accounts on share.codesense.ai.
