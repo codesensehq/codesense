@@ -569,8 +569,9 @@ it("restores an earlier version and undoes one revision through records", async 
   await waitFor(() =>
     expect(p!.doc.querySelectorAll("#sheet-history .nt-history-entry").length).toBeGreaterThan(1),
   );
-  const newestRow = () =>
-    p!.doc.querySelectorAll<HTMLElement>("#sheet-history .nt-history-entry")[0];
+  const row = (i: number) =>
+    p!.doc.querySelectorAll<HTMLElement>("#sheet-history .nt-history-entry")[i];
+  const newestRow = () => row(0);
   // The restore says what it did, never a commit or note id, and the newest revision (the note
   // as it stands) offers no Restore.
   await waitFor(() =>
@@ -581,7 +582,7 @@ it("restores an earlier version and undoes one revision through records", async 
   const restored = raw("history", { id: "alpha" })[0].commit;
   expect(newestRow().textContent).not.toContain(first);
   expect([...newestRow().querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Undo"]);
-  expect(entries[1].querySelector(".nt-history-who")?.textContent).toBe("You edited");
+  expect(row(1).querySelector(".nt-history-who")?.textContent).toBe("You edited");
   await act(async () => newestRow().querySelector<HTMLButtonElement>("button")!.click());
   await waitFor(() => expect(calls("restore")).toHaveLength(2));
   expect(calls("restore")[1][1].args).toMatchObject({ commit: restored, undo: true });
