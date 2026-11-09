@@ -9,7 +9,8 @@ import tailwindcss from "@tailwindcss/vite";
 // The dock slot host with fixture dashboards (test only, never shipped): `dock-ok` lists agent
 // names from first paint and `subscribe('agentList')`, calls ready(), declares one row menu and
 // leaves Esc unhandled; `dock-never` never calls ready(); `dock-throw` throws on load;
-// `dock-blank` calls ready() and draws nothing; `dock-silent` is `dock-ok` that never answers a ping.
+// `dock-blank` calls ready() and draws nothing; `dock-silent` is `dock-ok` that never answers a ping;
+// `dock-sub-blank` goes live only through its subscribe (like the built-in list) and draws nothing.
 let frames: Server;
 let vite: ViteDevServer;
 let base: string;
@@ -28,6 +29,8 @@ function fixtureBody(name: string): string {
   if (name === "dock-throw.html" || (name === "dock-flaky.html" && loads.get(name) === 1))
     return `<script>throw new Error("fixture failed to start")</script>`;
   if (name === "dock-blank.html") return `<script>codesense.ready()</script>`;
+  if (name === "dock-sub-blank.html")
+    return `<script>codesense.invoke('subscribe',{topic:'agentList'}).then(function(){window.subscribed=true})</script>`;
   const ok =
     name === "dock-ok.html" ||
     name === "dock-flaky.html" ||
@@ -284,6 +287,24 @@ for (const fixture of ["dock-silent", "dock-blank"])
     );
     await expect(strip.getByRole("button", { name: "Reload" })).toBeVisible();
   });
+test("a page live only through its subscribe is never render-checked on load, and is reloaded once on its next reveal when it drew nothing", async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date(0) });
+  await page.clock.pauseAt(new Date(0));
+  await open(page, "page=dock-sub-blank");
+  await expect.poll(() => doc(page)?.evaluate(() => !!(window as any).subscribed)).toBe(true);
+  await expect(page.locator("[data-slot-id=dock]")).not.toHaveAttribute("aria-busy");
+  // On load it may still be waiting for its data: plain heartbeats only.
+  for (let i = 0; i < 12; i++) await page.clock.runFor(1000);
+  expect(loads.get("dock-sub-blank.html")).toBe(1);
+  await page.evaluate(() => (window as any).foldDock());
+  await page.clock.runFor(500);
+  await page.evaluate(() => (window as any).unfoldDock());
+  await runPings(page, async () => (loads.get("dock-sub-blank.html") ?? 0) > 1);
+  expect(loads.get("dock-sub-blank.html")).toBe(2);
+  await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
+});
 test("a healthy dock page answers the render check and is never reloaded", async ({ page }) => {
   await page.clock.install({ time: new Date(0) });
   await page.clock.pauseAt(new Date(0));
