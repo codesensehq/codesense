@@ -1305,7 +1305,7 @@ async fn terminal_output_is_redacted_across_events() {
                 out("\x1b]0;curl -H \"Authorization: Bea"),
                 out("rer FAKEFAKEFAKEFAKEFAKE\" https://x\x07$ "),
             ],
-            "\x1b]0;curl -H \"[redacted]\" https://x\x07$ ".into(),
+            "\x1b]0;curl -H \"Authorization: [redacted]\" https://x\x07$ ".into(),
         ),
         (
             "7h a hyperlink with an access token",
@@ -1335,7 +1335,7 @@ async fn terminal_output_is_redacted_across_events() {
             vec![out(
                 "\u{9d}0;curl -H \"Authorization: Bearer FAKEFAKEFAKEFAKEFAKE\"\u{9c}$ ",
             )],
-            "\u{9d}0;curl -H \"[redacted]\"\u{9c}$ ".into(),
+            "\u{9d}0;curl -H \"Authorization: [redacted]\"\u{9c}$ ".into(),
         ),
         (
             "5b a short value after a key is masked too (over-redaction)",
@@ -1514,8 +1514,8 @@ fn every_split_of_the_output_redacts_the_same() {
             "jwt=[redacted]\r\n",
             "openai [redacted]\r\n",
             "pass\u{9b}1mword: [redacted]\r\n",
-            "\u{9d}0;curl -H \"[redacted]\"\u{9c}build ok\r\n",
-            "\x1b]0;curl -H \"[redacted]\"\x07",
+            "\u{9d}0;curl -H \"Authorization: [redacted]\"\u{9c}build ok\r\n",
+            "\x1b]0;curl -H \"Authorization: [redacted]\"\x07",
             "\x1b]8;;https://x.example/cb?access_token=[redacted]\x1b\\link\x1b]8;;\x1b\\\r\n",
             "\x1b]0;[redacted]\x07",
             "$ ",
