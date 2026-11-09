@@ -1080,13 +1080,25 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{run_id}: log line no longer parses: {e}: {line}"));
             }
             let turns = read_turns_from(dir.path(), run_id);
-            assert_eq!(
-                turns.is_some(),
-                !stored_by_session(format),
-                "{run_id}: per-run turns only where the CLI keeps no session log"
-            );
-            let rendered = serde_json::to_string(&turns).unwrap();
-            assert!(!rendered.contains(secret), "{run_id}: turns: {rendered}");
+            if stored_by_session(format) {
+                assert!(
+                    turns.is_none(),
+                    "{run_id}: no per-run turns where the CLI keeps a session log"
+                );
+            } else {
+                let rendered = serde_json::to_string(&turns.expect("per-run turns")).unwrap();
+                assert!(!rendered.contains(secret), "{run_id}: turns: {rendered}");
+                // The read path scrubs a turns file written raw (older evidence, or edited on disk).
+                let raw = parse_transcript(format, stdout).expect("the fixture parses");
+                let raw_json = serde_json::to_string(&raw).unwrap();
+                assert!(
+                    raw_json.contains(secret),
+                    "{run_id}: raw turns carry the secret"
+                );
+                write_turns_to(dir.path(), run_id, &raw).expect("writes the raw turns");
+                let read = serde_json::to_string(&read_turns_from(dir.path(), run_id)).unwrap();
+                assert!(!read.contains(secret), "{run_id}: turns read path: {read}");
+            }
 
             // The read path scrubs a log written raw (older evidence, or the plain capture).
             std::fs::write(dir.path().join(format!("{run_id}.log")), stdout).unwrap();

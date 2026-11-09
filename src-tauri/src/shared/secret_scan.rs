@@ -241,10 +241,11 @@ fn compile_one(p: &str) -> Regex {
     })
 }
 
-/// Whether a keyword match's value is a setting, not a credential: a boolean or `null` under any key
-/// (`credentials: true`), a `fetch` credentials mode (`credentials: "same-origin"`), or a token count
-/// under a compound key (`MAX_TOKEN=4096`, up to 7 digits). A numeric `DB_PASSWORD=12345678` or
-/// `API_TOKEN=1234567890` stays masked.
+/// Whether a keyword match's value is a setting, not a credential: an unquoted boolean or `null`
+/// under any key (`credentials: true`; a quoted `"null"` is a string and stays masked), a `fetch`
+/// credentials mode (`credentials: "same-origin"`), or a token count under a compound key
+/// (`MAX_TOKEN=4096`, up to 7 digits). A numeric `DB_PASSWORD=12345678` or `API_TOKEN=12345678`
+/// stays masked.
 fn is_setting(caps: &regex::Captures) -> bool {
     let (Some(kw), Some(val)) = (
         regex::Captures::name(caps, "kw"),
@@ -258,7 +259,7 @@ fn is_setting(caps: &regex::Captures) -> bool {
             str::eq_ignore_ascii_case(val, w)
         })
     };
-    is_one_of(&["true", "false", "null"])
+    (Option::is_none(&regex::Captures::name(caps, "vq")) && is_one_of(&["true", "false", "null"]))
         || (str::starts_with(&str::to_ascii_lowercase(kw), "credential")
             && is_one_of(&["include", "omit", "same-origin"]))
         || (Option::is_some(&regex::Captures::name(caps, "pre"))
@@ -612,16 +613,6 @@ mod tests {
                 Some("Authorization: [redacted]"),
             ),
             (
-                "6d plain header, basic",
-                "Authorization: Basic ZmFrZXVzZXI6ZmFrZXB3ZDEy",
-                Some("Authorization: [redacted]"),
-            ),
-            (
-                "6e unescaped JSON, basic",
-                r#"{"authorization":"Basic ZmFrZXVzZXI6ZmFrZXB3ZDEy"}"#,
-                Some(r#"{"authorization":"[redacted]"}"#),
-            ),
-            (
                 "6f token scheme",
                 "Authorization: token fakeTokenValue12345",
                 Some("Authorization: [redacted]"),
@@ -709,6 +700,17 @@ mod tests {
             ),
             ("15 setting name", "PASSWORD_MIN_LENGTH=8", None),
             ("15 counter", "token_count: 1234", None),
+            (
+                "15c bare key, number",
+                "token: 1234567",
+                Some("token: [redacted]"),
+            ),
+            ("15c compound key, 7 digits", "API_TOKEN=1234567", None),
+            (
+                "15c compound key, 8 digits",
+                "API_TOKEN=12345678",
+                Some("API_TOKEN=[redacted]"),
+            ),
             ("15 usage field", r#""input_tokens":12"#, None),
             ("15 limit", "TOKEN_LIMIT=4096", None),
             ("15 compound key, number", "MAX_TOKEN=4096", None),
@@ -735,6 +737,21 @@ mod tests {
             ("17 true", r#"{"password":true}"#, None),
             ("17 false", r#"{"password":false}"#, None),
             ("17 null", r#"{"password":null}"#, None),
+            (
+                "17 quoted null is a string",
+                r#"{"password":"null"}"#,
+                Some(r#"{"password":"[redacted]"}"#),
+            ),
+            (
+                "17 quoted false is a string",
+                r#"{"password":"false"}"#,
+                Some(r#"{"password":"[redacted]"}"#),
+            ),
+            (
+                "17 escaped quoted true is a string",
+                r#"{\"password\":\"true\"}"#,
+                Some(r#"{\"password\":\"[redacted]\"}"#),
+            ),
             (
                 "17 number, masked as a string",
                 r#"{"password":12345678}"#,
@@ -765,22 +782,39 @@ mod tests {
         for &(row, input, expected) in cases {
             check(row.to_string(), input, expected.unwrap_or(input), false);
         }
-        // Token-shaped values are built at runtime, so the source holds no credential literal.
+        // Credential-shaped values are built at runtime, so the source holds no credential literal.
         let bearer = ["fakeBearer", "Value1234567"].concat();
-        let project_key = ["sk-", "proj-", "FAKEfakeFAKEfake0000"].concat();
-        for (row, input, expected) in [
+        let basic = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            ["fake", "user:", "fake", "pwd12"].concat(),
+        );
+        let mut runtime_cases = vec![
             (
-                "6 escaped header, bearer-shaped value",
+                "6 escaped header, bearer-shaped value".to_string(),
                 format!(r#"\"authorization\":\"Bearer {bearer}\""#),
                 r#"\"authorization\":\"[redacted]\""#,
             ),
             (
-                "12 OpenAI project key",
-                format!("export K={project_key}"),
-                "export K=[redacted]",
+                "6d plain header, basic".to_string(),
+                format!("Authorization: Basic {basic}"),
+                "Authorization: [redacted]",
             ),
-        ] {
-            check(row.to_string(), &input, expected, false);
+            (
+                "6e unescaped JSON, basic".to_string(),
+                format!(r#"{{"authorization":"Basic {basic}"}}"#),
+                r#"{"authorization":"[redacted]"}"#,
+            ),
+        ];
+        for kind in ["proj", "svcacct", "admin", "ant"] {
+            let key = ["sk-", kind, "-", "FAKEfakeFAKEfake0000"].concat();
+            runtime_cases.push((
+                format!("12 sk-{kind}- key"),
+                format!("export K={key}"),
+                "export K=[redacted]",
+            ));
+        }
+        for (row, input, expected) in runtime_cases {
+            check(row, &input, expected, false);
         }
         let masked = |s: &str| {
             s.replace("fakeval1234", "[redacted]")
