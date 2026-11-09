@@ -303,6 +303,9 @@ test("a page live only through its subscribe is never render-checked on load, an
   await page.evaluate(() => (window as any).unfoldDock());
   await runPings(page, async () => (loads.get("dock-sub-blank.html") ?? 0) > 1);
   expect(loads.get("dock-sub-blank.html")).toBe(2);
+  // Only one reload: the reloaded page, still blank, is not checked again until its next reveal.
+  for (let i = 0; i < 15; i++) await page.clock.runFor(1000);
+  expect(loads.get("dock-sub-blank.html")).toBe(2);
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
 });
 test("a healthy dock page answers the render check and is never reloaded", async ({ page }) => {
@@ -311,6 +314,13 @@ test("a healthy dock page answers the render check and is never reloaded", async
   await open(page);
   await ready(page);
   await page.clock.runFor(30_000);
+  await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
+  expect(loads.get("dock-ok.html")).toBe(1);
+  // A fold and unfold alone never reloads it: the reveal's render check finds content.
+  await page.evaluate(() => (window as any).foldDock());
+  await page.clock.runFor(500);
+  await page.evaluate(() => (window as any).unfoldDock());
+  for (let i = 0; i < 15; i++) await page.clock.runFor(1000);
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
   expect(loads.get("dock-ok.html")).toBe(1);
 });
