@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Lower idle CPU while agents work: the inbox re-reads only when mail, a team or the sessions it shows change, and agent activity alone no longer tells inbox views to refresh.
+
 ### Privacy
 
 - Clarified: the app has no sign-in and no usage tracking; sharing a dashboard uses owner and viewer accounts on share.codesense.ai.

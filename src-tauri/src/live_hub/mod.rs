@@ -53,6 +53,7 @@ const FILES: u8 = 64;
 const INBOX: u8 = 2;
 const HOSTS: u8 = 4;
 const FOOTPRINT: u8 = 8;
+const SYNC_WAVE_COMPLETED_EVENT: &str = "sync-wave-completed";
 const DOMAIN_EVENTS: &[&str] = &[
     crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
     "sessions-waiter-changed",
@@ -594,6 +595,11 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
         }
     });
+    // A finished sync can bring a team's content onto disk: the inbox reconciles its teams.
+    let handle = app.clone();
+    app.listen(SYNC_WAVE_COMPLETED_EVENT, move |_| {
+        handle.state::<LiveHub>().invalidate(FOOTPRINT);
+    });
     let handle = app.clone();
     app.listen(inbox_events::INBOX_EVENT, move |event| {
         if let Ok(event) = serde_json::from_str::<inbox_events::InboxEvent>(event.payload()) {
@@ -644,7 +650,7 @@ pub fn start(app: &tauri::AppHandle) {
         let host = AppInboxHost {
             app: handle.clone(),
         };
-        let mut inbox_inputs = None;
+        let mut inbox_gate = InboxGate::default();
         loop {
             let flags = next_updates(&handle).await;
             if flags & MACHINE_STATS != 0 {
@@ -666,7 +672,7 @@ pub fn start(app: &tauri::AppHandle) {
                     log::warn!("sessions projection: {e}");
                 }
             }
-            if let Err(e) = inbox_pass(&handle, &host, flags, &mut inbox_inputs).await {
+            if let Err(e) = inbox_pass(&handle, &host, flags, &mut inbox_gate).await {
                 log::warn!("inbox projection: {e}");
             }
         }
@@ -1696,30 +1702,54 @@ fn inbox_inputs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> InboxInputs {
     InboxInputs { active, rows }
 }
 
-/// Refreshes the inbox for a batch with mail or a team-set change, or when its inputs
-/// changed since the last pass. Other batches (machine stats, files, agent activity that
-/// leaves the joined rows alone) skip it.
+/// How long after a failed or incomplete inbox pass the next batch runs it again.
+const INBOX_RETRY: Duration = Duration::from_secs(5);
+
+/// What the last inbox pass read, and what it still owes.
+#[derive(Default)]
+struct InboxGate {
+    inputs: Option<InboxInputs>,
+    /// A pass failed or could not read every team: the first batch after this runs it again.
+    retry_at: Option<tokio::time::Instant>,
+    /// A team-set change whose pass did not complete: the retry still reconciles teams.
+    reconcile: bool,
+}
+
+/// Refreshes the inbox for a batch with mail or a team-set change, when its inputs changed
+/// since the last pass, or to retry a pass that did not complete. Other batches (machine
+/// stats, files, agent activity that leaves the joined rows alone) skip it.
 async fn inbox_pass<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     host: &dyn crate::commands::agent_inbox::InboxHost,
     flags: u8,
-    last: &mut Option<InboxInputs>,
+    gate: &mut InboxGate,
 ) -> Result<(), String> {
     let inputs = inbox_inputs(app);
-    if flags & (INBOX | FOOTPRINT) == 0 && last.as_ref() == Some(&inputs) {
+    let retry = gate
+        .retry_at
+        .is_some_and(|at| tokio::time::Instant::now() >= at);
+    if flags & (INBOX | FOOTPRINT) == 0 && !retry && gate.inputs.as_ref() == Some(&inputs) {
         return Ok(());
     }
-    // A failed pass keeps the old inputs, so the next batch tries again.
-    refresh_inbox_with_host(app, host, flags & FOOTPRINT != 0).await?;
-    *last = Some(inputs);
-    Ok(())
+    let reconcile = gate.reconcile || flags & FOOTPRINT != 0;
+    let result = refresh_inbox_with_host(app, host, reconcile).await;
+    let complete = matches!(result, Ok(true));
+    gate.reconcile = reconcile && !complete;
+    gate.retry_at = (!complete).then(|| tokio::time::Instant::now() + INBOX_RETRY);
+    // A failed pass keeps the old inputs, so changed inputs still run the next batch.
+    if result.is_ok() {
+        gate.inputs = Some(inputs);
+    }
+    result.map(|_| ())
 }
 
+/// Returns whether the pass read everything it needed: `false` when a team lookup failed
+/// and was skipped, so the caller runs it again.
 async fn refresh_inbox_with_host<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     host: &dyn crate::commands::agent_inbox::InboxHost,
     reconcile_teams: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     use crate::commands::{
         agent_inbox::{KnownSession, KnownSessions},
         agent_read_model,
@@ -1735,9 +1765,11 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     };
     let had_pending = !pending.is_empty();
     let active = host.active_team().await.ok();
+    let synced = host.synced_teams().await.ok();
+    let mut complete = active.is_some() && synced.is_some();
     // Store resolution is best-effort; only successful discovery can retire a team.
     let allowed = if reconcile_teams {
-        host.synced_teams().await.ok().map(|teams| {
+        synced.as_ref().map(|teams| {
             teams
                 .iter()
                 .chain(active.iter())
@@ -1756,19 +1788,25 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
             return Err(error);
         }
     };
-    for row in &rows {
-        if let Some(team) = &row.team {
-            if !stores.iter().any(|(t, _)| t == team) {
-                if let Ok(path) = host.team_store(team).await {
-                    stores.push((team.clone(), path));
-                }
+    // A synced team missing here failed its store lookup, or shares another team's store.
+    for team in synced.iter().flatten() {
+        if !stores.iter().any(|(t, _)| t == team) {
+            match host.team_store(team).await {
+                Ok(path) if stores.iter().any(|(_, p)| *p == path) => {}
+                Ok(path) => stores.push((team.clone(), path)),
+                Err(_) => complete = false,
             }
         }
     }
-    for (team, _) in pending.values() {
+    for team in rows
+        .iter()
+        .filter_map(|row| row.team.as_ref())
+        .chain(pending.values().map(|(team, _)| team))
+    {
         if !stores.iter().any(|(t, _)| t == team) {
-            if let Ok(path) = host.team_store(team).await {
-                stores.push((team.clone(), path));
+            match host.team_store(team).await {
+                Ok(path) => stores.push((team.clone(), path)),
+                Err(_) => complete = false,
             }
         }
     }
@@ -1780,6 +1818,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
 
     // Prepare the new projection off the hub model lock. Readers still hold the
     // old Arc snapshot, so heavy COW clones and deallocation cannot block them.
+    let counts_before = inbox.count_rows();
     let mut inbox: inbox::InboxProjection = (*inbox).clone();
 
     for (team, path) in stores {
@@ -1814,16 +1853,21 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     if !pending.is_empty() {
         restore_pending(&hub, pending);
     }
-    updates.extend(inbox.refresh_sessions(host, &rows));
+    let reprojected = inbox.refresh_sessions(host, &rows);
+    let renamed = !reprojected.is_empty();
+    updates.extend(reprojected);
     if let Some(chat) = app
         .try_state::<crate::commands::workspace_chat::WorkspaceChatStore>()
         .filter(|s| crate::commands::workspace_chat::WorkspaceChatStore::is_installed(&s))
     {
         for row in &mut rows {
             if let (Some(workspace), Some(session)) = (&row.chat_workspace_id, &row.session) {
-                if let Ok(unread) = chat.unread(workspace, &row.handle, session) {
-                    row.group_unread = unread.count;
-                    row.group_read_id = unread.read_id;
+                match chat.unread(workspace, &row.handle, session) {
+                    Ok(unread) => {
+                        row.group_unread = unread.count;
+                        row.group_read_id = unread.read_id;
+                    }
+                    Err(_) => complete = false,
                 }
             }
         }
@@ -1838,17 +1882,21 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         updates.retain(|(scope, _)| scope.as_ref().is_some_and(|key| allowed.contains(key)));
     }
     inbox.fill_session_fields(&rows);
-    updates.extend(inbox.count_rows());
+    let counts = inbox.count_rows();
+    // What inbox readers show changed, whether or not an inbox view is open. Agent-list
+    // deltas published below are not news to them.
+    let notify_legacy =
+        had_pending || hydrated || renamed || !removes.is_empty() || counts != counts_before;
+    updates.extend(counts);
 
     // Publish the finished projection briefly under the model lock, then drop
     // the replaced Arc (and any inner maps it frees) after releasing it.
-    let (deltas, resets, inbox_changed) = {
+    let (deltas, resets) = {
         let mut model = hub.model.lock().unwrap();
         model.inbox = std::sync::Arc::new(inbox);
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;
-        let inbox_changed = !deltas.is_empty();
         deltas.extend(project_agent_views(&mut model)?);
         if hydrated {
             // Initial history is loaded through bounded snapshots, never arrival deltas.
@@ -1859,14 +1907,11 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
                     .filter(|delta| delta.topic != "inbox")
                     .collect(),
                 resets,
-                inbox_changed,
             )
         } else {
-            (deltas, Vec::new(), inbox_changed)
+            (deltas, Vec::new())
         }
     };
-    // Agent-list deltas ride along in `deltas`; only inbox changes are news to inbox readers.
-    let notify_legacy = had_pending || hydrated || inbox_changed;
     if hydrated {
         publish_subscriptions(app, resets);
     }
@@ -1880,7 +1925,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         host.inbox_committed(&committed);
     }
     hub.changes.send_modify(|rev| *rev += 1);
-    Ok(())
+    Ok(complete)
 }
 
 fn restore_pending(

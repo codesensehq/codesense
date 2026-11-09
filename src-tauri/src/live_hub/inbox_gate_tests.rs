@@ -4,7 +4,7 @@
 use super::*;
 use crate::commands::dashboard_launch::LaunchTeam;
 use crate::mcp::session_list::SessionState;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 fn team() -> LaunchTeam {
     LaunchTeam {
@@ -56,6 +56,8 @@ struct CountingHost {
     dir: tempfile::TempDir,
     passes: AtomicUsize,
     changed: AtomicUsize,
+    store_failed: AtomicBool,
+    discovery_failed: AtomicBool,
 }
 impl CountingHost {
     fn new() -> Self {
@@ -63,6 +65,8 @@ impl CountingHost {
             dir: tempfile::tempdir().unwrap(),
             passes: AtomicUsize::new(0),
             changed: AtomicUsize::new(0),
+            store_failed: AtomicBool::new(false),
+            discovery_failed: AtomicBool::new(false),
         }
     }
     fn path(&self) -> std::path::PathBuf {
@@ -78,6 +82,9 @@ impl CountingHost {
 #[async_trait::async_trait]
 impl crate::commands::agent_inbox::InboxHost for CountingHost {
     async fn team_store(&self, _team: &LaunchTeam) -> Result<std::path::PathBuf, String> {
+        if self.store_failed.load(Ordering::Relaxed) {
+            return Err("temporarily unavailable".into());
+        }
         Ok(self.path())
     }
     async fn active_team(&self) -> Result<LaunchTeam, String> {
@@ -85,6 +92,9 @@ impl crate::commands::agent_inbox::InboxHost for CountingHost {
         Ok(team())
     }
     async fn synced_teams(&self) -> Result<Vec<LaunchTeam>, String> {
+        if self.discovery_failed.load(Ordering::Relaxed) {
+            return Err("temporarily unavailable".into());
+        }
         Ok(vec![team()])
     }
     fn launch_team(&self, _handle: &str) -> Option<LaunchTeam> {
@@ -124,15 +134,15 @@ fn set_rows(app: &tauri::App<tauri::test::MockRuntime>, rows: Vec<SessionListRow
 async fn machine_stats_and_files_batches_skip_the_inbox_pass() {
     let app = app();
     let host = CountingHost::new();
-    let mut last = None;
+    let mut gate = InboxGate::default();
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
-    inbox_pass(app.handle(), &host, REBUILD | INBOX, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD | INBOX, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "the first pass always runs");
 
     for flags in [MACHINE_STATS, FILES, MACHINE_STATS | FILES, REBUILD | HOSTS] {
-        inbox_pass(app.handle(), &host, flags, &mut last)
+        inbox_pass(app.handle(), &host, flags, &mut gate)
             .await
             .unwrap();
         assert_eq!(host.take_passes(), 0, "flags {flags} carry no inbox work");
@@ -140,7 +150,7 @@ async fn machine_stats_and_files_batches_skip_the_inbox_pass() {
 
     // Agent activity moves a session between running states the inbox treats alike.
     set_rows(&app, vec![row("worker", "Worker", SessionState::Running)]);
-    inbox_pass(app.handle(), &host, REBUILD | HOSTS, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD | HOSTS, &mut gate)
         .await
         .unwrap();
     assert_eq!(
@@ -149,7 +159,7 @@ async fn machine_stats_and_files_batches_skip_the_inbox_pass() {
         "activity leaves the joined rows alone"
     );
 
-    inbox_pass(app.handle(), &host, INBOX, &mut last)
+    inbox_pass(app.handle(), &host, INBOX, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "mail runs a pass");
@@ -159,15 +169,15 @@ async fn machine_stats_and_files_batches_skip_the_inbox_pass() {
 async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
     let app = app();
     let host = CountingHost::new();
-    let mut last = None;
+    let mut gate = InboxGate::default();
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
-    inbox_pass(app.handle(), &host, REBUILD, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
         .await
         .unwrap();
     host.take_passes();
 
     set_rows(&app, vec![row("worker", "Renamed", SessionState::Idle)]);
-    inbox_pass(app.handle(), &host, REBUILD, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "a renamed session runs a pass");
@@ -175,7 +185,7 @@ async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
     let mut moved = row("worker", "Renamed", SessionState::Idle);
     moved.team = None;
     set_rows(&app, vec![moved.clone()]);
-    inbox_pass(app.handle(), &host, REBUILD, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "a session's team change runs a pass");
@@ -184,7 +194,7 @@ async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
         &app,
         vec![moved.clone(), row("helper", "Helper", SessionState::Idle)],
     );
-    inbox_pass(app.handle(), &host, HOSTS, &mut last)
+    inbox_pass(app.handle(), &host, HOSTS, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "a new session runs a pass");
@@ -193,7 +203,7 @@ async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
         &app,
         vec![moved, row("helper", "Helper", SessionState::Exited)],
     );
-    inbox_pass(app.handle(), &host, REBUILD, &mut last)
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
         .await
         .unwrap();
     assert_eq!(
@@ -202,8 +212,31 @@ async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
         "a session that stops running runs a pass"
     );
 
+    let mut chatting = row("helper", "Helper", SessionState::Exited);
+    chatting.chat_workspace_id = Some("workspace".into());
+    set_rows(&app, vec![moved.clone(), chatting]);
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(host.take_passes(), 1, "joining a group chat runs a pass");
+
+    app.manage(crate::mcp::state::ActiveTeamState::default());
+    app.state::<crate::mcp::state::ActiveTeamState>()
+        .update(crate::mcp::state::ActiveTeam {
+            org_slug: "acme".into(),
+            team_name: "other".into(),
+        });
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(
+        host.take_passes(),
+        1,
+        "switching the active team runs a pass"
+    );
+
     // A team synced or removed reconciles the team set with the rows unchanged.
-    inbox_pass(app.handle(), &host, FOOTPRINT, &mut last)
+    inbox_pass(app.handle(), &host, FOOTPRINT, &mut gate)
         .await
         .unwrap();
     assert_eq!(host.take_passes(), 1, "a team-set change runs a pass");
@@ -221,14 +254,8 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
     .unwrap();
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
     let hub = app.state::<LiveHub>();
-    {
-        let mut model = hub.model.lock().unwrap();
-        model.agent_views.insert("all".into());
-        model
-            .projections
-            .subscribe_window("native", "inbox", "all", None, None)
-            .unwrap();
-    }
+    // No inbox view is open: readers are told from the projection, not from view deltas.
+    hub.model.lock().unwrap().agent_views.insert("all".into());
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
@@ -261,4 +288,72 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     assert_eq!(host.take_changed(), 1, "the sender's name changed");
+}
+
+#[tokio::test]
+async fn an_incomplete_pass_runs_again_after_a_pause() {
+    let app = app();
+    let host = CountingHost::new();
+    let mut gate = InboxGate::default();
+    set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
+    host.store_failed.store(true, Ordering::Relaxed);
+    inbox_pass(app.handle(), &host, REBUILD, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(host.take_passes(), 1);
+    assert!(gate.retry_at.is_some(), "a skipped team store is a retry");
+
+    // The retry waits out its pause, so a failing store cannot run a pass every batch.
+    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(host.take_passes(), 0, "the retry is not due yet");
+
+    host.store_failed.store(false, Ordering::Relaxed);
+    gate.retry_at = Some(tokio::time::Instant::now());
+    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(host.take_passes(), 1, "a due retry runs on any batch");
+    assert!(gate.retry_at.is_none(), "the pass completed");
+
+    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+        .await
+        .unwrap();
+    assert_eq!(
+        host.take_passes(),
+        0,
+        "nothing is owed after a complete pass"
+    );
+}
+
+#[tokio::test]
+async fn a_team_set_change_whose_pass_fails_still_reconciles_on_the_retry() {
+    let app = app();
+    let host = CountingHost::new();
+    let mut gate = InboxGate::default();
+    host.discovery_failed.store(true, Ordering::Relaxed);
+    inbox_pass(app.handle(), &host, FOOTPRINT, &mut gate)
+        .await
+        .unwrap();
+    assert!(
+        gate.reconcile,
+        "discovery failed, so no team was reconciled"
+    );
+
+    host.discovery_failed.store(false, Ordering::Relaxed);
+    gate.retry_at = Some(tokio::time::Instant::now());
+    inbox_pass(app.handle(), &host, MACHINE_STATS, &mut gate)
+        .await
+        .unwrap();
+    assert!(!gate.reconcile, "the retry reconciled the team set");
+    assert!(gate.retry_at.is_none());
+}
+
+#[tokio::test]
+async fn a_finished_sync_reconciles_the_inbox_teams() {
+    let app = app();
+    listen_sources(app.handle());
+    app.emit(SYNC_WAVE_COMPLETED_EVENT, ()).unwrap();
+    assert_eq!(app.state::<LiveHub>().next_batch().await, FOOTPRINT);
 }
