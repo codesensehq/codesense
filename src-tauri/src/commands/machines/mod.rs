@@ -346,10 +346,14 @@ const CANT_PUBLISH: &str = "You can't publish to that team's context from this M
 /// `host:port`, via `jump`. Both sides compare trimmed, with an empty jump host
 /// as none, since a saved value keeps whatever spacing it was typed with.
 fn keeps_address(host: &str, port: u16, jump: Option<&str>, input: &MachineDraftInput) -> bool {
-    let jump_of = |jump: Option<&str>| jump.map(str::trim).filter(|jump| !str::is_empty(jump));
     host.trim() == input.host.trim()
         && port == input.port
         && jump_of(jump) == jump_of(input.jump_host.as_deref())
+}
+
+/// A jump host trimmed, with an empty one as none.
+fn jump_of(jump: Option<&str>) -> Option<&str> {
+    jump.map(|jump| jump.trim()).filter(|jump| !jump.is_empty())
 }
 
 // ---------------------------------------------------------------------------
