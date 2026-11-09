@@ -525,8 +525,15 @@ it("render-checks a slot page once it calls ready, again on each reveal and in-f
 it("render-checks a page live only through its subscribe from its next reveal, never on load", async () => {
   const base = ipc.getMockImplementation()!;
   let minted = 0;
+  let current = record;
   ipc.mockImplementation(async (command, args) => {
-    if (command === "mint_frame") return { ...record, kind: "team", frameId: `sub-${++minted}` };
+    // Each mint has its own grant, so the page's subscribe passes the frame identity check.
+    if (command === "mint_frame") {
+      const frameId = `sub-${++minted}`;
+      current = { ...record, kind: "team", frameId, grant: { ...record.grant, frameId } };
+      return current;
+    }
+    if (command === "resolve_frame_grant") return current.grant;
     if (command === "verb_dispatch") return { status: "admit", callId: "slot-subscribe" };
     if (command === "live_hub_subscribe")
       return { topic: "sessions", viewKey: "all", rev: 0, snapshot: [] };
