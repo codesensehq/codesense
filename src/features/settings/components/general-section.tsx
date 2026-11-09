@@ -2127,8 +2127,9 @@ function AgentsListRow() {
       buttonPaddingClassName="px-2 py-1.5"
       footer={
         <p className="mt-1 text-[10px] text-muted-foreground">
-          The list beside the CLI, for this organization. If a dashboard doesn&apos;t load, the
-          built-in list shows instead.
+          The list beside the CLI, for this organization. If a custom dashboard doesn&apos;t load,
+          the built-in HTML list is used when available. If that list can&apos;t load, use Reload in
+          the error strip.
         </p>
       }
     />
