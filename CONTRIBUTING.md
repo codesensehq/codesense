@@ -75,9 +75,12 @@ come if the project were ever relicensed.
 
 ### How a pull request lands
 
-The maintainer reviews your pull request and merges it here. Your commits keep
-your authorship and sign-off, so the history credits you. The change ships in
-the next release; releases are not on a fixed schedule.
+The maintainer reviews your pull request and adds it to the merge queue, which
+runs the required checks on your change combined with the others ahead of it
+and merges it once they pass. You don't need to keep your branch up to date
+with `main`. Your commits keep your authorship and sign-off, so the history
+credits you. The change ships in the next release; releases are not on a fixed
+schedule.
 
 ## Local checks
 
