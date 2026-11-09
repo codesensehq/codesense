@@ -38,7 +38,7 @@ import { formatMachineAddress, parseMachineAddress } from "../lib/machine-addres
 import { retireLeftoverLegacyServer } from "../lib/machine-actions";
 import { MB } from "../lib/machine-file-path";
 import { TONE_CLASS, type MachineTone } from "../lib/machine-status";
-import { reloadMachines } from "../stores/machines-store";
+import { refreshMachine, reloadMachines } from "../stores/machines-store";
 
 const STEP_LABEL: Record<MachineTestStep["id"], string> = {
   "private-account": "Private account",
@@ -145,6 +145,23 @@ export function AddMachinePanel({
     initialMode ?? decl?.mode ?? "private-account",
   );
   const [label, setLabel] = useState(machine?.label ?? "");
+  // The revision this panel opened the machine at, never the live store's: a
+  // save based on it is refused once someone else changes the machine. This
+  // panel's own save, enroll or install (a conversion, a first host-key pin)
+  // answers with the revision its writes left, which becomes the base.
+  const [baseRevision, setBaseRevision] = useState(() => decl?.revision ?? null);
+  // A setup step that converted a legacy machine and then failed answers with
+  // no revision: re-read the machine and adopt the converted declaration's,
+  // but only while the base is still the legacy one this panel opened. Once a
+  // step reported its own revision, a later change is someone else's.
+  const adoptConversion = async () => {
+    const opened = decl?.mode === "legacy" ? decl.revision : null;
+    if (!opened) return;
+    const now = await refreshMachine(machine.machineId).catch(() => null);
+    const converted =
+      now?.declaration?.mode === "private-account" ? now.declaration.revision : null;
+    if (converted) setBaseRevision((base) => (base === opened ? converted : base));
+  };
   const [autoConnect, setAutoConnect] = useState(machine?.binding?.autoConnect === true);
   const [jumpHost, setJumpHost] = useState(decl?.jumpHost ?? "");
   const [showJump, setShowJump] = useState(Boolean(decl?.jumpHost));
@@ -226,6 +243,7 @@ export function AddMachinePanel({
           jumpHost: jumpHost.trim() || null,
           signIn,
           trustedHostKeyFp: fp,
+          declarationRevision: baseRevision,
         }
       : null;
   const scope: MachineScope =
@@ -268,13 +286,16 @@ export function AddMachinePanel({
     let result: InstallTerminalServerResult;
     try {
       result = await installTerminalServer(machine?.machineId ?? null, input);
+      if (result.ok && result.declarationRevision) setBaseRevision(result.declarationRevision);
     } catch (e) {
       if (seq !== editSeq.current) return;
+      await adoptConversion();
       setInstall({ status: "idle" });
       toast.error(`Couldn't install on ${input.host}: ${getErrorMessage(e)}`);
       return;
     }
     if (seq !== editSeq.current) return;
+    if (!result.ok) await adoptConversion();
     if (result.ok) {
       setInstall({ status: "installed", logoutWarning: result.logoutWarning });
       await runTest();
@@ -316,10 +337,13 @@ export function AddMachinePanel({
         setTesting(true);
         void enrollPrivateMachineAccount(machine?.machineId ?? null, input)
           .then((report) => {
+            if (report.declarationRevision) setBaseRevision(report.declarationRevision);
             if (seq === editSeq.current) setReport(report);
           })
-          .catch((error) => {
-            if (seq === editSeq.current) toast.error(getErrorMessage(error));
+          .catch(async (error) => {
+            if (seq !== editSeq.current) return;
+            await adoptConversion();
+            toast.error(getErrorMessage(error));
           })
           .finally(() => {
             if (seq === editSeq.current) setTesting(false);
@@ -361,6 +385,8 @@ export function AddMachinePanel({
     setConnecting(true);
     try {
       const saved = await saveMachine(machine?.machineId ?? null, input, scope, true);
+      // A retry after a later step fails is based on what this save wrote.
+      setBaseRevision(saved.declaration?.revision ?? null);
       if (autoConnect !== (saved.binding?.autoConnect === true))
         await setMachineAutoConnect(saved.machineId, autoConnect);
       await reloadMachines(teamKey);

@@ -44,6 +44,7 @@ function machine(id: string, over: Partial<MachineSummary> = {}): MachineSummary
       defaultBaseDir: null,
       pinnedHostKeyFp: "SHA256:pin",
       pinnedServerId: null,
+      revision: "rev-1",
     },
     binding: {
       username: "quinn",

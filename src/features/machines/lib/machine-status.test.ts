@@ -182,6 +182,7 @@ describe("describeMachineStatus — Sally §3 status table", () => {
           defaultBaseDir: null,
           pinnedHostKeyFp: "pin",
           pinnedServerId: "server",
+          revision: "rev-1",
         },
       },
     );
@@ -199,6 +200,7 @@ describe("describeMachineStatus — Sally §3 status table", () => {
       defaultBaseDir: null,
       pinnedHostKeyFp: "pin",
       pinnedServerId: "server",
+      revision: "rev-1",
     };
     const stale = describeMachineStatus(
       machine({ state: "connected", workspaces: 2, terminalServerUpdate: true }, { declaration }),
@@ -299,6 +301,7 @@ describe("helpers", () => {
             defaultBaseDir: null,
             pinnedHostKeyFp: "pin",
             pinnedServerId: "server",
+            revision: "rev-1",
           },
         },
       );
