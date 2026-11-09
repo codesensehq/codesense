@@ -5,9 +5,11 @@ on:
   pull_request:
     # The defaults, plus ready_for_review: a draft skips macOS (below) until it is marked ready.
     types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
   merge_group:
+  # No push: main moves only through the merge queue, which already ran these jobs on the exact
+  # commit it merges. A nightly run on main saves the caches and tracks flaky tests instead.
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -26,7 +28,7 @@ jobs:
     name: Rust (macOS arm64)
     # macOS runners are scarce: skip draft and Dependabot pull requests. GitHub counts a skipped
     # required job as passing on the pull request, which is acceptable only because the merge
-    # queue reruns this job on merge_group, where it always runs (as on push and
+    # queue reruns this job on merge_group, where it always runs (as on the nightly schedule and
     # workflow_dispatch); nothing merges without it. workflow-policy keeps the leading
     # github.event_name != 'pull_request' || so that holds.
     if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')
@@ -81,7 +83,7 @@ jobs:
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
       - name: Save scanner archives
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/scanner-archives
@@ -90,7 +92,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-macos
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Fetch git-ai
         run: bash scripts/fetch-git-ai.sh 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/fetch-git-ai.log"
@@ -189,7 +191,7 @@ jobs:
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
       - name: Save scanner archives
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/scanner-archives
@@ -198,7 +200,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-linux
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Compile Linux tests
         id: compile
@@ -248,17 +250,17 @@ jobs:
   flaky-issues:
     name: Track flaky Rust tests
     needs: [rust-macos, rust-linux]
-    # The only job that writes issues: pushes to main in this repository, never pull requests or
-    # forks. It reads the uploaded JUnit reports; the test jobs stay read-only.
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    # The only job that writes issues: the nightly run on main in this repository, never pull
+    # requests, merge groups or forks. It reads the uploaded JUnit reports; the test jobs stay read-only.
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
       issues: write
-    # One run at a time, so two pushes cannot both open an issue for the same test. GitHub keeps
-    # at most one more waiting and cancels an older waiting run, so in a burst of pushes that
-    # run's flakes go untracked; a test that keeps flaking is tracked on its next flake.
+    # One run at a time, so two runs (a nightly and a rerun, say) cannot both open an issue for the
+    # same test. GitHub keeps at most one more waiting and cancels an older waiting run, whose
+    # flakes then go untracked; a test that keeps flaking is tracked on its next flake.
     concurrency:
       group: flaky-issues
       cancel-in-progress: false

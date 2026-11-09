@@ -155,7 +155,9 @@ test("a merge_group workflow saves no cache on merge groups", () => {
     `uses: actions/setup-node${pin}\nwith:\n  node-version: "24"`,
     `uses: actions/cache/restore${pin}\nwith:\n  path: x\n  key: k`,
     `if: github.event_name == 'push' && github.ref == 'refs/heads/main'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+    `if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.c.outputs.cache-hit != 'true'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
     `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}`,
+    `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}`,
   ])
     assert.deepEqual(workflowPolicy(cacheStep(step)), [], step);
   for (const [step, error] of [
@@ -172,6 +174,22 @@ test("a merge_group workflow saves no cache on merge groups", () => {
       /if must require/,
     ],
     [`uses: Swatinem/rust-cache${pin}\nwith:\n  shared-key: x`, /save-if must require/],
+    [
+      `if: github.event_name == 'schedule'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [
+      `if: github.event_name == 'merge_group' && github.ref == 'refs/heads/main'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [
+      `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}`,
+      /save-if must require/,
+    ],
+    [
+      `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'push' }}`,
+      /save-if must require/,
+    ],
     [`uses: Swatinem/rust-cache${pin}`, /save-if must require/],
   ])
     assert.match(workflowPolicy(cacheStep(step)).join("\n"), error, step);
@@ -204,6 +222,52 @@ test("a merge_group workflow's job conditions skip only pull requests", () => {
     workflowPolicy(job("github.event.pull_request.draft == false").replace("  merge_group:\n", "")),
     [],
   );
+});
+
+// main moves only through the merge queue: rust.yml runs on pull requests, merge groups, a
+// nightly schedule and by hand, never on push. The nightly run on main saves its caches and tracks
+// flaky tests; macOS, which skips only pull requests, always runs on merge groups and nightly.
+test("rust.yml runs nightly instead of on push, and only the nightly run saves or tracks", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  assert.deepEqual(Object.keys(workflow.on), [
+    "pull_request",
+    "merge_group",
+    "schedule",
+    "workflow_dispatch",
+  ]);
+  assert.deepEqual(workflow.on.schedule, [{ cron: "17 6 * * *" }]);
+  assert.ok(workflow.jobs["rust-macos"].if.startsWith("github.event_name != 'pull_request' ||"));
+  const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
+  for (const name of ["rust-macos", "rust-linux"]) {
+    const steps = workflow.jobs[name].steps;
+    const saves = steps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
+    assert.equal(saves.length, 1, name);
+    for (const step of saves) assert.ok(step.if.startsWith(`${nightly} &&`), name);
+    const rustCache = steps.filter((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
+    assert.equal(rustCache.length, 1, name);
+    assert.equal(rustCache[0].with["save-if"], `\${{ ${nightly} }}`, name);
+  }
+  assert.equal(
+    workflow.jobs["flaky-issues"].if,
+    `\${{ !cancelled() && ${nightly} && !github.event.repository.fork }}`,
+  );
+});
+
+test("flaky-issues may run on a nightly schedule on main, never on merge groups", () => {
+  const nightly = flakyIssues.replace(
+    "github.event_name == 'push'",
+    "github.event_name == 'schedule'",
+  );
+  assert.deepEqual(workflowPolicy(nightly, "rust.yml"), []);
+  for (const event of ["merge_group", "workflow_dispatch", "pull_request"])
+    assert.match(
+      workflowPolicy(
+        flakyIssues.replace("github.event_name == 'push'", `github.event_name == '${event}'`),
+        "rust.yml",
+      ).join("\n"),
+      /if must require github\.event_name == 'push' or github\.event_name == 'schedule'/,
+      event,
+    );
 });
 
 test("rust.yml skips macOS only on draft and Dependabot pull requests, and Linux never", () => {
@@ -424,10 +488,14 @@ test("Scorecard grants are confined to the exact file and job", () => {
   );
 });
 for (const trigger of ["schedule", "branch_protection_rule"]) {
-  test(`${trigger} is confined to scorecard.yml`, () => {
+  test(`${trigger} is confined to scorecard.yml${trigger === "schedule" ? " and rust.yml" : ""}`, () => {
     const fixture = scorecard.replace("workflow_dispatch", trigger);
     assert.deepEqual(workflowPolicy(fixture, "scorecard.yml"), []);
     assert.match(workflowPolicy(fixture, "ci.yml").join("\n"), /triggers/);
+    assert.equal(
+      /triggers/.test(workflowPolicy(fixture, "rust.yml").join("\n")),
+      trigger !== "schedule",
+    );
   });
 }
 

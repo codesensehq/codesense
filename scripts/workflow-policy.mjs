@@ -34,6 +34,15 @@ const JOB_PERMISSIONS = new Map([
 // its cache in a post step, so on a merge_group workflow it may cache only off merge groups.
 const SETUP_NODE_CACHE = "${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
 const PUSH_ONLY = "github.event_name == 'push'";
+const SCHEDULED = "github.event_name == 'schedule'";
+const ON_MAIN = "github.ref == 'refs/heads/main'";
+// The one other workflow with a schedule: a nightly Rust run on main, which saves its caches and
+// tracks flaky tests, since main moves only through the merge queue.
+const NIGHTLY_FILE = "rust.yml";
+// A cache save, or the flaky-issues job, runs only for a push or a scheduled run on main.
+const onMainOutsideRequests = (terms) =>
+  (terms.includes(PUSH_ONLY) || terms.includes(SCHEDULED)) && terms.includes(ON_MAIN);
+const MAIN_ONLY = `${PUSH_ONLY} or ${SCHEDULED}, and ${ON_MAIN},`;
 // A job in a merge_group workflow may be conditional only on pull requests, so a merge group,
 // which must report every required check, always runs it. GitHub reads || as the
 // lowest-precedence operator, so an expression that begins with this term is true off
@@ -97,7 +106,9 @@ export function workflowPolicy(text, file = "") {
   const scorecardWorkflow = file === SCORECARD.file;
   const allowedTriggers = scorecardWorkflow
     ? ["push", "schedule", "branch_protection_rule", "workflow_dispatch"]
-    : ["pull_request", "merge_group", "push", "workflow_dispatch"];
+    : ["pull_request", "merge_group", "push", "workflow_dispatch"].concat(
+        file === NIGHTLY_FILE ? ["schedule"] : [],
+      );
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
   if (!triggers.length || triggers.some((t) => !allowedTriggers.includes(t)))
@@ -172,13 +183,13 @@ export function workflowPolicy(text, file = "") {
           errors.push(
             `${label} saves on merge groups; use actions/cache/restore and a push-only save`,
           );
-        if (action === "actions/cache/save" && !topLevelConjuncts(condition).includes(PUSH_ONLY))
-          errors.push(`${label}: if must require ${PUSH_ONLY} at the top level`);
+        if (action === "actions/cache/save" && !onMainOutsideRequests(topLevelConjuncts(condition)))
+          errors.push(`${label}: if must require ${MAIN_ONLY} at the top level`);
         if (
           action === "Swatinem/rust-cache" &&
-          !topLevelConjuncts(String(inputs["save-if"] ?? "")).includes(PUSH_ONLY)
+          !onMainOutsideRequests(topLevelConjuncts(String(inputs["save-if"] ?? "")))
         )
-          errors.push(`${label}: save-if must require ${PUSH_ONLY} at the top level`);
+          errors.push(`${label}: save-if must require ${MAIN_ONLY} at the top level`);
         if (
           action === "actions/setup-node" &&
           Object.hasOwn(inputs, "cache") &&
@@ -199,14 +210,13 @@ export function workflowPolicy(text, file = "") {
           `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge groups always run it`,
         );
     }
-    // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
+    // Issue writes run only for pushes or scheduled runs on main in the base repository, never
+    // pull requests, merge groups or forks.
     if (flakyIssues) {
       const terms = topLevelConjuncts(String(job.if ?? ""));
-      for (const required of [
-        "github.event_name == 'push'",
-        "github.ref == 'refs/heads/main'",
-        "!github.event.repository.fork",
-      ])
+      if (!terms.includes(PUSH_ONLY) && !terms.includes(SCHEDULED))
+        errors.push(`${name}: if must require ${PUSH_ONLY} or ${SCHEDULED} at the top level`);
+      for (const required of [ON_MAIN, "!github.event.repository.fork"])
         if (!terms.includes(required))
           errors.push(`${name}: if must require ${required} at the top level`);
     }
