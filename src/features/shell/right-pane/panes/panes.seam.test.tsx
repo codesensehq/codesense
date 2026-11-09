@@ -287,6 +287,16 @@ describe("a pane is an HTML file (seam)", () => {
         },
       );
       tauriInvoke.mockImplementation(async (cmd, args) => {
+        if (cmd === "read_dashboard_profile")
+          return {
+            id: "default",
+            name: "Default",
+            posture: "",
+            slots: {},
+            rightPaneSurfaces: { notes: "native" },
+            cliLayout: "default",
+            chrome: {},
+          };
         if (cmd === "list_panes") {
           if (installed && !recovered && mode === "reject") throw new Error("Cannot refresh");
           if (installed && !recovered && mode === "hang") return new Promise(() => {});
@@ -334,7 +344,7 @@ describe("a pane is an HTML file (seam)", () => {
     { overlap: true, watcher: false },
     { overlap: true, watcher: true },
   ])(
-    "swaps Notes in place through flush (overlap=$overlap, watcher=$watcher)",
+    "opens Notes by default and swaps in place through flush (overlap=$overlap, watcher=$watcher)",
     async ({ overlap, watcher }) => {
       const ref = { scope: "private" as const, org: ORG, id: "notes" };
       const panelId = `pane:private:${ORG}/notes`;
@@ -362,7 +372,6 @@ describe("a pane is an HTML file (seam)", () => {
         name: "Default",
         posture: "",
         slots: {},
-        rightPaneSurfaces: { notes: ref, ...(overlap ? { inbox: inboxRef } : {}) },
         cliLayout: "default",
         chrome: {},
       };

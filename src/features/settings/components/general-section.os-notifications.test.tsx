@@ -72,7 +72,7 @@ describe("GeneralSection — notify when an agent needs you", () => {
     expect(screen.queryByTestId("settings-inbox-pane-preview-on")).toBeNull();
   });
 
-  it("offers classic Notes only when listed, defaults On, and preserves Inbox in both directions", async () => {
+  it("offers classic Notes only when listed, defaults Off, and preserves Inbox in both directions", async () => {
     const org = "acme/repo";
     const ref = (id: string) => ({ scope: "team" as const, org, team: "dev", id });
     useOrgStore.setState({ activeOrgSlug: org, activeTeamName: "dev" });
@@ -101,12 +101,7 @@ describe("GeneralSection — notify when an agent needs you", () => {
         "aria-checked",
         "true",
       );
-    checked("notes", "on");
-    expect(resolveSlot("right-pane", { surface: "inbox" }).dashboard?.dashboardRef).toEqual(
-      ref("inbox"),
-    );
-    fireEvent.click(screen.getByTestId("settings-notes-pane-preview-off"));
-    await waitFor(() => checked("notes", "off"));
+    checked("notes", "off");
     expect(resolveSlot("right-pane", { surface: "inbox" }).dashboard?.dashboardRef).toEqual(
       ref("inbox"),
     );
@@ -115,7 +110,14 @@ describe("GeneralSection — notify when an agent needs you", () => {
     expect(resolveSlot("right-pane", { surface: "inbox" }).dashboard?.dashboardRef).toEqual(
       ref("inbox"),
     );
-    expect(screen.getByText("Turn off to use the new Notes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("settings-notes-pane-preview-off"));
+    await waitFor(() => checked("notes", "off"));
+    expect(resolveSlot("right-pane", { surface: "inbox" }).dashboard?.dashboardRef).toEqual(
+      ref("inbox"),
+    );
+    expect(
+      screen.getByText("Shows the earlier Notes panel instead of the Notes pane."),
+    ).toBeInTheDocument();
   });
 
   it("shows the selected inherited Notes pane even when a new child pane is listed first", async () => {
