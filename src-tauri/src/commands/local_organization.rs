@@ -61,7 +61,10 @@ pub(crate) async fn create_for_profile<R: tauri::Runtime>(
         })
     })
     .await?;
-    if let Err(error) = app.emit("context-attachments-changed", ()) {
+    if let Err(error) = app.emit(
+        super::context_attachments::CONTEXT_ATTACHMENTS_CHANGED_EVENT,
+        (),
+    ) {
         log::warn!("Context repo created; refresh notification failed: {error}");
     }
     Ok(result)

@@ -6,10 +6,11 @@
 //!
 //! A hit is a map lookup: no blocking-pool task and no file I/O. Every result is kept,
 //! `Unauthorized` and `NotSynced` included. Entries are dropped by the app events that
-//! report a registry, attachment, index or git change. An entry no event has dropped
-//! is trusted for [`MAX_AGE`]; after that the next read stats the registry files and
-//! the content folder and parses the registry again only when that stamp moved, so a
-//! change no event reports (a hand edit, a folder made in a terminal) still shows.
+//! report a registry, attachment or git change. An entry no event has dropped is
+//! trusted for [`MAX_AGE`]; after that the next read stats the registry files and the
+//! content folder and parses the registry again only when that stamp moved, so a
+//! change no event reports (a hand edit, a folder made in a terminal, a pull in an
+//! org whose git isn't watched) shows within [`MAX_AGE`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,18 +23,24 @@ use super::route_to_context::{resolve_ambient, resolve_local, ContextResolution}
 use crate::domain::Principal;
 
 /// The app events after which a cached resolution may be wrong: a registry edit made
-/// in the app, an org attached or detached, an indexed content change, and git moving
-/// a context repo (a pull, checkout or merge that rewrote `teams.yml` or a content
-/// folder).
+/// in the app, an org attached or detached, and git moving a context repo (a pull,
+/// checkout or merge that rewrote `teams.yml` or a content folder). Content edits
+/// (`context-index-changed`) are left out: they can't move the registry, and a
+/// content folder appearing or going is caught by the stamp within [`MAX_AGE`].
 pub(crate) const INVALIDATING_EVENTS: &[&str] = &[
     crate::commands::registry_local::ORG_REGISTRY_CHANGED_EVENT,
-    "context-attachments-changed",
-    crate::context_query::service::CHANGE_EVENT,
+    crate::commands::context_attachments::CONTEXT_ATTACHMENTS_CHANGED_EVENT,
     crate::commands::context_git_watch::CONTEXT_GIT_MOVED_EVENT,
 ];
 
-/// How long an entry is trusted without being re-stamped.
-pub(crate) const MAX_AGE: Duration = Duration::from_secs(30);
+/// How long an entry is trusted without being re-stamped: the longest a change no
+/// event reports goes unseen. One re-stamp per team per window stays far below the
+/// per-call rate this cache replaces.
+pub(crate) const MAX_AGE: Duration = Duration::from_secs(2);
+
+/// Past this many entries, a fill drops the expired ones. Callers can name any team,
+/// so the map would otherwise grow until the next event.
+const PRUNE_ABOVE: usize = 256;
 
 /// The registry files a resolution is read from (see `domain::load_org`).
 const REGISTRY_FILES: [&str; 3] = ["org.yml", "people.yml", "teams.yml"];
@@ -92,30 +99,32 @@ fn stamp(home: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
     }
 }
 
-/// What a fill reads. The app reads the disk; tests count the reads.
-pub(crate) trait Disk: Send + 'static {
-    fn stamp(&self, user_id: u64, org: &str, team: &str) -> Stamp;
-    fn resolve(&self, user_id: u64, org: &str, team: &str) -> ContextResolution;
+/// What a fill reads under the CodeSense `home`. The app reads the disk; tests count
+/// the reads.
+pub(crate) trait Disk: Send + Sync + 'static {
+    fn stamp(&self, home: &Path, user_id: u64, org: &str, team: &str) -> Stamp;
+    fn resolve(&self, home: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution;
 }
 
-/// The disk under the CodeSense home.
-pub(crate) struct LocalDisk {
-    pub home: PathBuf,
-}
+/// The disk.
+pub(crate) struct LocalDisk;
 
 impl Disk for LocalDisk {
-    fn stamp(&self, user_id: u64, org: &str, team: &str) -> Stamp {
-        stamp(&self.home, user_id, org, team)
+    fn stamp(&self, home: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
+        stamp(home, user_id, org, team)
     }
-    fn resolve(&self, user_id: u64, org: &str, team: &str) -> ContextResolution {
+    fn resolve(&self, home: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution {
         resolve_local(
-            self.home.clone(),
+            home.to_path_buf(),
             user_id,
             org.to_string(),
             team.to_string(),
         )
     }
 }
+
+/// Where the cache reads the time; tests move it by hand.
+pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 struct Entry {
     resolution: ContextResolution,
@@ -130,24 +139,30 @@ struct Inner {
     entries: HashMap<Key, Entry>,
 }
 
+fn trusted(entry: &Entry, now: Instant) -> bool {
+    now.saturating_duration_since(entry.checked_at) < MAX_AGE
+}
+
 /// The app's resolution cache, managed as Tauri state.
 #[derive(Clone)]
 pub(crate) struct TeamResolutionCache {
     inner: Arc<Mutex<Inner>>,
-    max_age: Duration,
+    disk: Arc<dyn Disk>,
+    clock: Clock,
 }
 
 impl Default for TeamResolutionCache {
     fn default() -> Self {
-        Self::with_max_age(MAX_AGE)
+        Self::with(Arc::new(LocalDisk), Arc::new(Instant::now))
     }
 }
 
 impl TeamResolutionCache {
-    pub(crate) fn with_max_age(max_age: Duration) -> Self {
+    pub(crate) fn with(disk: Arc<dyn Disk>, clock: Clock) -> Self {
         Self {
             inner: Arc::default(),
-            max_age,
+            disk,
+            clock,
         }
     }
 
@@ -164,16 +179,17 @@ impl TeamResolutionCache {
 
     /// A trusted entry's resolution, from memory only.
     fn fresh(&self, key: &Key) -> Option<ContextResolution> {
+        let now = (self.clock)();
         let inner = self.lock();
         let entry = inner.entries.get(key)?;
-        (entry.checked_at.elapsed() < self.max_age).then(|| entry.resolution.clone())
+        trusted(entry, now).then(|| entry.resolution.clone())
     }
 
-    /// Resolve `(org, team)` for `user_id`: a trusted entry is answered from memory;
-    /// anything else is filled from `disk` on the blocking pool.
+    /// Resolve `(org, team)` for `user_id` under `home`: a trusted entry is answered
+    /// from memory; anything else is filled from the disk on the blocking pool.
     pub(crate) async fn resolve(
         &self,
-        disk: impl Disk,
+        home: PathBuf,
         user_id: u64,
         org: &str,
         team: &str,
@@ -188,12 +204,12 @@ impl TeamResolutionCache {
         }
         let cache = self.clone();
         // The same label as `derive_context_for`, so its blocking rate counts fills.
-        super::await_blocking("derive_context_for", move || Ok(cache.fill(&disk, key))).await
+        super::await_blocking("derive_context_for", move || Ok(cache.fill(&home, key))).await
     }
 
     /// Stamp the team's files, reuse the entry's resolution when the stamp hasn't
     /// moved, and resolve again when it has (or there is no entry). Blocking.
-    fn fill(&self, disk: &impl Disk, key: Key) -> ContextResolution {
+    fn fill(&self, home: &Path, key: Key) -> ContextResolution {
         let (generation, previous) = {
             let inner = self.lock();
             let previous = inner
@@ -202,21 +218,31 @@ impl TeamResolutionCache {
                 .map(|e| (e.stamp.clone(), e.resolution.clone()));
             (inner.generation, previous)
         };
-        let stamp = disk.stamp(key.user_id, &key.org, &key.team);
+        let stamp = self.disk.stamp(home, key.user_id, &key.org, &key.team);
         let resolution = match previous {
-            Some((before, resolution)) if before == stamp => resolution,
-            _ => disk.resolve(key.user_id, &key.org, &key.team),
+            // `Unauthorized` is also what a failed registry read gives, so it is
+            // always read again rather than kept on an unchanged stamp.
+            Some((before, resolution))
+                if before == stamp && !matches!(resolution, ContextResolution::Unauthorized) =>
+            {
+                resolution
+            }
+            _ => self.disk.resolve(home, key.user_id, &key.org, &key.team),
         };
+        let now = (self.clock)();
         let mut inner = self.lock();
         // An invalidation during the read may mean it saw the old files: answer, but
         // don't keep it.
         if inner.generation == generation {
+            if inner.entries.len() >= PRUNE_ABOVE {
+                inner.entries.retain(|_, e| trusted(e, now));
+            }
             inner.entries.insert(
                 key,
                 Entry {
                     resolution: resolution.clone(),
                     stamp,
-                    checked_at: Instant::now(),
+                    checked_at: now,
                 },
             );
         }
@@ -225,18 +251,18 @@ impl TeamResolutionCache {
 }
 
 /// [`derive_context_for`](super::route_to_context::derive_context_for), answered from
-/// the app's cache when it is installed.
+/// the app's cache.
 pub(crate) async fn derive_context_cached<R: tauri::Runtime>(
     app: &AppHandle<R>,
     org: &str,
     team: &str,
 ) -> Result<ContextResolution, String> {
     use tauri::Manager;
-    let Some(cache) = app.try_state::<TeamResolutionCache>() else {
-        return super::route_to_context::derive_context_for(app, org, team).await;
-    };
+    let cache = app
+        .try_state::<TeamResolutionCache>()
+        .ok_or("team resolution cache unavailable")?;
     let (home, user_id) = resolve_ambient(app).await?;
-    cache.resolve(LocalDisk { home }, user_id, org, team).await
+    cache.resolve(home, user_id, org, team).await
 }
 
 /// Drop the app's cached resolutions on each of [`INVALIDATING_EVENTS`].

@@ -43,14 +43,16 @@ fn write_teams(home: &Path, teams_yml: &str) {
 /// The real disk, counting every stamp and every registry read. Each fill runs
 /// exactly one blocking-pool task, which stamps once, so `stamps` also counts the
 /// blocking tasks this cache ran.
-#[derive(Clone, Default)]
-struct Counts {
-    stamps: Arc<AtomicUsize>,
-    resolves: Arc<AtomicUsize>,
+#[derive(Default)]
+struct CountingDisk {
+    stamps: AtomicUsize,
+    resolves: AtomicUsize,
+    /// Run during the registry read, to land an invalidation mid-fill.
+    during_resolve: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
-impl Counts {
-    fn get(&self) -> (usize, usize) {
+impl CountingDisk {
+    fn counts(&self) -> (usize, usize) {
         (
             self.stamps.load(Ordering::SeqCst),
             self.resolves.load(Ordering::SeqCst),
@@ -58,47 +60,75 @@ impl Counts {
     }
 }
 
-struct CountingDisk {
-    disk: LocalDisk,
-    counts: Counts,
-    /// Run during the registry read, to land an invalidation mid-fill.
-    during_resolve: Option<Box<dyn Fn() + Send>>,
-}
-
 impl Disk for CountingDisk {
-    fn stamp(&self, user_id: u64, org: &str, team: &str) -> Stamp {
-        self.counts.stamps.fetch_add(1, Ordering::SeqCst);
-        self.disk.stamp(user_id, org, team)
+    fn stamp(&self, home: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
+        self.stamps.fetch_add(1, Ordering::SeqCst);
+        LocalDisk.stamp(home, user_id, org, team)
     }
-    fn resolve(&self, user_id: u64, org: &str, team: &str) -> ContextResolution {
-        self.counts.resolves.fetch_add(1, Ordering::SeqCst);
-        if let Some(during) = &self.during_resolve {
+    fn resolve(&self, home: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution {
+        self.resolves.fetch_add(1, Ordering::SeqCst);
+        if let Some(during) = self.during_resolve.lock().unwrap().as_ref() {
             during();
         }
-        self.disk.resolve(user_id, org, team)
+        LocalDisk.resolve(home, user_id, org, team)
     }
 }
 
-fn disk(home: &TempDir, counts: &Counts) -> CountingDisk {
-    CountingDisk {
-        disk: LocalDisk {
-            home: home.path().to_path_buf(),
-        },
-        counts: counts.clone(),
-        during_resolve: None,
+/// A clock that moves only when told.
+#[derive(Clone)]
+struct ManualClock(Arc<Mutex<Instant>>);
+
+impl ManualClock {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Instant::now())))
+    }
+    fn advance(&self, by: Duration) {
+        *self.0.lock().unwrap() += by;
+    }
+    fn clock(&self) -> Clock {
+        let now = self.0.clone();
+        Arc::new(move || *now.lock().unwrap())
     }
 }
 
-async fn resolve(
-    cache: &TeamResolutionCache,
-    home: &TempDir,
-    counts: &Counts,
-    team: &str,
-) -> ContextResolution {
-    cache
-        .resolve(disk(home, counts), UID, ORG, team)
-        .await
-        .unwrap()
+struct Fixture {
+    home: TempDir,
+    disk: Arc<CountingDisk>,
+    clock: ManualClock,
+    cache: TeamResolutionCache,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let disk = Arc::new(CountingDisk::default());
+        let clock = ManualClock::new();
+        let cache = TeamResolutionCache::with(disk.clone(), clock.clock());
+        Self {
+            home: home_with_org(),
+            disk,
+            clock,
+            cache,
+        }
+    }
+
+    async fn resolve(&self, team: &str) -> ContextResolution {
+        self.resolve_as(UID, team).await
+    }
+
+    async fn resolve_as(&self, user_id: u64, team: &str) -> ContextResolution {
+        self.cache
+            .resolve(self.home.path().to_path_buf(), user_id, ORG, team)
+            .await
+            .unwrap()
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        self.disk.counts()
+    }
+
+    fn home(&self) -> &Path {
+        self.home.path()
+    }
 }
 
 fn is_ok(resolution: &ContextResolution, team: &str) -> bool {
@@ -107,200 +137,274 @@ fn is_ok(resolution: &ContextResolution, team: &str) -> bool {
 
 #[tokio::test]
 async fn a_hit_runs_no_blocking_task_and_reads_nothing() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "backend").await,
-        "backend"
-    ));
-    assert_eq!(counts.get(), (1, 1), "a miss fills once");
+    let f = Fixture::new();
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+    assert_eq!(f.counts(), (1, 1), "a miss fills once");
 
     for _ in 0..5 {
-        assert!(is_ok(
-            &resolve(&cache, &home, &counts, "backend").await,
-            "backend"
-        ));
+        assert!(is_ok(&f.resolve("backend").await, "backend"));
     }
-    assert_eq!(counts.get(), (1, 1), "hits stamp nothing and read nothing");
+    assert_eq!(f.counts(), (1, 1), "hits stamp nothing and read nothing");
 }
 
 #[tokio::test]
 async fn editing_teams_yml_changes_the_answer_after_an_invalidation() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "backend").await,
-        "backend"
-    ));
+    let f = Fixture::new();
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
 
-    write_teams(home.path(), "teams:\n  - name: frontend\n");
-    cache.invalidate();
+    write_teams(f.home(), "teams:\n  - name: frontend\n");
+    f.cache.invalidate();
 
     assert!(matches!(
-        resolve(&cache, &home, &counts, "backend").await,
+        f.resolve("backend").await,
         ContextResolution::Unauthorized
     ));
-    assert_eq!(counts.get(), (2, 2));
+    assert_eq!(f.counts(), (2, 2));
 }
 
 #[tokio::test]
 async fn removing_the_content_dir_changes_the_answer_after_an_invalidation() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "backend").await,
-        "backend"
-    ));
+    let f = Fixture::new();
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
 
-    std::fs::remove_dir_all(content_dir(home.path(), "backend")).unwrap();
-    cache.invalidate();
+    std::fs::remove_dir_all(content_dir(f.home(), "backend")).unwrap();
+    f.cache.invalidate();
 
     assert!(matches!(
-        resolve(&cache, &home, &counts, "backend").await,
+        f.resolve("backend").await,
         ContextResolution::NotSynced
     ));
 }
 
 #[tokio::test]
 async fn a_cached_not_synced_is_kept_and_turns_ok_once_the_dir_exists() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-    assert!(matches!(
-        resolve(&cache, &home, &counts, "frontend").await,
-        ContextResolution::NotSynced
-    ));
-    assert!(matches!(
-        resolve(&cache, &home, &counts, "frontend").await,
-        ContextResolution::NotSynced
-    ));
-    assert_eq!(counts.get(), (1, 1), "NotSynced is cached like Ok");
+    let f = Fixture::new();
+    for _ in 0..2 {
+        assert!(matches!(
+            f.resolve("frontend").await,
+            ContextResolution::NotSynced
+        ));
+    }
+    assert_eq!(f.counts(), (1, 1), "NotSynced is cached like Ok");
 
-    std::fs::create_dir_all(content_dir(home.path(), "frontend")).unwrap();
-    cache.invalidate();
+    std::fs::create_dir_all(content_dir(f.home(), "frontend")).unwrap();
+    f.cache.invalidate();
 
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "frontend").await,
-        "frontend"
-    ));
+    assert!(is_ok(&f.resolve("frontend").await, "frontend"));
 }
 
 #[tokio::test]
 async fn unauthorized_is_cached_and_invalidated_the_same_way() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
+    let f = Fixture::new();
     for _ in 0..2 {
         assert!(matches!(
-            resolve(&cache, &home, &counts, "design").await,
+            f.resolve("design").await,
             ContextResolution::Unauthorized
         ));
     }
-    assert_eq!(counts.get(), (1, 1), "Unauthorized is cached like Ok");
+    assert_eq!(f.counts(), (1, 1), "Unauthorized is cached like Ok");
 
-    write_teams(home.path(), &format!("{TEAMS_YML}  - name: design\n"));
-    std::fs::create_dir_all(content_dir(home.path(), "design")).unwrap();
-    cache.invalidate();
+    write_teams(f.home(), &format!("{TEAMS_YML}  - name: design\n"));
+    std::fs::create_dir_all(content_dir(f.home(), "design")).unwrap();
+    f.cache.invalidate();
 
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "design").await,
-        "design"
+    assert!(is_ok(&f.resolve("design").await, "design"));
+}
+
+#[tokio::test]
+async fn an_unreported_teams_yml_edit_shows_once_the_backstop_passes() {
+    let f = Fixture::new();
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+
+    // A hand edit no event reports: inside the backstop the entry still answers.
+    write_teams(f.home(), "teams:\n  - name: frontend\n");
+    f.clock.advance(MAX_AGE - Duration::from_millis(1));
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+    assert_eq!(f.counts(), (1, 1), "still a hit, with no I/O");
+
+    f.clock.advance(Duration::from_millis(1));
+    assert!(matches!(
+        f.resolve("backend").await,
+        ContextResolution::Unauthorized
     ));
+    assert_eq!(f.counts(), (2, 2), "one stamp, and a read because it moved");
 }
 
 #[tokio::test]
 async fn an_expired_entry_rereads_the_registry_only_when_its_stamp_moved() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::with_max_age(Duration::ZERO);
-    let counts = Counts::default();
+    let f = Fixture::new();
     assert!(matches!(
-        resolve(&cache, &home, &counts, "frontend").await,
+        f.resolve("frontend").await,
         ContextResolution::NotSynced
     ));
 
     // Nothing moved: re-stamped, not re-read.
+    f.clock.advance(MAX_AGE);
     assert!(matches!(
-        resolve(&cache, &home, &counts, "frontend").await,
+        f.resolve("frontend").await,
         ContextResolution::NotSynced
     ));
-    assert_eq!(counts.get(), (2, 1));
+    assert_eq!(f.counts(), (2, 1));
 
-    // A folder made with no event: the stamp moved, so the registry is read again.
-    std::fs::create_dir_all(content_dir(home.path(), "frontend")).unwrap();
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "frontend").await,
-        "frontend"
-    ));
-    assert_eq!(counts.get(), (3, 2));
+    // A folder made with no event moves the stamp, so the registry is read again.
+    std::fs::create_dir_all(content_dir(f.home(), "frontend")).unwrap();
+    f.clock.advance(MAX_AGE);
+    assert!(is_ok(&f.resolve("frontend").await, "frontend"));
+    assert_eq!(f.counts(), (3, 2));
+}
 
-    // A registry edit with no event moves the stamp too.
-    write_teams(home.path(), "teams:\n  - name: backend\n");
+#[tokio::test]
+async fn an_unreported_people_yml_break_shows_once_the_backstop_passes() {
+    let f = Fixture::new();
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+
+    std::fs::write(org_root(f.home()).join("people.yml"), "people: [unclosed\n").unwrap();
+    f.clock.advance(MAX_AGE);
     assert!(matches!(
-        resolve(&cache, &home, &counts, "frontend").await,
+        f.resolve("backend").await,
         ContextResolution::Unauthorized
     ));
-    assert_eq!(counts.get(), (4, 3));
+    assert_eq!(f.counts(), (2, 2));
+}
+
+#[tokio::test]
+async fn an_expired_unauthorized_is_read_again_even_on_an_unchanged_stamp() {
+    // A registry read that failed for a passing reason also reads Unauthorized, so it
+    // isn't kept just because the files look the same.
+    let f = Fixture::new();
+    assert!(matches!(
+        f.resolve("design").await,
+        ContextResolution::Unauthorized
+    ));
+    f.clock.advance(MAX_AGE);
+    assert!(matches!(
+        f.resolve("design").await,
+        ContextResolution::Unauthorized
+    ));
+    assert_eq!(f.counts(), (2, 2));
 }
 
 #[tokio::test]
 async fn an_invalidation_during_a_fill_keeps_its_answer_out_of_the_cache() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-    let racing = cache.clone();
-    let mut racing_disk = disk(&home, &counts);
-    racing_disk.during_resolve = Some(Box::new(move || racing.invalidate()));
+    let f = Fixture::new();
+    let racing = f.cache.clone();
+    *f.disk.during_resolve.lock().unwrap() = Some(Box::new(move || racing.invalidate()));
 
-    let first = cache
-        .resolve(racing_disk, UID, ORG, "backend")
-        .await
-        .unwrap();
-    assert!(is_ok(&first, "backend"), "the racing fill still answers");
+    assert!(
+        is_ok(&f.resolve("backend").await, "backend"),
+        "the racing fill still answers"
+    );
+    *f.disk.during_resolve.lock().unwrap() = None;
 
-    assert!(is_ok(
-        &resolve(&cache, &home, &counts, "backend").await,
-        "backend"
-    ));
-    assert_eq!(counts.get(), (2, 2), "the raced answer wasn't kept");
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+    assert_eq!(f.counts(), (2, 2), "the raced answer wasn't kept");
 }
 
 #[tokio::test]
 async fn entries_are_kept_per_principal_and_team() {
-    let home = home_with_org();
-    let cache = TeamResolutionCache::default();
-    let counts = Counts::default();
-    resolve(&cache, &home, &counts, "backend").await;
-    resolve(&cache, &home, &counts, "frontend").await;
-    let other = cache
-        .resolve(disk(&home, &counts), UID + 1, ORG, "backend")
-        .await
-        .unwrap();
+    let f = Fixture::new();
+    f.resolve("backend").await;
+    f.resolve("frontend").await;
     // The other principal has no clone of the org.
-    assert!(matches!(other, ContextResolution::Unauthorized));
-    assert_eq!(counts.get(), (3, 3));
+    assert!(matches!(
+        f.resolve_as(UID + 1, "backend").await,
+        ContextResolution::Unauthorized
+    ));
+    assert_eq!(f.counts(), (3, 3));
+}
+
+#[tokio::test]
+async fn a_full_map_drops_its_expired_entries() {
+    let f = Fixture::new();
+    for i in 0..PRUNE_ABOVE {
+        f.resolve(&format!("ghost-{i}")).await;
+    }
+    assert_eq!(f.cache.lock().entries.len(), PRUNE_ABOVE);
+
+    f.clock.advance(MAX_AGE);
+    f.resolve("backend").await;
+    assert_eq!(
+        f.cache.lock().entries.len(),
+        1,
+        "only the new entry is left"
+    );
+}
+
+fn mock_app(f: &Fixture) -> tauri::App<tauri::test::MockRuntime> {
+    use tauri::Manager;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("mock app");
+    app.manage(crate::commands::local_profile::LocalProfileState::for_test(
+        f.home(),
+        UID,
+        crate::commands::local_profile::MachineOwner::LegacyGithub { id: UID },
+    ));
+    app.manage(f.cache.clone());
+    app
+}
+
+/// The inbox host's `team_store` and `role_configs` read through the managed cache:
+/// the second read of a team is a hit, and every answer matches an uncached resolve.
+#[tokio::test]
+async fn the_inbox_host_reads_through_the_cache() {
+    use crate::commands::agent_inbox::{app_role_configs, app_team_store, team_store_path};
+    use crate::commands::dashboard_launch::LaunchTeam;
+
+    // The counted disk reads the fixture's home whatever home the app reports.
+    struct FixtureHome(Arc<CountingDisk>, PathBuf);
+    impl Disk for FixtureHome {
+        fn stamp(&self, _: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
+            self.0.stamp(&self.1, user_id, org, team)
+        }
+        fn resolve(&self, _: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution {
+            self.0.resolve(&self.1, user_id, org, team)
+        }
+    }
+    let mut f = Fixture::new();
+    f.cache = TeamResolutionCache::with(
+        Arc::new(FixtureHome(f.disk.clone(), f.home().to_path_buf())),
+        f.clock.clock(),
+    );
+    let app = mock_app(&f);
+
+    for (i, name) in ["backend", "frontend", "design"].into_iter().enumerate() {
+        let team = LaunchTeam {
+            org: ORG.into(),
+            team: name.into(),
+        };
+        let uncached = team_store_path(
+            resolve_local(f.home().to_path_buf(), UID, ORG.into(), name.into()),
+            &team,
+        );
+        assert_eq!(
+            app_team_store(app.handle(), &team).await,
+            uncached,
+            "{name}"
+        );
+        assert_eq!(f.counts(), (i + 1, i + 1), "{name}: one fill");
+        assert_eq!(
+            app_team_store(app.handle(), &team).await,
+            uncached,
+            "{name}"
+        );
+        let _ = app_role_configs(app.handle(), &team, &Default::default()).await;
+        assert_eq!(f.counts(), (i + 1, i + 1), "{name}: later reads are hits");
+    }
 }
 
 #[tokio::test]
 async fn each_invalidating_event_drops_the_entries() {
-    use tauri::{Emitter, Manager};
-    let home = home_with_org();
-    let app = tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .expect("mock app");
-    let cache = TeamResolutionCache::default();
-    app.manage(cache.clone());
+    use tauri::Emitter;
+    let f = Fixture::new();
+    let app = mock_app(&f);
     listen(app.handle());
-    let counts = Counts::default();
 
     for (i, event) in INVALIDATING_EVENTS.iter().enumerate() {
-        resolve(&cache, &home, &counts, "backend").await;
-        assert_eq!(counts.get(), (i + 1, i + 1), "{event}: filled once");
+        f.resolve("backend").await;
+        assert_eq!(f.counts(), (i + 1, i + 1), "{event}: filled once");
         app.emit(event, ()).unwrap();
-        resolve(&cache, &home, &counts, "backend").await;
-        assert_eq!(counts.get(), (i + 2, i + 2), "{event}: dropped the entry");
+        f.resolve("backend").await;
+        assert_eq!(f.counts(), (i + 2, i + 2), "{event}: dropped the entry");
     }
 }
