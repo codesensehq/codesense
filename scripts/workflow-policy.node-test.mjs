@@ -112,6 +112,50 @@ for (const [name, fixture, error] of badFixtures) {
 
 test("accept the valid fixture", () => assert.deepEqual(workflowPolicy(good), []));
 
+const queued = (filter = "") =>
+  good.replace(
+    "on: [pull_request, workflow_dispatch]",
+    `on:\n  pull_request:\n  merge_group:${filter}`,
+  );
+test("merge_group is allowed bare or for checks_requested only", () => {
+  assert.deepEqual(workflowPolicy(queued()), []);
+  assert.deepEqual(workflowPolicy(good.replace("pull_request,", "pull_request, merge_group,")), []);
+  assert.deepEqual(workflowPolicy(queued("\n    types: [checks_requested]")), []);
+  for (const filter of ["\n    types: [destroyed]", "\n    branches: [main]", " {}"])
+    assert.match(workflowPolicy(queued(filter)).join("\n"), /merge_group takes no filter/, filter);
+});
+
+// The merge queue waits for every required check, so each one must also run on merge_group, and
+// a concurrency group keyed on the pull request alone would make queued runs cancel each other.
+test("every pull request workflow also runs on merge groups, each in its own concurrency group", () => {
+  for (const file of files) {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    if (!Object.hasOwn(workflow.on ?? {}, "pull_request")) continue;
+    assert.ok(Object.hasOwn(workflow.on, "merge_group"), `${file} must run on merge_group`);
+    const group = workflow.concurrency.group;
+    if (group.includes("github.event.pull_request.number"))
+      assert.match(group, /pull_request\.number \|\| github\.(ref|sha|run_id) \}\}/, file);
+  }
+});
+
+test("pull-requests read is limited to the DCO job", () => {
+  const dco = good
+    .replace("  static:\n", "  dco:\n")
+    .replace("      contents: read", "      contents: read\n      pull-requests: read");
+  assert.deepEqual(workflowPolicy(dco, "dco.yml"), []);
+  assert.match(workflowPolicy(dco, "ci.yml").join("\n"), /permissions must grant exactly/);
+  assert.match(
+    workflowPolicy(dco.replace("  dco:\n", "  other:\n"), "dco.yml").join("\n"),
+    /permissions must grant exactly/,
+  );
+  assert.match(
+    workflowPolicy(dco.replace("pull-requests: read", "pull-requests: write"), "dco.yml").join(
+      "\n",
+    ),
+    /permissions must grant exactly/,
+  );
+});
+
 const afterFailure = (condition, run = "cargo test --doc") => `      - id: compile
         run: cargo test --no-run
       - name: Doctests
@@ -305,6 +349,7 @@ for (const trigger of ["schedule", "branch_protection_rule"]) {
 
 for (const trigger of [
   "pull_request",
+  "merge_group",
   "pull_request_target",
   "pull_request_review",
   "pull_request_review_comment",

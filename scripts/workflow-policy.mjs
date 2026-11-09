@@ -22,6 +22,7 @@ const HOSTED_RUNNERS = new Set([
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
 const JOB_PERMISSIONS = new Map([
+  ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
   [
@@ -87,11 +88,16 @@ export function workflowPolicy(text, file = "") {
   const scorecardWorkflow = file === SCORECARD.file;
   const allowedTriggers = scorecardWorkflow
     ? ["push", "schedule", "branch_protection_rule", "workflow_dispatch"]
-    : ["pull_request", "push", "workflow_dispatch"];
+    : ["pull_request", "merge_group", "push", "workflow_dispatch"];
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
   if (!triggers.length || triggers.some((t) => !allowedTriggers.includes(t)))
     errors.push("triggers must match the workflow allowlist; Scorecard forbids pull requests");
+  if (triggers.includes("merge_group")) {
+    const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
+    if (mergeGroup !== null && JSON.stringify(mergeGroup) !== '{"types":["checks_requested"]}')
+      errors.push("merge_group takes no filter other than types: [checks_requested]");
+  }
   if (triggers.includes("push")) {
     const push = mapping(workflow.on) ? workflow.on.push : null;
     if (
