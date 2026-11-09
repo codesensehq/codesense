@@ -275,6 +275,32 @@ it("acks flush after async handlers settle, including a rejection, and answers p
   hostMessage("codesense:ping");
   expect(post).toHaveBeenLastCalledWith({ type: "codesense:pong" }, "*");
 });
+it("answers a render check with whether the page drew anything, and only when asked", () => {
+  const post = install();
+  const pong = () => post.mock.lastCall![0] as Record<string, unknown>;
+  document.body.replaceChildren();
+  hostMessage("codesense:ping");
+  expect(pong()).toMatchObject({ type: "codesense:pong" });
+  expect(pong().rendered).toBeUndefined();
+  hostMessage("codesense:ping", { render: true });
+  expect(pong()).toMatchObject({ type: "codesense:pong", rendered: false });
+  const row = document.createElement("div");
+  document.body.append(row);
+  // A child with no box is still nothing to see.
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(false);
+  // A zero-box wrapper (display: contents, or a collapsed parent) still counts its children.
+  const cell = document.createElement("span");
+  row.append(cell);
+  vi.spyOn(cell, "getBoundingClientRect").mockReturnValue({ width: 200, height: 24 } as DOMRect);
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(true);
+  // A frame with no viewport (folded or display:none) can't tell, so it never reports blank.
+  row.remove();
+  vi.spyOn(window, "innerWidth", "get").mockReturnValue(0);
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(true);
+});
 it("delivers slot context and its nav alias, teardown, and default/custom focus-in", async () => {
   install();
   const cs = (window as any).codesense;
