@@ -16,7 +16,15 @@ vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async 
 import { liveHub } from "@/features/dashboard/lib/live-hub";
 import { flushFrame, hasLiveFrames } from "@/features/dashboard/lib/frame-lifecycle";
 import { frameFixture, frameEventClass } from "../../../../../tests/support/fixtures/frame";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   readFileSync,
   mkdtempSync,
@@ -113,6 +121,10 @@ import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { getPanel } from "../panel-registry";
 import { defaultRightPaneLayout, INBOX_PANEL_ID } from "../right-pane-layout";
 import { PanePanelsMount } from "./use-register-pane-panels";
+
+// Change nudges pace to one refresh per second, so a nudge that lands inside the window shows
+// on the trailing refresh, up to a second later.
+configure({ asyncUtilTimeout: 3000 });
 
 const PORT = 9322;
 const PaneMessageEvent = frameEventClass(PORT);

@@ -2773,6 +2773,11 @@
           dirty = true,
           refreshing = false,
           sending = false;
+        const REFRESH_PACE_MS = 1000;
+        let badgeStale = true,
+          urgentRefresh = false,
+          refreshStartedAt = -Infinity,
+          refreshDue = 0;
         let refreshTimer,
           saveTimer,
           offSessions,
@@ -6501,6 +6506,7 @@
           if (!visible || refreshing) return;
           dirty = false;
           refreshing = true;
+          refreshStartedAt = Date.now();
           const opened = selected;
           const reactionMark = reactionSaves;
           const changedIds = changedRows;
@@ -6716,7 +6722,7 @@
               }
             }
             // Architecture: visibility gates rendering, not the draining of dirty badge work.
-            if (dirty) scheduleRefresh();
+            queueRefresh();
           }
         }
         // Architecture: hidden invalidations reuse the Inbox's existing read, computing
@@ -6724,7 +6730,8 @@
         async function refreshBadge() {
           if (visible || refreshing) return;
           refreshing = true;
-          dirty = false;
+          badgeStale = false;
+          refreshStartedAt = Date.now();
           try {
             await contextReady;
             const inbox = crossTeam
@@ -6751,17 +6758,40 @@
             // the visible refresh owns error UI and retries.
           } finally {
             refreshing = false;
-            if (dirty || visible) scheduleRefresh();
+            queueRefresh();
           }
         }
+        // A refresh the human starts (or that follows the human's own write) runs at once.
         function scheduleRefresh() {
+          dirty = badgeStale = urgentRefresh = true;
+          queueRefresh();
+        }
+        // Change nudges pace on the leading edge: the first refreshes at once, and the ones that
+        // land in the next second or during a read share one trailing refresh. A hidden pane only
+        // re-reads its badge, and only for a change that can touch the human's unread set.
+        function paceRefresh(unreadMayChange) {
           dirty = true;
-          if (!prefsReady || refreshing || refreshTimer) return;
-          refreshTimer = setTimeout(() => {
-            refreshTimer = null;
-            if (visible) refresh();
-            else refreshBadge();
-          }, 25);
+          if (unreadMayChange) badgeStale = true;
+          queueRefresh();
+        }
+        // Architecture: a timer is armed only while a refresh is owed, so an idle pane runs none.
+        function queueRefresh() {
+          if (!prefsReady || refreshing || !(visible ? dirty : badgeStale)) return;
+          const due = urgentRefresh
+            ? Date.now()
+            : Math.max(Date.now(), refreshStartedAt + REFRESH_PACE_MS);
+          if (refreshTimer && refreshDue <= due) return;
+          clearTimeout(refreshTimer);
+          refreshDue = due;
+          refreshTimer = setTimeout(
+            () => {
+              refreshTimer = null;
+              urgentRefresh = false;
+              if (visible) refresh();
+              else refreshBadge();
+            },
+            due - Date.now() + 25,
+          );
         }
         $("composer").onsubmit = async (e) => {
           e.preventDefault();
@@ -7231,12 +7261,22 @@
             scheduleRefresh();
           });
         // A change names the rows it touched; the next refresh re-reads those it has loaded.
+        // Only a change that names no rows, names a row this pane hasn't read, or names mail to
+        // the human can touch the human's unread set; the rows it has read are all to or from them.
         cs.onInboxChanged((change) => {
+          const known = visible ? null : new Map(messages.map((m) => [messageKey(m), m]));
+          let unreadMayChange = !change?.changes?.length;
           for (const c of change?.changes || [])
-            if (crossTeam || sameTeam(c.team, activeTeam))
-              for (const id of c.messageIds || [])
-                changedRows.add(messageKey({ team: c.team, messageId: id }));
-          scheduleRefresh();
+            if (crossTeam || sameTeam(c.team, activeTeam)) {
+              if (!c.messageIds?.length) unreadMayChange = true;
+              for (const id of c.messageIds || []) {
+                const key = messageKey({ team: c.team, messageId: id });
+                changedRows.add(key);
+                const row = known?.get(key);
+                if (known && (!row || row.toHuman !== false)) unreadMayChange = true;
+              }
+            }
+          paceRefresh(unreadMayChange);
         });
         cs.onTeardown?.(() => offSessions?.());
         cs.onVisibility((shown) => {
@@ -7255,7 +7295,7 @@
               if (!visible) return;
               sessions = snapshot.snapshot;
               drawConversationView();
-              scheduleRefresh();
+              paceRefresh(false);
             };
             cs.subscribe?.("sessions", { onChange: changed }).catch((error) =>
               drawNotice(error.message),
