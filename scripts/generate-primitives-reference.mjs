@@ -723,7 +723,7 @@ const KIT = [
     category: "ui",
     wraps: "codesense:focus-return listener",
     description:
-      "Replace default anchor focus after host UI closes. With no handler, the shim focuses anchorId or its first focusable control.",
+      "Replace default anchor focus after host UI closes. With no handler, the shim focuses anchorId without scrolling, or the document if it has gone.",
     example: "const off = codesense.onFocusReturn(({anchorId}) => restoreFocus(anchorId));",
   },
   {
@@ -1593,7 +1593,8 @@ const EVENT_META = {
     direction: "parent-to-doc",
     payload: "{}",
     timing: "When focus enters a frame",
-    description: "Focus the first available control unless an onFocusIn handler owns focus.",
+    description:
+      "With nothing focused, it focuses the first visible control, only if it is in view (without scrolling); otherwise the document. An onFocusIn handler owns focus instead.",
     example: 'codesense.onFocusIn(() => document.getElementById("search").focus());',
   },
   "codesense:focus-return": {
@@ -1601,7 +1602,7 @@ const EVENT_META = {
     payload: "{anchorId?}",
     timing: "After a host menu, popover or confirmation closes",
     description:
-      "Focus the opening anchor, or the first available control if it has gone. An onFocusReturn handler receives {anchorId} and replaces default focus.",
+      "Focus the opening anchor without scrolling, or the document if it has gone. An onFocusReturn handler receives {anchorId} and replaces default focus.",
     example: "codesense.onFocusReturn(({anchorId}) => restoreFocus(anchorId));",
   },
   "codesense:command": {

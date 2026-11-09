@@ -47,15 +47,18 @@ test("the docs pane keeps its rendered view across maximize and focus context pu
     marker.dataset.kept = "";
     document.querySelector("#pane-body")!.append(marker);
   });
-  // Count the host's focus pushes inside the pane, then focus a control in it.
-  await pane.frame.evaluate(() => {
-    (window as any).focusIns = 0;
-    window.addEventListener("message", (e) => {
-      if (e.data?.type === "codesense:focus-in") (window as any).focusIns += 1;
-    });
-  });
+  // Enter the pane through the host's focus path, then focus a control in it.
+  const focusIns = async () =>
+    (await pane.probe()).messages.filter((type) => type === "codesense:focus-in").length;
+  expect(await focusIns()).toBe(0);
+  await pane.page.locator("#terminal").focus();
+  await pane.focus();
+  await expect.poll(focusIns).toBe(1);
+  // Where focus lands is the pane's choice (this pane has no onFocusIn), so only delivery is asserted.
+  // Moving between controls inside the entered pane is not another hand-off.
   await pane.frame.locator(".pane__collapse").focus();
-  await expect.poll(() => pane.frame.evaluate(() => (window as any).focusIns)).toBeGreaterThan(0);
+  await pane.page.waitForTimeout(300);
+  expect(await focusIns()).toBe(1);
   await pane.maximize(true);
   await expect(pane.page.getByTestId("overlay-strip")).toBeVisible();
   // Allow the host's slot-context push and the pane's animation frames to render.

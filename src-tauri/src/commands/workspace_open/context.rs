@@ -72,20 +72,14 @@ pub(crate) fn resolve(
     if create && requested.is_none() {
         return Err("createWorktree:true requires a worktree name".into());
     }
-    let rows = worktree_index::context_records(home, principal).map_err(|e| e.to_string())?;
-    let team_rows: Vec<_> = rows
-        .iter()
-        .filter(|r| r.org == scope.org && r.team == scope.team)
-        .collect();
-    let selected = requested.and_then(|name| {
-        rows.iter().find(|r| {
-            r.id == name
-                || (r.org == scope.org
-                    && r.team == scope.team
-                    && r.name.to_lowercase() == name.to_lowercase())
-        })
-    });
     if !create {
+        let rows = worktree_index::context_records(home, principal).map_err(|e| e.to_string())?;
+        let team_rows: Vec<_> = rows
+            .iter()
+            .filter(|r| r.org == scope.org && r.team == scope.team)
+            .collect();
+        let selected =
+            requested.and_then(|name| rows.iter().find(|r| r.id == name || named(r, scope, name)));
         let existing = match requested {
             Some(_) => selected,
             None => team_rows.first().copied(),
@@ -112,52 +106,81 @@ pub(crate) fn resolve(
     if name.is_empty() || name.chars().count() > 64 || !name.chars().any(char::is_alphanumeric) {
         return Err("Name the worktree with a letter or digit, using at most 64 characters".into());
     }
-    if team_rows
-        .iter()
-        .any(|r| r.name.to_lowercase() == name.to_lowercase())
-    {
+    let repo = crate::content_engine::git_worktree::GitWorktree::discover(content)?.ok_or(
+        "The team's context repo isn't set up on this Mac, so there's nowhere to make a worktree",
+    )?;
+    // Held from the duplicate check through the record write, so two opens of one name
+    // can't both pick the same root and branch.
+    crate::context_repo::branch_common::with_clone_lock(&repo.root, || {
+        create_new(home, principal, scope, &repo.root, workspace_name, name)
+    })
+}
+
+/// `row` is the team's worktree called `name`, ignoring case.
+fn named(row: &ContextWorktreeRecord, scope: &ActiveTeam, name: &str) -> bool {
+    row.org == scope.org && row.team == scope.team && row.name.to_lowercase() == name.to_lowercase()
+}
+
+/// The most worktrees one name gets: `<slug>`, then `<slug>-2` up to `<slug>-100`.
+const MAX_SUFFIX: usize = 100;
+
+fn create_new(
+    home: &Path,
+    principal: &Principal,
+    scope: &ActiveTeam,
+    clone: &Path,
+    workspace_name: &str,
+    name: &str,
+) -> Result<ContextDestination, String> {
+    let rows = worktree_index::context_records(home, principal).map_err(|e| e.to_string())?;
+    if rows.iter().any(|r| named(r, scope, name)) {
         return Err(format!(
             "{name} already exists. Pick it from the list, or use another name"
         ));
     }
-    let repo = crate::content_engine::git_worktree::GitWorktree::discover(content)?.ok_or(
-        "The team's context repo isn't set up on this Mac, so there's nowhere to make a worktree",
-    )?;
-    let base_sha = git(
-        &repo.root,
-        &["rev-parse", "--verify", "refs/heads/main^{commit}"],
-    )
-    .map_err(|_| {
-        "The context repo has no local main commit. Commit the team files on main before launching"
-            .to_string()
-    })?;
+    let base_sha = git(clone, &["rev-parse", "--verify", "refs/heads/main^{commit}"])
+        .map_err(|_| {
+            "The context repo has no local main commit. Commit the team files on main before launching"
+                .to_string()
+        })?;
     let slug = worker_slug(name).ok_or("The worktree name needs a letter or digit")?;
     let parent = crate::context_repo::path_to_user_home(home, principal)
         .join("context-worktrees")
         .join(&scope.org)
         .join(&scope.team);
     std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    let mut n = 1;
-    let (branch, root) = loop {
+    // Loose refs are files, and APFS ignores case, so every comparison does too.
+    let heads: Vec<String> = git(clone, &["for-each-ref", "--format=%(refname)", "refs/heads/"])?
+        .lines()
+        .filter_map(|r| r.strip_prefix("refs/heads/"))
+        .map(str::to_string)
+        .collect();
+    let team_prefix = format!("cs/{}", scope.team);
+    if let Some(blocker) = Iterator::find(&mut heads.iter(), |h| {
+        h.eq_ignore_ascii_case("cs") || h.eq_ignore_ascii_case(&team_prefix)
+    }) {
+        return Err(format!(
+            "Branch {blocker} in the team's context repo blocks worktree branches under {team_prefix}/, so rename or delete it"
+        ));
+    }
+    let mut candidates = (1..=MAX_SUFFIX).map(|n| {
         let suffix = if n == 1 {
             String::new()
         } else {
             format!("-{n}")
         };
-        let branch = format!("{}/{}{}", scope.team, slug, suffix);
-        let root = parent.join(format!("{slug}{suffix}"));
-        if !root.exists()
-            && git(
-                &repo.root,
-                &["show-ref", "--verify", &format!("refs/heads/{branch}")],
-            )
-            .is_err()
-        {
-            break (branch, root);
-        }
-        n += 1;
-    };
-    let changes = git(&repo.root, &["status", "--porcelain", "--", &scope.team])?
+        (
+            format!("{team_prefix}/{slug}{suffix}"),
+            parent.join(format!("{slug}{suffix}")),
+        )
+    });
+    let (branch, root) = Iterator::find(&mut candidates, |(branch, root)| {
+        !root.exists() && !ref_conflict(&heads, branch)
+    })
+    .ok_or_else(|| {
+        format!("{name} already has {MAX_SUFFIX} worktrees ({team_prefix}/{slug} to -{MAX_SUFFIX}). Use another name")
+    })?;
+    let changes = git(clone, &["status", "--porcelain", "--", &scope.team])?
         .lines()
         .count();
     let now = std::time::SystemTime::now()
@@ -180,8 +203,9 @@ pub(crate) fn resolve(
         last_used_at: now,
         extras: Default::default(),
     };
-    if let Err(error) = git(
-        &repo.root,
+    // A failed add made nothing this attempt may remove, so there is nothing to roll back.
+    git(
+        clone,
         &[
             "worktree",
             "add",
@@ -191,27 +215,13 @@ pub(crate) fn resolve(
             &record.root.to_string_lossy(),
             &record.base_sha,
         ],
-    ) {
-        rollback(
-            home,
-            principal,
-            &ContextDestination {
-                record: record.clone(),
-                created: true,
-                warnings: Vec::new(),
-            },
-        );
-        return Err(error);
-    }
+    )?;
     let result = (|| {
         validate(&record)?;
         worktree_index::write_context_record(home, principal, &record).map_err(|e| e.to_string())
     })();
     if let Err(error) = result {
-        let _ = git(
-            &repo.root,
-            &["worktree", "remove", "--", &record.root.to_string_lossy()],
-        );
+        remove_created(clone, &record);
         return Err(error);
     }
     let mut warnings = if changes > 0 {
@@ -231,6 +241,39 @@ pub(crate) fn resolve(
         created: true,
         warnings,
     })
+}
+
+/// Git can't create `branch` beside a ref with the same name, a parent path or a child path.
+fn ref_conflict(heads: &[String], branch: &str) -> bool {
+    let branch = branch.to_lowercase();
+    heads.iter().any(|head| {
+        let head = head.to_lowercase();
+        head == branch
+            || branch.starts_with(&format!("{head}/"))
+            || head.starts_with(&format!("{branch}/"))
+    })
+}
+
+/// Removes a worktree this attempt created, then its branch if it still points at the base.
+fn remove_created(clone: &Path, row: &ContextWorktreeRecord) -> bool {
+    if git(
+        clone,
+        &["worktree", "remove", "--", &row.root.to_string_lossy()],
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let _ = git(
+        clone,
+        &[
+            "update-ref",
+            "-d",
+            &format!("refs/heads/{}", row.branch),
+            &row.base_sha,
+        ],
+    );
+    true
 }
 
 pub(crate) fn validate(record: &ContextWorktreeRecord) -> Result<(), String> {
@@ -316,12 +359,7 @@ pub(crate) fn rollback(home: &Path, principal: &Principal, destination: &Context
     let Some(clone) = Path::new(&common).parent() else {
         return;
     };
-    if git(
-        clone,
-        &["worktree", "remove", "--", &row.root.to_string_lossy()],
-    )
-    .is_ok()
-    {
+    if remove_created(clone, row) {
         let _ = worktree_index::remove_record(home, principal, &row.root);
     }
 }
@@ -401,10 +439,13 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            Self::with_team("default")
+        }
+        fn with_team(team: &str) -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path().join("home");
             let clone = tmp.path().join("context");
-            let content = clone.join("default/content");
+            let content = clone.join(team).join("content");
             std::fs::create_dir_all(content.join(".claude/skills/own")).unwrap();
             std::fs::write(content.join("README.md"), "team files").unwrap();
             std::fs::write(content.join(".claude/skills/own/SKILL.md"), "own skill").unwrap();
@@ -425,11 +466,11 @@ mod tests {
                 principal: Principal::from(42),
                 scope: ActiveTeam {
                     org: "acme".into(),
-                    team: "default".into(),
+                    team: team.into(),
                 },
             }
         }
-        fn open(&self, name: &str) -> ContextDestination {
+        fn try_open(&self, name: &str) -> Result<ContextDestination, String> {
             resolve(
                 &self.home,
                 &self.principal,
@@ -439,7 +480,28 @@ mod tests {
                 Some(name),
                 true,
             )
-            .unwrap()
+        }
+        fn open(&self, name: &str) -> ContextDestination {
+            self.try_open(name).unwrap()
+        }
+        fn refs(&self, refs: &[&str]) {
+            let mut child = std::process::Command::new("git")
+                .args(["update-ref", "--stdin"])
+                .current_dir(&self.clone)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let lines: String = refs.iter().map(|r| format!("create {r} HEAD\n")).collect();
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(lines.as_bytes()).unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+        fn branch_exists(&self, branch: &str) -> bool {
+            git(
+                &self.clone,
+                &["show-ref", "--verify", &format!("refs/heads/{branch}")],
+            )
+            .is_ok()
         }
         fn snapshot(&self) -> (String, Vec<u8>, Vec<u8>) {
             (
@@ -485,7 +547,7 @@ mod tests {
         let before = f.snapshot();
         let a = f.open("Sprint 1");
         let b = f.open("Copy pass");
-        assert_eq!(a.record.branch, "default/sprint-1");
+        assert_eq!(a.record.branch, "cs/default/sprint-1");
         assert!(a
             .record
             .root
@@ -647,6 +709,7 @@ mod tests {
         let a = f.open("Empty");
         rollback(&f.home, &f.principal, &a);
         assert!(!a.record.root.exists());
+        assert!(!f.branch_exists(&a.record.branch));
         assert!(worktree_index::context_records(&f.home, &f.principal)
             .unwrap()
             .is_empty());
@@ -654,10 +717,199 @@ mod tests {
         std::fs::write(b.record.launch_cwd.join("README.md"), "keep me").unwrap();
         rollback(&f.home, &f.principal, &b);
         assert!(b.record.root.is_dir());
+        assert!(f.branch_exists(&b.record.branch));
         let mut existing = b.clone();
         existing.created = false;
         rollback(&f.home, &f.principal, &existing);
         assert!(existing.record.root.is_dir());
+        assert!(f.branch_exists(&existing.record.branch));
+    }
+    #[test]
+    fn cleanup_keeps_a_branch_that_moved_past_the_base() {
+        let f = Fixture::new();
+        let a = f.open("Moved");
+        let branch_ref = format!("refs/heads/{}", a.record.branch);
+        git(&a.record.root, &["checkout", "-q", "--detach"]).unwrap();
+        let tree = format!("{}^{{tree}}", a.record.base_sha);
+        let tip = git(
+            &f.clone,
+            &["commit-tree", &tree, "-p", &a.record.base_sha, "-m", "moved"],
+        )
+        .unwrap();
+        git(&f.clone, &["update-ref", &branch_ref, &tip]).unwrap();
+        assert!(remove_created(&f.clone, &a.record));
+        assert!(!a.record.root.exists());
+        assert_eq!(git(&f.clone, &["rev-parse", &branch_ref]).unwrap(), tip);
+    }
+    #[test]
+    fn a_failed_worktree_add_leaves_the_other_attempts_worktree_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fixture::new();
+        let base = git(&f.clone, &["rev-parse", "main"]).unwrap();
+        let root = f
+            .home
+            .join("users/42/context-worktrees/acme/default/sprint-1");
+        let other = ContextWorktreeRecord {
+            owner: Some(worktree_index::ContextWorktreeOwner::Person),
+            schema_version: worktree_index::SCHEMA_VERSION,
+            kind: "context".into(),
+            id: "cw_other".into(),
+            org: "acme".into(),
+            team: "default".into(),
+            name: "Other".into(),
+            branch: "other/sprint-1".into(),
+            base_sha: base.clone(),
+            launch_cwd: root.join("default/content"),
+            root: root.clone(),
+            created_at: 1,
+            last_used_at: 1,
+            extras: Default::default(),
+        };
+        worktree_index::write_context_record(&f.home, &f.principal, &other).unwrap();
+        // While this open creates its branch, another attempt makes its worktree at the
+        // same root, as a racing open would, and this open's `worktree add` fails.
+        let hook = f.clone.join(".git/hooks/reference-transaction");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 [ \"$1\" = prepared ] || exit 0\n\
+                 grep -q ' refs/heads/cs/default/sprint-1$' || exit 0\n\
+                 rm -- \"$0\"\n\
+                 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\n\
+                 git -C '{}' worktree add -q -b other/sprint-1 -- '{}' {base} >/dev/null 2>&1\n\
+                 exit 1\n",
+                f.clone.display(),
+                root.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = f.try_open("Sprint 1").unwrap_err();
+        assert!(!hook.exists(), "the hook never ran: {error}");
+        assert!(root.join("default/content/README.md").is_file(), "{error}");
+        assert!(git(&f.clone, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .contains(&*root.canonicalize().unwrap().to_string_lossy()));
+        assert!(f.branch_exists("other/sprint-1"));
+        assert!(worktree_index::context_records(&f.home, &f.principal)
+            .unwrap()
+            .iter()
+            .any(|r| r.id == "cw_other"));
+    }
+    #[test]
+    fn new_branches_are_cs_prefixed_and_never_collide_with_an_existing_ref() {
+        // (team, refs that already exist, the branch it gets or a fragment of the error)
+        let cases: &[(&str, &[&str], Result<&str, &str>)] = &[
+            ("main", &[], Ok("cs/main/sprint-1")),
+            ("master", &["refs/heads/master"], Ok("cs/master/sprint-1")),
+            ("master", &["refs/remotes/origin/master"], Ok("cs/master/sprint-1")),
+            ("head", &["refs/heads/head"], Ok("cs/head/sprint-1")),
+            ("default", &["refs/heads/default"], Ok("cs/default/sprint-1")),
+            ("default", &["refs/heads/cs"], Err("Branch cs ")),
+            ("default", &["refs/heads/CS"], Err("Branch CS ")),
+            ("default", &["refs/heads/cs/default"], Err("Branch cs/default ")),
+            ("default", &["refs/heads/cs/other"], Ok("cs/default/sprint-1")),
+            ("default", &["refs/heads/cs/default/sprint-1"], Ok("cs/default/sprint-1-2")),
+            ("default", &["refs/heads/cs/default/sprint-1/x"], Ok("cs/default/sprint-1-2")),
+            ("default", &["refs/heads/cs/default/Sprint-1"], Ok("cs/default/sprint-1-2")),
+        ];
+        for (team, existing, expected) in cases {
+            let f = Fixture::with_team(team);
+            f.refs(existing);
+            let label = format!("team {team}, existing {existing:?}");
+            match (f.try_open("Sprint 1"), expected) {
+                (Ok(opened), Ok(branch)) => {
+                    assert_eq!(opened.record.branch, *branch, "{label}");
+                    assert!(f.branch_exists(branch), "{label}");
+                    assert!(opened.record.launch_cwd.join("README.md").is_file(), "{label}");
+                }
+                (Err(error), Err(fragment)) => {
+                    assert!(error.contains(fragment), "{label}: {error}");
+                    assert!(error.contains("rename or delete"), "{label}: {error}");
+                    assert!(worktree_index::context_records(&f.home, &f.principal)
+                        .unwrap()
+                        .is_empty());
+                    assert!(!f.home.join("users/42/context-worktrees/acme").join(team).join("sprint-1").exists());
+                }
+                (got, want) => panic!("{label}: got {got:?}, want {want:?}"),
+            }
+        }
+    }
+    #[test]
+    fn the_suffix_search_stops_at_100() {
+        let f = Fixture::new();
+        let taken: Vec<String> = std::iter::once("refs/heads/cs/default/sprint-1".to_string())
+            .chain((2..=100).map(|n| format!("refs/heads/cs/default/sprint-1-{n}")))
+            .collect();
+        f.refs(&taken.iter().map(String::as_str).collect::<Vec<_>>());
+        let error = f.try_open("Sprint 1").unwrap_err();
+        assert!(error.contains("100"), "{error}");
+        assert!(worktree_index::context_records(&f.home, &f.principal)
+            .unwrap()
+            .is_empty());
+    }
+    #[test]
+    fn a_failed_record_check_removes_the_new_worktree_and_its_branch() {
+        let f = Fixture::new();
+        // The team folder is on disk but not committed, so the new worktree has no content.
+        git(&f.clone, &["rm", "-r", "--cached", "-q", "default"]).unwrap();
+        git(&f.clone, &["commit", "-q", "-m", "untrack"]).unwrap();
+        let error = f.try_open("Sprint 1").unwrap_err();
+        assert!(error.contains("no longer exists"), "{error}");
+        assert!(!f.home.join("users/42/context-worktrees/acme/default/sprint-1").exists());
+        assert!(!f.branch_exists("cs/default/sprint-1"));
+        assert!(worktree_index::context_records(&f.home, &f.principal)
+            .unwrap()
+            .is_empty());
+    }
+    #[test]
+    fn concurrent_opens_of_one_name_create_it_once_and_keep_the_winner() {
+        let f = Fixture::new();
+        let barrier = std::sync::Barrier::new(2);
+        let results: Vec<_> = std::thread::scope(|s| {
+            let open = || {
+                barrier.wait();
+                f.try_open("Sprint 1")
+            };
+            let a = s.spawn(open);
+            let b = s.spawn(open);
+            vec![a.join().unwrap(), b.join().unwrap()]
+        });
+        let (won, lost): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
+        assert_eq!((won.len(), lost.len()), (1, 1), "{won:?} {lost:?}");
+        let winner = won.into_iter().next().unwrap().unwrap();
+        let error = lost.into_iter().next().unwrap().unwrap_err();
+        assert!(error.contains("already exists. Pick it from the list"), "{error}");
+        assert!(winner.record.launch_cwd.join("README.md").is_file());
+        assert!(f.branch_exists(&winner.record.branch));
+        let rows = worktree_index::context_records(&f.home, &f.principal).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, winner.record.id);
+    }
+    #[test]
+    fn an_old_record_reopens_on_its_stored_branch() {
+        let f = Fixture::new();
+        let a = f.open("Old");
+        git(&f.clone, &["branch", "-m", &a.record.branch, "default/old"]).unwrap();
+        let mut old = a.record.clone();
+        old.branch = "default/old".into();
+        worktree_index::write_context_record(&f.home, &f.principal, &old).unwrap();
+        let reopened = resolve(
+            &f.home,
+            &f.principal,
+            &f.scope,
+            &f.content,
+            "agent",
+            Some("Old"),
+            false,
+        )
+        .unwrap();
+        assert!(!reopened.created);
+        assert_eq!(reopened.record.branch, "default/old");
+        assert_eq!(reopened.record.root, a.record.root);
+        rollback(&f.home, &f.principal, &reopened);
+        assert!(f.branch_exists("default/old"));
     }
     #[test]
     fn legacy_folder_is_retained_and_notice_is_once_after_a_successful_launch() {
