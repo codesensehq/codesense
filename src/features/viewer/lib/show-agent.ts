@@ -453,14 +453,6 @@ export interface ShowOptions {
   stayInTeam?: boolean;
 }
 
-let openRunHistory: (() => void) | null = null;
-
-/** How to open the agents' Run history, registered by the surface that shows it (null once it is
- *  gone): an ended agent with no saved output of its own still offers the way to every run. */
-export function setRunHistoryOpener(open: (() => void) | null): void {
-  openRunHistory = open;
-}
-
 /** What a tab on a tile shown as it last was says about its machine. */
 function heldNotice(held: HeldMachine, name: string): string {
   return held.offline
@@ -633,10 +625,9 @@ export async function runShowPlan(
         });
         return { shown: "runOutput" };
       }
-      // With no run id there is no saved output of its own to open; Run history lists the rest.
+      // With no run id there is no saved output of its own to open.
       const reason = `${opts.name} has ended. There's no saved output for this run.`;
-      const history = openRunHistory;
-      say(reason, history ? { action: { label: "Run history", onClick: history } } : undefined);
+      say(reason);
       return { notShown: reason };
     }
     default:

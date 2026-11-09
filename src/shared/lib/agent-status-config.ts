@@ -55,18 +55,6 @@ export const NEEDS_YOU_STATUSES: readonly AgentStatus[] = [
 /** The statuses of an agent at work. */
 export const WORKING_STATUSES: readonly AgentStatus[] = ["running", "thinking", "tool-running"];
 
-/** The statuses of an agent that is neither working nor waiting on a person: parked
- *  at a prompt, finished, stalled or alive with no way to tell what it is doing.
- *  Together with {@link NEEDS_YOU_STATUSES} and {@link WORKING_STATUSES} this
- *  covers every status exactly once. */
-export const IDLE_STATUSES: readonly AgentStatus[] = [
-  "idle",
-  "stalled",
-  "unknown",
-  "completed",
-  "done",
-];
-
 /** The statuses whose "waiting on a person" line replaces the row's task label
  *  (`awaiting-answer`'s question, `paused`'s approval, `blocked`'s note); `dropped`
  *  is a needs-you status but has no waiting message, so its chip label stays on the

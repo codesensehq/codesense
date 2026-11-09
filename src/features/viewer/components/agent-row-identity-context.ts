@@ -111,6 +111,6 @@ export const Identity = createContext<IdentityContext>({
 });
 
 /** A team's own name, as its header shows it after its org; the org for a key with no team. */
-export function teamNameOf(teamKey: string): string {
+function teamNameOf(teamKey: string): string {
   return parseTeamKey(teamKey).teamName ?? parseTeamKey(teamKey).orgSlug;
 }

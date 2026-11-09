@@ -40,12 +40,3 @@ export function agentsListId(teamKey: string): string {
 export function focusDockPage(): void {
   requestFrameFocus(DOCK_FRAME_PANEL_ID);
 }
-
-/** Focus into a team's built-in Agents list: its first agent row, else its first control. */
-export function focusAgentsList(teamKey: string): void {
-  const list = document.getElementById(agentsListId(teamKey));
-  const target =
-    list?.querySelector<HTMLElement>(".ag-scroll button") ??
-    list?.querySelector<HTMLElement>("input, button");
-  target?.focus();
-}

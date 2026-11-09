@@ -249,9 +249,3 @@ export function CrewStack({
     </span>
   );
 }
-
-/** Whether the list had settled when this row first mounted: rows arriving later animate in. */
-export function useArrivedLate(settled: boolean): boolean {
-  const [late] = useState(settled);
-  return late;
-}

@@ -155,7 +155,7 @@ export function memberMarksFor(
 }
 
 /** The activity words each member's crew line shows, by session id (only the ones it shows). */
-export function qualifiersFor(
+function qualifiersFor(
   memberMarks: Readonly<Record<string, StatusMarkKind>>,
   activityBySession: Readonly<Record<string, Parameters<typeof activityQualifier>[0]>>,
 ): Record<string, string | undefined> {

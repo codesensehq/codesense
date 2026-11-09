@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { isFleetAgent } from "@/features/viewer/lib/agent-rows";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import { agentCliLabel } from "@/shared/lib/agent-clis";
 import { isRegisteredAgentRuntime } from "@/shared/lib/agent-runtimes";
 import { endedByExit, type SessionAgentRecord } from "@/shared/lib/agent-state";
 import type { TerminalAiStatus } from "@/shared/lib/terminal-ai-status";
-import { markOfAgentStatus, markOfTerminalStatus } from "@/shared/lib/status-mark";
-import type { AgentStatus } from "@/shared/lib/agent-status-config";
-import { formatMarkLabel } from "@/shared/lib/terminal-dot-words";
 import {
   sessionTarget,
   type TerminalLayoutProjection,
@@ -114,28 +110,4 @@ export function isAgentSession(
   row: Pick<AgentSessionRow, "alive" | "kind" | "agentRevision" | "detected">,
 ): boolean {
   return row.alive && isFleetAgent(row);
-}
-
-/** The agent's name for people: `claude` → `Claude`. */
-export function cliLabel(cli: string | null): string {
-  return agentCliLabel(cli);
-}
-
-/** What a hand-started agent's row says under its name: its CLI and what it is doing. One
- *  only the process tree knows of cannot say what it is doing: the probe sees the process,
- *  not its turn. */
-export function handAgentSubtitle(
-  detected: DetectedAgent,
-  status?: AgentStatus,
-  subagents?: number,
-): string {
-  const cli = cliLabel(detected.cli);
-  if (status)
-    return `${cli} · ${formatMarkLabel({ mark: markOfAgentStatus(status), words: status === "dropped" ? "Needs you" : undefined, subagents })}`;
-  if (detected.processOnly && (detected.dot === null || detected.dot === "running")) {
-    return `${cli} · Activity unknown`;
-  }
-  if (!detected.dot) return `${cli} · started in this tab`;
-  const mark = markOfTerminalStatus(detected.dot);
-  return `${cli} · ${formatMarkLabel({ mark, status: detected.dot, subagents })}`;
 }

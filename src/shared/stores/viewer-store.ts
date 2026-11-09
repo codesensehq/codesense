@@ -5485,7 +5485,7 @@ export function mergeOpenedTeams(saved: unknown, live: readonly string[]): strin
 
 /** A list of teams the agents pane hides: each team key once, in order. Only keys that name a
  *  team survive (not the no-team sentinel, not an empty or colon-less string). A team the
- *  checklist no longer lists is kept, as the funnel keeps it (`toggleTeamFocus`). */
+ *  checklist no longer lists is kept, as the dock's team funnel keeps it. */
 function cleanHiddenTeams(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];

@@ -142,11 +142,6 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "one listener, mounted once by the single CLI host; it compares the host's repo path to the active team and does not exist per team.",
   },
-  "src/features/viewer/lib/agents-list-focus.ts": {
-    count: 1,
-    reason:
-      "the list id embeds the normalized teamKey, which is not guaranteed unique across orgs; the only mount is the single dock, so the lookup finds one list.",
-  },
   "src/features/viewer/lib/attention-alerts-controller.ts": {
     count: 3,
     reason:
