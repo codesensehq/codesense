@@ -679,15 +679,25 @@ impl PrivateRegistry {
         refusal.declaration_revision = next.clone();
         refusal.published = false;
         self.save_state(&state)?;
-        self.write(&self.dir(&scope)?.join(format!("{id}.yaml")), &bytes, false)?;
+        let written = self
+            .dir(&scope)
+            .and_then(|dir| self.write(&dir.join(format!("{id}.yaml")), &bytes, false));
+        let refusal = state
+            .migrated_mode_refusals
+            .get_mut(id)
+            .ok_or("private reservation missing")?;
+        refusal.published = true;
+        if let Err(error) = written {
+            // The file still holds the old bytes: put the ledger back with
+            // them, so the machine keeps its old label instead of reading as
+            // changed outside this Mac.
+            refusal.declaration_revision = revision;
+            self.save_state(&state)?;
+            return Err(error);
+        }
         if let Some(binding) = state.bindings.get_mut(id) {
             binding.declaration_revision = next;
         }
-        state
-            .migrated_mode_refusals
-            .get_mut(id)
-            .ok_or("private reservation missing")?
-            .published = true;
         self.save_state(&state)
     }
 
@@ -998,7 +1008,7 @@ impl PrivateRegistry {
 /// Why a team private machine's label can't change from one Mac.
 pub(crate) fn team_label_refusal(label: &str) -> String {
     format!(
-        "A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name {label:?}."
+        "A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name “{label}”."
     )
 }
 
@@ -1088,15 +1098,17 @@ fn validate_private_binding_declaration(
     declaration: &PrivateDeclaration,
     revision: &str,
 ) -> Result<(), String> {
-    validate_binding_declaration(
-        &binding.host_key,
-        &declaration.machine.pinned_host_key,
-        "private host pin does not match declaration",
-    )?;
+    // Any edit made outside this Mac changes the revision, so it reads as
+    // that first, whatever else it changed.
     validate_binding_declaration(
         revision,
         binding.declaration_revision.as_str(),
         PRIVATE_DECLARATION_CHANGED,
+    )?;
+    validate_binding_declaration(
+        &binding.host_key,
+        &declaration.machine.pinned_host_key,
+        "private host pin does not match declaration",
     )
 }
 

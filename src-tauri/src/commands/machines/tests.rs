@@ -748,16 +748,14 @@ fn draft(sign_in: MachineSignIn) -> MachineDraftInput {
     }
 }
 
-/// `input` based on the machine's declaration as saved now, as the Machines
-/// panel sends it.
+/// `input` based on the machine's declaration as listed now, legacy or
+/// private, as the Machines panel sends it.
 fn based(env: &Env, id: &str, input: &MachineDraftInput) -> MachineDraftInput {
     MachineDraftInput {
-        declaration_revision: env
-            .registry
-            .find(id)
+        declaration_revision: summary_of(env, id)
             .ok()
-            .flatten()
-            .map(|(scope, declaration)| identity::declaration_revision(&scope, &declaration)),
+            .and_then(|summary| summary.declaration)
+            .map(|declaration| declaration.revision),
         ..input.clone()
     }
 }
@@ -2369,6 +2367,86 @@ fn concurrent_saves_from_one_base_admit_exactly_one() {
     let binding = env.registry.bindings().unwrap().remove(id).unwrap();
     let expected_user = format!("user-{n}");
     assert_eq!(binding.username.as_deref(), Some(expected_user.as_str()));
+}
+
+/// Saves that need no base (binding-only edits of a private machine) still
+/// queue: every one lands, and the binding left is one writer's, coherent with
+/// its declaration.
+#[test]
+fn concurrent_unbased_saves_keep_one_coherent_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let env = std::sync::Arc::new(legacy_test_env(root.path()));
+    let store = std::sync::Arc::new(FakeStore::default());
+    let id = save(
+        &env,
+        store.as_ref(),
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|n| {
+            let (env, store, barrier, id) =
+                (env.clone(), store.clone(), barrier.clone(), id.clone());
+            std::thread::spawn(move || {
+                let input = MachineDraftInput {
+                    username: Some(format!("user-{n}")),
+                    ..private_draft()
+                };
+                barrier.wait();
+                save(
+                    &env,
+                    store.as_ref(),
+                    Some(&id),
+                    &input,
+                    &Scope::Personal,
+                    false,
+                )
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap().unwrap();
+    }
+    let listed = summary_of(&env, &id).unwrap();
+    assert!(
+        !matches!(listed.status, MachineStatus::ConnectionFailed { .. }),
+        "{:?}",
+        listed.status
+    );
+    let username = listed.binding.unwrap().username.unwrap();
+    assert!(username.starts_with("user-"), "{username}");
+}
+
+/// Compare-and-swap: a save based on a machine removed since is refused; it
+/// never recreates the machine under its old id.
+#[test]
+fn a_based_save_of_a_removed_machine_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = "dev-box-legacy";
+    let legacy = draft(MachineSignIn::KeyFile {
+        key_path: "/tmp/legacy-key".into(),
+    });
+    save_legacy_machine(&env, id, &legacy);
+    let opened = based(&env, id, &legacy);
+    assert!(opened.declaration_revision.is_some());
+    env.registry.delete(&Scope::Personal, id).unwrap();
+    for mode in [MachineMode::Legacy, MachineMode::PrivateAccount] {
+        let input = MachineDraftInput {
+            mode: Some(mode),
+            ..opened.clone()
+        };
+        let error = save(&env, &store, Some(id), &input, &Scope::Personal, false).unwrap_err();
+        assert_eq!(error, identity::CHANGED_SINCE_OPENED, "{mode:?}");
+        assert!(env.registry.find(id).unwrap().is_none(), "{mode:?}");
+        assert!(!private_setup::claims(&env, id).unwrap(), "{mode:?}");
+    }
 }
 
 /// Compare-and-swap: a save based on an older revision, or on none, never
@@ -4905,7 +4983,8 @@ async fn refused_private_switch_never_disconnects() {
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 std::future::ready(())
             })
-            .await;
+            .await
+            .map(drop);
         (
             result,
             disconnects.load(std::sync::atomic::Ordering::SeqCst),
@@ -4985,11 +5064,16 @@ async fn refused_private_switch_never_disconnects() {
     assert_eq!(disconnects, 0);
 }
 
+/// A saved private machine's declaration file.
+fn private_file(env: &Env, scope: &Scope, id: &str) -> PathBuf {
+    registry::private::PrivateRegistry::dir_for(&env.registry, scope)
+        .unwrap()
+        .join(format!("{id}.yaml"))
+}
+
 /// A saved private machine's declaration file, edited as by hand or by git.
 fn edit_private_declaration(env: &Env, scope: &Scope, id: &str) {
-    let path = registry::private::PrivateRegistry::dir_for(&env.registry, scope)
-        .unwrap()
-        .join(format!("{id}.yaml"));
+    let path = private_file(env, scope, id);
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("label: Dev Box"), "{text}");
     std::fs::write(
@@ -5184,9 +5268,31 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
             std::future::ready(())
         })
         .await
+        .map(drop)
         .unwrap_err();
     assert!(error.contains("can't be changed from this Mac"), "{error}");
     assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    // The panel enrolls before it saves: the enroll's preflight and its
+    // conversion step refuse the label too, before anything ends or converts.
+    let counted = disconnects.clone();
+    let error =
+        end_legacy_connection_before_switch(same_env(&env), Some(id), &renamed, false, move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(())
+        })
+        .await
+        .map(drop)
+        .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let error = based_setup(&env, Some(id), &renamed, || {
+        private_setup::convert_if_legacy(&env, Some(id), &renamed)
+    })
+    .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert!(!private_setup::claims(&env, id).unwrap());
 
     // The writer itself refuses it before converting, too.
     let error = save(
@@ -5211,7 +5317,8 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         end_legacy_connection_before_switch(same_env(&env), Some(id), &kept, true, |_| {
             std::future::ready(())
         })
-        .await,
+        .await
+        .map(drop),
         Ok(())
     );
 }
@@ -5276,12 +5383,12 @@ fn a_setup_step_reports_only_a_revision_it_wrote() {
         ..at(revision(&env).as_str())
     };
     let wrote = based_setup(&env, Some(id), &switch, || {
-        private_setup::convert_if_legacy(&env, Some(id), &switch, false)
+        private_setup::convert_if_legacy(&env, Some(id), &switch)
     })
     .unwrap();
     assert_eq!(wrote, Some(revision(&env)));
     assert_eq!(
-        private_setup::convert_if_legacy(&env, Some(id), &switch, false),
+        private_setup::convert_if_legacy(&env, Some(id), &switch),
         Ok(None)
     );
     let saved = MachineDraftInput {
@@ -5361,6 +5468,192 @@ fn a_private_label_edit_is_written_or_refused_never_dropped() {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+/// Private edits: a save that changes a saved private machine's address, or a
+/// team private machine's label, is refused before it writes anything: its
+/// passphrase bookkeeping, declaration and binding stay as they were.
+#[test]
+fn a_refused_private_edit_writes_nothing_first() {
+    use registry::private::PrivateRegistry;
+    for (case, scope) in [
+        ("label", team()),
+        ("host", Scope::Personal),
+        ("port", team()),
+        ("jump host", Scope::Personal),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let env = legacy_test_env(root.path());
+        let store = FakeStore::default();
+        store.set("kept", &Secret::new("pw")).unwrap();
+        let input = MachineDraftInput {
+            sign_in: keychain_sign_in("kept"),
+            ..private_draft()
+        };
+        let id = save(&env, &store, None, &input, &scope, false)
+            .unwrap()
+            .machine_id;
+        env.registry
+            .update_issued_passphrases(|issued| {
+                issued.insert("kept".into(), 1);
+            })
+            .unwrap();
+        let private = PrivateRegistry::new(
+            env.registry.clone(),
+            env.private_authority.as_ref().unwrap(),
+        )
+        .unwrap();
+        let file = private_file(&env, &scope, &id);
+        let bytes = std::fs::read(&file).unwrap();
+        let binding = serde_json::to_value(private.binding(&id).unwrap()).unwrap();
+        let mut edit = based(&env, &id, &input);
+        let refusal = match case {
+            "label" => {
+                edit.label = "Renamed".into();
+                "can't be changed from this Mac"
+            }
+            "host" => {
+                edit.host = "elsewhere.int".into();
+                "address changed"
+            }
+            "port" => {
+                edit.port = 2223;
+                "address changed"
+            }
+            "jump host" => {
+                edit.jump_host = Some("bastion.int".into());
+                "address changed"
+            }
+            _ => unreachable!(),
+        };
+        let error = save(&env, &store, Some(&id), &edit, &scope, false).unwrap_err();
+        assert!(error.contains(refusal), "{case}: {error}");
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "{case}");
+        assert_eq!(
+            serde_json::to_value(private.binding(&id).unwrap()).unwrap(),
+            binding,
+            "{case}"
+        );
+        let issued = env
+            .registry
+            .update_issued_passphrases(|issued| issued.get("kept").copied())
+            .unwrap();
+        assert_eq!(issued, Some(1), "{case}: passphrase bookkeeping ran");
+    }
+}
+
+/// Private label edits: a relabel whose file write fails puts the ledger back,
+/// so the machine keeps its old label instead of reading as changed outside
+/// this Mac, and a later save goes through.
+#[test]
+fn a_failed_relabel_write_keeps_the_machine_listed() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = save(
+        &env,
+        &store,
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let dir = private_file(&env, &Scope::Personal, &id)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let renamed = |env: &Env| MachineDraftInput {
+        label: "Renamed".into(),
+        ..based(env, &id, &private_draft())
+    };
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = save(
+        &env,
+        &store,
+        Some(&id),
+        &renamed(&env),
+        &Scope::Personal,
+        false,
+    );
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        result.is_err(),
+        "the write into a read-only directory failed"
+    );
+    let listed = summary_of(&env, &id).unwrap();
+    assert_eq!(listed.label, "Dev Box");
+    assert!(
+        !matches!(listed.status, MachineStatus::ConnectionFailed { .. }),
+        "{:?}",
+        listed.status
+    );
+    let saved = save(
+        &env,
+        &store,
+        Some(&id),
+        &renamed(&env),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
+    assert_eq!(saved.label, "Renamed");
+}
+
+/// Compare-and-swap: enroll's first host-key pin reports the revision it
+/// wrote only when the caller's base (or the step's own conversion) is the
+/// declaration it pinned; a second pin of the same key passes the step's
+/// revision through.
+#[test]
+fn a_first_pin_reports_its_revision_only_over_the_callers_base() {
+    use registry::private::PrivateRegistry;
+    for stale in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let env = legacy_test_env(root.path());
+        let store = FakeStore::default();
+        let id = save(
+            &env,
+            &store,
+            None,
+            &private_draft(),
+            &Scope::Personal,
+            false,
+        )
+        .unwrap()
+        .machine_id;
+        let private = PrivateRegistry::new(
+            env.registry.clone(),
+            env.private_authority.as_ref().unwrap(),
+        )
+        .unwrap();
+        let base = if stale {
+            "0".repeat(64)
+        } else {
+            based(&env, &id, &private_draft())
+                .declaration_revision
+                .unwrap()
+        };
+        let key = "ssh-ed25519 test";
+        let wrote = private_setup::adopt_pin(&private, &id, key, None, Some(&base)).unwrap();
+        let current = based(&env, &id, &private_draft()).declaration_revision;
+        if stale {
+            assert_eq!(wrote, None, "a stale base adopts nothing");
+            continue;
+        }
+        assert_eq!(wrote, current, "the pin's own revision");
+        assert_eq!(
+            private_setup::adopt_pin(&private, &id, key, Some("step".into()), None).unwrap(),
+            Some("step".into()),
+            "an existing pin writes nothing"
+        );
+        let saved = MachineDraftInput {
+            declaration_revision: wrote,
+            ..private_draft()
+        };
+        save(&env, &store, Some(&id), &saved, &Scope::Personal, false).unwrap();
     }
 }
 
@@ -6204,6 +6497,8 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
     let transaction = save_transaction(id);
     assert_eq!(Arc::strong_count(&transaction), 2);
     let agent_env = env.clone();
+    // Based on the declaration the person's save lands, so the agent's stale
+    // endpoint passes the revision check and reaches the identity guard.
     let stale_input = MachineDraftInput {
         mode: Some(MachineMode::Legacy),
         label: original.label,
@@ -6213,14 +6508,14 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
         jump_host: original.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
-        declaration_revision: None,
+        declaration_revision: Some(identity::declaration_revision(&team(), &expected)),
     };
     let agent = std::thread::spawn(move || {
         save_for_agent(
             &agent_env,
             &FakeStore::default(),
             Some(id),
-            &based(&agent_env, id, &stale_input),
+            &stale_input,
             &team(),
             false,
         )
@@ -6250,8 +6545,7 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
         expected_binding_bytes,
         "stale agent save changed the person's binding"
     );
-    // It was based on the declaration before the person's save landed.
-    assert_eq!(result.unwrap_err(), identity::CHANGED_SINCE_OPENED);
+    assert!(result.unwrap_err().contains(identity::REFUSAL));
 }
 
 #[test]

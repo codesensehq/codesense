@@ -343,16 +343,13 @@ const DRAFT_ID: &str = "draft";
 const CANT_PUBLISH: &str = "You can't publish to that team's context from this Mac";
 
 /// Whether `input` reaches a machine at the address it was saved at:
-/// `host:port`, via `jump`.
+/// `host:port`, via `jump`. Both sides compare trimmed, with an empty jump host
+/// as none, since a saved value keeps whatever spacing it was typed with.
 fn keeps_address(host: &str, port: u16, jump: Option<&str>, input: &MachineDraftInput) -> bool {
-    host == input.host.trim()
+    let jump_of = |jump: Option<&str>| jump.map(str::trim).filter(|jump| !str::is_empty(jump));
+    str::trim(host) == input.host.trim()
         && port == input.port
-        && jump
-            == input
-                .jump_host
-                .as_deref()
-                .map(str::trim)
-                .filter(|jump| !str::is_empty(jump))
+        && jump_of(jump) == jump_of(input.jump_host.as_deref())
 }
 
 // ---------------------------------------------------------------------------
@@ -1934,6 +1931,11 @@ fn save_as(
         .map(|id| env.registry.find(id))
         .transpose()?
         .flatten();
+    // A base names the declaration its caller opened: one removed since is
+    // never recreated under its old id.
+    if machine_id.is_some() && existing.is_none() && input.declaration_revision.is_some() {
+        return Err(identity::CHANGED_SINCE_OPENED.into());
+    }
     let bindings = env.registry.bindings()?;
     let old_binding = bindings.get(&id).cloned().unwrap_or_default();
     if let Some((scope, declaration)) = &existing {
@@ -4117,26 +4119,27 @@ fn switch_preflight(
 /// Switching a connected legacy machine first ends its legacy connection, so
 /// nothing keeps using the shared-account transport under the private record.
 /// A switch that will be refused fails here, before `disconnect` runs.
+/// Answers with `env`, for the caller's own step.
 async fn end_legacy_connection_before_switch<F>(
     env: Env,
     machine_id: Option<&str>,
     input: &MachineDraftInput,
     rewrites: bool,
     disconnect: impl FnOnce(String) -> F,
-) -> Result<(), String>
+) -> Result<Env, String>
 where
     F: std::future::Future<Output = ()>,
 {
     let (id, input) = (machine_id.map(String::from), input.clone());
-    let switching = crate::commands::await_blocking("machine switch check", {
+    let (env, switching) = crate::commands::await_blocking("machine switch check", {
         let id = id.clone();
-        move || switch_preflight(&env, id.as_deref(), &input, rewrites)
+        move || switch_preflight(&env, id.as_deref(), &input, rewrites).map(|s| (env, s))
     })
     .await?;
     if let (true, Some(id)) = (switching, id) {
         disconnect(id).await;
     }
-    Ok(())
+    Ok(env)
 }
 
 /// A setup step (enroll, install) on a saved machine, based on the revision
@@ -4179,8 +4182,7 @@ pub async fn enroll_private_machine_account(
     if input.mode == Some(MachineMode::Legacy) {
         return Err("private mode required".into());
     }
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(
+    let env = end_legacy_connection_before_switch(
         env_of(&app).await?,
         machine_id.as_deref(),
         &input,
@@ -4210,8 +4212,7 @@ pub async fn install_terminal_server(
     machine_id: Option<String>,
     input: MachineDraftInput,
 ) -> Result<InstallTerminalServerResult, String> {
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(
+    let env = end_legacy_connection_before_switch(
         env_of(&app).await?,
         machine_id.as_deref(),
         &input,
@@ -4295,8 +4296,7 @@ async fn save_machine_as(
     connect: bool,
     actor: crate::panes::commands::Actor,
 ) -> Result<MachineSummary, String> {
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(
+    let env = end_legacy_connection_before_switch(
         env_of(&app).await?,
         machine_id.as_deref(),
         &input,

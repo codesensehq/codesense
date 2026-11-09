@@ -1559,7 +1559,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service."
+        description = "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine or pin its host key, so call list_machines again before your next save_machine."
     )]
     async fn enroll_private_machine_account(
         &self,
@@ -1578,7 +1578,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner."
+        description = "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine, so call list_machines again before your next save_machine."
     )]
     async fn install_terminal_server(
         &self,
@@ -1796,7 +1796,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). Changing a saved legacy machine you can publish needs declarationRevision, the declaration.revision from list_machines; a save based on an older revision is refused, so reread and retry. connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off."
+        description = "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). Changing a saved legacy machine you can publish needs declarationRevision, the declaration.revision from list_machines; a save based on an older revision is refused, so reread and retry, including after your own enroll_private_machine_account or install_terminal_server. A label change on a team private machine is refused. connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off."
     )]
     async fn save_machine(
         &self,

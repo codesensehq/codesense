@@ -4,6 +4,7 @@ use super::*;
 use codesense_session_server::private_account::{Bootstrap, HelperUpload, VerifiedAccount};
 use registry::private::{
     PrivateAccount, PrivateBinding, PrivateDeclaration, PrivateRegistry, PrivateSetup,
+    PRIVATE_DECLARATION_CHANGED,
 };
 
 const REFUSED: &str = "private account unavailable; check account enrollment";
@@ -114,7 +115,8 @@ fn saved_legacy(
 /// Every refusal switching the saved legacy machine `id` to a private account
 /// can know from local files, made before its connection ends: the private
 /// authority, the saved identity, a changed address, who may publish the
-/// declaration and, for a save (`rewrites`), the revision it was based on.
+/// declaration, a team machine's changed label and the revision it was based
+/// on, which a save (`rewrites`) must supply.
 pub(super) fn preflight_switch(
     env: &Env,
     id: Option<&str>,
@@ -134,10 +136,7 @@ pub(super) fn preflight_switch(
         input.declaration_revision.as_deref(),
         rewrites,
     )?;
-    if rewrites {
-        keeps_team_label(&scope, &old, input)?;
-    }
-    Ok(())
+    keeps_team_label(&scope, &old.label, input)
 }
 /// The label a save gives a machine: the one typed, else its host.
 fn saved_label(input: &MachineDraftInput) -> String {
@@ -148,15 +147,11 @@ fn saved_label(input: &MachineDraftInput) -> String {
     }
 }
 /// A team machine keeps its published label through a switch to a private
-/// account (see `PrivateRegistry::relabel`): a save that changes it is
-/// refused before the connection ends or anything converts.
-fn keeps_team_label(
-    scope: &Scope,
-    old: &Declaration,
-    input: &MachineDraftInput,
-) -> Result<(), String> {
-    if matches!(scope, Scope::Team { .. }) && saved_label(input) != old.label {
-        return Err(registry::private::team_label_refusal(&old.label));
+/// account (see `PrivateRegistry::relabel`): a save or setup step that changes
+/// it is refused before the connection ends or anything converts.
+fn keeps_team_label(scope: &Scope, label: &str, input: &MachineDraftInput) -> Result<(), String> {
+    if matches!(scope, Scope::Team { .. }) && saved_label(input) != label {
+        return Err(registry::private::team_label_refusal(label));
     }
     Ok(())
 }
@@ -165,27 +160,44 @@ fn keeps_team_label(
 /// Only private accounts open terminal tabs, so this is the one way forward
 /// for a legacy machine rather than adding a second record for the host. The
 /// caller reaches this only by asking for a private account explicitly.
-/// `saving`: the caller goes on to write the label, which a team machine keeps.
+/// A team machine keeps its label, so a draft that changes it is refused.
 /// Answers with the revision of the declaration it converted, if it did.
 pub(super) fn convert_if_legacy(
     env: &Env,
     id: Option<&str>,
     input: &MachineDraftInput,
-    saving: bool,
 ) -> Result<Option<String>, String> {
     if input.mode != Some(MachineMode::PrivateAccount) {
         return Ok(None);
     }
     let mut wrote = None;
     if let (Some(id), Some((scope, old))) = (id, saved_legacy(env, id, input)?) {
-        if saving {
-            keeps_team_label(&scope, &old, input)?;
-        }
+        keeps_team_label(&scope, &old.label, input)?;
         let converted = registry(env)?.convert_legacy(&scope, id)?;
         wrote = Some(written(&scope, &converted));
     }
     adopt_legacy_binding(env, id)?;
     Ok(wrote)
+}
+/// Pin `key` as a saved draft's first host key. `wrote`: the revision this step
+/// already wrote (a conversion), else `base`, the caller's. The pin is adopted
+/// only over the declaration the caller was based on: a git change during the
+/// SSH before it stays the caller's to see. Answers with the revision the
+/// caller's next save is based on, if this step wrote it.
+pub(super) fn adopt_pin(
+    registry: &PrivateRegistry,
+    id: &str,
+    key: &str,
+    wrote: Option<String>,
+    base: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some((scope, pinned)) = registry.pin_draft(id, key)? else {
+        return Ok(wrote);
+    };
+    let mut unpinned = pinned.clone();
+    unpinned.machine.pinned_host_key = None;
+    let based_on = wrote.or_else(|| base.map(String::from));
+    Ok((based_on == Some(written(&scope, &unpinned))).then(|| written(&scope, &pinned)))
 }
 /// The revision of a private declaration this call wrote: what its caller's
 /// next save is based on. Never read back from disk, where a git change may
@@ -369,7 +381,7 @@ pub(super) fn enroll(
     id: Option<&str>,
     input: &MachineDraftInput,
 ) -> Result<MachineTestReportDto, String> {
-    let mut wrote = convert_if_legacy(env, id, input, false)?;
+    let mut wrote = convert_if_legacy(env, id, input)?;
     let (_reach, bootstrap, key) = prepare(
         env,
         store,
@@ -392,21 +404,13 @@ pub(super) fn enroll(
     };
     validate_observed(env, id, &observed)?;
     if let Some(id) = id {
-        if let Some((scope, pinned)) = registry.pin_draft(id, &key.to_line())? {
-            // The pin is adopted only over the declaration this call was based
-            // on: a git change during the SSH above stays the caller's to see.
-            let mut unpinned = pinned.clone();
-            unpinned.machine.pinned_host_key = None;
-            let based_on = match &wrote {
-                Some(converted) => Some(converted.clone()),
-                None => input.declaration_revision.clone(),
-            };
-            wrote = if based_on == Some(written(&scope, &unpinned)) {
-                Some(written(&scope, &pinned))
-            } else {
-                None
-            };
-        }
+        wrote = adopt_pin(
+            &registry,
+            id,
+            &key.to_line(),
+            wrote,
+            input.declaration_revision.as_deref(),
+        )?;
         let (_, _, revision) = registry.capture(id)?.ok_or(REFUSED)?;
         let setup = match prior.as_ref().map(|b| &b.setup) {
             Some(ready @ PrivateSetup::Ready { .. }) => ready.clone(),
@@ -448,7 +452,7 @@ pub(super) fn install(
     id: Option<&str>,
     input: &MachineDraftInput,
 ) -> Result<InstallTerminalServerResult, String> {
-    let wrote = convert_if_legacy(env, id, input, false)?;
+    let wrote = convert_if_legacy(env, id, input)?;
     let (_reach, bootstrap, _) = prepare(
         env,
         store,
@@ -481,15 +485,7 @@ pub(super) fn save_locked(
     connect: bool,
 ) -> Result<MachineSummary, String> {
     let authority = authority(env)?;
-    convert_if_legacy(env, Some(id), input, true)?;
-    if let Some(handle) = input.sign_in.credential_ref() {
-        passphrase::load(store, handle)?;
-        env.registry.update_issued_passphrases(|issued| {
-            if let Some(at) = issued.get_mut(&handle.account) {
-                *at = now_secs();
-            }
-        })?;
-    }
+    convert_if_legacy(env, Some(id), input)?;
     let registry = registry(env)?;
     let id = id.to_string();
     let existing = registry.capture(&id)?;
@@ -499,11 +495,21 @@ pub(super) fn save_locked(
         return Err(format!("{id:?} can't name a machine"));
     }
     // Existing published reach/host identity is immutable through personal
-    // setup: refused before anything is written.
-    if let Some((_, saved, _)) = &existing {
+    // setup, and so is a team machine's label: refused before anything is
+    // written.
+    if let Some((scope, saved, _)) = &existing {
         if !keeps_saved_address(&saved.machine, input) {
             return Err(ADDRESS_CHANGED.into());
         }
+        keeps_team_label(scope, &saved.machine.label, input)?;
+    }
+    if let Some(handle) = input.sign_in.credential_ref() {
+        passphrase::load(store, handle)?;
+        env.registry.update_issued_passphrases(|issued| {
+            if let Some(at) = issued.get_mut(&handle.account) {
+                *at = now_secs();
+            }
+        })?;
     }
     let old = if existing.is_some() {
         registry.binding(&id)?
@@ -908,14 +914,21 @@ pub(super) fn summaries(env: &Env) -> Result<Vec<MachineSummary>, String> {
             // only this machine; the rest still list.
             result.push(match PrivateRegistry::binding(&registry, &id) {
                 Ok(binding) => private_summary(env, scope, &declaration, binding.as_ref())?,
-                Err(error) => {
-                    let mut summary = private_summary(env, scope, &declaration, None)?;
+                Err(error) if error == PRIVATE_DECLARATION_CHANGED => {
+                    let mut summary = match private_summary(env, scope, &declaration, None) {
+                        Ok(summary) => summary,
+                        Err(summary_error) => {
+                            log::warn!(target: "machines", "listing {id}: {summary_error}");
+                            continue;
+                        }
+                    };
                     summary.status = MachineStatus::ConnectionFailed { last_error: error };
                     if let Some(declaration) = &mut summary.declaration {
                         declaration.configuration_refused = true;
                     }
                     summary
                 }
+                Err(error) => return Err(error),
             });
         }
     }
