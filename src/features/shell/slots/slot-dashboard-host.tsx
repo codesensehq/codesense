@@ -577,12 +577,19 @@ export function SlotDashboardHost({
   const onDocProblem = useCallback(
     (problem: DocProblem) => {
       if (!isCurrentAttempt(attempts)) return;
-      if (problem.kind === "bridge" || (problem.kind === "script" && live.current)) {
+      // A blocked load is one problem row, before or after ready; it never fails the pane.
+      if (
+        problem.kind === "bridge" ||
+        problem.kind === "csp" ||
+        (problem.kind === "script" && live.current)
+      ) {
         setProblems((previous) =>
-          problem.kind === "script" &&
-          previous
-            .slice(-3)
-            .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))
+          (problem.kind === "script" &&
+            previous
+              .slice(-3)
+              .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))) ||
+          (problem.kind === "csp" &&
+            previous.some((p) => p.kind === "csp" && p.message === problem.message))
             ? previous
             : [...previous.slice(-49), problem],
         );

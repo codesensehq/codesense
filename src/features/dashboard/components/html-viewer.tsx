@@ -109,11 +109,12 @@ function recordFocusOwner(element: HTMLElement): void {
 // capabilities, parity with a browser tab. The frame is served from
 // a fresh frame hostname, cross-origin to the `tauri://` app webview, so
 // `allow-same-origin` cannot escape the sandbox or reach `window.__TAURI__`
-// (the codesense bridge is a postMessage RPC, not direct invoke). A baseline
+// (the codesense bridge is a postMessage RPC, not direct invoke). No popups:
+// a popup would not inherit the frame's network policy, so web links go
+// through `codesense:external-link` to the OS browser. A baseline
 // render is a historical blob shown for comparison only, so it keeps the
 // opaque-origin, scripts-only sandbox and gets no bridge.
-const LIVE_SANDBOX =
-  "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads";
+const LIVE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads";
 const BASELINE_SANDBOX = "allow-scripts";
 
 // SF-1: HtmlViewer accepts the shared viewer contract directly. `teamContentPath`
@@ -293,7 +294,8 @@ export const NETWORK_PROBLEM_GRACE_MS = 5000;
 
 /** A problem a live doc hit, for its host to show. */
 export interface DocProblem {
-  kind: "load" | "script" | "bridge";
+  /** `csp`: the frame's content policy blocked a load; never a reason to fail the doc. */
+  kind: "load" | "script" | "bridge" | "csp";
   message: string;
 }
 
@@ -825,6 +827,10 @@ export function HtmlViewer({
   const onFrameViewKeyRef = useRef(onFrameViewKey);
   const onPageStartRef = useRef(onPageStart);
   const onPageLoadRef = useRef(onPageLoad);
+  // An embedded message reports only what the policy blocked; its own failures stay in its frame.
+  const onChildDocProblem = useCallback((problem: DocProblem) => {
+    if (problem.kind === "csp") onDocProblemRef.current?.(problem);
+  }, []);
   useLayoutEffect(() => {
     onDocProblemRef.current = onDocProblem;
     onDocLoadedRef.current = onDocLoaded;
@@ -1904,12 +1910,16 @@ export function HtmlViewer({
       // An uncaught error, failed asset or unhandled rejection the shim forwarded.
       if (type === "codesense:doc-error") {
         if (typeof data.message === "string") {
-          onDocProblemRef.current?.({
-            kind: "script",
-            message: data.source
-              ? `${data.message} (${data.source}:${data.line ?? 0})`
-              : data.message,
-          });
+          onDocProblemRef.current?.(
+            data.kind === "csp"
+              ? { kind: "csp", message: data.message }
+              : {
+                  kind: "script",
+                  message: data.source
+                    ? `${data.message} (${data.source}:${data.line ?? 0})`
+                    : data.message,
+                },
+          );
         }
         return;
       }
@@ -2378,6 +2388,7 @@ export function HtmlViewer({
             <HtmlViewer
               key={child.frameId}
               hostedFrame={child}
+              onDocProblem={onChildDocProblem}
               presented={presented}
               allowAutoFocus={allowAutoFocus}
               onCandidateFocus={onCandidateFocus}

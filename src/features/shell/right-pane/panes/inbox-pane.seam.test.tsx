@@ -2523,6 +2523,41 @@ it("returns docked cross-team message Escape to the host terminal while actions 
   }
 });
 
+it("an embedded message's blocked load reaches the pane's problems, and its own failures never fail the pane", async () => {
+  messages[0].contentType = "html";
+  messages[0].text = "<p>Tracked</p>";
+  const p = await openInbox(true, PANE, undefined, `workspace:${ORG}:${TEAM}:owner/repo`);
+  await openThread(p);
+  await waitFor(() => expect(el(p, "log").querySelector("iframe")).not.toBeNull());
+  const childFrame = el(p, "log").querySelector("iframe")!;
+  const record = [...mintedFrames.values()].find((r) => r.parentFrame)!;
+  const child = bootPaneDoc(childFrame, messages[0].text, record, true);
+  docs.push(child);
+  const paneFrame = screen.getByTestId("pane-body").querySelector("iframe");
+  const fromChild = (data: object) =>
+    act(async () =>
+      window.dispatchEvent(
+        new PaneMessageEvent("message", {
+          source: childFrame.contentWindow,
+          origin: record.origin,
+          data: { type: "codesense:doc-error", token: record.token, ...data },
+        }),
+      ),
+    );
+  const blocked = "blocked by the frame content policy: https://tracker.example/p.png (img-src)";
+  await fromChild({ kind: "csp", message: blocked });
+  await waitFor(() =>
+    expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent(`Blocked: ${blocked}`),
+  );
+  await fromChild({ message: "boom", source: "message.html", line: 1 });
+  fireEvent.error(childFrame);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  expect(screen.getByTestId("pane-dev-banner")).not.toHaveTextContent("boom");
+  expect(screen.getByTestId("pane-dev-banner")).not.toHaveTextContent("frame crashed");
+  expect(screen.getByTestId("pane-body").querySelector("iframe")).toBe(paneFrame);
+});
+
 it("uses the host sanitizer for human-authored HTML and refuses agent-addressed embeds", async () => {
   messages.push(
     row(3, "human", "Mia", {

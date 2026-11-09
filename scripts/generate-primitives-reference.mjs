@@ -1327,8 +1327,7 @@ const CONTEXTS = [
     name: "centre-tab",
     category: "centre",
     route: "/ + base64(teamContentPath) + file path",
-    sandbox:
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads",
+    sandbox: "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
     bridgeFull: true,
     snapshotAvailable: true,
     detection: "props.message === null && props.pane === null",
@@ -1347,8 +1346,7 @@ const CONTEXTS = [
     name: "right-pane",
     category: "pane",
     route: "/pane + port + contentRoot + panesDir + fileName",
-    sandbox:
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads",
+    sandbox: "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
     bridgeFull: true,
     snapshotAvailable: false,
     detection: "props.pane !== null",
@@ -1367,8 +1365,7 @@ const CONTEXTS = [
     name: "inbox-message",
     category: "message",
     route: "/message + port + org + team + messageId",
-    sandbox:
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads",
+    sandbox: "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
     bridgeFull: true,
     snapshotAvailable: false,
     detection: "props.message !== null",

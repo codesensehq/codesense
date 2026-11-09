@@ -343,8 +343,8 @@ Local paths resolve the sender's own team content first and then that local sess
 captured workspace; other sessions' workspaces and arbitrary home paths are refused.
 Remote sessions cannot read files from their remote workspace with `path`.
 Team `config/inbox.yml` controls `inbox.media` through `media: {remote: auto|ask|off,
-hosts: [...]}`. Auto requires an allowlisted host and a session on your own admitted
-machine; other cases ask, and off prevents remote media. OS Reduce Motion shows a
+hosts: [...]}`; the default is ask. Auto requires an allowlisted host and a session on
+your own admitted machine; other cases ask, and off prevents remote media. OS Reduce Motion shows a
 still with play/pause. Use images for light moments, never `needs-you`, and avoid
 flashing GIFs. `attachFile` separately attaches a logical team-content document.
 See [Send a GIF or image](../arc-f-inboxes-and-triage/messages.html#send-media).

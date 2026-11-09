@@ -12071,6 +12071,13 @@
       "text": "Arc I · Pane authoring Slots and pane shapes Choose a right pane or the dock, then adapt to the slot context. The host owns the surrounding chrome; your HTML owns its content."
     },
     {
+      "title": "Reach an outside host",
+      "crumb": "CodeSense — Slots and pane shapes",
+      "kind": "section",
+      "href": "./arc-i-dashboard-primitives/pane-shapes.html#network",
+      "text": "Reach an outside host Pane frames block outside loads by default: remote scripts, styles, images, fonts, media, fetch , WebSockets and nested frames are all blocked, and each blocked load shows in the pane's problems. Some outside traffic isn't blocked yet: a page can navigate its own frame (a <meta http-equiv=\"refresh\"> needs no script), hint DNS lookups and connections with dns-prefetch or preconnect , and open WebRTC connections. Files beside the pane, the dashboard kit and the host's media route still load. When a pane needs a remote API, declare its exact HTTPS origins in pane-manifest.yaml or the pane's HTML head: version: 1 panes: - id: status html: status.html allowed_hosts: - https://status.example.com The HTML form is <meta name=\"codesense:allowed-hosts\" content=\"https://status.example.com\"> (comma or space separated). An origin needs a public host name and may carry a port; wildcards, IP addresses, localhost and other local names ( *.localhost , or a single-label name such as https://intranet ), http: , paths and other schemes reject the pane with a diagnostic. A declared host is trusted with scripts and frames, not only with data. Same-origin workers, WebAssembly and blob: / data: images, fonts and media keep working, but a fetch of a data: URL is blocked; eval and new Function stay off. Popups are off. window.open hands web links ( https: , http: , mailto: ) to your browser, even without a click, and page links to the app; anything else is listed as blocked. A link or form aimed at _blank or another window name is listed as blocked too, unless it's a web or page link. Some new-window requests are dropped without a listing: links under a <base target> , a button's formtarget , form.submit() , <area> links, and _blank links to other schemes ( tel: , blob: , data: , file: ). Message frames a pane embeds never get outside hosts, and the Inbox pane declares none."
+    },
+    {
       "title": "Pane manifest",
       "crumb": "CodeSense — Slots and pane shapes",
       "kind": "section",
@@ -12114,6 +12121,13 @@
     },
     {
       "title": "Pane manifest",
+      "crumb": "CodeSense — Slots and pane shapes",
+      "kind": "heading",
+      "href": "./arc-i-dashboard-primitives/pane-shapes.html",
+      "text": ""
+    },
+    {
+      "title": "Reach an outside host",
       "crumb": "CodeSense — Slots and pane shapes",
       "kind": "heading",
       "href": "./arc-i-dashboard-primitives/pane-shapes.html",
@@ -12687,6 +12701,13 @@
       "text": "What to try next Show what each story cost. codesense.sessionUsage({story: \"DEMO-1\"}) returns the tokens and cost of every agent session CodeSense launched for that story; without story , each session carries its own story {id, title, status, epic} , so you can group cost by story or epic and set it beside the stories that reached done . Add a button that runs an action ( openWorkspace , setStatus ). See calling CodeSense . Theme without authoring colours: use the cs-* classes and tokens, and the page follows the app's light and dark themes. Theme & tokens . Link to another doc with a plain <a href=\"…/story.md\"> . The bridge routes the click; ⌘-click opens a new tab. See linking . Iterate without rebuilding: edit the file and watch the tab reload. See testing . For worked examples that go further (inboxes, agent cards, routine dashboards), browse recipes-gallery ."
     },
     {
+      "title": "Reach a remote API",
+      "crumb": "CodeSense — Your first dashboard",
+      "kind": "section",
+      "href": "./arc-i-dashboard-primitives/your-first-dashboard.html#outside-network",
+      "text": "Reach a remote API Dashboards in the app block outside loads by default. A remote script, image, font or fetch is blocked and shows in the dashboard's problems. Some outside traffic isn't blocked yet: a page can navigate its own frame (a <meta http-equiv=\"refresh\"> needs no script), hint DNS lookups with dns-prefetch or preconnect , open WebRTC connections, and hand a web link to your browser with window.open . If your page needs a remote API, add its exact HTTPS origin to the nearest dashboard.yml at or above the page: allowed_hosts: - https://api.example.com An origin needs a public host name and may carry a port ( https://api.example.com:8443 ). Wildcards, IP addresses, localhost and other local names ( *.localhost , or a single-label name such as https://intranet ), http: , paths and other schemes stop the page from opening, with a message that names the bad entry; so does a dashboard.yml that isn't valid YAML. A declared host is trusted with scripts and frames, not only with data, so name only services you trust. Only the nearest dashboard.yml counts, and only inside the team's content folder: one higher up is never read. A nearer dashboard.yml without allowed_hosts declares nothing, even when an outer one lists hosts. A dashboard.yml at the top of the content folder opens its hosts to every HTML page in it. eval and new Function stay off; workers, WebAssembly and blob: and data: images, fonts and media keep working, but a fetch of a data: URL is blocked. This only applies inside the CodeSense app: hosted share pages never reach the network."
+    },
+    {
       "title": "How an agent does this",
       "crumb": "CodeSense — Your first dashboard",
       "kind": "section",
@@ -12744,6 +12765,13 @@
     },
     {
       "title": "Re-render when the context changes",
+      "crumb": "CodeSense — Your first dashboard",
+      "kind": "heading",
+      "href": "./arc-i-dashboard-primitives/your-first-dashboard.html",
+      "text": ""
+    },
+    {
+      "title": "Reach a remote API",
       "crumb": "CodeSense — Your first dashboard",
       "kind": "heading",
       "href": "./arc-i-dashboard-primitives/your-first-dashboard.html",
@@ -16261,7 +16289,7 @@
       "crumb": "CodeSense — Updates, network calls and removing CodeSense",
       "kind": "section",
       "href": "./arc-n-reference/updates-and-uninstall.html#what-leaves",
-      "text": "What leaves your Mac CodeSense has no analytics, telemetry or crash reporting and makes no AI calls of its own. PRIVACY.md , at the root of the CodeSense source, lists every network call the app makes, with what it sends, how to turn it off and where it is in the code. In short: On its own (PRIVACY.md §1–§5): the update check, a GET of one static file on dl.codesense.ai that sends no account, key, install id or clock; the update download when there is a newer build; inbox pictures on *.giphy.com or static.klipy.com that an agent in one of this app's tabs posts (other pictures wait for your click, and media: {remote: off} or remote: ask in a team's config/inbox.yml stops or holds them); and git fetch from a repository's origin for change history, with your own git credentials. Because you set something up (§6–§11): your remote machines over SSH, which receive your terminal sessions, the files you open there and a git bundle of the branch you prepare a workspace from; git fetch when a workspace is checked; git-ai notes; MCP servers you configure; agent accounts you add; and dashboards you publish to share.codesense.ai , which sends the files those dashboards list. Content you open (§12): dashboards, documents and stories load what they reference when you open them in the viewer. The agent CLIs you run talk to their own providers under your accounts with them. A shared dashboard draws no CodeSense bar over itself unless its dashboard.yml sets chrome: full , so a page can look like any screen, including CodeSense's own. Never type a password, a sign-in code or a payment detail into a dashboard. What a live dashboard shares with its viewers is set out field by field in get_live_data_contract ."
+      "text": "What leaves your Mac CodeSense has no analytics, telemetry or crash reporting and makes no AI calls of its own. PRIVACY.md , at the root of the CodeSense source, lists every network call the app makes, with what it sends, how to turn it off and where it is in the code. In short: On its own (PRIVACY.md §1–§5): the update check, a GET of one static file on dl.codesense.ai that sends no account, key, install id or clock; the update download when there is a newer build; inbox pictures on *.giphy.com or static.klipy.com that an agent in one of this app's tabs posts, but only when a team sets media: {remote: auto} in its config/inbox.yml (by default every picture waits for your click, and remote: off stops them); and git fetch from a repository's origin for change history, with your own git credentials. Because you set something up (§6–§11): your remote machines over SSH, which receive your terminal sessions, the files you open there and a git bundle of the branch you prepare a workspace from; git fetch when a workspace is checked; git-ai notes; MCP servers you configure; agent accounts you add; and dashboards you publish to share.codesense.ai , which sends the files those dashboards list. Content you open (§12): stories and Markdown documents load the pictures they reference when you open them in the viewer; dashboards, panes and HTML documents load remote content only from the hosts they name in allowed_hosts , though a page can still navigate its own frame, hint DNS lookups, open WebRTC connections and hand a web link to your browser. The agent CLIs you run talk to their own providers under your accounts with them. A shared dashboard draws no CodeSense bar over itself unless its dashboard.yml sets chrome: full , so a page can look like any screen, including CodeSense's own. Never type a password, a sign-in code or a payment detail into a dashboard. What a live dashboard shares with its viewers is set out field by field in get_live_data_contract ."
     },
     {
       "title": "Removing CodeSense",

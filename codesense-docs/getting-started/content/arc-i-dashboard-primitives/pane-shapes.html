@@ -57,6 +57,43 @@
           The <a href="../generated/pane-declarations.md">generated pane declaration reference</a>
           lists every field; the <a href="../generated/slots.md">slot contract</a> lists supported slots.</p>
       </section>
+      <section id="network" data-search="Pane outside network allowed_hosts allowed-hosts remote API images fonts CSP blocked">
+        <h2>Reach an outside host</h2>
+        <p>Pane frames block outside loads by default: remote scripts, styles, images, fonts,
+          media, <code>fetch</code>, WebSockets and nested frames are all blocked, and each blocked
+          load shows in the pane's problems. Some outside traffic isn't blocked yet: a page can
+          navigate its own frame (a <code>&lt;meta http-equiv="refresh"&gt;</code> needs no script),
+          hint DNS lookups and connections with <code>dns-prefetch</code> or <code>preconnect</code>,
+          and open WebRTC connections. Files beside the pane, the dashboard kit and
+          the host's media route still load. When a pane needs a remote API, declare its exact
+          HTTPS origins in <code>pane-manifest.yaml</code> or the pane's HTML head:</p>
+        <pre><code>version: 1
+panes:
+  - id: status
+    html: status.html
+    allowed_hosts:
+      - https://status.example.com</code></pre>
+        <p>The HTML form is
+          <code>&lt;meta name="codesense:allowed-hosts" content="https://status.example.com"&gt;</code>
+          (comma or space separated). An origin needs a public host name and may carry a port;
+          wildcards, IP addresses, <code>localhost</code> and other local names
+          (<code>*.localhost</code>, or a single-label name such as <code>https://intranet</code>),
+          <code>http:</code>, paths and other schemes reject the pane with a diagnostic.
+          A declared host is trusted with scripts and frames, not only with data. Same-origin workers,
+          WebAssembly and <code>blob:</code>/<code>data:</code> images, fonts and media keep working,
+          but a <code>fetch</code> of a <code>data:</code> URL is blocked; <code>eval</code> and
+          <code>new Function</code> stay off.</p>
+        <p>Popups are off. <code>window.open</code> hands web links (<code>https:</code>,
+          <code>http:</code>, <code>mailto:</code>) to your browser, even without a click, and page
+          links to the app; anything else is listed as blocked. A link or form aimed at
+          <code>_blank</code> or another window name is listed as blocked too, unless it's a web or
+          page link. Some new-window requests are dropped without a listing: links under a
+          <code>&lt;base target&gt;</code>, a button's <code>formtarget</code>,
+          <code>form.submit()</code>, <code>&lt;area&gt;</code> links, and <code>_blank</code> links
+          to other schemes (<code>tel:</code>, <code>blob:</code>, <code>data:</code>,
+          <code>file:</code>). Message frames a pane embeds never get outside hosts, and the Inbox
+          pane declares none.</p>
+      </section>
       <section id="context" data-search="Read slot context">
         <h2>Read slot context</h2>
         <pre><code>const cs = window.codesense;

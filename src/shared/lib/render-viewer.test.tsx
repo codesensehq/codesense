@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createElement, type ReactElement } from "react";
+import { act, render, screen } from "@testing-library/react";
 
 import { renderViewer } from "@/shared/lib/render-viewer";
 import {
@@ -13,8 +14,14 @@ import {
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({
   MarkdownViewer: () => createElement("div", { "data-stub": "markdown" }),
 }));
+const htmlProps: {
+  current: { onDocProblem?: (problem: { kind: string; message: string }) => void };
+} = vi.hoisted(() => ({ current: {} }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
-  HtmlViewer: () => createElement("div", { "data-stub": "html" }),
+  HtmlViewer: (props: typeof htmlProps.current) => {
+    htmlProps.current = props;
+    return createElement("div", { "data-stub": "html" });
+  },
 }));
 vi.mock("@/features/dashboard/components/excalidraw-viewer", () => ({
   ExcalidrawViewer: () => createElement("div", { "data-stub": "excalidraw" }),
@@ -121,4 +128,20 @@ it("forwards a pending hash to HTML through the shared viewer dispatch", () => {
   expect(element.props).toEqual(
     expect.objectContaining({ pendingHash: "#story/SV-X", onPendingHashConsumed: consumed }),
   );
+});
+
+it("a centre HTML tab lists each load its content policy blocked, once", () => {
+  render(renderViewer({ ...common, filePath: "/ctx/board.html" }, md));
+  expect(screen.queryByTestId("pane-dev-banner")).toBeNull();
+  const message =
+    "blocked by the frame content policy: https://cdn.example/lib.js (script-src-elem)";
+  act(() => {
+    htmlProps.current.onDocProblem?.({ kind: "csp", message });
+    htmlProps.current.onDocProblem?.({ kind: "csp", message });
+    htmlProps.current.onDocProblem?.({ kind: "script", message: "ReferenceError: x" });
+  });
+  const banner = screen.getByTestId("pane-dev-banner");
+  expect([...banner.querySelectorAll("p.font-mono")].map((p) => p.textContent)).toEqual([
+    `Blocked: ${message}`,
+  ]);
 });

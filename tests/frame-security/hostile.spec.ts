@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { test, expect } from "../support/quarantine-playwright";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server } from "node:http";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,11 @@ import { resolveFrameFixtureBinary } from "./support/fixture-guard.mjs";
 
 let rust: ChildProcess;
 let host: Server;
+// A named HTTPS origin a dashboard can declare. The plain host server and every IP
+// literal (the same server at 127.0.0.1) are never declarable.
+let external: HttpsServer;
+let externalUrl: string;
+let externalHits: string[];
 let scratch: string;
 let port: number;
 let hostUrl: string;
@@ -23,6 +29,8 @@ let records: Array<{
 }>;
 let setupError: Error | undefined;
 
+test.use({ ignoreHTTPSErrors: true });
+
 // A beforeAll throw fails one test and leaves the rest unrun, so setup records its
 // error and beforeEach fails every security test with it.
 test.beforeAll(async () => {
@@ -35,6 +43,42 @@ test.beforeAll(async () => {
 
 async function startFixtures() {
   scratch = await mkdtemp(join(tmpdir(), "codesense-frame-"));
+  const tlsKey = join(scratch, "tls-key.pem");
+  const tlsCert = join(scratch, "tls-cert.pem");
+  execFileSync("openssl", [
+    "req",
+    "-x509",
+    "-newkey",
+    "rsa:2048",
+    "-nodes",
+    "-keyout",
+    tlsKey,
+    "-out",
+    tlsCert,
+    "-subj",
+    "/CN=localhost",
+    "-days",
+    "1",
+  ]);
+  externalHits = [];
+  external = createHttpsServer(
+    { key: await readFile(tlsKey), cert: await readFile(tlsCert) },
+    (req: IncomingMessage, res: ServerResponse) => {
+      externalHits.push(req.url ?? "");
+      res.setHeader("access-control-allow-origin", "*");
+      if (req.url?.startsWith("/redirect")) {
+        // Same server, but an origin the dashboard did not declare.
+        res.statusCode = 302;
+        res.setHeader("location", `${undeclared()}/outside`);
+        res.end();
+        return;
+      }
+      res.end("outside");
+    },
+  );
+  // Both stacks, so `localhost` reaches it whichever address it resolves to first.
+  await new Promise<void>((r) => external.listen(0, r));
+  externalUrl = `https://localhost:${(external.address() as { port: number }).port}`;
   host = createServer((req, res) => {
     if (req.url?.startsWith("/outside")) {
       res.setHeader("access-control-allow-origin", "*");
@@ -53,9 +97,9 @@ async function startFixtures() {
     const shownUrls = [urls[index], urls[1]];
     const shownRecords = [records[index], records[1]];
     res.setHeader("content-type", "text/html");
-    res.end(`<iframe name="team" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads" src="${shownUrls[0]}"></iframe>
-      <iframe name="private" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads" src="${shownUrls[1]}"></iframe>
-      <script>window.records=${JSON.stringify(shownRecords)};window.calls=[];addEventListener('message',e=>{
+    res.end(`<iframe name="team" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads" src="${shownUrls[0]}"></iframe>
+      <iframe name="private" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads" src="${shownUrls[1]}"></iframe>
+      <script>window.records=${JSON.stringify(shownRecords)};window.calls=[];window.events=[];addEventListener('message',e=>{
         var child=${JSON.stringify(records[7])};
         if(e.origin===child.origin&&e.data.token===child.token){
           if(e.source!==frames[0].frames[0])return;
@@ -64,7 +108,7 @@ async function startFixtures() {
           if(e.data.type==='codesense:invoke'){calls.push(e.data);e.source.postMessage({type:'codesense:invoke-result',id:e.data.id,ok:true,data:{identity:'message'}},child.origin)}
           return;
         }
-        if(e.source!==frames[0]&&e.source!==frames[1])return;var i=e.source===frames[1]?1:0;if(e.origin!==records[i].origin||e.data.token!==records[i].token)return;if(e.data.type==='codesense:ready')e.source.postMessage({type:'codesense:visibility',visible:true,token:records[i].token},records[i].origin);if(e.data.type==='codesense:invoke'){calls.push(e.data);e.source.postMessage({type:'codesense:invoke-result',id:e.data.id,ok:true,data:{identity:e.source===frames[1]?'private':'team'}},e.origin)}})</script>`);
+        if(e.source!==frames[0]&&e.source!==frames[1])return;var i=e.source===frames[1]?1:0;if(e.origin!==records[i].origin||e.data.token!==records[i].token)return;if(['codesense:doc-error','codesense:external-link','codesense:navigate'].includes(e.data.type))events.push(e.data);if(e.data.type==='codesense:ready')e.source.postMessage({type:'codesense:visibility',visible:true,token:records[i].token},records[i].origin);if(e.data.type==='codesense:invoke'){calls.push(e.data);e.source.postMessage({type:'codesense:invoke-result',id:e.data.id,ok:true,data:{identity:e.source===frames[1]?'private':'team'}},e.origin)}})</script>`);
   });
   await new Promise<void>((r) => host.listen(0, "127.0.0.1", r));
   hostUrl = `http://127.0.0.1:${(host.address() as { port: number }).port}`;
@@ -74,7 +118,8 @@ async function startFixtures() {
     env: {
       ...process.env,
       CODESENSE_FRAME_FIXTURE: join(scratch, "port"),
-      CODESENSE_FIXTURE_ALLOWED_ORIGIN: hostUrl,
+      // Written to net-blocked's dashboard.yml; the production resolver reads it.
+      CODESENSE_FIXTURE_ALLOWED_ORIGIN: externalUrl,
     },
     stdio: "pipe",
   });
@@ -107,10 +152,16 @@ async function startFixtures() {
 test.afterAll(async () => {
   rust?.kill("SIGTERM");
   await new Promise<void>((r) => (host ? host.close(() => r()) : r()));
+  await new Promise<void>((r) => (external ? external.close(() => r()) : r()));
   if (scratch) await rm(scratch, { recursive: true, force: true });
 });
+/** The external server under an origin no fixture frame declares. */
+const undeclared = () => externalUrl.replace("localhost", "127.0.0.1");
+
 test.beforeEach(async ({ page }) => {
   if (setupError) throw setupError;
+  // Each test sees only the outside requests it caused.
+  externalHits.length = 0;
   await page.goto(hostUrl);
   await expect.poll(() => page.frames().filter((f) => f.url().includes("/viewer/")).length).toBe(2);
   await page.frames()[1].waitForFunction(() => !!(window as any).codesense);
@@ -193,16 +244,31 @@ test("f: a rebinding Host and foreign Origin are refused", async ({ request }) =
     expect((await request.get(`http://127.0.0.1:${port}/health`, { headers })).status()).toBe(403);
   }
 });
-test("g: popups open but get no token or bridge authority", async ({ page }) => {
-  const popupPromise = page.waitForEvent("popup");
-  await page.frames()[1].evaluate(() => window.open("about:blank"));
-  const popup = await popupPromise;
-  expect(await popup.evaluate(() => (window as any).__codesenseProxy?.token ?? null)).toBeNull();
-  expect(await popup.evaluate(() => window.opener)).toBeNull();
-  expect(await popup.evaluate(() => (window.opener as any)?.codesense.sessions() ?? "denied")).toBe(
-    "denied",
-  );
-  await popup.close();
+test("g: the sandbox opens no popups; window.open hands web links to the host", async ({
+  page,
+  context,
+}) => {
+  const opened = await page.frames()[1].evaluate((url) => {
+    // A same-origin blank child has the native window.open and the frame's sandbox.
+    const blank = document.createElement("iframe");
+    document.body.append(blank);
+    return [
+      window.open(url),
+      window.open("about:blank"),
+      blank.contentWindow!.open("about:blank"),
+      blank.contentWindow!.open(url),
+    ];
+  }, `${externalUrl}/outside?via=open`);
+  expect(opened).toEqual([null, null, null, null]);
+  expect(context.pages()).toHaveLength(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).events.filter((e: any) => e.type === "codesense:external-link"),
+      ),
+    )
+    .toEqual([expect.objectContaining({ href: `${externalUrl}/outside?via=open` })]);
+  expect(externalHits).not.toContain("/outside?via=open");
 });
 test("relative fetch and XHR retain their frame credential under cross-site embedding", async ({
   page,
@@ -258,28 +324,32 @@ test("open policy keeps cross-scope file reads attributed to the open frame", as
   expect(result.identity.identity).toBe("open");
   expect(result.identity.contentRoot).toBe(records[2].contentRoot);
 });
-test("service-worker blocking is opt-in and blocks registration in the shim", async ({
+test("every frame refuses service workers in the shim and at the boundary", async ({
   page,
   request,
 }) => {
-  await page.goto(`${hostUrl}/?index=3`);
-  const frame = page.frames()[1];
-  await frame.waitForFunction(() => !!(window as any).codesense);
-  const result = await frame.evaluate(async () => {
-    if (!navigator.serviceWorker) return "unavailable";
-    try {
-      await navigator.serviceWorker.register("/worker.js");
-      return "allowed";
-    } catch (e) {
-      return (e as Error).message;
-    }
-  });
-  // An engine without service workers already refuses them; an engine that
-  // exposes registration must hit the policy shim before making a request.
-  expect(result === "unavailable" || result.startsWith("denied:")).toBe(true);
+  // Network denial is the default, and a service worker could strip the CSP.
+  for (const index of [2, 3, 4]) {
+    await page.goto(`${hostUrl}/?index=${index}`);
+    const frame = page.frames()[1];
+    await frame.waitForFunction(() => !!(window as any).codesense);
+    const result = await frame.evaluate(async () => {
+      if (!navigator.serviceWorker) return "unavailable";
+      try {
+        await navigator.serviceWorker.register("/worker.js");
+        return "allowed";
+      } catch (e) {
+        return (e as Error).message;
+      }
+    });
+    // An engine without service workers already refuses them; an engine that
+    // exposes registration must hit the policy shim before making a request.
+    expect(result === "unavailable" || result.startsWith("denied:"), `${index}`).toBe(true);
+  }
   for (const [index, status] of [
-    [2, 200],
+    [2, 403],
     [3, 403],
+    [4, 403],
   ]) {
     const frame = records[index];
     const response = await request.get(`http://127.0.0.1:${port}/worker.js`, {
@@ -293,7 +363,7 @@ test("service-worker blocking is opt-in and blocks registration in the shim", as
     expect(response.status()).toBe(status);
   }
 });
-test("outside network stays open by default; the switch allows declared hosts only", async ({
+test("outside network is denied by default; only the declared origin is reachable", async ({
   page,
 }) => {
   const fetchFrom = async (index: number, url: string) => {
@@ -308,11 +378,211 @@ test("outside network stays open by default; the switch allows declared hosts on
       }
     }, url);
   };
-  expect(await fetchFrom(2, `${hostUrl}/outside`)).toBe("outside");
-  expect(await fetchFrom(4, `${hostUrl}/outside`)).toBe("outside");
-  expect(await fetchFrom(4, `${hostUrl.replace("127.0.0.1", "localhost")}/outside`)).toBe(
-    "blocked",
+  // Index 2 declares nothing; index 4's dashboard.yml declares exactly externalUrl.
+  expect(await fetchFrom(2, `${hostUrl}/outside`)).toBe("blocked");
+  expect(await fetchFrom(2, `${externalUrl}/outside`)).toBe("blocked");
+  expect(await fetchFrom(4, `${hostUrl}/outside`)).toBe("blocked");
+  expect(await fetchFrom(4, `${externalUrl}/outside`)).toBe("outside");
+  expect(await fetchFrom(4, `${undeclared()}/outside`)).toBe("blocked");
+  // A declared host that redirects to an undeclared one is blocked at the redirect.
+  expect(await fetchFrom(4, `${externalUrl}/redirect`)).toBe("blocked");
+  expect(externalHits.filter((hit) => hit === "/redirect")).toHaveLength(1);
+});
+
+for (const index of [2, 4]) {
+  test(`undeclared script, image, WebSocket and nested frame are blocked and reported (frame ${index})`, async ({
+    page,
+  }) => {
+    await page.goto(`${hostUrl}/?index=${index}`);
+    const frame = page.frames()[1];
+    await frame.waitForFunction(() => !!(window as any).codesense);
+    // An IP literal is never declared, so every load below is outside the frame's policy.
+    const origin = undeclared();
+    const result = await frame.evaluate(async (origin) => {
+      const violation = (match: (uri: string) => boolean) =>
+        new Promise<string>((resolve) =>
+          document.addEventListener("securitypolicyviolation", function seen(e) {
+            if (!match(e.blockedURI)) return;
+            document.removeEventListener("securitypolicyviolation", seen);
+            resolve(e.effectiveDirective);
+          }),
+        );
+      const loads = (element: HTMLScriptElement | HTMLImageElement) =>
+        new Promise<boolean>((resolve) => {
+          element.onload = () => resolve(true);
+          element.onerror = () => resolve(false);
+          document.body.append(element);
+        });
+      const reported = Promise.all([
+        violation((uri) => uri.includes("/outside-script")),
+        violation((uri) => uri.includes("/outside-image")),
+        violation((uri) => /^wss?:/.test(uri)),
+        violation((uri) => uri.includes("/outside-frame")),
+      ]);
+      const script = document.createElement("script");
+      script.src = `${origin}/outside-script`;
+      const image = document.createElement("img");
+      image.src = `${origin}/outside-image`;
+      const loaded = Promise.all([loads(script), loads(image)]);
+      try {
+        new WebSocket(`${origin.replace("https:", "wss:")}/socket`);
+      } catch {
+        // Some engines refuse a CSP-blocked socket synchronously; the violation still fires.
+      }
+      const child = document.createElement("iframe");
+      child.src = `${origin}/outside-frame`;
+      document.body.append(child);
+      return { loaded: await loaded, directives: await reported };
+    }, origin);
+    expect(result.loaded).toEqual([false, false]);
+    expect(result.directives).toHaveLength(4);
+    expect(
+      externalHits.filter((hit) =>
+        /^\/(outside-script|outside-image|outside-frame|socket)/.test(hit),
+      ),
+    ).toEqual([]);
+    // The shim reports each violation to the host as a doc problem.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as any).events
+            .filter((e: any) => e.type === "codesense:doc-error" && e.kind === "csp")
+            .map((e: any) => e.message),
+        ),
+      )
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("/outside-script"),
+          expect.stringContaining("/outside-image"),
+        ]),
+      );
+  });
+}
+
+test("a nested same-origin SVG document keeps the frame's network policy", async ({ page }) => {
+  await page.goto(`${hostUrl}/?index=2`);
+  const frame = page.frames()[1];
+  await frame.waitForFunction(() => !!(window as any).codesense);
+  const result = await frame.evaluate(async (target) => {
+    const child = document.createElement("iframe");
+    const loaded = new Promise((resolve) => (child.onload = resolve));
+    child.src = `./probe.svg#${target}`;
+    document.body.append(child);
+    await loaded;
+    // Refused outright (frame-ancestors) or rendered under the frame CSP: either way, no network.
+    let probe: Promise<string> | undefined;
+    try {
+      probe = (child.contentWindow as any).probe;
+    } catch {
+      return "refused";
+    }
+    return probe ? await probe : "refused";
+  }, `${externalUrl}/outside?via=svg`);
+  expect(["blocked", "refused"]).toContain(result);
+  expect(externalHits).not.toContain("/outside?via=svg");
+});
+
+test("default deny keeps local features: workers, blob: images, WebAssembly; eval stays off", async ({
+  page,
+}) => {
+  await page.goto(`${hostUrl}/?index=2`);
+  const frame = page.frames()[1];
+  await frame.waitForFunction(() => !!(window as any).codesense);
+  const result = await frame.evaluate(async () => {
+    const worker = await new Promise<string>((resolve) => {
+      const own = new Worker("./own-worker.js");
+      own.onmessage = (e) => resolve(String(e.data));
+      own.onerror = () => resolve("blocked");
+    });
+    const blobImage = await new Promise<boolean>((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(true);
+      image.onerror = () => resolve(false);
+      image.src = URL.createObjectURL(
+        new Blob(["<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'/>"], {
+          type: "image/svg+xml",
+        }),
+      );
+    });
+    const wasm = await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])).then(
+      () => true,
+      () => false,
+    );
+    let evaluated = "blocked";
+    try {
+      evaluated = String((0, eval)("1 + 1"));
+    } catch {
+      // 'unsafe-eval' stays off.
+    }
+    return { worker, blobImage, wasm, evaluated };
+  });
+  expect(result).toEqual({
+    worker: "worker-ran",
+    blobImage: true,
+    wasm: true,
+    evaluated: "blocked",
+  });
+  expect(externalHits).toEqual([]);
+});
+
+test("a same-origin worker's own fetch to an undeclared host is blocked", async ({ page }) => {
+  await page.goto(`${hostUrl}/?index=2`);
+  const frame = page.frames()[1];
+  await frame.waitForFunction(() => !!(window as any).codesense);
+  const target = `${externalUrl}/outside?via=worker`;
+  const result = await frame.evaluate(
+    (target) =>
+      new Promise<string>((resolve) => {
+        const worker = new Worker(`./fetch-worker.js#${encodeURIComponent(target)}`);
+        worker.onmessage = (e) => resolve(String(e.data));
+        worker.onerror = () => resolve("refused");
+      }),
+    target,
   );
+  expect(result).toBe("blocked");
+  expect(externalHits).not.toContain("/outside?via=worker");
+});
+
+test("popups that are not web or page links, and new-window links and forms, report as blocked", async ({
+  page,
+}) => {
+  const frame = page.frames()[1];
+  await frame.evaluate(() => {
+    window.open("./report.pdf");
+    const link = document.createElement("a");
+    link.href = "./report.pdf";
+    link.target = "_blank";
+    link.textContent = "report";
+    document.body.append(link);
+    link.click();
+    const form = document.createElement("form");
+    form.action = "./submit";
+    form.setAttribute("action", "./submit");
+    form.target = "_blank";
+    document.body.append(form);
+    form.requestSubmit();
+    // A page link still opens through the host's navigation.
+    window.open("./runs.html");
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).events
+          .filter((e: any) => e.type === "codesense:doc-error" && e.kind === "csp")
+          .map((e: any) => e.message),
+      ),
+    )
+    .toEqual([
+      "blocked by the frame content policy: ./report.pdf (popup)",
+      "blocked by the frame content policy: ./report.pdf (popup)",
+      "blocked by the frame content policy: ./submit (popup)",
+    ]);
+  expect(
+    await page.evaluate(() =>
+      (window as any).events.filter((e: any) => e.type === "codesense:navigate"),
+    ),
+  ).toEqual([expect.objectContaining({ href: "./runs.html", metaKey: true })]);
+  expect(page.context().pages()).toHaveLength(1);
 });
 
 test("kit scripts and styles load through the same frame boundary", async ({ page }) => {
@@ -345,40 +615,6 @@ test("open frame HTTP reads honor an explicit managed content root", async ({ pa
     target,
   );
   expect(roots).toEqual([target, target]);
-});
-
-test("noOutsideNetwork alone blocks service-worker registration and script requests", async ({
-  page,
-  request,
-}) => {
-  for (const [index, expected] of [
-    [2, "allowed"],
-    [4, "denied:"],
-  ] as const) {
-    await page.goto(`${hostUrl}/?index=${index}`);
-    const frame = page.frames()[1];
-    await frame.waitForFunction(() => !!(window as any).codesense);
-    const result = await frame.evaluate(async () => {
-      if (!navigator.serviceWorker) return "unavailable";
-      try {
-        await navigator.serviceWorker.register("/network-worker.js");
-        return "allowed";
-      } catch (error) {
-        return (error as Error).message;
-      }
-    });
-    expect(result).toMatch(new RegExp(`^${expected}`));
-    const record = records[index];
-    const response = await request.get(`http://127.0.0.1:${port}/network-worker.js`, {
-      headers: {
-        host: new URL(record.origin).host,
-        origin: record.origin,
-        "service-worker": "script",
-        "x-codesense-proxy-token": record.token,
-      },
-    });
-    expect(response.status()).toBe(index === 2 ? 200 : 403);
-  }
 });
 
 test("file fixture preserves production JSON response types", async ({ page }) => {
@@ -480,7 +716,7 @@ for (const baseline of [false, true]) {
     ["audio", "silence.wav"],
     ["video", "black.mp4"],
   ] as const) {
-    test(`native ${tag} loads ${baseline ? "baseline" : "default-open live"} media without shim credentials`, async ({
+    test(`native ${tag} loads ${baseline ? "baseline" : "live"} media without shim credentials`, async ({
       page,
       context,
     }) => {
@@ -542,6 +778,16 @@ test("minted inline children are isolated and call the host directly with their 
     .toBe(true);
   const child = page.frames().find((f) => f.url().includes("/inline/message.html"))!;
   await child.waitForFunction(() => !!(window as any).codesense);
+  // The minted message child gets no outside network either.
+  expect(
+    await child.evaluate(async (url) => {
+      try {
+        return await (await fetch(url)).text();
+      } catch {
+        return "blocked";
+      }
+    }, `${externalUrl}/outside`),
+  ).toBe("blocked");
   expect(
     await child.evaluate(() => {
       try {

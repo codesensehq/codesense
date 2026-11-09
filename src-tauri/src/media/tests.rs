@@ -31,6 +31,20 @@ fn fetch_rule_requires_auto_own_machine_and_allowed_host() {
 }
 
 #[test]
+fn the_default_config_and_an_unset_mode_fetch_nothing_without_a_tap() {
+    let unset: Config = serde_yaml::from_str("hosts: ['*.giphy.com']").unwrap();
+    for config in [Config::default(), unset] {
+        assert_eq!(config.remote, Remote::Ask);
+        assert!(!config.should_auto_fetch("i.giphy.com", true));
+        let a = Attachment::remote("https://i.giphy.com/cat.gif", "cat", &config, true).unwrap();
+        assert_eq!(
+            (a.state.as_str(), a.reason.as_deref()),
+            ("pending", Some("ask"))
+        );
+    }
+}
+
+#[test]
 fn checks_magic_dimensions_and_size() {
     let gif = b"GIF89a\x02\x00\x03\x00";
     assert_eq!(inspect(gif).unwrap(), ("image/gif", 2, 3));

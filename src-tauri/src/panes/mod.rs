@@ -273,6 +273,9 @@ pub struct DashboardDeclaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface: Option<String>,
     pub capabilities: Vec<String>,
+    /// Outside-network origins the pane's frame may reach: exact `https://host[:port]` only.
+    #[serde(rename = "allowed_hosts", skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<DashboardCommand>,
     /// Why the `codesense:commands` meta did not parse; reported by `validate`.
@@ -305,6 +308,8 @@ impl DashboardDeclaration {
             && self.surface == other.surface
             && set(&self.slots) == set(&other.slots)
             && set(&self.capabilities) == set(&other.capabilities)
+            && set(&normalized_hosts(&self.allowed_hosts))
+                == set(&normalized_hosts(&other.allowed_hosts))
             && self.commands == other.commands
     }
     pub fn from_html(html: &str) -> Self {
@@ -335,6 +340,7 @@ impl DashboardDeclaration {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned),
             capabilities: list("codesense:capabilities"),
+            allowed_hosts: list("codesense:allowed-hosts"),
             commands,
             commands_error,
         }
@@ -356,6 +362,8 @@ impl DashboardDeclaration {
         if let Some(error) = &self.commands_error {
             return Err(error.clone());
         }
+        crate::dashboard_stream::frame::AllowedHosts::parse(&self.allowed_hosts)
+            .map_err(|error| format!("invalid allowed_hosts: {error}"))?;
         let mut ids = std::collections::BTreeSet::new();
         for command in &self.commands {
             command.validate()?;
@@ -364,6 +372,15 @@ impl DashboardDeclaration {
             }
         }
         Ok(())
+    }
+}
+
+/// Declared hosts compared as the origins they name (`https://API.example.com/` is
+/// `https://api.example.com`); a list that does not parse is compared as written.
+fn normalized_hosts(hosts: &[String]) -> Vec<String> {
+    match crate::dashboard_stream::frame::AllowedHosts::parse(hosts) {
+        Ok(parsed) => parsed.0,
+        Err(_) => hosts.to_vec(),
     }
 }
 

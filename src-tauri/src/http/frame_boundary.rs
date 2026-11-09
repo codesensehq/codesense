@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::app_origins::AppOrigins;
-use crate::dashboard_stream::frame::{FrameRecord, FrameStore};
+use crate::dashboard_stream::frame::{AllowedHosts, FrameRecord, FrameStore};
 use axum::{
     extract::{Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -173,18 +173,18 @@ async fn boundary(
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         }
+        // The CSP below is chosen by the declared type, so no engine may sniff another one.
+        response.headers_mut().insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
         if let Ok(value) = HeaderValue::from_str(&format!(
             "csframe={}; Path=/; HttpOnly; SameSite=Strict",
             frame.token
         )) {
             response.headers_mut().insert(header::SET_COOKIE, value);
         }
-        if worker_script
-            || response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .is_some_and(|v| v.as_bytes().starts_with(b"text/html"))
-        {
+        if worker_script || can_be_a_document(response.headers().get(header::CONTENT_TYPE)) {
             let mut csp = state.app_origins.frame_ancestors();
             if let Some(parent) = frame
                 .parent_frame
@@ -195,25 +195,28 @@ async fn boundary(
                 csp.push_str(&parent.origin);
             }
             if frame.policy.no_outside_network {
-                let hosts = frame
-                    .policy
-                    .allowed_hosts
-                    .iter()
-                    .filter_map(|h| url::Url::parse(h).ok())
-                    .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
-                    .map(|u| u.origin().ascii_serialization())
-                    .collect::<Vec<_>>()
+                // A policy whose hosts are not all exact HTTPS origins opens none of them.
+                let hosts = AllowedHosts::parse(&frame.policy.allowed_hosts)
+                    .unwrap_or_default()
+                    .0
                     .join(" ");
-                if frame.grant.slot == "right-pane" {
+                // A slot frame may nest the message frames it embeds (`link_child`).
+                if crate::verbs::capabilities::SLOTS.contains(&frame.grant.slot.as_str()) {
                     csp.push_str(&format!(
-                        "; frame-src 'self' http://*.localhost:{}",
+                        "; frame-src 'self' http://*.localhost:{} {hosts}",
                         state.port
                     ));
                 }
-                csp.push_str(&format!("; default-src 'self' {hosts}; script-src 'self' 'unsafe-inline' {hosts}; style-src 'self' 'unsafe-inline' {hosts}; img-src 'self' data: {hosts}; connect-src 'self' {hosts}; form-action 'self' {hosts}; base-uri 'self'; object-src 'none'"));
+                // Only the outside network is denied: local blob:/data: media and fonts, same-origin
+                // workers and WebAssembly keep working. `eval` stays off ('unsafe-eval').
+                csp.push_str(&format!("; default-src 'self' {hosts}; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' {hosts}; style-src 'self' 'unsafe-inline' {hosts}; img-src 'self' data: blob: {hosts}; font-src 'self' data: blob: {hosts}; media-src 'self' data: blob: {hosts}; connect-src 'self' blob: {hosts}; form-action 'self' {hosts}; base-uri 'self'; object-src 'none'"));
             }
-            if frame.policy.blocks_service_workers() {
+            // Service workers stay refused at the boundary (`blocks_service_workers`); only an
+            // explicit switch also turns dedicated and shared workers off.
+            if frame.policy.block_service_workers {
                 csp.push_str("; worker-src 'none'");
+            } else if frame.policy.no_outside_network {
+                csp.push_str("; worker-src 'self' blob:");
             }
             if let Ok(value) = HeaderValue::from_str(&csp) {
                 response
@@ -223,6 +226,21 @@ async fn boundary(
         }
     }
     response
+}
+/// Policy: any response a nested frame could render as a scripted document (HTML, SVG,
+/// XHTML or other XML, or an untyped body) carries the frame CSP; a same-origin URL frame
+/// does not inherit its parent's policy.
+fn can_be_a_document(content_type: Option<&HeaderValue>) -> bool {
+    let Some(value) = content_type.and_then(|v| Result::ok(v.to_str())) else {
+        return true;
+    };
+    let essence = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence == "text/html" || essence.ends_with("/xml") || essence.ends_with("+xml")
 }
 fn cors(response: &mut Response, origin: Option<&str>) {
     if let Some(origin) = origin.and_then(|o| HeaderValue::from_str(o).ok()) {
@@ -312,6 +330,13 @@ mod tests {
         fixture_with_origins(policy, AppOrigins::default())
     }
     fn fixture_with_origins(policy: FramePolicy, app_origins: AppOrigins) -> (Router, FrameRecord) {
+        fixture_in_slot("centre", policy, app_origins)
+    }
+    fn fixture_in_slot(
+        slot: &str,
+        policy: FramePolicy,
+        app_origins: AppOrigins,
+    ) -> (Router, FrameRecord) {
         let frames = Arc::new(FrameStore::default());
         let record = frames.mint(
             9321,
@@ -319,7 +344,7 @@ mod tests {
                 frame_id: String::new(),
                 principal: "human".into(),
                 dashboard: "board".into(),
-                slot: "centre".into(),
+                slot: slot.into(),
                 team: None,
                 scope: "open".into(),
             },
@@ -331,7 +356,16 @@ mod tests {
         );
         let app = Router::new()
             .merge(crate::http::routes::dashboard_kit::router())
-            .fallback(|| async { ([(header::CONTENT_TYPE, "text/html")], "<p>board</p>") });
+            .fallback(|uri: axum::http::Uri| async move {
+                let content_type = match uri.path().rsplit('.').next() {
+                    Some("svg") => "image/svg+xml",
+                    Some("xhtml") => "application/xhtml+xml; charset=utf-8",
+                    Some("png") => "image/png",
+                    Some("json") => "application/json",
+                    _ => "text/html",
+                };
+                ([(header::CONTENT_TYPE, content_type)], "<p>board</p>")
+            });
         (
             with_boundary(
                 app,
@@ -450,10 +484,11 @@ mod tests {
                         origin
                     );
                     if method != "OPTIONS" {
-                        assert_eq!(
-                            response.headers()[header::CONTENT_SECURITY_POLICY],
-                            origins.frame_ancestors()
-                        );
+                        let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
+                            .to_str()
+                            .unwrap();
+                        assert!(csp.starts_with(&format!("{}; ", origins.frame_ancestors())));
+                        assert!(csp.contains("; default-src 'self' ;"));
                     }
                 } else {
                     assert_eq!(
@@ -566,9 +601,17 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn service_worker_switch_is_off_until_requested() {
+    async fn service_workers_load_only_for_an_open_network_without_the_switch() {
         assert_eq!(
-            request(FramePolicy::default(), true).await.status(),
+            request(
+                FramePolicy {
+                    no_outside_network: false,
+                    ..Default::default()
+                },
+                true
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         assert_eq!(
@@ -587,41 +630,192 @@ mod tests {
     #[tokio::test]
     async fn no_outside_network_alone_blocks_service_worker_scripts() {
         assert_eq!(
-            request(
-                FramePolicy {
-                    no_outside_network: true,
-                    ..Default::default()
-                },
-                true
-            )
-            .await
-            .status(),
+            request(FramePolicy::default(), true).await.status(),
             StatusCode::FORBIDDEN
         );
     }
     #[tokio::test]
-    async fn outside_network_is_unrestricted_until_requested_and_declared_hosts_survive() {
-        let open = request(FramePolicy::default(), false).await;
-        let csp = open.headers()[header::CONTENT_SECURITY_POLICY]
-            .to_str()
-            .unwrap();
-        assert!(csp.starts_with("frame-ancestors"));
-        assert!(!csp.contains("connect-src"));
-        let restricted = request(
+    async fn outside_network_is_denied_by_default_and_only_exact_declared_hosts_survive() {
+        let csp = |response: Response| {
+            response.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        let denied = csp(request(FramePolicy::default(), false).await);
+        for directive in [
+            "default-src 'self' ;",
+            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' ;",
+            "img-src 'self' data: blob: ;",
+            "font-src 'self' data: blob: ;",
+            "media-src 'self' data: blob: ;",
+            "connect-src 'self' blob: ;",
+            "form-action 'self' ;",
+            "object-src 'none'",
+            "worker-src 'self' blob:",
+        ] {
+            assert!(denied.contains(directive), "{directive}: {denied}");
+        }
+        assert!(!denied.contains("'unsafe-eval'"), "{denied}");
+        // An explicit service-worker switch still turns every worker off.
+        let workers_off = csp(request(
             FramePolicy {
-                no_outside_network: true,
+                block_service_workers: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .await);
+        assert!(
+            workers_off.ends_with("; worker-src 'none'"),
+            "{workers_off}"
+        );
+        let declared = csp(request(
+            FramePolicy {
                 allowed_hosts: vec!["https://api.example.com".into()],
                 ..Default::default()
             },
             false,
         )
-        .await;
-        let csp = restricted.headers()[header::CONTENT_SECURITY_POLICY]
+        .await);
+        for directive in [
+            "default-src 'self' https://api.example.com;",
+            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://api.example.com;",
+            "img-src 'self' data: blob: https://api.example.com;",
+            "connect-src 'self' blob: https://api.example.com;",
+        ] {
+            assert!(declared.contains(directive), "{directive}: {declared}");
+        }
+        assert!(!declared.contains('*'));
+        // A host the resolver would refuse never reaches the header, nor do its siblings.
+        let refused = csp(request(
+            FramePolicy {
+                allowed_hosts: vec![
+                    "https://api.example.com".into(),
+                    "http://plain.example.com".into(),
+                ],
+                ..Default::default()
+            },
+            false,
+        )
+        .await);
+        assert!(refused.contains("connect-src 'self' blob: ;"), "{refused}");
+        assert!(!refused.contains("example.com"), "{refused}");
+    }
+    #[tokio::test]
+    async fn only_slot_frames_may_nest_their_message_frames() {
+        for (slot, nests) in [
+            ("right-pane", true),
+            ("dock", true),
+            ("file-nav", true),
+            ("centre", false),
+            ("message", false),
+        ] {
+            let (app, frame) = fixture_in_slot(slot, FramePolicy::default(), AppOrigins::default());
+            let response = app
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/viewer/root/board.html")
+                        .header("host", frame.origin.trim_start_matches("http://"))
+                        .header("origin", &frame.origin)
+                        .header("x-codesense-proxy-token", &frame.token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                csp.contains("; frame-src 'self' http://*.localhost:9321 ;"),
+                nests,
+                "{slot}: {csp}"
+            );
+            assert!(csp.contains("; default-src 'self' ;"), "{slot}: {csp}");
+        }
+        // Declared hosts may be framed by a slot frame exactly as default-src allows them.
+        let (app, frame) = fixture_in_slot(
+            "dock",
+            FramePolicy {
+                allowed_hosts: vec!["https://api.example.com".into()],
+                ..Default::default()
+            },
+            AppOrigins::default(),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/viewer/root/board.html")
+                    .header("host", frame.origin.trim_start_matches("http://"))
+                    .header("origin", &frame.origin)
+                    .header("x-codesense-proxy-token", &frame.token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
             .to_str()
             .unwrap();
-        assert!(csp.contains("connect-src 'self' https://api.example.com"));
-        assert!(csp.contains("img-src 'self' data: https://api.example.com"));
-        assert!(!csp.contains("*"));
+        assert!(
+            csp.contains("; frame-src 'self' http://*.localhost:9321 https://api.example.com;"),
+            "{csp}"
+        );
+        assert!(
+            !csp.contains("frame-src 'self' http://*.localhost:9321 ;"),
+            "{csp}"
+        );
+    }
+    #[tokio::test]
+    async fn every_scriptable_document_type_carries_the_network_policy() {
+        let (app, frame) = fixture(FramePolicy::default());
+        for (path, guarded) in [
+            ("/viewer/root/board.html", true),
+            ("/viewer/root/image.svg", true),
+            ("/viewer/root/page.xhtml", true),
+            ("/viewer/root/photo.png", false),
+            ("/viewer/root/data.json", false),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .header("host", frame.origin.trim_start_matches("http://"))
+                        .header("origin", &frame.origin)
+                        .header("x-codesense-proxy-token", &frame.token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff",
+                "{path}"
+            );
+            let csp = response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .map(|v| v.to_str().unwrap().to_owned());
+            assert_eq!(
+                csp.is_some_and(|csp| csp.contains("connect-src 'self' blob: ;")),
+                guarded,
+                "{path}"
+            );
+        }
+        assert!(can_be_a_document(None));
+        assert!(can_be_a_document(Some(&HeaderValue::from_static(
+            "Text/HTML; charset=utf-8"
+        ))));
+        assert!(can_be_a_document(Some(&HeaderValue::from_static(
+            "text/xml"
+        ))));
+        assert!(!can_be_a_document(Some(&HeaderValue::from_static(
+            "text/css"
+        ))));
     }
     #[tokio::test]
     async fn app_and_live_frame_cors_are_pinned_and_teardown_revokes_access() {
