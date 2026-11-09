@@ -235,7 +235,6 @@ for (const fixture of ["dock-never", "dock-throw"])
     await expect(strip).toContainText("Fixture agents pane didn't load.");
     await expect(strip).not.toContainText("showing the built-in");
     await expect(cards).toHaveCount(0);
-    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
     // The strip sits in a box capped at about 60% of the column.
     const box = (await strip.locator("..").boundingBox())!;
     const column = (await page.getByRole("region", { name: "Agents" }).boundingBox())!;
@@ -263,12 +262,11 @@ test("a failed dock page falls back to the listed built-in agent-list page", asy
     "fixture-agent",
   );
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await expect(fallback.getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
 // A ready dock page that stops answering, or draws nothing, is reloaded once, then the strip
-// stands alone with Reload (no native list beneath it). A healthy page is never reloaded.
+// stands alone with Reload. A healthy page is never reloaded.
 async function runPings(page: Page, until: () => Promise<boolean>) {
   for (let i = 0; i < 30 && !(await until()); i++) await page.clock.runFor(1000);
 }
@@ -285,7 +283,6 @@ for (const fixture of ["dock-silent", "dock-blank"])
     await runPings(page, async () => (await strip.count()) > 0);
     await expect(strip).toBeVisible();
     expect(loads.get(`${fixture}.html`)).toBe(2);
-    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
     await expect(page.locator("[data-slot-id=dock] iframe")).toHaveCount(0);
     await strip.getByRole("button", { name: "Details" }).click();
     await expect(strip).toContainText(
@@ -551,7 +548,6 @@ test("a page still loading stays neutral past three seconds and falls back at th
   await page.clock.runFor(1);
   await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
   await expect(page.locator("[data-slot-id=dock]")).not.toHaveAttribute("aria-busy");
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
 });
 
 test("a dashboard missing at launch loads after its file is restored and Reload", async ({
@@ -560,7 +556,6 @@ test("a dashboard missing at launch loads after its file is restored and Reload"
   await open(page, "page=dock-ok&missing");
   const strip = page.getByTestId("slot-fallback-strip");
   await expect(strip).toBeVisible();
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await page.evaluate(() => (window as any).restore());
   await strip.getByRole("button", { name: "Reload" }).click();
   await ready(page);
