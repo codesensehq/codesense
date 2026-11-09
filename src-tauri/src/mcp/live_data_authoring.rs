@@ -547,7 +547,7 @@ fn sdk_section() -> Value {
                 "handling": "The page decides what to do with a drop. The host does not ingest files or change a composer automatically. Drag enter/over/leave carry no paths; only an actual drop discloses paths.",
                 "example": "window.addEventListener('message', (event) => {\n  if (event.source !== parent) return;\n  const message = event.data;\n  if (message?.type === 'codesense:file-drag') {\n    document.body.classList.toggle('file-drag', message.phase !== 'leave');\n  } else if (message?.type === 'codesense:file-drop') {\n    document.body.classList.remove('file-drag');\n    showDroppedPaths(message.paths); // Your page's handler decides what happens next.\n  }\n});"
             },
-            "focus_return": "When the host UI closes, the host focuses the iframe and sends codesense:focus-return {anchorId}. The shim focuses that id, else its first focusable control. codesense.onFocusReturn(cb) passes {anchorId} and returns an unsubscribe; any registered handler replaces default focus."
+            "focus_return": "When the host UI closes, the host focuses the iframe and sends codesense:focus-return {anchorId}. The shim focuses that id without scrolling, else the document (no control). codesense.onFocusReturn(cb) passes {anchorId} and returns an unsubscribe; any registered handler replaces default focus."
         },
         "context_query": {
             "read": "codesense.queryContext(q) → {total, rows:[{id,path,relPath,fileName,org,team,layer,kind,mtime,title,fields,relationships?}], groups?, nextCursor?}",
