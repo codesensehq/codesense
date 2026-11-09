@@ -21,7 +21,14 @@ const HOSTED_RUNNERS = new Set([
 // Exact grants are scoped by file and job; each exception also needs its own constraints.
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
+// The commit email audit runs nightly and on main, never on pull requests.
+const COMMIT_EMAILS = {
+  file: "commit-emails.yml",
+  job: "commit-emails",
+  triggers: ["push", "schedule", "workflow_dispatch"],
+};
 const JOB_PERMISSIONS = new Map([
+  [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
@@ -100,8 +107,12 @@ export function workflowPolicy(text, file = "") {
     : ["pull_request", "merge_group", "push", "workflow_dispatch"];
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
-  if (!triggers.length || triggers.some((t) => !allowedTriggers.includes(t)))
-    errors.push("triggers must match the workflow allowlist; Scorecard forbids pull requests");
+  // Kept apart from allowedTriggers, so each file's exception reads (and merges) on its own.
+  const permittedTriggers = file === COMMIT_EMAILS.file ? COMMIT_EMAILS.triggers : allowedTriggers;
+  if (!triggers.length || triggers.some((t) => !permittedTriggers.includes(t)))
+    errors.push(
+      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests",
+    );
   if (triggers.includes("merge_group")) {
     const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
     if (mergeGroup !== null && JSON.stringify(mergeGroup) !== '{"types":["checks_requested"]}')
@@ -127,6 +138,11 @@ export function workflowPolicy(text, file = "") {
     errors.push("concurrency must group and cancel superseded runs");
   if (!mapping(workflow.jobs) || !Object.keys(workflow.jobs).length)
     errors.push("workflow must define jobs");
+  if (
+    file === COMMIT_EMAILS.file &&
+    JSON.stringify(Object.keys(workflow.jobs ?? {})) !== JSON.stringify([COMMIT_EMAILS.job])
+  )
+    errors.push(`commit emails: the only job must be ${COMMIT_EMAILS.job}`);
   for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
     if (!mapping(job)) {
       errors.push(`${name}: job must be a mapping`);
