@@ -294,6 +294,8 @@ export const NETWORK_PROBLEM_GRACE_MS = 5000;
 export interface DocProblem {
   kind: "load" | "script" | "bridge";
   message: string;
+  /** Why a frame failed, when the host may recover it; `message` is display text only. */
+  cause?: "crashed" | "unresponsive" | "blank";
 }
 
 /**
@@ -909,6 +911,12 @@ export function HtmlViewer({
   // Whether the doc now loaded has announced itself; pushes wait for it, and a
   // new load announces again.
   const docReadyRef = useRef(false);
+  /** The page itself called `codesense.ready()`: it has drawn what it means to show. A page
+   *  that is only subscribed may still be waiting for its data, so it is never render-checked. */
+  const pageLiveRef = useRef(false);
+  /** The next ping asks whether the page drew anything (set when it goes live and on each
+   *  reveal). */
+  const renderCheckDue = useRef(false);
   const loadedDocumentKey = useRef<string | null>(null);
   const documentLoads = useRef(0);
 
@@ -1473,21 +1481,31 @@ export function HtmlViewer({
     postToFrame,
   ]);
   const missedPongs = useRef(0);
+  const slotPane = !!pane;
   useEffect(() => {
     missedPongs.current = 0;
     if (!live || !docVisible || retiring || !frameRecord) return;
+    // A slot pane's first ping after its page is live or revealed also asks whether the page
+    // drew anything, so a frame that answers but shows nothing is caught too.
+    renderCheckDue.current = true;
     const timer = setInterval(() => {
       if (!docReadyRef.current || retiringRef.current) return;
       if (missedPongs.current >= 3) {
         clearInterval(timer);
-        onDocProblemRef.current?.({ kind: "load", message: "frame stopped responding" });
+        onDocProblemRef.current?.({
+          kind: "load",
+          message: "frame stopped responding",
+          cause: "unresponsive",
+        });
         return;
       }
       missedPongs.current += 1;
-      postToFrame(endpoint(), { type: "codesense:ping" });
+      const render = slotPane && renderCheckDue.current && pageLiveRef.current;
+      if (render) renderCheckDue.current = false;
+      postToFrame(endpoint(), { type: "codesense:ping", render: render || undefined });
     }, 5000);
     return () => clearInterval(timer);
-  }, [live, docVisible, retiring, frameRecord, endpoint, postToFrame]);
+  }, [live, docVisible, retiring, frameRecord, endpoint, postToFrame, slotPane]);
   useEffect(() => {
     if (!hostedFrame && !docVisible && frame && document.activeElement === frame) {
       const previous = focusOwner.previous.get(frame);
@@ -1526,6 +1544,7 @@ export function HtmlViewer({
   }, [endpoint, focusElement, postToFrame, presented, prepareIntent]);
   useLayoutEffect(() => {
     docReadyRef.current = false;
+    pageLiveRef.current = false;
     loadedDocumentKey.current = null;
     menuActionsEnabled.current = false;
     menuLifetime.current.abort();
@@ -1654,7 +1673,10 @@ export function HtmlViewer({
         return;
       }
       if (type === "codesense:live") {
-        if (live) docLive();
+        if (!live) return;
+        pageLiveRef.current = true;
+        renderCheckDue.current = true;
+        docLive();
         return;
       }
       // The page has applied the theme the host posted: now the frame may show.
@@ -1673,6 +1695,9 @@ export function HtmlViewer({
           () =>
             `ready doc=${documentKey} t=${nowMs()} sinceDocStart=${nowMs() - docStartedAt.current} again=${docReadyRef.current} visible=${visibleRef.current}${lagField(data.sentAt)}`,
         );
+        // Every load, an in-frame reload included, is render-checked once it is live again. A
+        // repeated ready (a lost first one) may come after the page already went live.
+        if (data.retry !== true) pageLiveRef.current = false;
         if (docReadyRef.current) {
           outbox.begin(`${documentKey}:load:${++documentLoads.current}`);
           onPageStartRef.current?.(`${documentKey}:load:${documentLoads.current}`);
@@ -1809,6 +1834,12 @@ export function HtmlViewer({
       }
       if (type === "codesense:pong") {
         missedPongs.current = 0;
+        if (data.rendered === false)
+          onDocProblemRef.current?.({
+            kind: "load",
+            message: "frame rendered nothing",
+            cause: "blank",
+          });
         return;
       }
       if (type === "codesense:key-escape") {
@@ -2354,7 +2385,9 @@ export function HtmlViewer({
         allow={HTML_FRAME_ALLOW}
         src={initialFrameSrc}
         onLoad={handleIframeLoad}
-        onError={() => onDocProblemRef.current?.({ kind: "load", message: "frame crashed" })}
+        onError={() =>
+          onDocProblemRef.current?.({ kind: "load", message: "frame crashed", cause: "crashed" })
+        }
         // Matching the doc's own `color-scheme` keeps the frame transparent over
         // the surface it sits on.
         style={{

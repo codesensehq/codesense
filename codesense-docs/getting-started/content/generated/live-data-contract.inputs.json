@@ -17,7 +17,7 @@
     "src-tauri/src/dashboard_publish/inbox/media.rs": "d2513f771721480927a47728a96ddfc20f74771b7d3452d730246d4fd6eeff58",
     "src-tauri/src/dashboard_publish/inbox/tests.rs": "63f938474f140e6c958c411546db355b3cb5a2a6fd01213e474ad01fd32f8c85",
     "src-tauri/src/dashboard_publish/toolkit/cs-live.js": "3296389ae01beebc31b4e3a67fa09e1b1de9dd505330e5d835c9d737e0340840",
-    "src-tauri/src/http/routes/viewer.rs": "4ad626a372fd2197923eeaa684a0723aceb3180a48b06af49cca0f58bb0a75f0",
+    "src-tauri/src/http/routes/viewer.rs": "f7c918fffa06a73ff10014ad0ee7b9c78bfee3b47cecc31a39c4fa92d73a2fae",
     "src-tauri/src/mcp/live-data-starter.html": "5de6771ae5c84d74caf264f97a3038b3c826375147f1cf66eb12e87e868a8c61",
     "src-tauri/src/mcp/live_data_authoring.rs": "55f1677108c00a785eb4676c75125dcf6190c8e48e8e767279f4a79e8c096fbb",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
