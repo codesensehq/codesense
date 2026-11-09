@@ -36,9 +36,9 @@
 //
 // Modes:
 //   write (default) — regenerate `generated/recipes.json` from `examples/`.
-//   --check          — exit non-zero if the committed JSON differs from a fresh
-//                      render. Error message names (i) the drifted entity,
-//                      (ii) the file to edit, (iii) `npm run gen:docs`.
+//   The output is a build artifact, not committed (.gitignore): cargo's build script
+//   and `pnpm gen:docs` write it, and `gen:docs:check` writes it too, so a
+//   generator error still fails the check. --check is accepted and writes as well.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -588,51 +588,9 @@ function main() {
     for (const input of buildInputs()) console.log(input);
     return;
   }
-  const check = process.argv.includes("--check");
   const { doc, warnings } = buildManifest();
   for (const w of warnings) console.warn(w);
   const fresh = serialize(doc);
-  if (check) {
-    const existing = existsSync(OUTPUT) ? readFileSync(OUTPUT, "utf8") : "";
-    if (existing !== fresh) {
-      // Find the drifted entity (first id that differs or is missing) so the
-      // error message points at the actual culprit, not just "the whole file."
-      let culprit = "recipes.json";
-      try {
-        const got = existing ? JSON.parse(existing) : { recipes: [] };
-        const have = new Map((got.recipes || []).map((r) => [r.id, r]));
-        for (const r of doc.recipes) {
-          const prev = have.get(r.id);
-          if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {
-            culprit = r.id;
-            break;
-          }
-        }
-        if (culprit === "recipes.json") {
-          for (const prev of got.recipes || []) {
-            if (!doc.recipes.some((r) => r.id === prev.id)) {
-              culprit = `${prev.id} (removed)`;
-              break;
-            }
-          }
-        }
-      } catch {
-        /* corrupt JSON — the generic message is still useful. */
-      }
-      console.error(
-        [
-          "generate-recipes-manifest: committed recipes.json is stale.",
-          `  entity:    ${culprit}`,
-          `  file:      codesense-docs/getting-started/content/generated/recipes.json`,
-          `  generator: scripts/generate-recipes-manifest.mjs`,
-          `  fix:       npm run gen:docs`,
-        ].join("\n"),
-      );
-      process.exit(1);
-    }
-    console.log("generate-recipes-manifest: ok");
-    return;
-  }
   mkdirSync(dirname(OUTPUT), { recursive: true });
   if (!existsSync(OUTPUT) || readFileSync(OUTPUT, "utf8") !== fresh) writeFileSync(OUTPUT, fresh);
   console.log(`generate-recipes-manifest: wrote ${OUTPUT}`);

@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error -- plain Node ESM build script, no type declarations.
 import {
   buildCrossref,
-  crossrefVerdict,
   parseMcpTools,
   parseTauriCommands,
   parseTauriWrappers,
@@ -255,52 +254,5 @@ describe("buildCrossref — end-to-end from in-memory fixtures", () => {
       allowYaml: "",
     });
     expect(warnings.join("\n")).toContain("does not resolve");
-  });
-
-  describe("PR gate tolerance for line-only drift", () => {
-    const libRs = [
-      "pub fn run() {",
-      "    .invoke_handler(tauri::generate_handler![",
-      "        commands::foo::alpha,",
-      "        commands::foo::beta,",
-      "    ])",
-      "}",
-    ].join("\n");
-    const handlerRs = (pad: number) =>
-      [
-        "impl Handler {",
-        ...Array(pad).fill("    // pad"),
-        '    #[tool(description = "x")]',
-        "    async fn alpha(&self) -> R { todo!() }",
-        "}",
-      ].join("\n");
-    const render = (pad: number, lib = libRs) =>
-      buildCrossref({
-        libRs: lib,
-        handlerRs: handlerRs(pad),
-        commandsTs: 'invoke<void>("alpha", {});',
-        mapYaml: "",
-        allowYaml: "",
-      }).doc;
-    const text = (doc: unknown) => `${JSON.stringify(doc, null, 2)}\n`;
-
-    it("line-only drift is a notice under the PR switch and stale when strict", () => {
-      const committed = text(render(0));
-      const fresh = render(3);
-      expect(crossrefVerdict(committed, fresh, true)).toBe("notice");
-      expect(crossrefVerdict(committed, fresh, false)).toBe("stale");
-      expect(crossrefVerdict(text(fresh), fresh, false)).toBe("ok");
-    });
-
-    it("a renamed, removed or re-paired entry still fails the PR gate", () => {
-      const committed = text(render(0));
-      const renamed = libRs.replace("commands::foo::beta", "commands::foo::gamma");
-      expect(crossrefVerdict(committed, render(3, renamed), true)).toBe("stale");
-      const dropped = libRs.replace("        commands::foo::beta,\n", "");
-      expect(crossrefVerdict(committed, render(3, dropped), true)).toBe("stale");
-      const moved = libRs.replace("commands::foo::alpha", "commands::bar::alpha");
-      expect(crossrefVerdict(committed, render(3, moved), true)).toBe("stale");
-      expect(crossrefVerdict("not json", render(0), true)).toBe("stale");
-    });
   });
 });
