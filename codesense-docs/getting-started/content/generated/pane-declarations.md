@@ -10,6 +10,7 @@ Generated from panes/mod.rs and manifest.rs. Manifest declarations are flattened
 | slots | codesense:slots (comma or whitespace separated) | slots | [] |
 | surface | codesense:surface (string) | surface | null |
 | capabilities | codesense:capabilities (comma or whitespace separated) | capabilities | [] |
+| allowed_hosts | codesense:allowed-hosts (comma or whitespace separated) | allowed_hosts | [] |
 | commands | codesense:commands (JSON array) | commands | [] |
 
 ## YAML manifest entry
@@ -20,6 +21,7 @@ Generated from panes/mod.rs and manifest.rs. Manifest declarations are flattened
 | slots | array | false | [] |
 | surface | [{"type":"string"},{"type":"null"}] | false | "—" |
 | capabilities | array | false | [] |
+| allowed_hosts | array | false | [] |
 | commands | array | false | [] |
 | id | string | true | "—" |
 | title | [{"type":"string"},{"type":"null"}] | false | "—" |

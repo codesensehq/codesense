@@ -339,7 +339,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1297,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10105
+        "wrapperLine": 10104
       },
       "mcp": {
         "name": "dismiss_agent_mark",
@@ -1293,7 +1293,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1323,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10229
+        "wrapperLine": 10228
       },
       "mcp": {
         "name": "story_changes",
@@ -1311,7 +1311,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1324,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10240
+        "wrapperLine": 10239
       },
       "mcp": {
         "name": "story_totals",
@@ -2109,7 +2109,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1671,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10078,
+      "wrapperLine": 10077,
       "acknowledged": false,
       "rationale": null
     },
@@ -2119,7 +2119,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1669,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10042,
+      "wrapperLine": 10041,
       "acknowledged": false,
       "rationale": null
     },
@@ -2129,7 +2129,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1672,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10081,
+      "wrapperLine": 10080,
       "acknowledged": false,
       "rationale": null
     },
@@ -2139,7 +2139,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1670,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10076,
+      "wrapperLine": 10075,
       "acknowledged": false,
       "rationale": null
     },
@@ -2675,7 +2675,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1390,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10197,
+      "wrapperLine": 10196,
       "acknowledged": false,
       "rationale": null
     },
@@ -2685,7 +2685,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1391,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10201,
+      "wrapperLine": 10200,
       "acknowledged": false,
       "rationale": null
     },
@@ -3313,7 +3313,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1298,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10083,
+      "wrapperLine": 10082,
       "acknowledged": false,
       "rationale": null
     },
@@ -3333,7 +3333,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1301,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10093,
+      "wrapperLine": 10092,
       "acknowledged": false,
       "rationale": null
     },
@@ -3343,7 +3343,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1300,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10096,
+      "wrapperLine": 10095,
       "acknowledged": false,
       "rationale": null
     },
@@ -3353,7 +3353,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1299,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10088,
+      "wrapperLine": 10087,
       "acknowledged": false,
       "rationale": null
     },
@@ -3511,7 +3511,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1665,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10029,
+      "wrapperLine": 10028,
       "acknowledged": false,
       "rationale": null
     },
@@ -3551,7 +3551,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1392,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10206,
+      "wrapperLine": 10205,
       "acknowledged": false,
       "rationale": null
     },
@@ -3571,7 +3571,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1321,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10252,
+      "wrapperLine": 10251,
       "acknowledged": false,
       "rationale": null
     },
@@ -3889,7 +3889,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1667,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10033,
+      "wrapperLine": 10032,
       "acknowledged": false,
       "rationale": null
     },
@@ -3969,7 +3969,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1088,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10141,
+      "wrapperLine": 10140,
       "acknowledged": false,
       "rationale": null
     },
@@ -3979,7 +3979,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1090,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10147,
+      "wrapperLine": 10146,
       "acknowledged": false,
       "rationale": null
     },
@@ -3989,7 +3989,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1089,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10143,
+      "wrapperLine": 10142,
       "acknowledged": false,
       "rationale": null
     },
@@ -4017,7 +4017,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1666,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10030,
+      "wrapperLine": 10029,
       "acknowledged": false,
       "rationale": null
     },
@@ -4207,7 +4207,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1668,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10035,
+      "wrapperLine": 10034,
       "acknowledged": false,
       "rationale": null
     },
@@ -4435,7 +4435,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1269,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10130,
+      "wrapperLine": 10129,
       "acknowledged": false,
       "rationale": null
     },
@@ -5121,7 +5121,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1327,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10178,
+      "wrapperLine": 10177,
       "acknowledged": true,
       "rationale": "Only a person in the native app can loosen the local accepted spend cap. MCP and embedded pages may request a raise but cannot accept it."
     },
@@ -5131,7 +5131,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1326,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10170,
+      "wrapperLine": 10169,
       "acknowledged": true,
       "rationale": "Native-only human Save writes and accepts the cap; MCP edits remain pending when they loosen a cap. Embedded pages cannot call this command."
     },
@@ -5141,7 +5141,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1328,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10190,
+      "wrapperLine": 10189,
       "acknowledged": true,
       "rationale": "Only a person in the native app can apply a pending rate reduction or price an unpriced model. Exposing acceptance to MCP defeats spend caps."
     },
@@ -5671,7 +5671,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1675,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10112,
+      "wrapperLine": 10111,
       "acknowledged": false,
       "rationale": null
     },

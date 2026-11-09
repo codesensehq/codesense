@@ -72,9 +72,9 @@
             <strong>On its own</strong> (PRIVACY.md §1–§5): the update check, a <code>GET</code> of one
             static file on <code>dl.codesense.ai</code> that sends no account, key, install id or clock;
             the update download when there is a newer build; inbox pictures on <code>*.giphy.com</code>
-            or <code>static.klipy.com</code> that an agent in one of this app's tabs posts (other pictures
-            wait for your click, and <code>media: {remote: off}</code> or <code>remote: ask</code> in a
-            team's <code>config/inbox.yml</code> stops or holds them); and
+            or <code>static.klipy.com</code> that an agent in one of this app's tabs posts, but only when a
+            team sets <code>media: {remote: auto}</code> in its <code>config/inbox.yml</code> (by default
+            every picture waits for your click, and <code>remote: off</code> stops them); and
             <code>git fetch</code> from a repository's <code>origin</code> for change history, with your
             own git credentials.
           </li>
@@ -86,8 +86,11 @@
             <code>share.codesense.ai</code>, which sends the files those dashboards list.
           </li>
           <li>
-            <strong>Content you open</strong> (§12): dashboards, documents and stories load what they
-            reference when you open them in the viewer.
+            <strong>Content you open</strong> (§12): stories and Markdown documents load the pictures
+            they reference when you open them in the viewer; dashboards, panes and HTML documents load
+            remote content only from the hosts they name in <code>allowed_hosts</code>, though a page can
+            still navigate its own frame, hint DNS lookups, open WebRTC connections and hand a web link
+            to your browser.
           </li>
         </ul>
         <p>

@@ -10024,7 +10024,6 @@ export interface MintFrameArgs {
   assetFolder?: string;
   slot: string;
   message?: { org: string; team: string; messageId: number };
-  policy?: FramePolicy;
 }
 export const mintFrame = (args: MintFrameArgs) => invoke<FrameRecord>("mint_frame", { args });
 export const releaseFrame = (frameId: string) => invoke<void>("release_frame", { frameId });

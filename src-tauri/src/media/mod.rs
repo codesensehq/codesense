@@ -35,8 +35,9 @@ impl MediaInput {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Remote {
-    #[default]
     Auto,
+    /// Policy: the default; no remote image is fetched without a tap.
+    #[default]
     Ask,
     Off,
 }
@@ -49,7 +50,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            remote: Remote::Auto,
+            remote: Remote::default(),
             hosts: vec!["*.giphy.com".into(), "static.klipy.com".into()],
         }
     }

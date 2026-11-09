@@ -79,21 +79,24 @@ Install & Restart.
 
 ### 4. Pictures in the inbox
 
-- **What:** by default, when an agent running in one of this app's terminal
-  tabs posts an inbox message with a picture link on `*.giphy.com` or
-  `static.klipy.com`, the app downloads the picture straight away. Other
-  pictures, including those from other hosts or other senders, are downloaded
-  only when you click to load them. A picture written into a message's text is
-  never loaded: it shows as a link, which opens in your browser.
+- **What:** by default, a picture link in an inbox message is downloaded only
+  when you click to load it. With `remote: auto`, when an agent running in one
+  of this app's terminal tabs posts a picture link on `*.giphy.com` or
+  `static.klipy.com`, the app downloads the picture straight away; pictures
+  from other hosts or other senders still wait for your click. A picture
+  written into a message's text is never loaded: it shows as a link, which
+  opens in your browser.
 - **What it sends:** a `GET` of that link, with `User-Agent: ImageFetcher/1.0`
-  and no referrer. GIPHY or KLIPY sees your IP address and which picture was
-  chosen.
+  and no referrer. The host that serves the picture (GIPHY, KLIPY, or any
+  other `https://` host the sender used, when you click) sees your IP address
+  and which picture was chosen.
 - **Limits:** public addresses only (no local or private network), `https://`
   only, at most 3 redirects and only to allowed hosts, 8 MiB at most.
 - **Turning it off:** each team has its own inbox settings file,
   `config/inbox.yml` inside that team's folder in your context repository
   (`<team>/config/inbox.yml`). Set `remote: off` under `media:` to never
-  download pictures, or `remote: ask` to download them only when you click.
+  download pictures. `remote: ask`, the default, downloads them only when you
+  click; `remote: auto` downloads those described above straight away.
   The same file can change the list of hosts.
 - **Code:** `src-tauri/src/media/mod.rs` (`fetch`),
   `src-tauri/src/commands/agent_inbox.rs` (`fetch_media`),
@@ -243,10 +246,17 @@ a key, none of them is made.
 
 What you or your agents write can load what it references when you open it:
 
-- **HTML dashboards and documents** load anything they reference. So does an
-  HTML message to you in the inbox, which shows as a dashboard. A dashboard can
-  declare that it uses no outside network apart from the hosts it lists; then
-  only those hosts are allowed.
+- **HTML dashboards, panes and documents** load no remote scripts, styles,
+  pictures, fonts, media, fetches or frames unless they name the host:
+  `allowed_hosts` in the nearest `dashboard.yml`, or in a pane's
+  `pane-manifest.yaml` or `codesense:allowed-hosts` tag, lists exact `https://`
+  origins with a public host name (never an IP address, `localhost` or another
+  local name). Only those hosts are allowed, and they see your IP address and
+  what the page asks for. An HTML message to you in the inbox, which shows as a
+  dashboard, can't name any host. A page's markup or script can still navigate
+  its own frame to another site (`<meta http-equiv="refresh">` needs no script)
+  and hint a DNS lookup or connection; its script can open a WebRTC connection
+  or ask the app to open a web address in your browser without a click.
 - **Markdown documents and stories** load the pictures they name
   (`![](https://...)`) from those hosts: in the document viewer, the story view,
   the before-and-after view of a change, and the preview pane.
@@ -265,6 +275,10 @@ ones you trust; see
 [How CodeSense trusts agents](https://github.com/codesensehq/codesense/blob/main/SECURITY.md#how-codesense-trusts-agents).
 
 - **Code:** `src-tauri/src/http/frame_boundary.rs` (`request_frame`),
+  `src-tauri/src/commands/frames.rs` (`resolve_frame_network_policy`),
+  `src-tauri/src/dashboard_stream/frame.rs` (`AllowedHosts`),
+  `src-tauri/src/panes/mod.rs` (`DashboardDeclaration::validate`),
+  `src-tauri/src/http/routes/viewer.rs` (`FRAME_ENV_JS`, `LINK_INTERCEPTOR_JS`),
   `src-tauri/tauri.conf.json` (`app.security`),
   `src/features/weft/components/inbox-message-dashboard.tsx`
   (`InboxMessageDashboard`), `src/shared/lib/markdown-worker/parse.worker.ts`

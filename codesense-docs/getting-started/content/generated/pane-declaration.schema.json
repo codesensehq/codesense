@@ -50,6 +50,14 @@
             },
             "default": []
           },
+          "allowed_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Outside-network origins the pane's frame may reach: exact `https://host[:port]` only.",
+            "default": []
+          },
           "commands": {
             "type": "array",
             "items": {
@@ -224,6 +232,14 @@
           },
           "default": []
         },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Outside-network origins the pane's frame may reach: exact `https://host[:port]` only.",
+          "default": []
+        },
         "commands": {
           "type": "array",
           "items": {
@@ -379,6 +395,14 @@
           "items": {
             "type": "string"
           },
+          "default": []
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Outside-network origins the pane's frame may reach: exact `https://host[:port]` only.",
           "default": []
         },
         "commands": {
@@ -558,6 +582,14 @@
                 },
                 "default": []
               },
+              "allowed_hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Outside-network origins the pane's frame may reach: exact `https://host[:port]` only.",
+                "default": []
+              },
               "commands": {
                 "type": "array",
                 "items": {
@@ -694,7 +726,7 @@
     }
   },
   "sources": {
-    "src-tauri/src/panes/mod.rs": "4c424a762475bb20538f5c5e9c287962361c38e516160f1c2d59a8530cb9f041",
+    "src-tauri/src/panes/mod.rs": "6aa9d82ed0351f8ccad18611b6b95ff6c74b1d8c01f6df79d08363d9ceda6633",
     "src-tauri/src/panes/manifest.rs": "08c8869011a375d14d866f056d2d4d5ee2c729d5b08ba8c78123021717ef6f36"
   }
 }

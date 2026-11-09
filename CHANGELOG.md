@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Privacy
 
 - Clarified: the app has no sign-in and no usage tracking; sharing a dashboard uses owner and viewer accounts on share.codesense.ai.
+- Dashboards, panes and HTML messages no longer load remote scripts, styles, images, fonts, media or fetches unless the dashboard or pane lists the host in `allowed_hosts`. A page can still navigate its own frame, hint DNS lookups, open WebRTC connections or hand a web link to your browser. Blocked loads show in the page's problems, and Inbox pictures now wait for your tap by default.
 
 ## [0.1.0] - 2026-11-06
 

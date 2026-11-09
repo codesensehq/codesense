@@ -229,7 +229,7 @@ window.addEventListener('message',function(e){
   if(t.field){t.start=t.field.selectionStart;t.end=t.field.selectionEnd;t.direction=t.field.selectionDirection}
   var selected=window.getSelection();t.range=t.field&&'value' in t.field?null:selected&&selected.rangeCount?selected.getRangeAt(0).cloneRange():null;
 });
-function _csNow(){return typeof performance!=='undefined'&&performance.timeOrigin!==undefined?performance.timeOrigin+performance.now():Date.now()}function _off(list,cb){return function(){var i=list.indexOf(cb);if(i>=0)list.splice(i,1)}}function _applyTheme(t,own){var r=document.documentElement,k=(t&&typeof t.tokens==='object'&&t.tokens)||{},names=[];_thKeys.forEach(function(n){if(!(n in k))r.style.removeProperty(n)});for(var n in k)if(n.indexOf('--')===0&&typeof k[n]==='string'){r.style.setProperty(n,k[n]);names.push(n)}var sc=t.scheme==='light'?'light':'dark';r.style.setProperty('--cs-color-scheme',sc);_thKeys=names.concat('--cs-color-scheme');if(own){r.style.colorScheme=sc;_thOwn=true}else if(_thOwn){r.style.removeProperty('color-scheme');_thOwn=false}var tokens={};names.forEach(function(n){tokens[n]=k[n]});_th={scheme:sc,tokens:tokens};_thWait.splice(0).forEach(function(f){f(_th)});_thL.slice().forEach(function(cb){cb(_th)})}function stripScripts(root){root.querySelectorAll('script').forEach(function(s){s.remove()});root.querySelectorAll('template').forEach(function(t){stripScripts(t.content)})}function serializeSnapshot(state){var _dd=document.getElementById('codesense-dashboard-data');var _ddText=_dd?_dd.textContent:null;var clone=document.documentElement.cloneNode(true);clone.querySelectorAll('#codesense-initial-theme').forEach(function(s){s.remove()});stripScripts(clone);_thKeys.forEach(function(n){clone.style.removeProperty(n)});if(_thOwn)clone.style.removeProperty('color-scheme');if(clone.getAttribute('style')==='')clone.removeAttribute('style');var _host=clone.querySelector('head')||clone.querySelector('body')||clone;if(_ddText!==null){var dblob=document.createElement('script');dblob.type='application/json';dblob.id='codesense-dashboard-data';dblob.textContent=_ddText.replace(/</g,'\\u003c');_host.appendChild(dblob)}if(state!==undefined){var blob=document.createElement('script');blob.type='application/json';blob.id='codesense-snapshot-state';blob.textContent=JSON.stringify(state).replace(/</g,'\\u003c');_host.appendChild(blob)}return '<!doctype html>\n'+clone.outerHTML}function _csFP(){try{var el=document.getElementById('codesense-dashboard-data');return el?JSON.parse(el.textContent):null}catch(e){return null}}window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d)return;if(d.type==='codesense:invoke-result'||d.type==='codesense:snapshot-result'){var cb=_p[d.id];if(!cb)return;delete _p[d.id];if(d.ok)cb.res(d.data);else cb.rej(new Error(d.error||'codesense bridge error'));return}if(d.type==='codesense:flush'){var ack=function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:flush-ack',id:d.id},'*')};if(!_flushL.length)ack();else Promise.allSettled(_flushL.slice().map(function(cb){return Promise.resolve().then(cb)})).then(ack);return}if(d.type==='codesense:menu-action'){_menuActionL.slice().forEach(function(cb){cb({itemId:d.itemId,row:d.row})});if(d.id)window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:menu-action-ack',id:d.id},'*');return}if(d.type==='codesense:command'){_cmdL.slice().forEach(function(cb){cb({id:d.id,args:d.args,dispatchId:d.dispatchId})});return}if(d.type==='codesense:teardown'){_teardownL.slice().forEach(function(cb){cb()});return}if(d.type==='codesense:rebind-pending'){_rb=true;window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:rebind-ack'},'*');return}if(d.type==='codesense:rebind'){if(typeof d.token==='string'&&window.__codesenseProxy){window.__codesenseProxy.token=d.token;window.__codesenseProxy.readCap=d.token}_rb=false;_rbQ.splice(0).forEach(function(f){f()});return}if(d.type==='codesense:hello'){if(!window.__csSlotSeen)window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:ready',retry:true,sentAt:_csNow()},'*');return}if(d.type==='codesense:ping'){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:pong'},'*');return}function _csFocusDoc(){window.focus()}if(d.type==='codesense:focus-return'){if(_textTarget){var saved=_textTarget;_textTarget=null;_restoreText(saved);_focusReturnL.slice().forEach(function(cb){cb({anchorId:d.anchorId})});return}if(_focusReturnL.length)_focusReturnL.slice().forEach(function(cb){cb({anchorId:d.anchorId})});else{var anchor=d.anchorId&&document.getElementById(d.anchorId);if(anchor)anchor.focus({preventScroll:true});if(!anchor||document.activeElement!==anchor)_csFocusDoc()}return}if(d.type==='codesense:focus-in'){if(_focusL.length)_focusL.slice().forEach(function(cb){cb()});else if(!document.activeElement||document.activeElement===document.body||document.activeElement===document.documentElement){_csFocusDoc()}return}if(d.type==='codesense:slot-context'){window.__csSlotSeen=true;if(d.sdk&&typeof d.sdk==='object')_sdk={features:Array.isArray(d.sdk.features)?d.sdk.features:[],verbs:Array.isArray(d.sdk.verbs)?d.sdk.verbs:[]};_slot=d.context;_slotL.slice().forEach(function(cb){cb(_slot)});if(_slot.selection!==undefined){_nav=_slot.selection||null;_navKnown=true;_navWait.splice(0).forEach(function(f){f(_nav)});_navL.slice().forEach(function(cb){cb(_nav)})}return}if(d.type==='codesense:theme'){window.__csSlotSeen=true;if(d.theme){_applyTheme(d.theme,d.applyScheme!==false||window.__codesenseThemeAware===true)}else{_thNone=true;_thWait.splice(0).forEach(function(f){f(null)})}(typeof requestAnimationFrame==='function'?requestAnimationFrame:function(f){setTimeout(f,0)})(function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:theme-applied'},'*')});return}if(d.type==='codesense:intent'){if(_intentL.length)_intentL.slice().forEach(function(cb){cb(d.intent)});else _intent=d.intent;return}if(d.type==='codesense:visibility'){var v=d.visible!==false;if(_visKnown&&v===_vis)return;_vis=v;_visKnown=true;_visL.slice().forEach(function(cb){cb(v)});return}if(d.type==='codesense:snapshot-request'){try{if(d.format&&document.readyState!=='complete')throw new Error('Document is still loading; wait for it to finish and retry');if(d.format&&d.expectedUrl&&d.expectedUrl.split('#')[0]!==location.href.split('#')[0])throw new Error('Document navigated; select the current document and retry');var h=d.format==='text'?(document.body?document.body.innerText:''):serializeSnapshot(undefined);var truncated=false;if(d.format){var bytes=new TextEncoder().encode(h);if(bytes.length>524288){var end=524288;while(end>0&&(bytes[end]&192)===128)end--;h=new TextDecoder().decode(bytes.subarray(0,end));truncated=true}}window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot-result',id:d.id,ok:true,html:d.format?undefined:h,content:d.format?h:undefined,capturedAt:new Date().toISOString(),truncated:truncated,sourceUrl:location.href},'*')}catch(err){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot-result',id:d.id,ok:false,error:String((err&&err.message)||err)},'*')}}});window.codesense={get textMenuOpen(){return _textMenuId!==0},version:'4',has:function(n){return _sdk.features.indexOf(n)>=0||_sdk.verbs.indexOf(n)>=0},onFlush:function(cb){_flushL.push(cb);return _off(_flushL,cb)},onTeardown:function(cb){_teardownL.push(cb);return _off(_teardownL,cb)},onFocusIn:function(cb){_focusL.push(cb);return _off(_focusL,cb)},onFocusReturn:function(cb){_focusReturnL.push(cb);return _off(_focusReturnL,cb)},showMenu:function(a){_menuSerial++;_menuTurn=true;setTimeout(function(){_menuTurn=false},0);return this.invoke('showMenu',a||{})},showPopover:function(a){return this.invoke('showPopover',a||{})},onSlotContext:function(cb){_slotL.push(cb);if(_slot)cb(_slot);return _off(_slotL,cb)},focusOut:function(a){return this.invoke('focusOut',a||{})},focusTerminal:function(){return this.invoke('focusTerminal',{})},commands:{register:function(ids){return window.codesense.invoke('commands.register',{ids:ids})},list:function(){return window.codesense.invoke('commands.list',{})},run:function(id,args){return window.codesense.invoke('commands.run',{id:id,args:args})}},onMenuAction:function(cb){_menuActionL.push(cb);function advertise(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:menu-actions',enabled:_menuActionL.length>0},'*')}advertise();return function(){_off(_menuActionL,cb)();advertise()}},onCommand:function(cb){_cmdL.push(cb);return _off(_cmdL,cb)},ready:function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:live'},'*')},get firstPaint(){if(_fpDone)return _fp;var v=_csFP();if(v!==null){_fp=v;_fpDone=true;return v}return window.__codesenseFirstPaint||null},invoke:function(command,args){return new Promise(function(res,rej){function send(){var id=++_n;_p[id]={res:res,rej:rej};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:invoke',id:id,command:command,args:args,sentAt:_csNow()},'*')}if(_rb)_rbQ.push(send);else send()})},act:function(v,a){return this.invoke(v,a)},routineResult:function(a){return this.invoke('routineResult',a)},routineRefresh:function(a){return this.invoke('routineRefresh',a)},routineStatus:function(a){return this.invoke('routineStatus',a)},routineCancel:function(a){return this.invoke('routineCancel',a)},onRoutineResult:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:routines-changed')cb()}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},readWorkspace:function(a){return this.invoke('readWorkspace',a)},queryContext:function(q){return this.invoke('queryContext',q||{})},subscribeContext:function(q,cb){var self=this,gen=0,closed=false,so=null;function run(){var my=++gen;self.invoke('queryContext',q||{}).then(function(r){if(!closed&&my===gen){so=(r&&r.scopeOrgs)||null;cb(r,null)}},function(err){if(!closed&&my===gen)cb(null,err)})}function changed(e){var d=e.data;if(e.source!==window.parent||!d||d.type!=='codesense:context-changed')return;if(!so||d.truncated||d.allOrgs||(d.orgs||[]).some(function(o){return so.indexOf(o)>=0}))run()}window.addEventListener('message',changed);run();return function(){closed=true;window.removeEventListener('message',changed)}},snapshot:function(state){return new Promise(function(res,rej){var id=++_n;var h;try{h=serializeSnapshot(state)}catch(err){rej(err);return}_p[id]={res:res,rej:rej};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot',id:id,html:h},'*')})},theme:function(){return _th||_thNone?Promise.resolve(_th):new Promise(function(res){_thWait.push(res)})},onTheme:function(cb){_thL.push(cb);if(_th)cb(_th);return _off(_thL,cb)},onIntent:function(cb){_intentL.push(cb);if(_intent!==undefined){var intent=_intent;_intent=undefined;cb(intent)}return _off(_intentL,cb)},onVisibility:function(cb){_visL.push(cb);if(_visKnown)cb(_vis);return _off(_visL,cb)},prefs:function(){return this.invoke('prefs')},setPrefs:function(p){return this.invoke('setPrefs',p||{})},getNavSelection:function(){if(_navKnown)return Promise.resolve(_nav);return new Promise(function(res){_navWait.push(res);setTimeout(function(){var i=_navWait.indexOf(res);if(i<0)return;_navWait.splice(i,1);res(null)},5000)})},onNavSelectionChange:function(cb){_navL.push(cb);if(_navKnown)cb(_nav);return _off(_navL,cb)},sessions:function(){return this.invoke('sessions')},agents:function(){return this.invoke('agents')},agent:function(a){return this.invoke('agent',a)},inbox:function(a){return this.invoke('inbox',a||{})},inboxRollup:function(){return this.invoke('inboxRollup')},roles:function(a){return this.invoke('roles',a||{})},updates:function(a){return this.invoke('updates',a||{})},humanStatus:function(){return this.invoke('humanStatus')},onAgentsChanged:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:agents-changed')cb()}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},onInboxChanged:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:inbox-changed')cb(e.data)}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},context:function(){return this.invoke('context')},openFile:function(t,o){var a=t&&typeof t==='object'?t:{path:t};return this.invoke('openFile',{path:a.path,team:a.team,newTab:!!((o&&o.newTab)||a.newTab),preview:o&&o.preview!==undefined?o.preview:a.preview})},setField:function(a){return this.invoke('setField',a)},setBadge:function(b){if(b!==null&&b!==undefined&&(typeof b!=='object'||typeof b.count!=='number'||!isFinite(b.count)||b.count<0))throw new TypeError('setBadge: pass {count, severity?} or null');if(b&&b.severity!==undefined&&b.severity!=='info'&&b.severity!=='warning'&&b.severity!=='error')throw new TypeError("setBadge: severity is 'info', 'warning' or 'error'");window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:badge',badge:b?{count:Math.floor(b.count),severity:b.severity||'info'}:null},'*')},sprints:function(){var px=window.__codesenseProxy;if(!px||!px.readCap)return Promise.reject(new Error('unavailable: no read capability'));return fetch(px.base+'/api/v1/sprints',{headers:{'x-codesense-proxy-token':px.readCap}}).then(function(r){if(r.status===401)return Promise.reject(new Error('expired'));if(!r.ok)return Promise.reject(new Error('codesense-sprints-'+r.status));return r.json()})},taxonomy:function(){var px=window.__codesenseProxy;if(!px||!px.readCap)return Promise.reject(new Error('unavailable: no read capability'));return fetch(px.base+'/api/v1/taxonomy',{headers:{'x-codesense-proxy-token':px.readCap}}).then(function(r){if(r.status===401)return Promise.reject(new Error('expired'));if(!r.ok)return Promise.reject(new Error('codesense-taxonomy-'+r.status));return r.json()})}};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:ready',sentAt:_csNow()},'*')})();window.addEventListener('error',function(e){var t=e&&e.target;var m=t&&t!==window&&t.tagName?'failed to load '+(t.getAttribute('src')||t.getAttribute('href')||t.tagName.toLowerCase()):(e&&e.message)||'script error';window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:doc-error',kind:'error',message:String(m),source:(e&&e.filename)||'',line:(e&&e.lineno)||0},'*')},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:doc-error',kind:'rejection',message:String((r&&r.message)||r)},'*')});
+function _csNow(){return typeof performance!=='undefined'&&performance.timeOrigin!==undefined?performance.timeOrigin+performance.now():Date.now()}function _off(list,cb){return function(){var i=list.indexOf(cb);if(i>=0)list.splice(i,1)}}function _applyTheme(t,own){var r=document.documentElement,k=(t&&typeof t.tokens==='object'&&t.tokens)||{},names=[];_thKeys.forEach(function(n){if(!(n in k))r.style.removeProperty(n)});for(var n in k)if(n.indexOf('--')===0&&typeof k[n]==='string'){r.style.setProperty(n,k[n]);names.push(n)}var sc=t.scheme==='light'?'light':'dark';r.style.setProperty('--cs-color-scheme',sc);_thKeys=names.concat('--cs-color-scheme');if(own){r.style.colorScheme=sc;_thOwn=true}else if(_thOwn){r.style.removeProperty('color-scheme');_thOwn=false}var tokens={};names.forEach(function(n){tokens[n]=k[n]});_th={scheme:sc,tokens:tokens};_thWait.splice(0).forEach(function(f){f(_th)});_thL.slice().forEach(function(cb){cb(_th)})}function stripScripts(root){root.querySelectorAll('script').forEach(function(s){s.remove()});root.querySelectorAll('template').forEach(function(t){stripScripts(t.content)})}function serializeSnapshot(state){var _dd=document.getElementById('codesense-dashboard-data');var _ddText=_dd?_dd.textContent:null;var clone=document.documentElement.cloneNode(true);clone.querySelectorAll('#codesense-initial-theme').forEach(function(s){s.remove()});stripScripts(clone);_thKeys.forEach(function(n){clone.style.removeProperty(n)});if(_thOwn)clone.style.removeProperty('color-scheme');if(clone.getAttribute('style')==='')clone.removeAttribute('style');var _host=clone.querySelector('head')||clone.querySelector('body')||clone;if(_ddText!==null){var dblob=document.createElement('script');dblob.type='application/json';dblob.id='codesense-dashboard-data';dblob.textContent=_ddText.replace(/</g,'\\u003c');_host.appendChild(dblob)}if(state!==undefined){var blob=document.createElement('script');blob.type='application/json';blob.id='codesense-snapshot-state';blob.textContent=JSON.stringify(state).replace(/</g,'\\u003c');_host.appendChild(blob)}return '<!doctype html>\n'+clone.outerHTML}function _csFP(){try{var el=document.getElementById('codesense-dashboard-data');return el?JSON.parse(el.textContent):null}catch(e){return null}}window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d)return;if(d.type==='codesense:invoke-result'||d.type==='codesense:snapshot-result'){var cb=_p[d.id];if(!cb)return;delete _p[d.id];if(d.ok)cb.res(d.data);else cb.rej(new Error(d.error||'codesense bridge error'));return}if(d.type==='codesense:flush'){var ack=function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:flush-ack',id:d.id},'*')};if(!_flushL.length)ack();else Promise.allSettled(_flushL.slice().map(function(cb){return Promise.resolve().then(cb)})).then(ack);return}if(d.type==='codesense:menu-action'){_menuActionL.slice().forEach(function(cb){cb({itemId:d.itemId,row:d.row})});if(d.id)window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:menu-action-ack',id:d.id},'*');return}if(d.type==='codesense:command'){_cmdL.slice().forEach(function(cb){cb({id:d.id,args:d.args,dispatchId:d.dispatchId})});return}if(d.type==='codesense:teardown'){_teardownL.slice().forEach(function(cb){cb()});return}if(d.type==='codesense:rebind-pending'){_rb=true;window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:rebind-ack'},'*');return}if(d.type==='codesense:rebind'){if(typeof d.token==='string'&&window.__codesenseProxy){window.__codesenseProxy.token=d.token;window.__codesenseProxy.readCap=d.token}_rb=false;_rbQ.splice(0).forEach(function(f){f()});return}if(d.type==='codesense:hello'){if(!window.__csSlotSeen)window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:ready',retry:true,sentAt:_csNow()},'*');return}if(d.type==='codesense:ping'){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:pong'},'*');return}function _csFocusDoc(){window.focus()}if(d.type==='codesense:focus-return'){if(_textTarget){var saved=_textTarget;_textTarget=null;_restoreText(saved);_focusReturnL.slice().forEach(function(cb){cb({anchorId:d.anchorId})});return}if(_focusReturnL.length)_focusReturnL.slice().forEach(function(cb){cb({anchorId:d.anchorId})});else{var anchor=d.anchorId&&document.getElementById(d.anchorId);if(anchor)anchor.focus({preventScroll:true});if(!anchor||document.activeElement!==anchor)_csFocusDoc()}return}if(d.type==='codesense:focus-in'){if(_focusL.length)_focusL.slice().forEach(function(cb){cb()});else if(!document.activeElement||document.activeElement===document.body||document.activeElement===document.documentElement){_csFocusDoc()}return}if(d.type==='codesense:slot-context'){window.__csSlotSeen=true;if(d.sdk&&typeof d.sdk==='object')_sdk={features:Array.isArray(d.sdk.features)?d.sdk.features:[],verbs:Array.isArray(d.sdk.verbs)?d.sdk.verbs:[]};_slot=d.context;_slotL.slice().forEach(function(cb){cb(_slot)});if(_slot.selection!==undefined){_nav=_slot.selection||null;_navKnown=true;_navWait.splice(0).forEach(function(f){f(_nav)});_navL.slice().forEach(function(cb){cb(_nav)})}return}if(d.type==='codesense:theme'){window.__csSlotSeen=true;if(d.theme){_applyTheme(d.theme,d.applyScheme!==false||window.__codesenseThemeAware===true)}else{_thNone=true;_thWait.splice(0).forEach(function(f){f(null)})}(typeof requestAnimationFrame==='function'?requestAnimationFrame:function(f){setTimeout(f,0)})(function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:theme-applied'},'*')});return}if(d.type==='codesense:intent'){if(_intentL.length)_intentL.slice().forEach(function(cb){cb(d.intent)});else _intent=d.intent;return}if(d.type==='codesense:visibility'){var v=d.visible!==false;if(_visKnown&&v===_vis)return;_vis=v;_visKnown=true;_visL.slice().forEach(function(cb){cb(v)});return}if(d.type==='codesense:snapshot-request'){try{if(d.format&&document.readyState!=='complete')throw new Error('Document is still loading; wait for it to finish and retry');if(d.format&&d.expectedUrl&&d.expectedUrl.split('#')[0]!==location.href.split('#')[0])throw new Error('Document navigated; select the current document and retry');var h=d.format==='text'?(document.body?document.body.innerText:''):serializeSnapshot(undefined);var truncated=false;if(d.format){var bytes=new TextEncoder().encode(h);if(bytes.length>524288){var end=524288;while(end>0&&(bytes[end]&192)===128)end--;h=new TextDecoder().decode(bytes.subarray(0,end));truncated=true}}window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot-result',id:d.id,ok:true,html:d.format?undefined:h,content:d.format?h:undefined,capturedAt:new Date().toISOString(),truncated:truncated,sourceUrl:location.href},'*')}catch(err){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot-result',id:d.id,ok:false,error:String((err&&err.message)||err)},'*')}}});window.codesense={get textMenuOpen(){return _textMenuId!==0},version:'4',has:function(n){return _sdk.features.indexOf(n)>=0||_sdk.verbs.indexOf(n)>=0},onFlush:function(cb){_flushL.push(cb);return _off(_flushL,cb)},onTeardown:function(cb){_teardownL.push(cb);return _off(_teardownL,cb)},onFocusIn:function(cb){_focusL.push(cb);return _off(_focusL,cb)},onFocusReturn:function(cb){_focusReturnL.push(cb);return _off(_focusReturnL,cb)},showMenu:function(a){_menuSerial++;_menuTurn=true;setTimeout(function(){_menuTurn=false},0);return this.invoke('showMenu',a||{})},showPopover:function(a){return this.invoke('showPopover',a||{})},onSlotContext:function(cb){_slotL.push(cb);if(_slot)cb(_slot);return _off(_slotL,cb)},focusOut:function(a){return this.invoke('focusOut',a||{})},focusTerminal:function(){return this.invoke('focusTerminal',{})},commands:{register:function(ids){return window.codesense.invoke('commands.register',{ids:ids})},list:function(){return window.codesense.invoke('commands.list',{})},run:function(id,args){return window.codesense.invoke('commands.run',{id:id,args:args})}},onMenuAction:function(cb){_menuActionL.push(cb);function advertise(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:menu-actions',enabled:_menuActionL.length>0},'*')}advertise();return function(){_off(_menuActionL,cb)();advertise()}},onCommand:function(cb){_cmdL.push(cb);return _off(_cmdL,cb)},ready:function(){window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:live'},'*')},get firstPaint(){if(_fpDone)return _fp;var v=_csFP();if(v!==null){_fp=v;_fpDone=true;return v}return window.__codesenseFirstPaint||null},invoke:function(command,args){return new Promise(function(res,rej){function send(){var id=++_n;_p[id]={res:res,rej:rej};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:invoke',id:id,command:command,args:args,sentAt:_csNow()},'*')}if(_rb)_rbQ.push(send);else send()})},act:function(v,a){return this.invoke(v,a)},routineResult:function(a){return this.invoke('routineResult',a)},routineRefresh:function(a){return this.invoke('routineRefresh',a)},routineStatus:function(a){return this.invoke('routineStatus',a)},routineCancel:function(a){return this.invoke('routineCancel',a)},onRoutineResult:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:routines-changed')cb()}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},readWorkspace:function(a){return this.invoke('readWorkspace',a)},queryContext:function(q){return this.invoke('queryContext',q||{})},subscribeContext:function(q,cb){var self=this,gen=0,closed=false,so=null;function run(){var my=++gen;self.invoke('queryContext',q||{}).then(function(r){if(!closed&&my===gen){so=(r&&r.scopeOrgs)||null;cb(r,null)}},function(err){if(!closed&&my===gen)cb(null,err)})}function changed(e){var d=e.data;if(e.source!==window.parent||!d||d.type!=='codesense:context-changed')return;if(!so||d.truncated||d.allOrgs||(d.orgs||[]).some(function(o){return so.indexOf(o)>=0}))run()}window.addEventListener('message',changed);run();return function(){closed=true;window.removeEventListener('message',changed)}},snapshot:function(state){return new Promise(function(res,rej){var id=++_n;var h;try{h=serializeSnapshot(state)}catch(err){rej(err);return}_p[id]={res:res,rej:rej};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:snapshot',id:id,html:h},'*')})},theme:function(){return _th||_thNone?Promise.resolve(_th):new Promise(function(res){_thWait.push(res)})},onTheme:function(cb){_thL.push(cb);if(_th)cb(_th);return _off(_thL,cb)},onIntent:function(cb){_intentL.push(cb);if(_intent!==undefined){var intent=_intent;_intent=undefined;cb(intent)}return _off(_intentL,cb)},onVisibility:function(cb){_visL.push(cb);if(_visKnown)cb(_vis);return _off(_visL,cb)},prefs:function(){return this.invoke('prefs')},setPrefs:function(p){return this.invoke('setPrefs',p||{})},getNavSelection:function(){if(_navKnown)return Promise.resolve(_nav);return new Promise(function(res){_navWait.push(res);setTimeout(function(){var i=_navWait.indexOf(res);if(i<0)return;_navWait.splice(i,1);res(null)},5000)})},onNavSelectionChange:function(cb){_navL.push(cb);if(_navKnown)cb(_nav);return _off(_navL,cb)},sessions:function(){return this.invoke('sessions')},agents:function(){return this.invoke('agents')},agent:function(a){return this.invoke('agent',a)},inbox:function(a){return this.invoke('inbox',a||{})},inboxRollup:function(){return this.invoke('inboxRollup')},roles:function(a){return this.invoke('roles',a||{})},updates:function(a){return this.invoke('updates',a||{})},humanStatus:function(){return this.invoke('humanStatus')},onAgentsChanged:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:agents-changed')cb()}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},onInboxChanged:function(cb){function changed(e){if(e.source===window.parent&&e.data&&e.data.type==='codesense:inbox-changed')cb(e.data)}window.addEventListener('message',changed);return function(){window.removeEventListener('message',changed)}},context:function(){return this.invoke('context')},openFile:function(t,o){var a=t&&typeof t==='object'?t:{path:t};return this.invoke('openFile',{path:a.path,team:a.team,newTab:!!((o&&o.newTab)||a.newTab),preview:o&&o.preview!==undefined?o.preview:a.preview})},setField:function(a){return this.invoke('setField',a)},setBadge:function(b){if(b!==null&&b!==undefined&&(typeof b!=='object'||typeof b.count!=='number'||!isFinite(b.count)||b.count<0))throw new TypeError('setBadge: pass {count, severity?} or null');if(b&&b.severity!==undefined&&b.severity!=='info'&&b.severity!=='warning'&&b.severity!=='error')throw new TypeError("setBadge: severity is 'info', 'warning' or 'error'");window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:badge',badge:b?{count:Math.floor(b.count),severity:b.severity||'info'}:null},'*')},sprints:function(){var px=window.__codesenseProxy;if(!px||!px.readCap)return Promise.reject(new Error('unavailable: no read capability'));return fetch(px.base+'/api/v1/sprints',{headers:{'x-codesense-proxy-token':px.readCap}}).then(function(r){if(r.status===401)return Promise.reject(new Error('expired'));if(!r.ok)return Promise.reject(new Error('codesense-sprints-'+r.status));return r.json()})},taxonomy:function(){var px=window.__codesenseProxy;if(!px||!px.readCap)return Promise.reject(new Error('unavailable: no read capability'));return fetch(px.base+'/api/v1/taxonomy',{headers:{'x-codesense-proxy-token':px.readCap}}).then(function(r){if(r.status===401)return Promise.reject(new Error('expired'));if(!r.ok)return Promise.reject(new Error('codesense-taxonomy-'+r.status));return r.json()})}};window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:ready',sentAt:_csNow()},'*')})();window.addEventListener('error',function(e){var t=e&&e.target;var m=t&&t!==window&&t.tagName?'failed to load '+(t.getAttribute('src')||t.getAttribute('href')||t.tagName.toLowerCase()):(e&&e.message)||'script error';window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:doc-error',kind:'error',message:String(m),source:(e&&e.filename)||'',line:(e&&e.lineno)||0},'*')},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:doc-error',kind:'rejection',message:String((r&&r.message)||r)},'*')});var _cspSeen={},_cspCount=0;document.addEventListener('securitypolicyviolation',function(e){if(e.disposition!=='enforce')return;var at=e.blockedURI||'inline',key=at;try{var u=new URL(at);if(u.origin!=='null'){at=u.origin+u.pathname;key=u.origin}}catch(x){}key+=' '+e.effectiveDirective;if(_cspSeen[key]||_cspCount>=100)return;_cspSeen[key]=1;_cspCount++;var what=at+' ('+e.effectiveDirective+')';window.parent.postMessage({token:window.__codesenseProxy&&window.__codesenseProxy.token,type:'codesense:doc-error',kind:'csp',message:'blocked by the frame content policy: '+what,source:e.sourceFile||'',line:e.lineNumber||0},'*')});
 (function(){
   var cs=window.codesense,before=null,known=false,state=null,waiting=[],warned={},frozen=false,candidate=!!(window.location&&new URLSearchParams(window.location.search).get('codesenseCandidate')==='1'),pendingFocus=null,savedFocus=null;
   function post(data){data.token=window.__codesenseProxy&&window.__codesenseProxy.token;window.parent.postMessage(data,'*')}
@@ -510,7 +510,9 @@ async fn serve_frame_file(
 
 // Run before authored scripts. Relative data reads need an explicit credential:
 // third-party cookie restrictions also apply to same-origin fetch inside a frame.
-// Popups remain allowed, but cannot borrow the opener's SDK or capability.
+// The sandbox has no popups. `window.open` of a web link asks the host to open it and a
+// page link asks the host to navigate, as clicked links do; a popup that is neither, and a
+// link or form aimed at a new window, is reported as blocked instead of doing nothing.
 const FRAME_ENV_JS: &str = r#"(function(){
   // Read per request: a re-bound frame (the dock after a team switch) swaps its token.
   var proxy=window.__codesenseProxy, token=function(){return proxy.token}, nativeFetch=window.fetch.bind(window);
@@ -538,19 +540,31 @@ const FRAME_ENV_JS: &str = r#"(function(){
     if(sameOrigin.get(this)&&!hasToken.has(this))this.setRequestHeader('x-codesense-proxy-token',token());
     return send.apply(this,arguments);
   };
-  var popup=window.open.bind(window);
-  window.open=function(url,target,features){
-    var safe=String(features||'').split(',').filter(function(f){return !/^\s*(noopener|noreferrer)\b/i.test(f)});
-    safe.push('noopener');
-    return popup(url,target,safe.join(','));
+  var post=function(m){m.token=token();window.parent.postMessage(m,'*')};
+  var blockedPopup=function(href){post({type:'codesense:doc-error',kind:'csp',message:'blocked by the frame content policy: '+href+' (popup)'})};
+  var scheme=function(href){return /^[a-z][a-z0-9+.-]*:/i.test(href)||href.slice(0,2)==='//'};
+  var pageLink=function(href){return !scheme(href)&&/\.(md|html?)([?#]|$)/i.test(href)};
+  window.open=function(url){
+    var href=String(url==null?'':url);
+    if(/^(https?:|mailto:|\/\/)/i.test(href))post({type:'codesense:external-link',href:href});
+    else if(pageLink(href))post({type:'codesense:navigate',href:href,metaKey:true,ctrlKey:false});
+    else blockedPopup(href||'about:blank');
+    return null;
   };
   document.addEventListener('click',function(e){
-    var link=e.target.closest&&e.target.closest('a[target],area[target]');
-    if(link&&!/^_(self|parent|top)$/i.test(link.target))link.relList.add('noopener');
+    var link=e.target&&e.target.closest&&e.target.closest('a[target],area[target]');
+    if(!link||/^_(self|parent|top)$/i.test(link.target))return;
+    var href=link.getAttribute('href');
+    // The link interceptor hands web and page links on; anything else would need a popup.
+    if(!href||href.charAt(0)==='#'||scheme(href)||pageLink(href))return;
+    e.preventDefault();
+    blockedPopup(href);
   },true);
   document.addEventListener('submit',function(e){
     var form=e.target;
-    if(form.target&&!/^_(self|parent|top)$/i.test(form.target))form.relList.add('noopener');
+    if(!form||!form.target||/^_(self|parent|top)$/i.test(form.target))return;
+    e.preventDefault();
+    blockedPopup(form.getAttribute('action')||location.pathname);
   },true);
 })();"#;
 
@@ -1238,6 +1252,25 @@ mod tests {
     }
 
     #[test]
+    fn window_open_never_makes_a_popup_and_hands_links_to_the_host() {
+        assert!(FRAME_ENV_JS.contains("window.open=function(url){"));
+        assert!(FRAME_ENV_JS.contains(
+            "if(/^(https?:|mailto:|\\/\\/)/i.test(href))post({type:'codesense:external-link',href:href});"
+        ));
+        // A relative page opens through the host's navigation, as a clicked link does.
+        assert!(FRAME_ENV_JS.contains(
+            "else if(pageLink(href))post({type:'codesense:navigate',href:href,metaKey:true,ctrlKey:false});"
+        ));
+        assert!(FRAME_ENV_JS.contains("else blockedPopup(href||'about:blank');\n    return null;"));
+        // A link or form aimed at a new window is reported, not dropped.
+        assert!(FRAME_ENV_JS.contains("e.preventDefault();\n    blockedPopup(href);"));
+        assert!(FRAME_ENV_JS.contains(
+            "e.preventDefault();\n    blockedPopup(form.getAttribute('action')||location.pathname);"
+        ));
+        assert!(!FRAME_ENV_JS.contains("popup("));
+    }
+
+    #[test]
     fn frozen_install_and_its_assets_use_the_existing_pane_resolver() {
         let home = tempfile::tempdir().unwrap();
         let source_dir = home.path().join("team/panes");
@@ -1453,6 +1486,19 @@ mod tests {
         assert!(LINK_INTERCEPTOR_JS.contains("codesense:doc-error"));
         assert!(LINK_INTERCEPTOR_JS.contains("addEventListener('error'"));
         assert!(LINK_INTERCEPTOR_JS.contains("addEventListener('unhandledrejection'"));
+        // A blocked outside-network load reaches the pane's problems, naming what was blocked.
+        assert!(LINK_INTERCEPTOR_JS.contains(
+            "document.addEventListener('securitypolicyviolation',function(e){if(e.disposition!=='enforce')return;"
+        ));
+        // Each blocked origin and directive is reported once, up to 100 per document, so a
+        // polling page cannot flood it; the report names the origin and path, never the query.
+        assert!(LINK_INTERCEPTOR_JS.contains(
+            "try{var u=new URL(at);if(u.origin!=='null'){at=u.origin+u.pathname;key=u.origin}}catch(x){}"
+        ));
+        assert!(LINK_INTERCEPTOR_JS
+            .contains("if(_cspSeen[key]||_cspCount>=100)return;_cspSeen[key]=1;_cspCount++;"));
+        assert!(LINK_INTERCEPTOR_JS
+            .contains("kind:'csp',message:'blocked by the frame content policy: '+what"));
         // A failed asset is named as the doc wrote it (`lib/chart.js`), not by
         // its resolved URL, whose encoded route segments would bury the path.
         assert!(LINK_INTERCEPTOR_JS.contains("'failed to load '+(t.getAttribute('src')"));
@@ -2402,6 +2448,11 @@ mod frame_security_tests {
         let Ok(info_file) = std::env::var("CODESENSE_FRAME_FIXTURE") else {
             return;
         };
+        // The declared fixture host is `https://localhost`; shipped builds refuse local names.
+        if std::env::var_os("CODESENSE_FIXTURE_ALLOWED_ORIGIN").is_some() {
+            crate::dashboard_stream::frame::FIXTURE_LOOPBACK
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         use crate::dashboard_stream::frame::{FrameGrant, FramePolicy, FrameStore};
         use crate::http::frame_boundary::{with_boundary, FrameBoundary};
         let (v4, v6) = crate::http::bind_api_listener(0, None).await.unwrap();
@@ -2430,6 +2481,36 @@ mod frame_security_tests {
             .unwrap();
             std::fs::write(folder.join("data.txt"), "private-bytes").unwrap();
             std::fs::write(folder.join("data.json"), r#"{"value":1}"#).unwrap();
+            if let Some(origin) = std::env::var("CODESENSE_FIXTURE_ALLOWED_ORIGIN")
+                .ok()
+                .filter(|_| name == "net-blocked")
+            {
+                std::fs::write(
+                    folder.join("dashboard.yml"),
+                    format!("allowed_hosts: [{origin}]\n"),
+                )
+                .unwrap();
+            }
+            let slot = if name == "baseline" {
+                "baseline"
+            } else {
+                "centre"
+            };
+            // The production resolver decides each frame's network, as mint_frame does.
+            let mut policy = FramePolicy {
+                own_folder_only: name == "team" || name == "baseline",
+                block_service_workers: name == "sw-blocked",
+                ..Default::default()
+            };
+            crate::commands::frames::resolve_frame_network_policy(
+                &mut policy,
+                slot,
+                false,
+                None,
+                &file.to_string_lossy(),
+                &context.to_string_lossy(),
+            )
+            .unwrap();
             std::fs::write(
                 folder.join("silence.wav"),
                 include_bytes!("../../../../tests/frame-security/fixtures/silence.wav"),
@@ -2445,38 +2526,22 @@ mod frame_security_tests {
                 "WEBVTT\n\n00:00.000 --> 00:00.500\nfixture\n",
             )
             .unwrap();
-            records.push(
-                frames.mint(
-                    port,
-                    FrameGrant {
-                        frame_id: String::new(),
-                        principal: name.into(),
-                        dashboard: file.to_string_lossy().into_owned(),
-                        slot: if name == "baseline" {
-                            "baseline"
-                        } else {
-                            "centre"
-                        }
-                        .into(),
-                        team: None,
-                        scope: "open".into(),
-                    },
-                    context.to_string_lossy().into_owned(),
-                    file.to_string_lossy().into_owned(),
-                    folder.to_string_lossy().into_owned(),
-                    FramePolicy {
-                        own_folder_only: name == "team" || name == "baseline",
-                        block_service_workers: name == "sw-blocked",
-                        no_outside_network: name == "net-blocked",
-                        allowed_hosts: std::env::var("CODESENSE_FIXTURE_ALLOWED_ORIGIN")
-                            .ok()
-                            .into_iter()
-                            .collect(),
-                        ..Default::default()
-                    },
-                    None,
-                ),
-            );
+            records.push(frames.mint(
+                port,
+                FrameGrant {
+                    frame_id: String::new(),
+                    principal: name.into(),
+                    dashboard: file.to_string_lossy().into_owned(),
+                    slot: slot.into(),
+                    team: None,
+                    scope: "open".into(),
+                },
+                context.to_string_lossy().into_owned(),
+                file.to_string_lossy().into_owned(),
+                folder.to_string_lossy().into_owned(),
+                policy,
+                None,
+            ));
         }
         let inline_folder = context.join("inline");
         std::fs::create_dir_all(&inline_folder).unwrap();
@@ -2531,6 +2596,24 @@ mod frame_security_tests {
         std::fs::write(
             context.join("private/outside.js"),
             "window.loopbackLeak='private-bytes'",
+        )
+        .unwrap();
+        // A same-origin dedicated worker: default deny must leave it working.
+        std::fs::write(
+            context.join("open/own-worker.js"),
+            "postMessage('worker-ran')",
+        )
+        .unwrap();
+        // A same-origin worker's own requests carry the frame's policy too.
+        std::fs::write(
+            context.join("open/fetch-worker.js"),
+            "fetch(decodeURIComponent(location.hash.slice(1))).then(r=>r.text(),()=>'blocked').then(t=>postMessage(t))",
+        )
+        .unwrap();
+        // A same-origin scripted document that a frame could nest to escape its CSP.
+        std::fs::write(
+            context.join("open/probe.svg"),
+            "<svg xmlns='http://www.w3.org/2000/svg'><script><![CDATA[window.probe=fetch(location.hash.slice(1)).then(r=>r.text(),()=>'blocked')]]></script></svg>",
         )
         .unwrap();
         std::fs::write(

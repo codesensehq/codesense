@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::dashboard_stream::frame::{
-    FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameRecord, FrameStore, FrameTeam,
+    AllowedHosts, FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameRecord, FrameStore,
+    FrameTeam,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -135,11 +136,14 @@ pub async fn mint_frame<R: tauri::Runtime>(
                 .into_owned(),
         );
     }
-    inbox_network_policy(
+    resolve_frame_network_policy(
         &mut args.policy,
         &args.slot,
-        pane.as_ref().and_then(|p| p.surface.as_deref()),
-    );
+        args.message.is_some(),
+        pane.as_ref(),
+        &args.document_path,
+        &args.content_root,
+    )?;
     let policy =
         crate::verbs::commands::read_policy(app.clone(), &local_principal.to_string()).await?;
     let dashboard = pane
@@ -659,6 +663,86 @@ mod tests {
             assert_eq!(frame.kind, FrameCallerKind::Builtin);
             assert_eq!(frame.grant.slot, slot);
         }
+    }
+
+    #[tokio::test]
+    async fn mint_frame_ignores_a_renderer_supplied_network_policy() {
+        let fixture = crate::context_repo::caller_scope::tests::AppFixture::new();
+        fixture.app.manage(crate::http::HttpApiPort(9400));
+        let listing = crate::panes::list_builtin_panes(
+            &fixture.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            "acme/ctx",
+            "child",
+        )
+        .unwrap();
+        for (id, slot, inbox_media) in [
+            ("inbox", "right-pane", true),
+            ("agent-list", "dock", false),
+            ("files-tree", "file-nav", false),
+        ] {
+            let args = serde_json::from_value(serde_json::json!({
+                "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
+                "contentRoot": listing.content_root, "slot": slot,
+                "builtinTeam": {"org":"acme/ctx", "team":"child"},
+                "policy": {"noOutsideNetwork": false, "allowedHosts": ["https://attacker.example"]},
+            }))
+            .unwrap();
+            let frame = mint_frame(fixture.app.handle().clone(), args)
+                .await
+                .unwrap();
+            assert!(frame.policy.no_outside_network, "{id}");
+            assert!(frame.policy.allowed_hosts.is_empty(), "{id}");
+            assert_eq!(frame.policy.inbox_media, inbox_media, "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_dashboard_host_survives_mint_frame_and_a_bad_one_fails_it() {
+        let f = crate::context_repo::caller_scope::tests::AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9400));
+        f.app.manage(f.fixture.service());
+        let page = f
+            .fixture
+            .write("child", "content/board/index.html", "<p>board</p>");
+        let mint = || {
+            mint_frame(
+                f.app.handle().clone(),
+                MintFrameArgs {
+                    document_path: page.display().to_string(),
+                    content_root: f.fixture.path("child", "content").display().to_string(),
+                    asset_folder: None,
+                    slot: "centre".into(),
+                    message: None,
+                    parent_frame: None,
+                    builtin_team: None,
+                    // A hostile renderer: ignored either way.
+                    policy: FramePolicy {
+                        no_outside_network: false,
+                        allowed_hosts: vec!["https://attacker.example".into()],
+                        ..Default::default()
+                    },
+                },
+            )
+        };
+        let undeclared = mint().await.unwrap();
+        assert!(undeclared.policy.no_outside_network);
+        assert!(undeclared.policy.allowed_hosts.is_empty());
+        f.fixture.write(
+            "child",
+            "content/board/dashboard.yml",
+            "slug: board\ntitle: Board\nallowed_hosts: [https://api.example.com]\n",
+        );
+        let declared = mint().await.unwrap();
+        assert!(declared.policy.no_outside_network);
+        assert_eq!(declared.policy.allowed_hosts, ["https://api.example.com"]);
+        f.fixture.write(
+            "child",
+            "content/board/dashboard.yml",
+            "allowed_hosts: [https://*.example.com]\n",
+        );
+        let error = mint().await.unwrap_err();
+        assert!(error.contains("dashboard.yml: allowed_hosts:"), "{error}");
     }
 
     #[test]
@@ -1351,25 +1435,185 @@ mod records_ceiling_tests {
     }
 }
 
-fn inbox_network_policy(policy: &mut FramePolicy, slot: &str, surface: Option<&str>) {
-    policy.inbox_media = slot == "right-pane" && surface == Some("human-inbox");
-    if policy.inbox_media {
-        policy.no_outside_network = true;
-        policy.allowed_hosts.clear();
-    }
+/// Policy: the server decides every frame's outside network from its document, whatever the
+/// renderer sent. Each frame denies outside network; only a pane's own declaration, or else
+/// the nearest `dashboard.yml` at or above the document, opens exact HTTPS origins. Messages
+/// and the Inbox pane never get hosts: their images use the host media route.
+pub(crate) fn resolve_frame_network_policy(
+    policy: &mut FramePolicy,
+    slot: &str,
+    message: bool,
+    pane: Option<&crate::panes::PaneEntry>,
+    document_path: &str,
+    content_root: &str,
+) -> Result<(), String> {
+    policy.inbox_media =
+        slot == "right-pane" && pane.and_then(|p| p.surface.as_deref()) == Some("human-inbox");
+    policy.no_outside_network = true;
+    policy.allowed_hosts = if message || slot == "message" || policy.inbox_media {
+        Vec::new()
+    } else if let Some(pane) = pane {
+        AllowedHosts::parse(&pane.declaration.allowed_hosts)
+            .map_err(|error| format!("invalid allowed_hosts: {error}"))?
+            .0
+    } else {
+        AllowedHosts::for_document(
+            std::path::Path::new(document_path),
+            std::path::Path::new(content_root),
+        )?
+        .0
+    };
+    Ok(())
 }
 #[cfg(test)]
-#[test]
-fn only_inbox_pane_mints_without_outside_network() {
-    let mut policy = FramePolicy {
-        allowed_hosts: vec!["https://example.com".into()],
-        ..Default::default()
-    };
-    inbox_network_policy(&mut policy, "message", Some("human-inbox"));
-    assert!(!policy.no_outside_network);
-    inbox_network_policy(&mut policy, "right-pane", Some("notes"));
-    assert!(!policy.no_outside_network);
-    inbox_network_policy(&mut policy, "right-pane", Some("human-inbox"));
-    assert!(policy.no_outside_network);
-    assert!(policy.allowed_hosts.is_empty());
+mod network_policy_tests {
+    use super::*;
+
+    /// One team pane, discovered the production way from `panes/<id>.html`.
+    fn pane(dir: &std::path::Path, id: &str, meta: &str) -> crate::panes::PaneEntry {
+        let panes = dir.join(crate::context_repo::PANES_DIR);
+        std::fs::create_dir_all(&panes).unwrap();
+        std::fs::write(panes.join(format!("{id}.html")), meta).unwrap();
+        crate::panes::list_layer(
+            &panes,
+            crate::panes::PaneScope::Team,
+            "acme/repo",
+            Some("dev"),
+        )
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .unwrap()
+    }
+
+    #[test]
+    fn every_slot_resolves_its_network_from_the_document_never_the_renderer() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("team/content");
+        let board = root.join("board");
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::write(
+            board.join("dashboard.yml"),
+            "slug: board\ntitle: Board\nallowed_hosts: [https://api.example.com]\n",
+        )
+        .unwrap();
+        let declared = board.join("index.html");
+        let undeclared = root.join("notes.html");
+        let hosts_pane = pane(
+            &root,
+            "status",
+            r#"<meta name="codesense:slots" content="right-pane,dock"><meta name="codesense:allowed-hosts" content="https://status.example.com">"#,
+        );
+        let inbox = pane(
+            &root,
+            "mail",
+            r#"<meta name="codesense:slots" content="right-pane"><meta name="codesense:surface" content="human-inbox"><meta name="codesense:allowed-hosts" content="https://status.example.com">"#,
+        );
+        let api = ["https://api.example.com"];
+        let status = ["https://status.example.com"];
+        let none: [&str; 0] = [];
+        for (slot, message, pane, document, expected, inbox_media) in [
+            ("centre", false, None, &undeclared, &none[..], false),
+            ("centre", false, None, &declared, &api[..], false),
+            ("baseline", false, None, &declared, &api[..], false),
+            ("export", false, None, &declared, &api[..], false),
+            ("dock", false, None, &declared, &api[..], false),
+            ("file-nav", false, None, &declared, &api[..], false),
+            (
+                "right-pane",
+                false,
+                Some(&hosts_pane),
+                &declared,
+                &status[..],
+                false,
+            ),
+            (
+                "dock",
+                false,
+                Some(&hosts_pane),
+                &undeclared,
+                &status[..],
+                false,
+            ),
+            // Agent HTML messages cannot declare hosts, wherever they render.
+            ("message", true, None, &declared, &none[..], false),
+            ("message", false, None, &declared, &none[..], false),
+            ("centre", true, None, &declared, &none[..], false),
+            // The Inbox stays locked down even if its file declares hosts.
+            (
+                "right-pane",
+                false,
+                Some(&inbox),
+                &declared,
+                &none[..],
+                true,
+            ),
+        ] {
+            // A hostile renderer asks for an open network and its own host.
+            let mut policy = FramePolicy {
+                no_outside_network: false,
+                inbox_media: !inbox_media,
+                allowed_hosts: vec!["https://attacker.example".into()],
+                ..Default::default()
+            };
+            resolve_frame_network_policy(
+                &mut policy,
+                slot,
+                message,
+                pane,
+                &document.to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap();
+            assert!(policy.no_outside_network, "{slot} {document:?}");
+            assert_eq!(policy.allowed_hosts, expected, "{slot} {document:?}");
+            assert_eq!(policy.inbox_media, inbox_media, "{slot} {document:?}");
+        }
+    }
+
+    #[test]
+    fn a_bad_declaration_fails_the_mint_with_a_diagnostic() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("content");
+        std::fs::create_dir_all(&root).unwrap();
+        for bad in [
+            "https://*.example.com",
+            "http://api.example.com",
+            "https://api.example.com/v1",
+        ] {
+            std::fs::write(
+                root.join("dashboard.yml"),
+                format!("allowed_hosts: [{bad}]\n"),
+            )
+            .unwrap();
+            let error = resolve_frame_network_policy(
+                &mut FramePolicy::default(),
+                "centre",
+                false,
+                None,
+                &root.join("index.html").to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("dashboard.yml: allowed_hosts:"),
+                "{bad}: {error}"
+            );
+            // A pane's declaration is checked again at mint, not only at discovery.
+            let mut entry = pane(&root, "status", "");
+            entry.declaration.allowed_hosts = vec![bad.into()];
+            let error = resolve_frame_network_policy(
+                &mut FramePolicy::default(),
+                "right-pane",
+                false,
+                Some(&entry),
+                &entry.path.clone(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err();
+            assert!(
+                error.starts_with("invalid allowed_hosts:"),
+                "{bad}: {error}"
+            );
+        }
+    }
 }

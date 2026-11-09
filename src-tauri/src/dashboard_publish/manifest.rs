@@ -474,6 +474,8 @@ pub enum ManifestError {
     BadLiveArgs(String),
     /// `live.streams` names a stream that is not in `STREAMS` (P17).
     UnknownLiveStream(String),
+    /// An `allowed_hosts` entry that is not an exact `https://host[:port]` origin.
+    BadAllowedHost(String),
 }
 
 impl fmt::Display for ManifestError {
@@ -521,6 +523,7 @@ impl fmt::Display for ManifestError {
             ManifestError::BadLiveArgs(why) => write!(f, "live.args: {why}"),
             ManifestError::BadLiveField(why) => write!(f, "live.fields: {why}"),
             ManifestError::UnknownLiveStream(name) => write!(f, "unknown live stream {name}"),
+            ManifestError::BadAllowedHost(why) => write!(f, "allowed_hosts: {why}"),
         }
     }
 }
@@ -536,6 +539,10 @@ struct RawManifest {
     viewers: Option<RawViewers>,
     #[serde(default)]
     actions: super::actions::Actions,
+    /// In-app frames only (share pages never reach the network); validated here so a
+    /// publish reports the same diagnostic the app shows when it loads the dashboard.
+    #[serde(default)]
+    allowed_hosts: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -676,6 +683,8 @@ pub fn parse_with(
 ) -> Result<Manifest, ManifestError> {
     let raw: RawManifest =
         serde_yaml::from_str(text).map_err(|e| ManifestError::Yaml(e.to_string()))?;
+    crate::dashboard_stream::frame::AllowedHosts::parse(&raw.allowed_hosts.unwrap_or_default())
+        .map_err(ManifestError::BadAllowedHost)?;
 
     let slug = raw.slug.ok_or(ManifestError::MissingField("slug"))?;
     if !valid_slug(&slug) {
@@ -1374,6 +1383,35 @@ mod tests {
             dir.path()
         )
         .is_err());
+    }
+
+    #[test]
+    fn allowed_hosts_accept_exact_https_origins_and_reject_the_rest() {
+        let dir = folder_with(&["index.html", "data/usage.json"]);
+        let with = |hosts: &str| {
+            parse(
+                &format!(
+                    "allowed_hosts: {hosts}\n{}",
+                    yaml("ai-usage", "draft", "private", GOOD_FILES)
+                ),
+                dir.path(),
+            )
+        };
+        assert!(with("[https://api.example.com, https://cdn.example.com:8443]").is_ok());
+        assert!(with("[]").is_ok());
+        for host in [
+            "http://api.example.com",
+            "https://*.example.com",
+            "https://api.example.com/path",
+            "file:///etc/passwd",
+        ] {
+            let error = with(&format!("[{host}]")).unwrap_err();
+            assert!(
+                matches!(error, ManifestError::BadAllowedHost(_)),
+                "{host}: {error}"
+            );
+            assert!(error.to_string().starts_with("allowed_hosts: "), "{error}");
+        }
     }
 
     #[test]

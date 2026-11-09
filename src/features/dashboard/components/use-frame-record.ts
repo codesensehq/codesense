@@ -52,7 +52,6 @@ export function useFrameRecord(
   const messageId = args?.message?.messageId;
   const builtinOrg = args?.builtinTeam?.org;
   const builtinTeam = args?.builtinTeam?.team;
-  const policy = JSON.stringify(args?.policy ?? {});
   const request = useMemo<MintFrameArgs | null>(() => {
     if (!documentPath || !contentRoot || !slot) return null;
     return {
@@ -60,24 +59,12 @@ export function useFrameRecord(
       contentRoot,
       assetFolder,
       slot,
-      policy: JSON.parse(policy),
       ...(builtinOrg && builtinTeam ? { builtinTeam: { org: builtinOrg, team: builtinTeam } } : {}),
       ...(org !== undefined && team !== undefined && messageId !== undefined
         ? { message: { org, team, messageId } }
         : {}),
     };
-  }, [
-    documentPath,
-    contentRoot,
-    assetFolder,
-    slot,
-    org,
-    team,
-    messageId,
-    policy,
-    builtinOrg,
-    builtinTeam,
-  ]);
+  }, [documentPath, contentRoot, assetFolder, slot, org, team, messageId, builtinOrg, builtinTeam]);
   const key = JSON.stringify([port, request]);
   const [state, setState] = useState<{
     key: string;
