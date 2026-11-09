@@ -201,7 +201,7 @@ async fn joined_row_and_team_set_changes_run_the_inbox_pass() {
 
     set_rows(
         &app,
-        vec![moved, row("helper", "Helper", SessionState::Exited)],
+        vec![moved.clone(), row("helper", "Helper", SessionState::Exited)],
     );
     inbox_pass(app.handle(), &host, REBUILD, &mut gate)
         .await
