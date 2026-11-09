@@ -186,7 +186,7 @@ test("a merge_group workflow saves no cache on merge groups", () => {
 // Merge groups, main and the nightly runs must run every job, so a job may only be skipped on
 // pull requests.
 const macosOptIn =
-  "github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos'))";
+  "github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
 test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
@@ -249,6 +249,11 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   for (const trigger of ["merge_group", "push"])
     assert.ok(Object.hasOwn(workflow.on, trigger), trigger);
   assert.equal(workflow.jobs["rust-macos"].if, macosOptIn);
+  // Another label's run has a group of its own, so it cannot cancel the pull request's run.
+  assert.equal(
+    workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
+  );
   assert.equal(workflow.jobs["rust-linux"].if, undefined);
 });
 
