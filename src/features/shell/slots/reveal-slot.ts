@@ -100,7 +100,15 @@ export function dashboardSelected(
         refs.some((r) => matchesRef(r, p.dashboardRef!)),
     );
     if (hasSurfaceRef) return refs.some((r) => matchesRef(r, ref, includeInstalledSource));
-    return false;
+    if (surface !== "notes") return false;
+    // Policy (open): only out-of-chain team refs leave this team's choice implicit.
+    const listing = usePaneStore.getState().listing;
+    const team = useOrgStore.getState().activeTeamName;
+    if (own && (own.scope !== "team" || [team, ...(listing?.chain ?? [])].includes(own.team ?? "")))
+      return false;
+    // With no choice, Notes opens its listed pane; classic Notes is a Settings choice.
+    const listed = listing?.panes.find((p) => servesSurface(p, surface));
+    return !!listed?.dashboardRef && matchesRef(listed.dashboardRef, ref);
   }
   return selectedRefs(slot, ref.org).some((r) => matchesRef(r, ref, includeInstalledSource));
 }

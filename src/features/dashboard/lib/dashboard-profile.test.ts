@@ -74,47 +74,63 @@ it("does not let a late local write response replace a newer org view", async ()
   expect(useDashboardProfileStore.getState().profile).toBeNull();
 });
 
-it.each([true, false])("keeps the implicit Inbox choice when Notes enabled=%s", async (enabled) => {
-  useOrgStore.setState({ activeOrgSlug: org, activeTeamName: "dev" });
-  const notes = { ...inbox, id: "journal" };
-  usePaneStore.setState({
-    teamKey: `${org}:dev`,
-    listing: {
-      contentRoot: "/ctx",
-      chain: [],
-      panes: [inbox, notes].map((ref, i) => ({
-        id: ref.id,
-        title: ref.id,
-        scope: ref.scope,
-        team: "dev",
-        path: `/ctx/${ref.id}.html`,
-        panesDir: "/ctx",
-        panelId: ref.id,
-        dashboardRef: ref,
-        surface: i ? "notes" : "human-inbox",
-      })),
-    },
-  });
-  expect(dashboardSelected(inbox)).toBe(true);
-  expect(dashboardSelected(notes)).toBe(false);
-  await setSurfaceDashboard(org, "notes", notes, enabled);
-  expect(dashboardSelected(inbox)).toBe(true);
-  expect(dashboardSelected(notes)).toBe(enabled);
-  await setSurfaceDashboard(org, "notes", notes, !enabled);
-  expect(dashboardSelected(inbox)).toBe(true);
-  expect(dashboardSelected(notes)).toBe(!enabled);
-});
+const surfaceToggles = ["inbox", "notes"].flatMap((surface) =>
+  [true, false].map((enabled) => ({ surface, enabled })),
+);
+it.each(surfaceToggles)(
+  "keeps the other implicit surface when $surface enabled=$enabled",
+  async ({ surface, enabled }) => {
+    useOrgStore.setState({ activeOrgSlug: org, activeTeamName: "dev" });
+    const notes = { ...inbox, id: "journal" };
+    usePaneStore.setState({
+      teamKey: `${org}:dev`,
+      listing: {
+        contentRoot: "/ctx",
+        chain: [],
+        panes: [inbox, notes].map((ref, i) => ({
+          id: ref.id,
+          title: ref.id,
+          scope: ref.scope,
+          team: "dev",
+          path: `/ctx/${ref.id}.html`,
+          panesDir: "/ctx",
+          panelId: ref.id,
+          dashboardRef: ref,
+          surface: i ? "notes" : "human-inbox",
+        })),
+      },
+    });
+    expect(dashboardSelected(inbox)).toBe(true);
+    expect(dashboardSelected(notes)).toBe(true);
+    const own = surface === "notes" ? notes : inbox;
+    const other = surface === "notes" ? inbox : notes;
+    await setSurfaceDashboard(org, surface, own, enabled);
+    expect(dashboardSelected(other)).toBe(true);
+    expect(dashboardSelected(own)).toBe(surface === "inbox" || enabled);
+    await setSurfaceDashboard(org, surface, own, !enabled);
+    expect(dashboardSelected(other)).toBe(true);
+    expect(dashboardSelected(own)).toBe(surface === "inbox" || !enabled);
+  },
+);
 
-it("keeps each team's implicit Inbox after a Notes choice and a team switch", async () => {
-  const notes = { ...inbox, id: "notes" };
-  useOrgStore.setState({ activeOrgSlug: org, activeTeamName: "dev" });
-  usePaneStore.setState({ teamKey: `${org}:dev`, listing: listing("dev") });
-  await setSurfaceDashboard(org, "notes", notes, true);
-  useOrgStore.setState({ activeTeamName: "other" });
-  usePaneStore.setState({ teamKey: `${org}:other`, listing: listing("other") });
-  expect(dashboardSelected({ ...inbox, team: "other" })).toBe(true);
-  expect(useDashboardProfileStore.getState().profile?.slots["right-pane"]).toBeUndefined();
-});
+it.each(surfaceToggles)(
+  "keeps both team defaults after $surface enabled=$enabled and a team switch",
+  async ({ surface, enabled }) => {
+    await setSurfaceDashboard(org, surface, { ...inbox, id: surface }, enabled);
+    useOrgStore.setState({ activeTeamName: "other" });
+    for (const id of ["inbox", "notes"]) {
+      expect(dashboardSelected({ ...inbox, id })).toBe(false);
+      expect(dashboardSelected({ ...inbox, team: "other", id })).toBe(false);
+    }
+    usePaneStore.setState({ teamKey: `${org}:other`, listing: listing("other") });
+    for (const id of ["inbox", "notes"]) {
+      expect(dashboardSelected({ ...inbox, team: "other", id })).toBe(
+        id === "inbox" || id !== surface || enabled,
+      );
+    }
+    expect(useDashboardProfileStore.getState().profile?.slots["right-pane"]).toBeUndefined();
+  },
+);
 
 it.each(["team", "org"])(
   "persists an accepted surface choice for its captured owner after a %s switch",
