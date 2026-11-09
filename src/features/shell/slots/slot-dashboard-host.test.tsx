@@ -735,7 +735,7 @@ it("uses native recovery when a candidate fails over a never-ready cold pane", (
   const native = () => <div>Native Recovery</div>;
   const view = render(
     <SlotDashboardHost
-      slotId="dock"
+      slotId="file-nav"
       entry={entry}
       contentRoot="/ctx"
       visible
@@ -746,7 +746,7 @@ it("uses native recovery when a candidate fails over a never-ready cold pane", (
   const savedEntry = { ...entry, modified: "2026-10-23T13:02:00Z" };
   view.rerender(
     <SlotDashboardHost
-      slotId="dock"
+      slotId="file-nav"
       entry={savedEntry}
       contentRoot="/ctx"
       visible
@@ -1033,22 +1033,22 @@ it.each(["team", "private"] as const)(
   },
 );
 
-it("keeps dock retry activity while its native fallback is on screen", () => {
+it("keeps file-nav retry activity while its native fallback is on screen", () => {
   vi.useFakeTimers();
   render(
     <SlotDashboardHost
-      slotId="dock"
+      slotId="file-nav"
       entry={entry}
       contentRoot="/ctx"
       visible
-      renderNative={() => <div>Agents list</div>}
+      renderNative={() => <div>Files</div>}
     />,
   );
   act(() => vi.advanceTimersByTime(30000));
-  expect(screen.getByText("Agents list")).toBeTruthy();
+  expect(screen.getByText("Files")).toBeTruthy();
   expect(props.current.visible).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Reload" }));
-  expect(props.current.pane.slotId).toBe("dock");
+  expect(props.current.pane.slotId).toBe("file-nav");
   expect(props.current.visible).toBe(true);
   act(() => props.current.onDocLive());
   expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();

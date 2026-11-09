@@ -6,4 +6,4 @@
 | --- | --- | --- | --- | --- | --- |
 | right-pane | docked, overlay | many | `{"notes":{"panelId":"scratch","label":"Notes","entry":"panel"}}` | 300 | fixed |
 | file-nav | docked | one | `{"files":{"label":"Files","entry":"component"}}` | 260 | follows-context |
-| dock | docked, overlay | one | `{"agent-list":{"label":"Agents list","entry":"component"}}` | 260 | follows-context |
+| dock | docked, overlay | one | `{}` | 260 | follows-context |

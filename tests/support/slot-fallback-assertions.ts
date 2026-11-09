@@ -11,8 +11,8 @@ export async function expectStandardFallback(
   expected: {
     /** The dashboard title the strip names. */
     name: string;
-    /** The slot's actual built-in surface. */
-    builtIn?: string;
+    /** The slot's actual built-in surface; null for a slot with none (the dock). */
+    builtIn?: string | null;
     /** Text the strip's Details shows. */
     detail: string | RegExp;
     /** The built-in's `ui:<slotId>` selection, when the test seeded one. */
@@ -23,7 +23,9 @@ export async function expectStandardFallback(
   const strip = page.getByTestId("slot-fallback-strip");
   await expect(strip).toBeVisible({ timeout: expected.timeout ?? 32_000 });
   await expect(strip).toContainText(
-    `${expected.name} pane didn't load — showing the built-in ${expected.builtIn ?? "Inbox"}.`,
+    expected.builtIn === null
+      ? `${expected.name} pane didn't load.`
+      : `${expected.name} pane didn't load — showing the built-in ${expected.builtIn ?? "Inbox"}.`,
   );
   if (expected.selection !== undefined)
     await expect(page.getByTestId("native-selection")).toHaveText(expected.selection);
@@ -34,7 +36,7 @@ export async function expectStandardFallback(
 /** A page that throws before it is live falls back at once, with its error, and no frame. */
 export async function expectThrowOnLoadFallback(
   page: Page,
-  expected: { name: string; message: string; selection?: string; builtIn?: string },
+  expected: { name: string; message: string; selection?: string; builtIn?: string | null },
 ) {
   await expectStandardFallback(page, {
     name: expected.name,
