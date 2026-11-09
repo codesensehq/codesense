@@ -237,7 +237,7 @@ const entry: PaneEntry = {
 };
 // `?builtin` lists the built-in agent-list page (as Rust `panes/builtin.rs` always does), the
 // dock's HTML fallback when the chosen dashboard fails. Without it the dock has no page to fall
-// back to and shows its native list.
+// back to and its strip stands alone with Reload. Choosing Built-in needs it listed too.
 const builtinAgentList: PaneEntry = {
   id: "agent-list",
   title: "Agents",
@@ -286,10 +286,13 @@ api.entryPanelId = entry.panelId;
 addEventListener("message", (e) => {
   if (e.data?.fixture) api.calls.push([`fixture:${e.data.fixture}`]);
 });
-// A Settings choice: the fixture dashboard or the built-in list.
-api.choose = (choice: "dashboard" | "native") =>
+// A Settings choice: the fixture dashboard or the built-in HTML list.
+api.choose = (choice: "dashboard" | "builtin") =>
   useDashboardProfileStore.setState((state) => ({
-    profile: { ...state.profile!, slots: { dock: choice === "native" ? "native" : ref } },
+    profile: {
+      ...state.profile!,
+      slots: { dock: choice === "builtin" ? builtinAgentList.dashboardRef! : ref },
+    },
   }));
 api.restore = () => {
   api.restored = true;

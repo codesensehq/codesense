@@ -19,7 +19,7 @@ beforeEach(() => {
       name: "Cached name",
       posture: "",
       cliLayout: "default",
-      slots: { dock: "native" },
+      slots: { dock: { scope: "team", org: "acme/repo", team: "dev", id: "board" } },
       chrome: { newer: "cached" },
     },
   });

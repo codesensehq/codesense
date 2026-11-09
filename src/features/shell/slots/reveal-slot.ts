@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
-import { DOCK_DEFAULT_HTML_AGENT_LIST } from "@/features/dashboard/lib/dock-default";
 import {
   builtinAgentListRef,
   isInboxDashboard,
@@ -60,7 +59,9 @@ function matchesRef(selected: DashboardRef, target: DashboardRef, includeSource 
 export function selectedRefs(slot: SlotId, org: string): DashboardRef[] {
   const profile = profileOf(org);
   const choice = profile?.slots[slot];
-  if (slot === "dock" && choice === undefined && DOCK_DEFAULT_HTML_AGENT_LIST)
+  // The dock shows the built-in HTML list unless a dashboard is chosen. A saved `"native"` is the
+  // retired classic list, so it reads as the built-in list too.
+  if (slot === "dock" && (choice === undefined || choice === "native"))
     return [builtinAgentListRef(org)];
   const refs = choiceRefs(choice);
   return slot === "right-pane"

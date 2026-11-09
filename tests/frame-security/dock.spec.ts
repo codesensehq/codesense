@@ -491,7 +491,7 @@ test("editing the dock page reloads it", async ({ page }) => {
 test("choosing Built-in after editing preserves the outgoing page until its save finishes", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "page=dock-ok&builtin");
   await ready(page);
   const originalFrame = doc(page);
   await page.evaluate(() => (window as any).bumpReload());
@@ -501,9 +501,9 @@ test("choosing Built-in after editing preserves the outgoing page until its save
   expect(editedLoads).toBeGreaterThan(1);
   await page.evaluate(() => {
     (window as any).calls = [];
-    (window as any).choose("native");
+    (window as any).choose("builtin");
   });
-  await expect(page.locator("[data-testid=agents-dock] .cs-agents")).toBeVisible();
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("release_frame");
@@ -516,7 +516,9 @@ test("choosing Built-in after editing preserves the outgoing page until its save
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("fixture:teardown");
-  await expect(page.locator("iframe")).toHaveCount(0);
+  // Only the built-in list's page is left.
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
 });
 
 test("a successful Reload moves focus into the dock page", async ({ page, browserName }) => {
@@ -576,14 +578,15 @@ test("a dashboard missing at launch loads after its file is restored and Reload"
 test("missing at launch, then Built-in, restored, and chosen again loads the page", async ({
   page,
 }) => {
-  await open(page, "page=dock-ok&missing");
-  await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
-  await page.evaluate(() => (window as any).choose("native"));
+  await open(page, "page=dock-ok&missing&builtin");
+  await expect(page.getByRole("region", { name: "Agents" })).toBeVisible();
+  await page.evaluate(() => (window as any).choose("builtin"));
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
-  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.locator("[data-slot-fallback-entry=agent-list]")).toHaveCount(0);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await page.evaluate(() => (window as any).restore());
   await page.evaluate(() => (window as any).choose("dashboard"));
-  await ready(page);
+  await page.frameLocator('iframe[title="Fixture agents"]').locator("#row").waitFor();
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
   expect(
     await page.evaluate(
@@ -593,15 +596,14 @@ test("missing at launch, then Built-in, restored, and chosen again loads the pag
     ),
   ).toBe("/fixture");
 });
-
 test("choosing Built-in retires the dock page through flush, then teardown, then release", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "page=dock-ok&builtin");
   await ready(page);
-  await page.evaluate(() => (window as any).choose("native"));
-  // The built-in list shows at once, while the outgoing page finishes its save.
-  await expect(page.locator("[data-testid=agents-dock] .cs-agents")).toBeVisible({ timeout: 80 });
+  await page.evaluate(() => (window as any).choose("builtin"));
+  // The built-in list's page mounts while the outgoing page finishes its save.
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("release_frame");
@@ -617,5 +619,7 @@ test("choosing Built-in retires the dock page through flush, then teardown, then
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("fixture:teardown");
-  await expect(page.locator("iframe")).toHaveCount(0);
+  // Only the built-in list's page is left.
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
 });
