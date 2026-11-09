@@ -137,12 +137,12 @@ function host(visible = true) {
     />
   );
 }
-function announce(frame: HTMLIFrameElement, type: string) {
+function announce(frame: HTMLIFrameElement, type: string, extra: Record<string, unknown> = {}) {
   window.dispatchEvent(
     new MessageEvent("message", {
       source: frame.contentWindow,
       origin: new URL(frame.src).origin,
-      data: { type, token: record.token },
+      data: { type, token: record.token, ...extra },
     }),
   );
 }
@@ -458,6 +458,69 @@ it("keeps one startup deadline across the shim and iframe load", async () => {
   expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
   act(() => vi.advanceTimersByTime(1));
   expect(screen.getByTestId("slot-fallback-strip")).toBeInTheDocument();
+});
+it("render-checks a slot page only once it calls ready, again on each reveal and in-frame reload, and reloads it once when it drew nothing", async () => {
+  const base = ipc.getMockImplementation()!;
+  let minted = 0;
+  ipc.mockImplementation(async (command, args) =>
+    command === "mint_frame"
+      ? { ...record, kind: "team", frameId: `blank-${++minted}` }
+      : base(command, args),
+  );
+  vi.useFakeTimers();
+  const view = (visible: boolean) => (
+    <SlotDashboardHost
+      slotId="dock"
+      entry={{ ...pane, id: "board", surface: undefined }}
+      contentRoot="/ctx/content"
+      visible={visible}
+    />
+  );
+  let rerender!: ReturnType<typeof render>["rerender"];
+  await act(async () => {
+    ({ rerender } = render(view(true)));
+  });
+  const first = document.querySelector("iframe")!;
+  const postMessage = vi.fn();
+  Object.defineProperty(first, "contentWindow", { value: { postMessage }, configurable: true });
+  const pings = () =>
+    postMessage.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:ping");
+  const pong = (rendered: boolean) => act(() => announce(first, "codesense:pong", { rendered }));
+  const tick = () => act(() => vi.advanceTimersByTime(5000));
+  act(() => announce(first, "codesense:ready"));
+  fireEvent.load(first);
+  // Before the page calls ready it may still be drawing from its data: a plain heartbeat.
+  tick();
+  expect(pings().at(-1)).toEqual(expect.objectContaining({ type: "codesense:ping" }));
+  expect(pings().at(-1).render).toBeUndefined();
+  pong(true);
+  act(() => announce(first, "codesense:live"));
+  tick();
+  expect(pings().at(-1).render).toBe(true);
+  // A healthy answer: later pings are plain heartbeats.
+  pong(true);
+  tick();
+  expect(pings().at(-1).render).toBeUndefined();
+  pong(true);
+  // Shown again: the next ping checks again.
+  rerender(view(false));
+  rerender(view(true));
+  tick();
+  expect(pings().at(-1).render).toBe(true);
+  pong(true);
+  // An in-frame reload is checked again once its page is live.
+  act(() => announce(first, "codesense:ready"));
+  tick();
+  expect(pings().at(-1).render).toBeUndefined();
+  pong(true);
+  act(() => announce(first, "codesense:live"));
+  tick();
+  expect(pings().at(-1).render).toBe(true);
+  expect(minted).toBe(1);
+  pong(false);
+  await act(async () => vi.advanceTimersByTimeAsync(500));
+  expect(minted).toBe(2);
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
 });
 it("a budget-evicted live frame must complete a fresh startup after re-mint", async () => {
   const base = ipc.getMockImplementation()!;

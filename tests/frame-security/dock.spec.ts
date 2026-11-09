@@ -8,7 +8,8 @@ import tailwindcss from "@tailwindcss/vite";
 
 // The dock slot host with fixture dashboards (test only, never shipped): `dock-ok` lists agent
 // names from first paint and `subscribe('agentList')`, calls ready(), declares one row menu and
-// leaves Esc unhandled; `dock-never` never calls ready(); `dock-throw` throws on load.
+// leaves Esc unhandled; `dock-never` never calls ready(); `dock-throw` throws on load;
+// `dock-blank` calls ready() and draws nothing; `dock-silent` is `dock-ok` that never answers a ping.
 let frames: Server;
 let vite: ViteDevServer;
 let base: string;
@@ -20,11 +21,18 @@ const FIRST_PAINT = {
   rev: 1,
   snapshot: [{ id: "fixture-agent", sessionRef: "fixture-session" }],
 };
+// Registered before the shim's own listener, so the shim never sees a ping.
+const SWALLOW_PINGS = `addEventListener('message',function(e){if(e.data&&e.data.type==='codesense:ping')e.stopImmediatePropagation()});`;
 function fixtureBody(name: string): string {
   // `dock-flaky` throws on its first load and starts on the next.
   if (name === "dock-throw.html" || (name === "dock-flaky.html" && loads.get(name) === 1))
     return `<script>throw new Error("fixture failed to start")</script>`;
-  const ok = name === "dock-ok.html" || name === "dock-flaky.html" || name === "agent-list.html";
+  if (name === "dock-blank.html") return `<script>codesense.ready()</script>`;
+  const ok =
+    name === "dock-ok.html" ||
+    name === "dock-flaky.html" ||
+    name === "dock-silent.html" ||
+    name === "agent-list.html";
   return `<meta name="codesense:first-paint" content="agentList">
 <ul id="rows"></ul>
 <button id="row" data-codesense-row='{"kind":"agent","sessionId":"fixture-session"}'>fixture-agent</button>
@@ -56,7 +64,7 @@ test.beforeAll(async ({ browser }) => {
     res.setHeader("access-control-allow-origin", "*");
     // As the Rust route does: the token, then the first paint, then the shim, then the page.
     res.end(
-      `<!doctype html><script>window.__codesenseProxy={token:${JSON.stringify(id)}};window.__codesenseFirstPaint=${JSON.stringify(FIRST_PAINT)};${shim}</script>${fixtureBody(id)}`,
+      `<!doctype html><script>window.__codesenseProxy={token:${JSON.stringify(id)}};window.__codesenseFirstPaint=${JSON.stringify(FIRST_PAINT)};${id === "dock-silent.html" ? SWALLOW_PINGS : ""}${shim}</script>${fixtureBody(id)}`,
     );
   });
   await new Promise<void>((done) => frames.listen(0, "127.0.0.1", done));
@@ -194,7 +202,7 @@ test("cold open paints the first-paint roster before subscribe returns", async (
 });
 
 for (const fixture of ["dock-never", "dock-throw"])
-  test(`${fixture}: neutral shared placeholder, then the built-in list under the strip`, async ({
+  test(`${fixture}: neutral shared placeholder, then the strip alone with Reload`, async ({
     page,
   }) => {
     if (fixture === "dock-never") {
@@ -215,11 +223,10 @@ for (const fixture of ["dock-never", "dock-throw"])
     const strip = page.getByTestId("slot-fallback-strip");
     await expect(strip).toBeVisible({ timeout: 2_500 });
     await expect(page.locator("[data-slot-id=dock]")).not.toHaveAttribute("aria-busy");
-    await expect(strip).toContainText(
-      "Fixture agents pane didn't load — showing the built-in Agents list.",
-    );
+    await expect(strip).toContainText("Fixture agents pane didn't load.");
+    await expect(strip).not.toContainText("showing the built-in");
     await expect(cards).toHaveCount(0);
-    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toBeVisible();
+    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
     // The strip sits in a box capped at about 60% of the column.
     const box = (await strip.locator("..").boundingBox())!;
     const column = (await page.getByRole("region", { name: "Agents" }).boundingBox())!;
@@ -249,6 +256,42 @@ test("a failed dock page falls back to the listed built-in agent-list page", asy
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
   await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await expect(fallback.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+// A ready dock page that stops answering, or draws nothing, is reloaded once, then the strip
+// stands alone with Reload (no native list beneath it). A healthy page is never reloaded.
+async function runPings(page: Page, until: () => Promise<boolean>) {
+  for (let i = 0; i < 30 && !(await until()); i++) await page.clock.runFor(1000);
+}
+for (const fixture of ["dock-silent", "dock-blank"])
+  test(`${fixture}: reloads once, then the strip alone with Reload`, async ({ page }) => {
+    await page.clock.install({ time: new Date(0) });
+    await page.clock.pauseAt(new Date(0));
+    await open(page, `page=${fixture}`);
+    const strip = page.getByTestId("slot-fallback-strip");
+    await expect.poll(() => doc(page)?.evaluate(() => !!(window as any).codesense)).toBe(true);
+    await runPings(page, async () => (loads.get(`${fixture}.html`) ?? 0) > 1);
+    expect(loads.get(`${fixture}.html`)).toBe(2);
+    await expect(strip).toHaveCount(0);
+    await runPings(page, async () => (await strip.count()) > 0);
+    await expect(strip).toBeVisible();
+    expect(loads.get(`${fixture}.html`)).toBe(2);
+    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
+    await expect(page.locator("[data-slot-id=dock] iframe")).toHaveCount(0);
+    await strip.getByRole("button", { name: "Details" }).click();
+    await expect(strip).toContainText(
+      fixture === "dock-silent" ? "frame stopped responding" : "frame rendered nothing",
+    );
+    await expect(strip.getByRole("button", { name: "Reload" })).toBeVisible();
+  });
+test("a healthy dock page answers the render check and is never reloaded", async ({ page }) => {
+  await page.clock.install({ time: new Date(0) });
+  await page.clock.pauseAt(new Date(0));
+  await open(page);
+  await ready(page);
+  await page.clock.runFor(30_000);
+  await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
+  expect(loads.get("dock-ok.html")).toBe(1);
 });
 
 test("Esc in the dock page lands on the focused terminal", async ({ page }) => {
@@ -469,7 +512,7 @@ test("a page still loading stays neutral past three seconds and falls back at th
   await page.clock.runFor(1);
   await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
   await expect(page.locator("[data-slot-id=dock]")).not.toHaveAttribute("aria-busy");
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toBeVisible();
+  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
 });
 
 test("a dashboard missing at launch loads after its file is restored and Reload", async ({
@@ -478,7 +521,7 @@ test("a dashboard missing at launch loads after its file is restored and Reload"
   await open(page, "page=dock-ok&missing");
   const strip = page.getByTestId("slot-fallback-strip");
   await expect(strip).toBeVisible();
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toBeVisible();
+  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await page.evaluate(() => (window as any).restore());
   await strip.getByRole("button", { name: "Reload" }).click();
   await ready(page);
