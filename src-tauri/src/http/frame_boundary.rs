@@ -194,6 +194,9 @@ async fn boundary(
                 csp.push(' ');
                 csp.push_str(&parent.origin);
             }
+            // The frame's own exact origin beside 'self': WebKit matches 'self' to nothing in a
+            // sandboxed (opaque-origin) document such as a baseline, so every engine gets the same policy.
+            let own = format!("'self' {}", frame.origin);
             if frame.policy.no_outside_network {
                 // A policy whose hosts are not all exact HTTPS origins opens none of them.
                 let hosts = AllowedHosts::parse(&frame.policy.allowed_hosts)
@@ -203,20 +206,20 @@ async fn boundary(
                 // A slot frame may nest the message frames it embeds (`link_child`).
                 if crate::verbs::capabilities::SLOTS.contains(&frame.grant.slot.as_str()) {
                     csp.push_str(&format!(
-                        "; frame-src 'self' http://*.localhost:{} {hosts}",
+                        "; frame-src {own} http://*.localhost:{} {hosts}",
                         state.port
                     ));
                 }
                 // Only the outside network is denied: local blob:/data: media and fonts, same-origin
                 // workers and WebAssembly keep working. `eval` stays off ('unsafe-eval').
-                csp.push_str(&format!("; default-src 'self' {hosts}; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' {hosts}; style-src 'self' 'unsafe-inline' {hosts}; img-src 'self' data: blob: {hosts}; font-src 'self' data: blob: {hosts}; media-src 'self' data: blob: {hosts}; connect-src 'self' blob: {hosts}; form-action 'self' {hosts}; base-uri 'self'; object-src 'none'"));
+                csp.push_str(&format!("; default-src {own} {hosts}; script-src {own} 'unsafe-inline' 'wasm-unsafe-eval' {hosts}; style-src {own} 'unsafe-inline' {hosts}; img-src {own} data: blob: {hosts}; font-src {own} data: blob: {hosts}; media-src {own} data: blob: {hosts}; connect-src {own} blob: {hosts}; form-action {own} {hosts}; base-uri {own}; object-src 'none'"));
             }
             // Service workers stay refused at the boundary (`blocks_service_workers`); only an
             // explicit switch also turns dedicated and shared workers off.
             if frame.policy.block_service_workers {
                 csp.push_str("; worker-src 'none'");
             } else if frame.policy.no_outside_network {
-                csp.push_str("; worker-src 'self' blob:");
+                csp.push_str(&format!("; worker-src {own} blob:"));
             }
             if let Ok(value) = HeaderValue::from_str(&csp) {
                 response
@@ -426,7 +429,12 @@ mod tests {
         assert_eq!(cross.status(), StatusCode::FORBIDDEN);
     }
     async fn request(policy: FramePolicy, worker: bool) -> Response {
+        request_from(policy, worker).await.0
+    }
+    /// The response and the frame's own origin, which its policy names beside 'self'.
+    async fn request_from(policy: FramePolicy, worker: bool) -> (Response, String) {
         let (app, frame) = fixture(policy);
+        let own = frame.origin.clone();
         let mut request = axum::http::Request::builder()
             .uri("/viewer/root/board.html")
             .header("host", frame.origin.trim_start_matches("http://"))
@@ -435,9 +443,11 @@ mod tests {
         if worker {
             request = request.header("service-worker", "script");
         }
-        app.oneshot(request.body(Body::empty()).unwrap())
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
             .await
-            .unwrap()
+            .unwrap();
+        (response, own)
     }
 
     #[tokio::test]
@@ -488,7 +498,7 @@ mod tests {
                             .to_str()
                             .unwrap();
                         assert!(csp.starts_with(&format!("{}; ", origins.frame_ancestors())));
-                        assert!(csp.contains("; default-src 'self' ;"));
+                        assert!(csp.contains(&format!("; default-src 'self' {} ;", frame.origin)));
                     }
                 } else {
                     assert_eq!(
@@ -636,29 +646,39 @@ mod tests {
     }
     #[tokio::test]
     async fn outside_network_is_denied_by_default_and_only_exact_declared_hosts_survive() {
-        let csp = |response: Response| {
-            response.headers()[header::CONTENT_SECURITY_POLICY]
+        // Each policy names the frame's own exact origin beside 'self', so an opaque-origin
+        // (sandboxed) document keeps its own scripts and media in every engine.
+        let csp = |(response, own): (Response, String)| {
+            let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
                 .to_str()
                 .unwrap()
-                .to_owned()
+                .to_owned();
+            assert!(own.starts_with("http://f-") && own.ends_with(".localhost:9321"));
+            csp.replace(&format!("'self' {own}"), "'self' <own>")
         };
-        let denied = csp(request(FramePolicy::default(), false).await);
+        let denied = csp(request_from(FramePolicy::default(), false).await);
         for directive in [
-            "default-src 'self' ;",
-            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' ;",
-            "img-src 'self' data: blob: ;",
-            "font-src 'self' data: blob: ;",
-            "media-src 'self' data: blob: ;",
-            "connect-src 'self' blob: ;",
-            "form-action 'self' ;",
+            "default-src 'self' <own> ;",
+            "script-src 'self' <own> 'unsafe-inline' 'wasm-unsafe-eval' ;",
+            "style-src 'self' <own> 'unsafe-inline' ;",
+            "img-src 'self' <own> data: blob: ;",
+            "font-src 'self' <own> data: blob: ;",
+            "media-src 'self' <own> data: blob: ;",
+            "connect-src 'self' <own> blob: ;",
+            "form-action 'self' <own> ;",
+            "base-uri 'self' <own>;",
             "object-src 'none'",
-            "worker-src 'self' blob:",
+            "worker-src 'self' <own> blob:",
         ] {
             assert!(denied.contains(directive), "{directive}: {denied}");
         }
+        assert!(
+            !denied.contains("'self' ;") && !denied.contains("'self';"),
+            "{denied}"
+        );
         assert!(!denied.contains("'unsafe-eval'"), "{denied}");
         // An explicit service-worker switch still turns every worker off.
-        let workers_off = csp(request(
+        let workers_off = csp(request_from(
             FramePolicy {
                 block_service_workers: true,
                 ..Default::default()
@@ -670,7 +690,7 @@ mod tests {
             workers_off.ends_with("; worker-src 'none'"),
             "{workers_off}"
         );
-        let declared = csp(request(
+        let declared = csp(request_from(
             FramePolicy {
                 allowed_hosts: vec!["https://api.example.com".into()],
                 ..Default::default()
@@ -679,16 +699,16 @@ mod tests {
         )
         .await);
         for directive in [
-            "default-src 'self' https://api.example.com;",
-            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://api.example.com;",
-            "img-src 'self' data: blob: https://api.example.com;",
-            "connect-src 'self' blob: https://api.example.com;",
+            "default-src 'self' <own> https://api.example.com;",
+            "script-src 'self' <own> 'unsafe-inline' 'wasm-unsafe-eval' https://api.example.com;",
+            "img-src 'self' <own> data: blob: https://api.example.com;",
+            "connect-src 'self' <own> blob: https://api.example.com;",
         ] {
             assert!(declared.contains(directive), "{directive}: {declared}");
         }
         assert!(!declared.contains('*'));
         // A host the resolver would refuse never reaches the header, nor do its siblings.
-        let refused = csp(request(
+        let refused = csp(request_from(
             FramePolicy {
                 allowed_hosts: vec![
                     "https://api.example.com".into(),
@@ -699,7 +719,10 @@ mod tests {
             false,
         )
         .await);
-        assert!(refused.contains("connect-src 'self' blob: ;"), "{refused}");
+        assert!(
+            refused.contains("connect-src 'self' <own> blob: ;"),
+            "{refused}"
+        );
         assert!(!refused.contains("example.com"), "{refused}");
     }
     #[tokio::test]
@@ -728,12 +751,18 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .to_owned();
+            let own = &frame.origin;
             assert_eq!(
-                csp.contains("; frame-src 'self' http://*.localhost:9321 ;"),
+                csp.contains(&format!(
+                    "; frame-src 'self' {own} http://*.localhost:9321 ;"
+                )),
                 nests,
                 "{slot}: {csp}"
             );
-            assert!(csp.contains("; default-src 'self' ;"), "{slot}: {csp}");
+            assert!(
+                csp.contains(&format!("; default-src 'self' {own} ;")),
+                "{slot}: {csp}"
+            );
         }
         // Declared hosts may be framed by a slot frame exactly as default-src allows them.
         let (app, frame) = fixture_in_slot(
@@ -759,14 +788,14 @@ mod tests {
         let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
             .to_str()
             .unwrap();
+        let own = &frame.origin;
         assert!(
-            csp.contains("; frame-src 'self' http://*.localhost:9321 https://api.example.com;"),
+            csp.contains(&format!(
+                "; frame-src 'self' {own} http://*.localhost:9321 https://api.example.com;"
+            )),
             "{csp}"
         );
-        assert!(
-            !csp.contains("frame-src 'self' http://*.localhost:9321 ;"),
-            "{csp}"
-        );
+        assert!(!csp.contains("http://*.localhost:9321 ;"), "{csp}");
     }
     #[tokio::test]
     async fn every_scriptable_document_type_carries_the_network_policy() {
@@ -801,7 +830,9 @@ mod tests {
                 .get(header::CONTENT_SECURITY_POLICY)
                 .map(|v| v.to_str().unwrap().to_owned());
             assert_eq!(
-                csp.is_some_and(|csp| csp.contains("connect-src 'self' blob: ;")),
+                csp.is_some_and(|csp| {
+                    csp.contains(&format!("connect-src 'self' {} blob: ;", frame.origin))
+                }),
                 guarded,
                 "{path}"
             );
