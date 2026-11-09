@@ -247,4 +247,95 @@ describe("Saving an edit", () => {
     const save = calls.find((c) => c.cmd === "save_machine");
     expect((save?.args.input as MachineDraftInput).declarationRevision).toBe(enrolled ?? opened);
   });
+
+  it("after its own install, saves on the revision the install left", async () => {
+    let tests = 0;
+    const { calls } = installMachinesBackend("demo", {
+      test_machine_connection: (): MachineTestReport => ({
+        steps: [
+          tests++ === 0
+            ? {
+                id: "private-account",
+                status: "warn",
+                detail: "warn",
+                nextSteps: ["install-terminal-server"],
+              }
+            : { id: "private-account", status: "ok", detail: "ok", nextSteps: [] },
+        ],
+        installPlan: null,
+        fileViewOnly: false,
+      }),
+      install_terminal_server: () => ({
+        ok: true,
+        version: "1",
+        logoutWarning: null,
+        declarationRevision: "after-install",
+      }),
+      save_machine: () => getTeamMachines(TEAM_KEY)?.find((m) => m.machineId === "gpu-box-2"),
+    });
+    await loadTeamMachines(TEAM_KEY);
+    render(
+      <MachineReserve
+        panel={{ mode: "setUp", machineId: "gpu-box-2" }}
+        teamKey={TEAM_KEY}
+        onClose={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByTestId("add-machine-test"));
+    await userEvent.click(await screen.findByTestId("machine-next-install-terminal-server"));
+    await waitFor(() => expect(screen.getByTestId("add-machine-connect")).toBeEnabled());
+    await userEvent.click(screen.getByTestId("add-machine-connect"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_machine")).toBe(true));
+    const save = calls.find((c) => c.cmd === "save_machine");
+    expect((save?.args.input as MachineDraftInput).declarationRevision).toBe("after-install");
+  });
+
+  it("retries a save whose later step failed on the revision that save left", async () => {
+    let autoConnects = 0;
+    const ready: MachineTestReport = {
+      steps: [{ id: "reachable", status: "ok", detail: "Reachable", nextSteps: [] }],
+      installPlan: null,
+      fileViewOnly: false,
+    };
+    const { calls } = installMachinesBackend("demo", {
+      test_machine_connection: () => ready,
+      save_machine: () => {
+        const machine = getTeamMachines(TEAM_KEY)?.find((m) => m.machineId === "gpu-box-2");
+        return machine?.declaration && machine.binding
+          ? {
+              ...machine,
+              declaration: { ...machine.declaration, revision: "after-save" },
+              binding: { ...machine.binding, autoConnect: false },
+            }
+          : machine;
+      },
+      set_machine_auto_connect: () => {
+        if (autoConnects++ === 0) throw new Error("offline");
+      },
+    });
+    await loadTeamMachines(TEAM_KEY);
+    const opened = getTeamMachines(TEAM_KEY)?.find((m) => m.machineId === "gpu-box-2")?.declaration
+      ?.revision;
+    render(
+      <MachineReserve
+        panel={{ mode: "setUp", machineId: "gpu-box-2" }}
+        teamKey={TEAM_KEY}
+        onClose={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByTestId("add-machine-test"));
+    await waitFor(() => expect(screen.getByTestId("add-machine-connect")).toBeEnabled());
+    const background = screen.getByRole("checkbox", { name: /reconnect in background/i });
+    if (!(background as HTMLInputElement).checked) await userEvent.click(background);
+    await userEvent.click(screen.getByTestId("add-machine-connect"));
+    await waitFor(() => expect(autoConnects).toBe(1));
+    await waitFor(() => expect(screen.getByTestId("add-machine-connect")).toBeEnabled());
+    await userEvent.click(screen.getByTestId("add-machine-connect"));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "save_machine")).toHaveLength(2));
+    const [first, second] = calls
+      .filter((c) => c.cmd === "save_machine")
+      .map((c) => (c.args.input as MachineDraftInput).declarationRevision);
+    expect(first).toBe(opened);
+    expect(second).toBe("after-save");
+  });
 });

@@ -367,6 +367,8 @@ export function machineHandlers(
   const interruptedOnce = new Set<string>();
   /** Keychain handles handed out (the passphrase itself never reaches the mock). */
   let passphraseHandles = 0;
+  const CHANGED_SINCE_OPENED =
+    "This machine changed since you opened it. Reopen it and save again.";
   /** Like the real registry's declaration revisions: a rewrite moves them. */
   let revisions = 0;
   const nextRevision = (id: string) => `mock-rev-${id}-${++revisions}`;
@@ -901,24 +903,36 @@ export function machineHandlers(
       const existing = records.get(id);
       const saved = existing?.summary.declaration;
       // Like the real registry: no save overwrites a change made since it was
-      // opened, and changing a legacy machine you publish names its base. (The
-      // mock's enroll converts nothing, so a switch to a private account is
-      // let through as the real one would be after enrolling.)
+      // opened, a base names a machine that still exists, changing a legacy
+      // machine you publish (switching it to a private account too) names its
+      // base, and a team machine keeps its label once it is or becomes private.
+      if (machineId && !existing && draft.declarationRevision != null)
+        throw new Error(CHANGED_SINCE_OPENED);
       if (
         saved &&
         draft.declarationRevision != null &&
         draft.declarationRevision !== saved.revision
       )
-        throw new Error("This machine changed since you opened it. Reopen it and save again.");
+        throw new Error(CHANGED_SINCE_OPENED);
       if (
         saved &&
         draft.declarationRevision == null &&
         existing?.summary.canPublish &&
-        saved.mode !== "private-account" &&
-        draft.mode !== "private-account"
+        saved.mode !== "private-account"
       )
-        throw new Error("Saving changes to this machine needs declarationRevision.");
+        throw new Error(
+          "Saving changes to this machine needs the revision it was based on: pass declarationRevision, the declaration.revision list_machines returns. Reopen it and save again.",
+        );
       const host = draft.host.trim();
+      const label = draft.label.trim() || host;
+      if (
+        existing?.summary.scope?.kind === "team" &&
+        (saved?.mode === "private-account" || draft.mode === "private-account") &&
+        label !== existing.summary.label
+      )
+        throw new Error(
+          `A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name “${existing.summary.label}”.`,
+        );
       const signIn = draft.signIn;
       // A member setting up a teammate's machine only writes their own binding:
       // the shared declaration (address, label, scope, pinned key) is unchanged.
@@ -926,18 +940,21 @@ export function machineHandlers(
       const summary: MachineSummary = {
         machineId: id,
         kind: "ssh",
-        label: keepDecl ? existing.summary.label : draft.label.trim() || host,
+        label: keepDecl ? existing.summary.label : label,
         scope: keepDecl ? existing.summary.scope : (share as MachineScope),
         declaration: keepDecl
           ? existing.summary.declaration
           : {
+              // Like the real registry: a new machine is a private account
+              // unless asked otherwise, and an existing one keeps its mode.
+              mode: draft.mode ?? saved?.mode ?? (existing ? "legacy" : "private-account"),
               host,
               port: draft.port,
               jumpHost: draft.jumpHost,
               defaultBaseDir: "~",
               pinnedHostKeyFp: draft.trustedHostKeyFp,
               pinnedServerId: connect ? `mock-server-${machineId}` : null,
-              revision: nextRevision(id),
+              revision: "",
             },
         binding: {
           username: draft.username,
@@ -956,6 +973,16 @@ export function machineHandlers(
         attention: existing?.summary.attention ?? 0,
         capabilities: { agentCallbacks: true },
       };
+      // Like the real registry's digest of scope and declaration: a save that
+      // changes neither (a binding-only edit) keeps the revision.
+      if (summary.declaration && !keepDecl) {
+        const content = (row: MachineSummary) =>
+          JSON.stringify([row.label, row.scope, { ...row.declaration, revision: null }]);
+        summary.declaration.revision =
+          saved && existing && content(summary) === content(existing.summary)
+            ? saved.revision
+            : nextRevision(id);
+      }
       const rec: MachineRecord = existing ?? {
         summary,
         snapshot: {

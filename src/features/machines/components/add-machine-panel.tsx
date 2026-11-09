@@ -38,7 +38,7 @@ import { formatMachineAddress, parseMachineAddress } from "../lib/machine-addres
 import { retireLeftoverLegacyServer } from "../lib/machine-actions";
 import { MB } from "../lib/machine-file-path";
 import { TONE_CLASS, type MachineTone } from "../lib/machine-status";
-import { reloadMachines } from "../stores/machines-store";
+import { refreshMachine, reloadMachines } from "../stores/machines-store";
 
 const STEP_LABEL: Record<MachineTestStep["id"], string> = {
   "private-account": "Private account",
@@ -147,9 +147,16 @@ export function AddMachinePanel({
   const [label, setLabel] = useState(machine?.label ?? "");
   // The revision this panel opened the machine at, never the live store's: a
   // save based on it is refused once someone else changes the machine. This
-  // panel's own enroll or install (a conversion, a first host-key pin) answers
-  // with the revision its writes left, which becomes the base.
+  // panel's own save, enroll or install (a conversion, a first host-key pin)
+  // answers with the revision its writes left, which becomes the base.
   const [baseRevision, setBaseRevision] = useState(() => decl?.revision ?? null);
+  // A setup step that converted a legacy machine and then failed answers with
+  // no revision: re-read the machine and adopt the converted declaration's.
+  const adoptConversion = async () => {
+    if (decl?.mode !== "legacy") return;
+    const now = await refreshMachine(machine.machineId).catch(() => null);
+    if (now?.declaration?.mode === "private-account") setBaseRevision(now.declaration.revision);
+  };
   const [autoConnect, setAutoConnect] = useState(machine?.binding?.autoConnect === true);
   const [jumpHost, setJumpHost] = useState(decl?.jumpHost ?? "");
   const [showJump, setShowJump] = useState(Boolean(decl?.jumpHost));
@@ -276,11 +283,13 @@ export function AddMachinePanel({
       result = await installTerminalServer(machine?.machineId ?? null, input);
       if (result.ok && result.declarationRevision) setBaseRevision(result.declarationRevision);
     } catch (e) {
+      await adoptConversion();
       if (seq !== editSeq.current) return;
       setInstall({ status: "idle" });
       toast.error(`Couldn't install on ${input.host}: ${getErrorMessage(e)}`);
       return;
     }
+    if (!result.ok) await adoptConversion();
     if (seq !== editSeq.current) return;
     if (result.ok) {
       setInstall({ status: "installed", logoutWarning: result.logoutWarning });
@@ -326,7 +335,8 @@ export function AddMachinePanel({
             if (report.declarationRevision) setBaseRevision(report.declarationRevision);
             if (seq === editSeq.current) setReport(report);
           })
-          .catch((error) => {
+          .catch(async (error) => {
+            await adoptConversion();
             if (seq === editSeq.current) toast.error(getErrorMessage(error));
           })
           .finally(() => {
@@ -369,6 +379,8 @@ export function AddMachinePanel({
     setConnecting(true);
     try {
       const saved = await saveMachine(machine?.machineId ?? null, input, scope, true);
+      // A retry after a later step fails is based on what this save wrote.
+      setBaseRevision(saved.declaration?.revision ?? null);
       if (autoConnect !== (saved.binding?.autoConnect === true))
         await setMachineAutoConnect(saved.machineId, autoConnect);
       await reloadMachines(teamKey);

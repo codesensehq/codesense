@@ -285,6 +285,7 @@ describe("save_machine", () => {
     const locked = await b.call<MachineSummary>("save_machine", {
       machineId: saved.machineId,
       input: draft("devbox-02.int", {
+        label: "devbox-02",
         signIn: { method: "keychainPassphrase", keyPath: "~/.ssh/locked", credentialRef: handle },
         declarationRevision: saved.declaration?.revision,
       }),
@@ -328,6 +329,60 @@ describe("save_machine", () => {
       }),
     ).toThrow(/declarationRevision/);
     expect(b.list().find((m) => m.machineId === "gpu-box-2")?.label).toBe("first");
+  });
+
+  it("matches the real registry: binding-only saves keep the revision, team private labels stay", async () => {
+    const b = backend("demo");
+    const team = { kind: "team", orgSlug: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME };
+    const revision = () => b.list().find((m) => m.machineId === "gpu-box-2")?.declaration?.revision;
+    const opened = revision();
+    expect(() =>
+      b.call("save_machine", {
+        machineId: "gpu-box-2",
+        input: draft("gpu-box-2.int", { label: "gpu-box-2", mode: "private-account" }),
+        share: team,
+        connect: false,
+      }),
+    ).toThrow(/declarationRevision/);
+    const saved = await b.call<MachineSummary>("save_machine", {
+      machineId: "gpu-box-2",
+      input: draft("gpu-box-2.int", {
+        label: "gpu-box-2",
+        mode: "private-account",
+        declarationRevision: opened,
+      }),
+      share: team,
+      connect: false,
+    });
+    const rebound = await b.call<MachineSummary>("save_machine", {
+      machineId: "gpu-box-2",
+      input: draft("gpu-box-2.int", {
+        label: "gpu-box-2",
+        username: "someone-else",
+        declarationRevision: saved.declaration?.revision,
+      }),
+      share: team,
+      connect: false,
+    });
+    expect(rebound.declaration?.revision).toBe(saved.declaration?.revision);
+    expect(() =>
+      b.call("save_machine", {
+        machineId: "gpu-box-2",
+        input: draft("gpu-box-2.int", { label: "Renamed", declarationRevision: revision() }),
+        share: team,
+        connect: false,
+      }),
+    ).toThrow(/can't be changed from this Mac/);
+    await b.call("remove_machine", { machineId: "gpu-box-2" });
+    expect(() =>
+      b.call("save_machine", {
+        machineId: "gpu-box-2",
+        input: draft("gpu-box-2.int", { declarationRevision: saved.declaration?.revision }),
+        share: team,
+        connect: false,
+      }),
+    ).toThrow(/changed since you opened it/);
+    expect(b.list().some((m) => m.machineId === "gpu-box-2")).toBe(false);
   });
 
   it("hide / unshare / remove", async () => {
