@@ -372,16 +372,16 @@ fn cache_round_trips_verified_bytes_and_all_supported_headers() {
 #[test]
 fn config_reads_edits_without_polling_or_a_cached_policy() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(Config::load(dir.path()).remote, Remote::Auto);
+    assert_eq!(Config::load(dir.path()).remote, Remote::Ask);
     std::fs::write(dir.path().join("inbox.yml"), "media: {remote: off}").unwrap();
     assert_eq!(Config::load(dir.path()).remote, Remote::Off);
     std::fs::write(
         dir.path().join("inbox.yml"),
-        "media: {remote: ask, hosts: [images.example.com]}",
+        "media: {remote: auto, hosts: [images.example.com]}",
     )
     .unwrap();
     let config = Config::load(dir.path());
-    assert_eq!(config.remote, Remote::Ask);
+    assert_eq!(config.remote, Remote::Auto);
     assert!(config.allows("images.example.com"));
     assert!(!config.allows("i.giphy.com"));
 }
