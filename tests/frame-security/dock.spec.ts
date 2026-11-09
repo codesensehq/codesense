@@ -59,6 +59,12 @@ test.beforeAll(async ({ browser }) => {
   const shim = source.match(/const LINK_INTERCEPTOR_JS: &str = r#"([\s\S]*?)"#;/)![1];
   frames = createServer((req, res) => {
     const id = req.url?.split("/").pop()?.split("?")[0] ?? "";
+    // Only fixture page names reach the response; anything else from the URL is a 404.
+    if (!/^[\w-]+\.html$/.test(id)) {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
     // Document loads only; the host's own existence probe is a fetch.
     if (req.headers["sec-fetch-dest"] === "iframe") loads.set(id, (loads.get(id) ?? 0) + 1);
     // `dock-hang` never finishes loading.
