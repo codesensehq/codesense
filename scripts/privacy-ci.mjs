@@ -176,6 +176,51 @@ function* commitAdditions(cwd, commit) {
   }
 }
 
+// The maintainer's identity is the one a commit or tag may name: exactly their
+// sign-off line in the trailer block, and exactly their tagger header. Built at
+// load so this file does not carry the handle.
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const MAINTAINER = ["alfy", "pops"].join("");
+const MAINTAINER_IDENTITY = `${MAINTAINER} <6836580+${MAINTAINER}@users.noreply.github.com>`;
+const MAINTAINER_SIGNOFF = `Signed-off-by: ${MAINTAINER_IDENTITY}`;
+const MAINTAINER_TAGGER = new RegExp(
+  `^tagger ${escapeRegExp(MAINTAINER_IDENTITY)} \\d+ [+-]\\d{4}$`,
+);
+const BLANK = /^[ \t]*$/;
+
+// Lines are split on \n only, so \r, U+2028 and U+2029 never end one. The
+// trailer block is the last paragraph, never the subject; `skip` lines (comments
+// git will strip) may follow it. Masked lines are blanked, not removed, so every
+// other line keeps its number.
+export function withoutMaintainerSignoff(message, skip = () => false) {
+  const lines = message.split("\n");
+  let end = lines.length;
+  while (end > 0 && (BLANK.test(lines[end - 1]) || skip(lines[end - 1]))) end--;
+  let start = end;
+  while (start > 0 && !BLANK.test(lines[start - 1])) start--;
+  for (let i = Math.max(start, 1); i < end; i++) if (lines[i] === MAINTAINER_SIGNOFF) lines[i] = "";
+  return lines.join("\n");
+}
+
+// A raw tag object: the maintainer's tagger header, and their sign-off in the
+// message above the signature, which starts at the last whole BEGIN line, as in git.
+export function withoutMaintainerTagIdentity(text) {
+  const split = text.indexOf("\n\n");
+  if (split < 0) return text;
+  const headers = text
+    .slice(0, split)
+    .split("\n")
+    .map((line) => (MAINTAINER_TAGGER.test(line) ? "" : line))
+    .join("\n");
+  const body = text.slice(split + 2).split("\n");
+  const signature = body.findLastIndex((line) =>
+    /^-----BEGIN [A-Z ]{1,20}SIGNATURE-----$/.test(line),
+  );
+  const end = signature < 0 ? body.length : signature;
+  const message = withoutMaintainerSignoff(body.slice(0, end).join("\n"));
+  return [`${headers}\n\n${message}`, ...body.slice(end)].join("\n");
+}
+
 // Scan each commit's additions, and its message as metadata in `tmp`.
 function scanCommits(cwd, commits, rules, freshAllow, tmp, progress = () => {}) {
   const findings = [];
@@ -186,7 +231,7 @@ function scanCommits(cwd, commits, rules, freshAllow, tmp, progress = () => {}) 
     }
     fs.writeFileSync(
       path.join(tmp, `message-${i}.txt`),
-      git(["show", "--no-patch", "--format=%B", commit, "--"], cwd),
+      withoutMaintainerSignoff(git(["show", "--no-patch", "--format=%B", commit, "--"], cwd)),
     );
   }
   return findings;
@@ -350,6 +395,7 @@ export function scanPush({
   allowFile = DEFAULT_ALLOW,
   remoteTimeoutMs,
   maxNewObjects = Infinity,
+  requireSigned = false,
   progress,
 }) {
   const rules = combinedRules(privateRulesFile);
@@ -404,15 +450,45 @@ export function scanPush({
     for (const [i, { remoteRef }] of pushes.entries()) {
       fs.writeFileSync(path.join(tmp, `ref-${i}.txt`), remoteRef);
       for (const [depth, { text }] of tags[i].entries())
-        fs.writeFileSync(path.join(tmp, `tag-${i}-${depth}.txt`), text);
+        fs.writeFileSync(
+          path.join(tmp, `tag-${i}-${depth}.txt`),
+          withoutMaintainerTagIdentity(text),
+        );
     }
     const findings = scanCommits(cwd, commits, rules, freshAllow, tmp, progress);
     findings.push(...scan(tmp, new Map(), { strict: true, rules }));
+    if (requireSigned) findings.push(...maintainerFindings(cwd, commits));
     return findings;
   });
 }
 
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const AI_CO_AUTHOR = /^Co-authored-by[ \t]*:.*<[^<>]*@(?:[^<>@]*\.)?anthropic\.com>/i;
+
+// A push from a maintainer clone (codesense.requireSigned) to the public repo
+// refuses a commit with no signature or with an AI co-author trailer. Every
+// commit the push publishes is checked, a contributor's included. This checks
+// that a signature is present, not whose key made it.
+function maintainerFindings(cwd, commits) {
+  const findings = [];
+  for (const commit of commits) {
+    const raw = git(["cat-file", "commit", commit], cwd);
+    const split = raw.indexOf("\n\n");
+    const [headers, message] = split < 0 ? [raw, ""] : [raw.slice(0, split), raw.slice(split + 2)];
+    const found = (rule) =>
+      findings.push({
+        rule,
+        sev: "error",
+        file: `commit ${commit.slice(0, 12)}`,
+        line: 0,
+        commit,
+        allowed: false,
+      });
+    if (!headers.split("\n").some((line) => /^gpgsig(?:-sha256)? /.test(line)))
+      found("unsigned-commit");
+    if (message.split("\n").some((line) => AI_CO_AUTHOR.test(line))) found("ai-co-author");
+  }
+  return findings;
+}
 
 // Commit-msg: the message up to the verbose diff below the scissors. Comment
 // lines are dropped only when the configured cleanup mode drops them; anything
@@ -423,7 +499,15 @@ export function scanMessage({ message, privateRulesFile, cleanup = "", commentCh
   let text = known ? message.split(new RegExp(`^${known} -+ >8 -+$`, "m"))[0] : message;
   if (known && cleanup === "strip") text = text.replace(new RegExp(`^${known}.*$`, "gm"), "");
   return withTemp((tmp) => {
-    fs.writeFileSync(path.join(tmp, "message.txt"), text);
+    // With commit.cleanup strip, comment lines are blank already. Unset or default
+    // strips them from an editor message, so a comment block after the sign-off
+    // does not end the trailer block (the comments are still scanned, and pre-push
+    // scans the final message). Other modes publish them, so they end it.
+    const editorStrips = !!known && (cleanup === "" || cleanup === "default");
+    fs.writeFileSync(
+      path.join(tmp, "message.txt"),
+      withoutMaintainerSignoff(text, (line) => editorStrips && line.startsWith(commentChar)),
+    );
     return scan(tmp, new Map(), { strict: true, rules });
   });
 }
@@ -469,17 +553,19 @@ const INVENTORY_FIX =
   "CODESENSE_PRIVACY_TERMS or place it at ~/.config/codesense/privacy-terms.json.";
 const PUBLIC_NOTICE = "privacy hook: public rules only; no private inventory";
 
+// A git config boolean: set and not readable as false (unparseable included) is true.
+function gitBoolean(cwd, key, override = []) {
+  const read = tryGit([...override, "config", "--bool", "--get", key], cwd);
+  return read.status !== 1 && read.stdout.trim() !== "false";
+}
+
 // A maintainer clone opts in to the private rules; nothing public sets it.
 // Both the env value and git config are read as git booleans, like fallback.sh:
 // set and not readable as false (unparseable included) means required.
 function privacyRequired(env, cwd) {
   const key = "codesense.privacyRequired";
-  const required = (override) => {
-    const read = tryGit([...override, "config", "--bool", "--get", key], cwd);
-    return read.status !== 1 && read.stdout.trim() !== "false";
-  };
   const flag = env.CODESENSE_PRIVACY_REQUIRED;
-  return (!!flag && required(["-c", `${key}=${flag}`])) || required([]);
+  return (!!flag && gitBoolean(cwd, key, ["-c", `${key}=${flag}`])) || gitBoolean(cwd, key);
 }
 
 // The new commits and tags a public push may carry: 200 by default, or a
@@ -543,6 +629,7 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
       updates: stdin,
       privateRulesFile,
       maxNewObjects,
+      requireSigned: gitBoolean(cwd, "codesense.requireSigned"),
       progress: (done, total) => console.error(`privacy-scan: scanned ${done}/${total} commits`),
     });
     return blockedReport(findings, "push", env);
