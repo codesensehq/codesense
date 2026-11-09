@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import type { Event as DocEvent } from "happy-dom";
 import { resolve } from "node:path";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
 
 vi.mock("@/shared/lib/open-management-tab", () => ({ openManagementTab: vi.fn() }));
 import {
@@ -51,7 +51,13 @@ vi.mock("@/shared/lib/send-to-terminal", async (original) => ({
   },
 }));
 
+import { PanePanelsMount } from "./use-register-pane-panels";
+import { getPanel } from "../panel-registry";
+import { defaultRightPaneLayout, findPanelLocation, SCRATCH_PANEL_ID } from "../right-pane-layout";
+import { revealSlot } from "../../slots/reveal-slot";
+import type { PaneListing } from "@/tauri/commands";
 import { NoteSwitcherMount } from "@/features/viewer/components/note-switcher-mount";
+import { logger } from "@/shared/lib/logger";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { usePaneStore } from "./pane-store";
@@ -219,19 +225,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function open(intent?: Record<string, unknown>, waitReady = true, source = SOURCE) {
-  const mount = render(
-    <HtmlViewer
-      filePath={PATH}
-      teamContentPath="/ctx/content"
-      onNavigate={navigate}
-      pane={{ contentRoot: "/ctx/content", panesDir: "/ctx/private/panes", fileName: "notes.html" }}
-      intent={intent}
-      parentPanelId={`pane:private:${ORG}/notes`}
-    />,
-  );
-  await waitFor(() => expect(document.querySelector("iframe")?.src).toContain("/pane/"));
-  const frame = document.querySelector("iframe")!;
+function bootNotesFrame(frame: HTMLIFrameElement, source = SOURCE) {
   const html = source
     .replace('<script type="module">', "<script>")
     .replace(
@@ -249,6 +243,23 @@ async function open(intent?: Record<string, unknown>, waitReady = true, source =
     },
   });
   docs.push(pane);
+  return pane;
+}
+
+async function open(intent?: Record<string, unknown>, waitReady = true, source = SOURCE) {
+  const mount = render(
+    <HtmlViewer
+      filePath={PATH}
+      teamContentPath="/ctx/content"
+      onNavigate={navigate}
+      pane={{ contentRoot: "/ctx/content", panesDir: "/ctx/private/panes", fileName: "notes.html" }}
+      intent={intent}
+      parentPanelId={`pane:private:${ORG}/notes`}
+    />,
+  );
+  await waitFor(() => expect(document.querySelector("iframe")?.src).toContain("/pane/"));
+  const frame = document.querySelector("iframe")!;
+  const pane = bootNotesFrame(frame, source);
   p = pane;
   if (!teamSafe && waitReady)
     await waitFor(() =>
@@ -298,8 +309,141 @@ function replyFor(command: string) {
   });
 }
 
+function resetNotesStores() {
+  usePaneStore.setState({ teamKey: null, listing: null, knownEntries: {}, pendingIntents: {} });
+  useDashboardProfileStore.setState({ org: ORG, profile: null });
+  useViewerStore.setState({ rightPaneLayout: defaultRightPaneLayout(), rightPaneOpen: false });
+}
+const notesListing = (privateCopy: boolean) =>
+  listing({
+    org: ORG,
+    team: TEAM,
+    root: "/ctx",
+    id: "notes",
+    title: "Notes",
+    privateCopy,
+    surface: "notes",
+  });
+
+it("carries a cold-start native reveal into the default Notes pane and consumes it once", async () => {
+  let land!: (value: PaneListing) => void;
+  const pending = new Promise<PaneListing>((resolve) => {
+    land = resolve;
+  });
+  const invoke = ipc.getMockImplementation()!;
+  ipc.mockImplementation((command, args) =>
+    command === "list_panes" ? pending : invoke(command, args),
+  );
+  // A failed load names its kind and detail, so a red run says why the pane fell back.
+  const warn = vi.spyOn(logger, "warn");
+  onTestFailed(() => {
+    const fallbacks = warn.mock.calls.filter(([scope]) => scope === "slot-fallback");
+    console.error(`slot-fallback: ${fallbacks.map(([, detail]) => detail).join("\n") || "none"}`);
+  });
+  resetNotesStores();
+  render(<PanePanelsMount />);
+  act(() => revealSlot("right-pane", { surface: "notes", intent: { noteId: "beta" } }));
+  expect(usePaneStore.getState().pendingIntents.scratch).toEqual({ noteId: "beta" });
+  const found = notesListing(true);
+  await act(async () => {
+    land(found);
+  });
+  const panelId = found.panes[0].panelId;
+  await waitFor(() =>
+    expect(findPanelLocation(useViewerStore.getState().rightPaneLayout, panelId)).not.toBeNull(),
+  );
+  render(getPanel(panelId)!.render());
+  await waitFor(() => expect(document.querySelector("iframe")?.src).toContain("/pane/"));
+  const frame = document.querySelector("iframe")!;
+  const pane = bootNotesFrame(frame);
+  const post = vi.spyOn(frame.contentWindow!, "postMessage");
+  // A failed load shows the fallback strip instead of the note.
+  await waitFor(() => {
+    expect(document.querySelector('[data-testid="slot-fallback-strip"]')).toBeNull();
+    expect((el(pane, "note-title") as HTMLInputElement).value).toBe("Beta");
+  });
+  expect(usePaneStore.getState().pendingIntents.scratch).toBeUndefined();
+  expect(usePaneStore.getState().pendingIntents[panelId]).toBeUndefined();
+  expect(post.mock.calls.filter(([message]) => message.type === "codesense:intent")).toHaveLength(
+    1,
+  );
+  expect(calls("read").filter(([, args]) => args.args.id === "beta")).toHaveLength(1);
+});
+
+async function mountNotesListing(found: PaneListing) {
+  resetNotesStores();
+  let current = found;
+  const invoke = ipc.getMockImplementation()!;
+  ipc.mockImplementation(async (command, args) =>
+    command === "list_panes" ? current : invoke(command, args),
+  );
+  render(<PanePanelsMount />);
+  await waitFor(() => expect(usePaneStore.getState().listing).not.toBeNull());
+  return (next: PaneListing) => (current = next);
+}
+
+it.each(["none", "older", "newer"])(
+  "moves a pending reveal back to classic Notes when the classic choice lands after the listing (classic intent %s)",
+  async (classic) => {
+    const found = notesListing(true);
+    await mountNotesListing(found);
+    const panelId = found.panes[0].panelId;
+    const waiting = { noteId: "alpha" };
+    if (classic === "older") usePaneStore.getState().setIntent(SCRATCH_PANEL_ID, waiting);
+    act(() => revealSlot("right-pane", { surface: "notes", intent: { noteId: "beta" } }));
+    expect(usePaneStore.getState().pendingIntents[panelId]).toEqual({ noteId: "beta" });
+    if (classic === "newer") usePaneStore.getState().setIntent(SCRATCH_PANEL_ID, waiting);
+    act(() =>
+      useDashboardProfileStore.setState({
+        org: ORG,
+        profile: {
+          id: "default",
+          name: "Default",
+          posture: "",
+          slots: {},
+          rightPaneSurfaces: { notes: "native" },
+          cliLayout: "default",
+          chrome: {},
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        findPanelLocation(useViewerStore.getState().rightPaneLayout, SCRATCH_PANEL_ID),
+      ).not.toBeNull(),
+    );
+    expect(usePaneStore.getState().pendingIntents[panelId]).toBeUndefined();
+    // The reveal follows its body; of two pending reveals, the newer one wins.
+    expect(usePaneStore.getState().pendingIntents[SCRATCH_PANEL_ID]).toEqual(
+      classic === "newer" ? waiting : { noteId: "beta" },
+    );
+  },
+);
+
+it("moves a pending reveal from one Notes pane to the team fork discovered after it", async () => {
+  const builtin = notesListing(true);
+  const relist = await mountNotesListing(builtin);
+  const from = builtin.panes[0].panelId;
+  act(() => revealSlot("right-pane", { surface: "notes", intent: { noteId: "beta" } }));
+  expect(usePaneStore.getState().pendingIntents[from]).toEqual({ noteId: "beta" });
+  // The team fork lists ahead of the private copy, so it becomes the Notes body.
+  const fork = notesListing(false);
+  relist({ ...builtin, panes: [...fork.panes, ...builtin.panes] });
+  await act(async () => {
+    await usePaneStore.getState().refresh?.();
+  });
+  const to = fork.panes[0].panelId;
+  await waitFor(() =>
+    expect(findPanelLocation(useViewerStore.getState().rightPaneLayout, to)).not.toBeNull(),
+  );
+  expect(usePaneStore.getState().pendingIntents[from]).toBeUndefined();
+  expect(usePaneStore.getState().pendingIntents[to]).toEqual({ noteId: "beta" });
+});
+
 it("ships one private dashboard and uses the shared kit editor", () => {
   expect(SOURCE).toContain('name="codesense:surface" content="notes"');
+  // The panel header shows classic Notes' icon.
+  expect(SOURCE).toContain('name="codesense:icon" content="sticky-note"');
   expect(SOURCE).toContain('name="codesense:slots" content="right-pane"');
   expect(SOURCE).toContain(
     "records:read:own records:write:own sessions:read sessions:send context:read",
@@ -321,8 +465,34 @@ it("creates a note, selects its title, types and autosaves through the real shim
     base: "",
     body: "Written here",
   });
+  // The meta line says when the note was saved, as classic Notes does, and never the org slug.
   await waitFor(() => expect(el(p!, "save-state").textContent).toBe("Saved"));
+  expect(p!.doc.querySelector(".nt-meta")!.textContent!.trim()).toBe("PrivateSaved just now");
 });
+it.each([
+  { by: { kind: "human", name: "You" }, state: "Saved" },
+  { by: { kind: "agent", name: "Ada" }, state: "Ada edited" },
+])(
+  "shows an older save's age outside the live region, so only save transitions are announced ($state)",
+  async ({ by, state }) => {
+    const invoke = ipc.getMockImplementation()!;
+    ipc.mockImplementation(async (command, args) => {
+      const result = await invoke(command, args);
+      return command === "records_call" && args.operation === "read" && result
+        ? {
+            ...result,
+            fields: { ...result.fields, updatedAt: Date.now() - 3 * 60_000, updatedBy: by },
+          }
+        : result;
+    });
+    await open();
+    await waitFor(() => expect(el(p!, "save-age").textContent).toBe(" 3m ago"));
+    expect(el(p!, "save-state").textContent).toBe(state);
+    expect(el(p!, "save-state").getAttribute("aria-live")).toBe("polite");
+    expect(el(p!, "save-age").closest("[aria-live]")).toBeNull();
+    expect(p!.doc.querySelector(".nt-meta")!.textContent!.trim()).toBe(`Private${state} 3m ago`);
+  },
+);
 it("does not write or normalize an unchanged body", async () => {
   const { frame } = await open();
   await flushFrame("test");
@@ -399,14 +569,22 @@ it("restores an earlier version and undoes one revision through records", async 
   await waitFor(() =>
     expect(p!.doc.querySelectorAll("#sheet-history .nt-history-entry").length).toBeGreaterThan(1),
   );
-  await act(async () =>
-    p!.doc
-      .querySelectorAll<HTMLButtonElement>("#sheet-history .nt-history-entry")[0]
-      .querySelectorAll("button")[1]
-      .click(),
+  const newestRow = () =>
+    p!.doc.querySelectorAll<HTMLElement>("#sheet-history .nt-history-entry")[0];
+  // The restore says what it did, never a commit or note id, and the newest revision (the note
+  // as it stands) offers no Restore.
+  await waitFor(() =>
+    expect(newestRow().querySelector(".nt-history-who")?.textContent).toBe(
+      "You restored an earlier version",
+    ),
   );
+  const restored = raw("history", { id: "alpha" })[0].commit;
+  expect(newestRow().textContent).not.toContain(first);
+  expect([...newestRow().querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Undo"]);
+  expect(entries[1].querySelector(".nt-history-who")?.textContent).toBe("You edited");
+  await act(async () => newestRow().querySelector<HTMLButtonElement>("button")!.click());
   await waitFor(() => expect(calls("restore")).toHaveLength(2));
-  expect(calls("restore")[1][1].args.undo).toBe(true);
+  expect(calls("restore")[1][1].args).toMatchObject({ commit: restored, undo: true });
 });
 it("reviews an agent change with removed lines in place and remembers Done", async () => {
   await open();
@@ -1065,7 +1243,7 @@ it("sends the note to a running agent and remembers the context preference", asy
   await agentPicker();
   expect(p!.doc.querySelector<HTMLInputElement>(".nt-send-context input")!.checked).toBe(false);
   expect(el(p!, "float").textContent).toContain("Start a new agent with this");
-  expect(el(p!, "float").textContent).toContain("Paste into terminal");
+  expect(el(p!, "float").textContent).toContain("Paste into focused terminal");
   expect(el(p!, "float").textContent).not.toMatch(/Organize|Routine/i);
 });
 it("keeps failed delivery visible without adding an agent chip", async () => {
@@ -1111,18 +1289,23 @@ describe("paste into the active terminal", () => {
     expect(el(p!, "notice").hidden).toBe(true);
   });
 
-  it("the send menu's item is disabled with a tooltip until a terminal is active, live", async () => {
+  it("the send menu's item is disabled with a visible reason until a terminal is active, live", async () => {
     sessionRows = [sender()];
     await open();
     await agentPicker();
-    expect(pasteRow().textContent).toBe("Paste into terminal⌥⌘↵");
+    const reason = () => p!.doc.querySelector<HTMLElement>("#send-paste-reason")!;
+    expect(pasteRow().textContent).toBe("Paste into focused terminal⌥⌘↵");
     expect(pasteRow().getAttribute("aria-disabled")).toBe("true");
-    expect(pasteRow().title).toBe("Open a terminal to paste into it");
+    expect(pasteRow().title).toBe("Focus a terminal to paste into it");
+    // The reason shows under the row and is its accessible description, not only a tooltip.
+    expect(reason().hidden).toBe(false);
+    expect(reason().textContent).toBe("Focus a terminal to paste into it");
+    expect(pasteRow().getAttribute("aria-describedby")).toBe("send-paste-reason");
     await act(async () => pasteRow().click());
     expect(terminal.paste).not.toHaveBeenCalled();
     expect(el(p!, "float").hidden).toBe(false);
     // A click on the disabled row says why instead of doing nothing.
-    expect(el(p!, "notice").textContent).toBe("Open a terminal to paste into it");
+    expect(el(p!, "notice").textContent).toBe("Focus a terminal to paste into it");
     expect(el(p!, "notice").hidden).toBe(false);
     // The agents-only context checkbox comes after every action.
     expect(
@@ -1133,6 +1316,8 @@ describe("paste into the active terminal", () => {
     await act(async () => terminal.listeners.forEach((changed) => changed()));
     await waitFor(() => expect(pasteRow().getAttribute("aria-disabled")).toBe("false"));
     expect(pasteRow().hasAttribute("title")).toBe(false);
+    expect(pasteRow().hasAttribute("aria-describedby")).toBe(false);
+    expect(reason().hidden).toBe(true);
     await act(async () => pasteRow().click());
     await waitFor(() => expect(terminal.paste).toHaveBeenCalledTimes(1));
     expect(terminal.paste.mock.calls[0][0]).toMatch(/^Read my note\. /);

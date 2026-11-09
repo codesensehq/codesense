@@ -93,6 +93,8 @@ interface PaneStoreState {
   pendingIntents: Record<string, PaneIntent>;
   setIntent: (panelId: string, intent: PaneIntent) => void;
   clearIntent: (panelId: string, intent: PaneIntent) => void;
+  /** Moves `from`'s pending intent to `to`; of two pending intents, the newer one stays. */
+  moveIntent: (from: string, to: string) => void;
   /** The active team's key the listing belongs to, or null when teamless. */
   teamKey: string | null;
   listing: PaneListing | null;
@@ -113,6 +115,10 @@ interface PaneStoreState {
   setBadge: (panelId: string, badge: DocBadge | null) => void;
 }
 
+/** When each pending intent was set, so a move between bodies keeps the newest. */
+const intentOrder = new WeakMap<PaneIntent, number>();
+let intentSequence = 0;
+
 export const usePaneStore = create<PaneStoreState>((set) => ({
   refresh: null,
   sourceRows: {},
@@ -120,8 +126,19 @@ export const usePaneStore = create<PaneStoreState>((set) => ({
   setIntent: (panelId, intent) => {
     if (new TextEncoder().encode(JSON.stringify(intent)).length > 4096)
       throw new Error("Pane intent must be at most 4 KB");
+    intentOrder.set(intent, ++intentSequence);
     set((s) => ({ pendingIntents: { ...s.pendingIntents, [panelId]: intent } }));
   },
+  moveIntent: (from, to) =>
+    set((s) => {
+      const intent = s.pendingIntents[from];
+      if (!intent || from === to) return s;
+      const { [from]: _moved, ...pendingIntents } = s.pendingIntents;
+      const waiting = pendingIntents[to];
+      if (!waiting || (intentOrder.get(intent) ?? 0) > (intentOrder.get(waiting) ?? 0))
+        pendingIntents[to] = intent;
+      return { pendingIntents };
+    }),
   clearIntent: (panelId, intent) =>
     set((s) => {
       if (s.pendingIntents[panelId] !== intent) return s;
