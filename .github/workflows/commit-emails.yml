@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Fails when a commit on main from the last 26 hours has an author or committer
+# email outside the allowlist in scripts/commit-email-audit.mjs. Read-only: a
+# failed run is the alert, and its log names only short SHAs and fields.
+name: Commit emails
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commit-emails:
+    name: Commit emails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: tree:0
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Audit commit emails from the last 26 hours
+        run: node scripts/commit-email-audit.mjs --hours 26

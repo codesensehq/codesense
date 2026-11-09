@@ -431,6 +431,60 @@ for (const trigger of ["schedule", "branch_protection_rule"]) {
   });
 }
 
+const commitEmails = good
+  .replace("on: [pull_request, workflow_dispatch]", "on: [schedule, workflow_dispatch]")
+  .replace("  static:", "  commit-emails:");
+test("schedule is confined to scorecard.yml and commit-emails.yml", () => {
+  assert.deepEqual(workflowPolicy(commitEmails, "commit-emails.yml"), []);
+  for (const file of ["ci.yml", "commit-emails.yaml", ""])
+    assert.match(workflowPolicy(commitEmails, file).join("\n"), /triggers/);
+});
+for (const trigger of [
+  "pull_request",
+  "merge_group",
+  "pull_request_target",
+  "branch_protection_rule",
+]) {
+  test(`commit emails rejects ${trigger}`, () => {
+    assert.match(
+      workflowPolicy(commitEmails.replace("schedule", trigger), "commit-emails.yml").join("\n"),
+      /triggers/,
+    );
+  });
+}
+test("commit emails grants contents: read to its single job only", () => {
+  for (const extra of ["issues: write", "issues: read", "actions: read"])
+    assert.match(
+      workflowPolicy(
+        commitEmails.replace("contents: read", `contents: read\n      ${extra}`),
+        "commit-emails.yml",
+      ).join("\n"),
+      /permissions must grant exactly contents: read$/m,
+    );
+  assert.match(
+    workflowPolicy(
+      commitEmails.replace("contents: read", "contents: write"),
+      "commit-emails.yml",
+    ).join("\n"),
+    /permissions/,
+  );
+  assert.match(
+    workflowPolicy(commitEmails.replace("  commit-emails:", "  other:"), "commit-emails.yml").join(
+      "\n",
+    ),
+    /only job must be commit-emails/,
+  );
+  const second =
+    commitEmails +
+    commitEmails
+      .slice(commitEmails.indexOf("  commit-emails:"))
+      .replace("  commit-emails:", "  second:");
+  assert.match(
+    workflowPolicy(second, "commit-emails.yml").join("\n"),
+    /only job must be commit-emails/,
+  );
+});
+
 for (const trigger of [
   "pull_request",
   "merge_group",
