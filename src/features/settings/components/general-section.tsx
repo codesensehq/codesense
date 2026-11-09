@@ -2061,7 +2061,7 @@ function ClassicSurfaceRow({
   );
 }
 
-/** The shipped HTML list, the classic list, or a custom dock dashboard beside the CLI. */
+/** The shipped HTML list or a custom dock dashboard beside the CLI. */
 function AgentsListRow() {
   const org = useOrgStore((s) => s.activeOrgSlug);
   const listing = usePaneStore((s) => s.listing);
@@ -2086,7 +2086,6 @@ function AgentsListRow() {
   if (!org) return null;
   const options = [
     { value: builtinKey, label: "Agent list (HTML)" },
-    { value: "native", label: "Built-in list (classic)" },
     ...shown.map((p) => ({
       value: dashboardRefKey(p.dashboardRef!),
       title: p.path,
@@ -2115,15 +2114,13 @@ function AgentsListRow() {
       label={GENERAL_ROW_SPECS.dockDashboard.label}
       ariaLabel={GENERAL_ROW_SPECS.dockDashboard.label}
       testId="settings-dock-dashboard"
-      value={chosenKey ?? "native"}
+      value={chosenKey ?? builtinKey}
       options={options}
       onChange={(v) => {
         const ref =
-          v === "native"
-            ? "native"
-            : v === builtinKey
-              ? builtin
-              : (shown.find((p) => dashboardRefKey(p.dashboardRef!) === v)?.dashboardRef ?? gone);
+          v === builtinKey
+            ? builtin
+            : (shown.find((p) => dashboardRefKey(p.dashboardRef!) === v)?.dashboardRef ?? gone);
         if (ref) void setSlotDashboard(org, "dock", ref).catch(console.error);
       }}
       gridClassName="grid-cols-2"
