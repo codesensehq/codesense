@@ -110,6 +110,9 @@ function boot(rows: Row[], scope: Scope) {
     readAt,
     nudge: (ids?: number[], team = TEAM) =>
       nudges.forEach((cb) => cb(ids ? { changes: [{ team, messageIds: ids }] } : {})),
+    // What the host's live-hub shim passes after a sessions re-read.
+    sessionsNudge: () =>
+      nudges.forEach((cb) => cb({ type: "codesense:inbox-changed", changes: [] })),
     show: (shown: boolean) => shows.forEach((cb) => cb(shown)),
     intent: (intent: unknown) => intents.forEach((cb) => cb(intent)),
     listRows: () => document.querySelectorAll(".ib-row").length,
@@ -135,6 +138,7 @@ describe("inbox pane refresh pacing", () => {
     expect(p.listRows()).toBe(new Set(rows.map((r) => (r.from === "human" ? r.to : r.from))).size);
     await settle(2000);
     vi.clearAllMocks();
+    p.readAt.length = 0;
     return p;
   }
   const MIA: Row = { id: 1, from: "Mia", to: "human", unread: true };
@@ -144,23 +148,23 @@ describe("inbox pane refresh pacing", () => {
     "coalesces 100 nudges for agents' mail in one second into at most two reads (%s)",
     async (scope) => {
       const p = await shown([MIA], scope);
+      const start = performance.now();
       for (let i = 0; i < 100; i++) {
         p.nudge([100 + i]);
         await settle(10);
       }
+      expect(p.readAt.filter((at) => at < start + 1000)).toHaveLength(2);
       await settle(2000);
-      expect(p.reads()).toBeGreaterThanOrEqual(1);
-      expect(p.reads()).toBeLessThanOrEqual(2);
-      // Idle afterwards: no timer keeps reading.
+      // One trailing read for the nudges after the second read, then idle: no timer keeps reading.
+      expect(p.reads()).toBe(3);
       expect(vi.getTimerCount()).toBe(0);
       await settle(10_000);
-      expect(p.reads()).toBeLessThanOrEqual(2);
+      expect(p.reads()).toBe(3);
     },
   );
 
   it("keeps an agent burst mixed with changes to the human's loaded mail at two reads a second", async () => {
     const p = await shown([MIA, SENT]);
-    p.readAt.length = 0;
     for (let i = 0; i < 300; i++) {
       p.nudge(i % 7 ? [100 + i] : [1]);
       await settle(10);
@@ -177,10 +181,23 @@ describe("inbox pane refresh pacing", () => {
     p.nudge([100]);
     await settle(30);
     p.nudge([2]);
-    await settle(30);
+    await settle(300);
     expect(p.reads()).toBe(1);
-    await settle(1000);
+    await settle(500);
     expect(p.reads()).toBe(2);
+  });
+
+  it("ignores the empty change the host sends after a sessions re-read", async () => {
+    const p = await shown([MIA]);
+    p.sessionsNudge();
+    await settle(2000);
+    p.show(false);
+    await settle(2000);
+    vi.clearAllMocks();
+    p.sessionsNudge();
+    await settle(2000);
+    expect(p.reads()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("paces on the monotonic clock, so a wall clock stepped back doesn't stall it", async () => {
@@ -189,7 +206,7 @@ describe("inbox pane refresh pacing", () => {
     await settle(30);
     vi.setSystemTime(Date.now() - 60_000);
     p.nudge([101]);
-    await settle(1050);
+    await settle(800);
     expect(p.reads()).toBe(2);
   });
 
@@ -210,7 +227,7 @@ describe("inbox pane refresh pacing", () => {
     expect(p.listRows()).toBe(2);
   });
 
-  it("shows the human's mail within about a second inside a burst of agents' mail", async () => {
+  it("shows the human's mail within 750 ms inside a burst of agents' mail", async () => {
     const p = await shown([MIA]);
     p.nudge([100]);
     await settle(30);
@@ -221,21 +238,37 @@ describe("inbox pane refresh pacing", () => {
       await settle(10);
     }
     expect(p.listRows()).toBe(1);
-    // 1,050 ms after the human's mail was nudged.
-    await settle(850);
+    // 750 ms after the human's mail was nudged, leaving the rest of the second for the read.
+    await settle(550);
     expect(p.listRows()).toBe(2);
     expect(p.reads()).toBe(2);
   });
 
-  it("skips the window for a change to a loaded row of the human's mail", async () => {
+  it("waits only 250 ms for a change to a loaded row of the human's mail", async () => {
     const p = await shown([MIA]);
     p.nudge([100]);
     await settle(30);
     expect(p.reads()).toBe(1);
     p.rows[0].unread = false;
     p.nudge([1]);
+    await settle(200);
+    expect(p.reads()).toBe(1);
+    await settle(50);
+    expect(p.reads()).toBe(2);
+  });
+
+  it("counts a refresh the human starts toward the two reads a second", async () => {
+    const p = await shown([MIA, SENT]);
+    p.nudge([100]);
+    await settle(30);
+    p.intent({ conversation: "Mia", org: TEAM.org, team: TEAM.team });
     await settle(30);
     expect(p.reads()).toBe(2);
+    p.nudge([1]);
+    await settle(400);
+    expect(p.reads()).toBe(2);
+    await settle(600);
+    expect(p.reads()).toBe(3);
   });
 
   it("does no list refresh while hidden, re-reads the badge only for unread changes, and refreshes once on show", async () => {
