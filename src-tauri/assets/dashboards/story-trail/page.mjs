@@ -326,6 +326,7 @@ export function mountTrail({cs = window.codesense, doc = document, win = window,
   cs?.subscribe?.('sessions',{onChange:onSessions}).catch(()=>{});
   offs.push(()=>cs?.unsubscribe?.('sessions',onSessions));
   route();
+  if(cs?.onFocusIn)offs.push(cs.onFocusIn(()=>focus.resume()));
   if(cs?.onVisibility)offs.push(cs.onVisibility(shown=>{visible=shown;conversationView?.setVisible(shown);if(shown)nudge();}));
   else {visible=doc.visibilityState!=='hidden';on(doc,'visibilitychange',()=>{visible=doc.visibilityState!=='hidden';if(visible)nudge();});current?.reader.resume();}
   function stop(){stopped=true;for(const state of cache.values()){state.reader.stop();state.linesReader?.stop();}for(const state of panels.values())state.reader.stop();for(const entry of conversations.values())entry.controller.stop();view.stop();focus.stop();offs.splice(0).forEach(off=>off?.());}

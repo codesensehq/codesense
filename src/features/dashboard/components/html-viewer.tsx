@@ -19,6 +19,7 @@ import {
   acknowledgeFlush,
   markFrameLive,
   markFrameReady,
+  retryFrameFocus,
 } from "../lib/frame-lifecycle";
 import { focusActiveWorkspaceTerminal } from "@/features/viewer/lib/focus-cascade";
 import { buildTeamKey, parseTeamKey } from "@/shared/lib/team-key";
@@ -909,6 +910,53 @@ export function HtmlViewer({
   // Whether the doc now loaded has announced itself; pushes wait for it, and a
   // new load announces again.
   const docReadyRef = useRef(false);
+  // One focus-in per focus hand-off: an engine may or may not also report the frame's own
+  // focus, so a host post marks the hand-off and the frame's own report then only clears it.
+  const focusInSent = useRef(false);
+  const presentedRef = useRef(presented);
+  presentedRef.current = presented;
+  useLayoutEffect(() => {
+    if (!presented) focusInSent.current = false;
+  }, [presented]);
+  const postFocusIn = useCallback(
+    (target: HTMLIFrameElement) => {
+      if (!presentedRef.current || !docReadyRef.current || retiringRef.current) return;
+      recordFocusOwner(target);
+      focusInSent.current = true;
+      postToFrame(endpoint(), { type: "codesense:focus-in" });
+    },
+    [endpoint, postToFrame],
+  );
+  const focusFrame = useCallback(() => {
+    if (!frame || !presentedRef.current || retiringRef.current) return false;
+    const entering = document.activeElement !== frame;
+    frame.focus();
+    if (document.activeElement !== frame) return false;
+    if (entering) postFocusIn(frame);
+    return true;
+  }, [frame, postFocusIn]);
+  // Focus can leave without the frame's blur (WebKit), so the app window losing focus ends it too.
+  useEffect(() => {
+    if (!frame) return;
+    const handOffEnded = () => {
+      focusInSent.current = false;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The host window also blurs when focus moves into a frame; only leaving the app counts.
+    const windowBlurred = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!document.hasFocus()) handOffEnded();
+      }, 0);
+    };
+    frame.addEventListener("blur", handOffEnded);
+    window.addEventListener("blur", windowBlurred);
+    return () => {
+      clearTimeout(timer);
+      frame.removeEventListener("blur", handOffEnded);
+      window.removeEventListener("blur", windowBlurred);
+    };
+  }, [frame]);
   const loadedDocumentKey = useRef<string | null>(null);
   const documentLoads = useRef(0);
 
@@ -1106,6 +1154,12 @@ export function HtmlViewer({
   // The document whose page has applied its theme: until then the frame is transparent over the
   // themed surface behind it, so neither an unpainted (white) document nor an unthemed one shows.
   const [readyUrl, setReadyUrl] = useState<string | null>(null);
+  const awaitingReady = live && embedded && readyUrl !== viewerUrl;
+  // A focus request queued for a frame that takes no input yet (see `inputBlocked`) waits for it.
+  const takesInput = presented && !retiring && !awaitingReady;
+  useLayoutEffect(() => {
+    if (takesInput && frameRecord) retryFrameFocus(frameRecord.frameId);
+  }, [takesInput, frameRecord]);
   // Reveals a frame whose theme ack never arrives (a hidden frame runs no animation frames).
   const revealTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(revealTimer.current), []);
@@ -1444,6 +1498,7 @@ export function HtmlViewer({
         return frameOwnerRef.current;
       },
       element: hostedFrame ? undefined : (frame ?? undefined),
+      focus: hostedFrame || !frame ? undefined : focusFrame,
       post: (message) =>
         postToFrame(hostedFrame ? endpoint() : frame, { ...message, token: frameRecord.token }),
       beforeReload: () => reloadCapture.capture(),
@@ -1471,6 +1526,7 @@ export function HtmlViewer({
     hostedFrame,
     endpoint,
     postToFrame,
+    focusFrame,
   ]);
   const missedPongs = useRef(0);
   useEffect(() => {
@@ -1680,6 +1736,7 @@ export function HtmlViewer({
           menuLifetime.current = new AbortController();
         }
         docReadyRef.current = true;
+        focusInSent.current = false;
         outbox.ready(endpoint());
         setShimReadyCount((n) => n + 1);
         // Every load, a reload included, stays transparent until its theme ack or the fallback.
@@ -1721,10 +1778,8 @@ export function HtmlViewer({
               sendState(state);
           });
         if (frameRecord) markFrameReady(frameRecord.frameId);
-        if (presented && !hostedFrame && frame && document.activeElement === frame) {
-          recordFocusOwner(frame);
-          postToFrame(endpoint(), { type: "codesense:focus-in" });
-        }
+        if (!hostedFrame && frame && document.activeElement === frame && !focusInSent.current)
+          postFocusIn(frame);
         return;
       }
 
@@ -1741,6 +1796,11 @@ export function HtmlViewer({
         if (focusElement) {
           recordFocusOwner(focusElement);
           if (focusOwner.returning.delete(focusElement)) return;
+        }
+        // The host already told the page about this hand-off.
+        if (focusInSent.current) {
+          focusInSent.current = false;
+          return;
         }
         if (docReadyRef.current && !retiringRef.current)
           postToFrame(endpoint(), { type: "codesense:focus-in" });
@@ -2286,8 +2346,7 @@ export function HtmlViewer({
   // for sight and input: a frame the user cannot see (not presented, retiring, or still starting)
   // takes no Tab, Enter or click. `retiring` keeps a readiness update from revealing a retired
   // frame, whose `inert` and `visibility` the retire path sets directly.
-  const awaitingReady = live && embedded && readyUrl !== viewerUrl;
-  const inputBlocked = !presented || retiring || awaitingReady;
+  const inputBlocked = !takesInput;
 
   return (
     <div
