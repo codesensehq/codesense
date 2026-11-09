@@ -4894,6 +4894,96 @@ describe("Mark all read, the row menu, the toast and row keys", () => {
     await waitFor(() => expect(ori.querySelector(".ib-count")?.textContent).toBe("1"));
   });
 
+  it("U marks only the newest message to you unread, never your own newer reply", async () => {
+    messages = [
+      row(1, "Mia", "human", { unread: false }),
+      row(2, "Mia", "human", { unread: false }),
+      row(3, "human", "Mia", { unread: false }),
+      row(4, "Ori", "human", { unread: false }),
+      row(5, "human", "Mia", { unread: false }),
+    ];
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    expect(p.doc.querySelector(".ib-row.kbd-active .who .trunc")?.textContent).toBe("Mia");
+    fireEvent.keyDown(list, { key: "u" });
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
+    expect(calls("mark_inbox_messages_unread").map(([, args]) => args.messageIds)).toEqual([[2]]);
+    expect(messages.filter((m) => m.unread).map((m) => m.messageId)).toEqual([2]);
+    await waitFor(() =>
+      expect(p.doc.querySelector(".ib-row.kbd-active .ib-count")?.textContent).toBe("1"),
+    );
+  });
+
+  it("U does nothing on a conversation with no message to you", async () => {
+    messages = [
+      row(1, "human", "Mia", { unread: false }),
+      row(2, "Ori", "human", { unread: false }),
+    ];
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(p.doc.querySelector(".ib-row.kbd-active .who .trunc")?.textContent).toBe("Mia");
+    fireEvent.keyDown(list, { key: "u" });
+    await sleep(50);
+    expect(calls("mark_inbox_messages_unread")).toHaveLength(0);
+    expect(p.doc.querySelector(".ib-row.kbd-active")?.classList.contains("unread")).toBe(false);
+    expect(toast(p).textContent).toBe("");
+  });
+
+  it("shows the E hint only on the keyboard-active row, which the arrow keys move", async () => {
+    const p = await openInbox();
+    const list = el(p, "conversations");
+    list.focus();
+    expect(list.getAttribute("aria-keyshortcuts")).toBe("E U Shift+F10");
+    const hints = () => [...p.doc.querySelectorAll<HTMLElement>(".ib-row kbd")];
+    const hinted = () => hints()[0]?.closest(".ib-row");
+    expect(hints()).toHaveLength(1);
+    expect(hints()[0].textContent).toBe("E");
+    expect(hints()[0].getAttribute("aria-hidden")).toBe("true");
+    expect(hinted()?.classList.contains("kbd-active")).toBe(true);
+    // The hint rides on Archive, whose name is unchanged; the "…" button carries no key.
+    const archive = hints()[0].closest("button")!;
+    expect(archive.getAttribute("aria-label")).toMatch(/^Archive /);
+    expect(p.doc.querySelector(".rowact [aria-keyshortcuts]")).toBeNull();
+    const first = hinted();
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(hints()).toHaveLength(1);
+    expect(hinted()).not.toBe(first);
+    expect(hinted()?.classList.contains("kbd-active")).toBe(true);
+  });
+
+  it("keeps the time readable while a row shows its actions", () => {
+    // The harness has no hover, so this pins the pane's own rules: the actions sit at the
+    // preview line's end, the preview makes room, and nothing hides or covers the time.
+    const css = [...PANE.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+    const rule = (selector: string) =>
+      css
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("}")
+        .map((block) => block.split("{"))
+        .find(([head]) => head.trim() === selector)?.[1] ?? "";
+    expect(rule(".ib-row .rowact")).toMatch(/bottom:\s*7px/);
+    expect(rule(".ib-row .rowact")).not.toMatch(/top:|background:/);
+    expect(css).toMatch(/\.ib-row:hover \.prev,[^{]*\{\s*padding-right:\s*52px/);
+    expect(css).not.toMatch(/\.when\s*\{[^}]*(display:\s*none|visibility:\s*hidden)/);
+  });
+
+  it("puts Mark all read in the header's right group, before presence", async () => {
+    const p = await openInbox();
+    const head = p.doc.querySelector(".ib-head")!;
+    const order = [...head.children].map((n) => n.id || n.className);
+    expect(order.indexOf("mark-all-read")).toBe(order.indexOf("sp") + 1);
+    expect(order.indexOf("presence")).toBe(order.indexOf("mark-all-read") + 1);
+    const button = el(p, "mark-all-read");
+    // The visible label is its name; under the stacked layout it shows its icon and the
+    // title names it.
+    expect(button.title).toBe("Mark all read");
+    expect(button.querySelector(".ib-mar-label")?.textContent).toBe("Mark all read");
+    expect(button.querySelector("svg use")?.getAttribute("href")).toBe("#i-check-check");
+  });
+
   it("anchors the … menu just below its button, from the box it has when clicked", async () => {
     const p = await openInbox();
     const more = p.doc.querySelector<HTMLButtonElement>(
@@ -5109,7 +5199,7 @@ describe("cross-team Mark all read", () => {
     { ...row(1, "human", null), id: 1, team: { org: ORG, team: TEAM }, toRole: "docs" },
     { ...row(1, "human", null), id: 1, team: { org: ORG, team: "web" }, toRole: "docs" },
     { ...row(2, "Mia"), id: 2, team: { org: ORG, team: TEAM }, inReplyTo: 1 },
-    { ...row(2, "Ori"), id: 2, team: { org: ORG, team: "web" }, inReplyTo: 1 },
+    { ...row(2, "Ori"), id: 2, team: { org: ORG, team: "web" }, inReplyTo: 1, createdAtMs: 3000 },
   ];
 
   it("opening a two-team conversation names the team whose read failed", async () => {
@@ -5125,7 +5215,7 @@ describe("cross-team Mark all read", () => {
     expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(true);
   });
 
-  it("U on a two-team row names the team it could not mark read or unread", async () => {
+  it("U on a two-team row names the team it could not mark read, and marks one newest message unread", async () => {
     rollup = docsInTwoTeams();
     const p = await openInbox(false);
     await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
@@ -5142,12 +5232,13 @@ describe("cross-team Mark all read", () => {
     await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
     failIn("mark_inbox_messages_unread", "web");
     fireEvent.keyDown(list, { key: "u" });
-    await waitFor(() =>
-      expect(toast(p).textContent).toBe(
-        "Couldn't mark the conversations in web unread. Try again.",
-      ),
-    );
-    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(true);
+    // U marks only the newest message to you across both teams: Ori's, in web. That one
+    // write failed, so nothing turned unread.
+    await waitFor(() => expect(toast(p).textContent).toBe("Couldn't mark unread. Try again."));
+    const writes = calls("mark_inbox_messages_unread");
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1]).toMatchObject({ team: { team: "web" }, messageIds: [2] });
+    expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(false);
     expect(rollup.find((m) => m.from === "Ori")?.unread).toBe(false);
   });
 });

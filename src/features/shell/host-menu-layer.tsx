@@ -19,6 +19,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
@@ -86,6 +87,7 @@ function MenuLabel({ item }: { item: HostMenuItem }) {
           {item.count}
         </span>
       )}
+      {item.shortcut && <DropdownMenuShortcut aria-hidden>{item.shortcut}</DropdownMenuShortcut>}
     </>
   );
 }
@@ -434,6 +436,7 @@ function RequestedMenu({ request, finish }: { request: ActiveRequest; finish: Fi
               <DropdownMenuRadioItem
                 key={choice.id}
                 value={choice.id}
+                aria-keyshortcuts={choice.shortcut}
                 disabled={(!!item.segmented && item.enabled === false) || choice.enabled === false}
                 className={
                   item.segmented
@@ -461,6 +464,7 @@ function RequestedMenu({ request, finish }: { request: ActiveRequest; finish: Fi
           <DropdownMenuCheckboxItem
             key={item.id}
             checked={item.checked}
+            aria-keyshortcuts={item.shortcut}
             disabled={item.enabled === false}
             onSelect={() => choose(item.id)}
           >
@@ -470,6 +474,7 @@ function RequestedMenu({ request, finish }: { request: ActiveRequest; finish: Fi
       return (
         <DropdownMenuItem
           key={item.id}
+          aria-keyshortcuts={item.shortcut}
           disabled={item.enabled === false}
           onSelect={() => choose(item.id)}
         >

@@ -1522,7 +1522,7 @@ const EVENT_META = {
     payload: "{id}",
     timing: "After synchronous page menu callbacks finish",
     description:
-      "Architecture: confirm that Mark as unread established its page hold before the host persists the unread state.",
+      "Architecture: confirm that Mark unread established its page hold before the host persists the unread state.",
     example: "// Applied by the shim, not page code.",
   },
   "codesense:menu-actions": {

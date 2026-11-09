@@ -372,3 +372,49 @@ it("keeps an enabled radio sibling selectable when the first choice is disabled"
   fireEvent.click(team);
   await expect(answer).resolves.toEqual({ itemId: "team", row: request.row });
 });
+
+it("shows a host inbox menu's list keys beside its items, outside their names", async () => {
+  const { request, run } = setup();
+  run.mockImplementation(async (verb: string) =>
+    verb === "inbox"
+      ? {
+          messages: [{ messageId: 1, from: "Mia", to: "human", toHuman: true, unread: false }],
+          hasMore: false,
+        }
+      : [],
+  );
+  act(() => {
+    void show({ ...request, type: "inbox", row: { kind: "conversation", key: "Mia" } });
+  });
+  const archive = await screen.findByRole("menuitem", { name: "Archive" });
+  expect(archive).toHaveAttribute("aria-keyshortcuts", "E");
+  expect(archive.querySelector('[data-slot="dropdown-menu-shortcut"]')).toHaveTextContent("E");
+  expect(screen.getByRole("menuitem", { name: "Mark unread" })).toHaveAttribute(
+    "aria-keyshortcuts",
+    "U",
+  );
+});
+
+it.each(["⌘Q", "Enter", "E U", "e", 1, { toString: () => "E" }])(
+  "a page cannot add host-menu shortcut text %s",
+  async (shortcut) => {
+    const { request } = setup();
+    const items = [{ id: "inspect", label: "Inspect", shortcut }] as HostMenuRequest["items"];
+    await expect(show({ ...request, items })).rejects.toThrow(/shortcut.*not allowed/);
+    const nested = [
+      { id: "more", label: "More", submenu: [{ id: "x", label: "X", shortcut }] },
+    ] as HostMenuRequest["items"];
+    await expect(show({ ...request, items: nested })).rejects.toThrow(/shortcut.*not allowed/);
+    expect(screen.queryByRole("menuitem", { name: "Inspect" })).toBeNull();
+    expect(document.querySelector('[data-slot="dropdown-menu-shortcut"]')).toBeNull();
+  },
+);
+
+it("a page's item may show an allowed list key", async () => {
+  const { request } = setup();
+  act(() => {
+    void show({ ...request, items: [{ id: "archive", label: "Archive", shortcut: "E" }] });
+  });
+  const item = await screen.findByRole("menuitem", { name: "Archive" });
+  expect(item).toHaveAttribute("aria-keyshortcuts", "E");
+});
