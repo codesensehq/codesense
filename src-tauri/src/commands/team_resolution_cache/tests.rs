@@ -40,9 +40,9 @@ fn write_teams(home: &Path, teams_yml: &str) {
     std::fs::write(org_root(home).join("teams.yml"), teams_yml).unwrap();
 }
 
-/// The real disk, counting every stamp and every registry read. Each fill runs
-/// exactly one blocking-pool task, which stamps once, so `stamps` also counts the
-/// blocking tasks this cache ran.
+/// The real disk, counting every stamp and every registry read. Every blocking task
+/// the cache runs stamps at least once: a fill stamps its team, a re-stamp each kept
+/// team (and `restamps()` counts those tasks).
 #[derive(Default)]
 struct CountingDisk {
     stamps: AtomicUsize,
@@ -124,6 +124,10 @@ impl Fixture {
 
     fn counts(&self) -> (usize, usize) {
         self.disk.counts()
+    }
+
+    fn restamps(&self) -> usize {
+        self.cache.restamps.load(Ordering::SeqCst)
     }
 
     fn home(&self) -> &Path {
@@ -227,7 +231,8 @@ async fn an_unreported_teams_yml_edit_shows_once_the_backstop_passes() {
         f.resolve("backend").await,
         ContextResolution::Unauthorized
     ));
-    assert_eq!(f.counts(), (2, 2), "one stamp, and a read because it moved");
+    assert_eq!(f.restamps(), 1);
+    assert_eq!(f.counts(), (3, 2), "re-stamped, moved, so filled again");
 }
 
 #[tokio::test]
@@ -250,7 +255,7 @@ async fn an_expired_entry_rereads_the_registry_only_when_its_stamp_moved() {
     std::fs::create_dir_all(content_dir(f.home(), "frontend")).unwrap();
     f.clock.advance(MAX_AGE);
     assert!(is_ok(&f.resolve("frontend").await, "frontend"));
-    assert_eq!(f.counts(), (3, 2));
+    assert_eq!(f.counts(), (4, 2));
 }
 
 #[tokio::test]
@@ -264,7 +269,7 @@ async fn an_unreported_people_yml_break_shows_once_the_backstop_passes() {
         f.resolve("backend").await,
         ContextResolution::Unauthorized
     ));
-    assert_eq!(f.counts(), (2, 2));
+    assert_eq!(f.counts(), (3, 2));
 }
 
 #[tokio::test]
@@ -314,20 +319,43 @@ async fn entries_are_kept_per_principal_and_team() {
 }
 
 #[tokio::test]
-async fn a_full_map_drops_its_expired_entries() {
+async fn one_restamp_per_window_covers_every_cached_team() {
     let f = Fixture::new();
-    for i in 0..PRUNE_ABOVE {
+    let teams = ["backend", "frontend"];
+    for team in teams {
+        f.resolve(team).await;
+    }
+    assert_eq!((f.counts(), f.restamps()), ((2, 2), 0));
+
+    for window in 1..=2 {
+        f.clock.advance(MAX_AGE);
+        for _ in 0..10 {
+            for team in teams {
+                f.resolve(team).await;
+            }
+        }
+        assert_eq!(f.restamps(), window, "one re-stamp per window");
+        assert_eq!(
+            f.counts(),
+            (2 + 2 * window, 2),
+            "each team stat'ed once per window, nothing re-read"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_restamp_drops_unauthorized_entries_without_a_stat() {
+    let f = Fixture::new();
+    for i in 0..3 {
         f.resolve(&format!("ghost-{i}")).await;
     }
-    assert_eq!(f.cache.lock().entries.len(), PRUNE_ABOVE);
+    f.resolve("backend").await;
+    assert_eq!(f.counts(), (4, 4));
 
     f.clock.advance(MAX_AGE);
     f.resolve("backend").await;
-    assert_eq!(
-        f.cache.lock().entries.len(),
-        1,
-        "only the new entry is left"
-    );
+    assert_eq!(f.counts(), (5, 4), "only backend was stat'ed");
+    assert_eq!(f.cache.lock().entries.len(), 1, "only backend is left");
 }
 
 fn mock_app(f: &Fixture) -> tauri::App<tauri::test::MockRuntime> {

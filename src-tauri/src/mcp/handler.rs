@@ -2212,10 +2212,7 @@ impl CodesenseHandler {
         crate::context_query::reset_footprint(&self.app_handle);
         use tauri::Emitter;
         self.app_handle
-            .emit(
-                crate::commands::context_attachments::CONTEXT_ATTACHMENTS_CHANGED_EVENT,
-                (),
-            )
+            .emit("context-attachments-changed", ())
             .map_err(|e| {
                 invalid_err(
                     "update_codesense_docs",

@@ -6,11 +6,11 @@
 //!
 //! A hit is a map lookup: no blocking-pool task and no file I/O. Every result is kept,
 //! `Unauthorized` and `NotSynced` included. Entries are dropped by the app events that
-//! report a registry, attachment or git change. An entry no event has dropped is
-//! trusted for [`MAX_AGE`]; after that the next read stats the registry files and the
-//! content folder and parses the registry again only when that stamp moved, so a
-//! change no event reports (a hand edit, a folder made in a terminal, a pull in an
-//! org whose git isn't watched) shows within [`MAX_AGE`].
+//! report a registry, attachment or git change. Changes no event reports (a hand edit,
+//! a folder made in a terminal, a pull in an org whose git isn't watched) are caught by
+//! one re-stamp per [`MAX_AGE`] window: the first read after the window stats every
+//! cached team's registry files and content folder in a single blocking task and drops
+//! the entries whose stamp moved, and the reads after it are hits again.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,14 +33,9 @@ pub(crate) const INVALIDATING_EVENTS: &[&str] = &[
     crate::commands::context_git_watch::CONTEXT_GIT_MOVED_EVENT,
 ];
 
-/// How long an entry is trusted without being re-stamped: the longest a change no
-/// event reports goes unseen. One re-stamp per team per window stays far below the
-/// per-call rate this cache replaces.
+/// The re-stamp window: the longest a change no event reports goes unseen. Steady
+/// state costs one blocking task per window, however many teams are cached.
 pub(crate) const MAX_AGE: Duration = Duration::from_secs(2);
-
-/// Past this many entries, a fill drops the expired ones. Callers can name any team,
-/// so the map would otherwise grow until the next event.
-const PRUNE_ABOVE: usize = 256;
 
 /// The registry files a resolution is read from (see `domain::load_org`).
 const REGISTRY_FILES: [&str; 3] = ["org.yml", "people.yml", "teams.yml"];
@@ -129,19 +124,21 @@ pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 struct Entry {
     resolution: ContextResolution,
     stamp: Stamp,
-    checked_at: Instant,
+    home: PathBuf,
 }
 
-#[derive(Default)]
 struct Inner {
-    /// Bumped by every invalidation, so a fill that raced one doesn't store.
+    /// Bumped by every invalidation, so a fill or re-stamp that raced one doesn't store.
     generation: u64,
     entries: HashMap<Key, Entry>,
+    /// When the current re-stamp window opened.
+    window: Instant,
 }
 
-fn trusted(entry: &Entry, now: Instant) -> bool {
-    now.saturating_duration_since(entry.checked_at) < MAX_AGE
-}
+/// One entry as a re-stamp sees it: `None` for an `Unauthorized` entry, which is
+/// dropped without a stat (a failed registry read gives the same answer, so it is
+/// never kept past a window; that also bounds entries for names callers made up).
+type Restamp = (Key, PathBuf, Option<Stamp>);
 
 /// The app's resolution cache, managed as Tauri state.
 #[derive(Clone)]
@@ -149,6 +146,8 @@ pub(crate) struct TeamResolutionCache {
     inner: Arc<Mutex<Inner>>,
     disk: Arc<dyn Disk>,
     clock: Clock,
+    /// Re-stamps run, for tests.
+    restamps: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for TeamResolutionCache {
@@ -159,10 +158,16 @@ impl Default for TeamResolutionCache {
 
 impl TeamResolutionCache {
     pub(crate) fn with(disk: Arc<dyn Disk>, clock: Clock) -> Self {
+        let window = clock();
         Self {
-            inner: Arc::default(),
+            inner: Arc::new(Mutex::new(Inner {
+                generation: 0,
+                entries: HashMap::new(),
+                window,
+            })),
             disk,
             clock,
+            restamps: Arc::default(),
         }
     }
 
@@ -177,16 +182,9 @@ impl TeamResolutionCache {
         inner.entries.clear();
     }
 
-    /// A trusted entry's resolution, from memory only.
-    fn fresh(&self, key: &Key) -> Option<ContextResolution> {
-        let now = (self.clock)();
-        let inner = self.lock();
-        let entry = inner.entries.get(key)?;
-        trusted(entry, now).then(|| entry.resolution.clone())
-    }
-
-    /// Resolve `(org, team)` for `user_id` under `home`: a trusted entry is answered
-    /// from memory; anything else is filled from the disk on the blocking pool.
+    /// Resolve `(org, team)` for `user_id` under `home`. A cached entry is answered from
+    /// memory. The first read after the window closes re-stamps every entry first; a
+    /// missing entry is filled. Both run on the blocking pool.
     pub(crate) async fn resolve(
         &self,
         home: PathBuf,
@@ -199,50 +197,90 @@ impl TeamResolutionCache {
             org: org.to_string(),
             team: team.to_string(),
         };
-        if let Some(hit) = self.fresh(&key) {
+        if let Some((generation, batch)) = self.claim_window() {
+            let cache = self.clone();
+            super::await_blocking("team_resolution_restamp", move || {
+                cache.restamp(generation, batch);
+                Ok(())
+            })
+            .await?;
+        }
+        let hit = self.lock().entries.get(&key).map(|e| e.resolution.clone());
+        if let Some(hit) = hit {
             return Ok(hit);
         }
         let cache = self.clone();
-        // The same label as `derive_context_for`, so its blocking rate counts fills.
-        super::await_blocking("derive_context_for", move || Ok(cache.fill(&home, key))).await
+        super::await_blocking("team_resolution_fill", move || Ok(cache.fill(home, key))).await
     }
 
-    /// Stamp the team's files, reuse the entry's resolution when the stamp hasn't
-    /// moved, and resolve again when it has (or there is no entry). Blocking.
-    fn fill(&self, home: &Path, key: Key) -> ContextResolution {
-        let (generation, previous) = {
-            let inner = self.lock();
-            let previous = inner
-                .entries
-                .get(&key)
-                .map(|e| (e.stamp.clone(), e.resolution.clone()));
-            (inner.generation, previous)
-        };
-        let stamp = self.disk.stamp(home, key.user_id, &key.org, &key.team);
-        let resolution = match previous {
-            // `Unauthorized` is also what a failed registry read gives, so it is
-            // always read again rather than kept on an unchanged stamp.
-            Some((before, resolution))
-                if before == stamp && !matches!(resolution, ContextResolution::Unauthorized) =>
-            {
-                resolution
-            }
-            _ => self.disk.resolve(home, key.user_id, &key.org, &key.team),
-        };
+    /// When the window has closed, open the next one and take the entries to re-stamp.
+    /// Reads that arrive while the re-stamp runs answer from the entries as they are.
+    fn claim_window(&self) -> Option<(u64, Vec<Restamp>)> {
         let now = (self.clock)();
+        let mut inner = self.lock();
+        if now.saturating_duration_since(inner.window) < MAX_AGE {
+            return None;
+        }
+        inner.window = now;
+        if inner.entries.is_empty() {
+            return None;
+        }
+        let batch = inner
+            .entries
+            .iter()
+            .map(|(key, e)| {
+                let stamp = (!matches!(e.resolution, ContextResolution::Unauthorized))
+                    .then(|| e.stamp.clone());
+                (key.clone(), e.home.clone(), stamp)
+            })
+            .collect();
+        Some((inner.generation, batch))
+    }
+
+    /// Stat every entry in `batch` and drop those whose stamp moved. Blocking.
+    fn restamp(&self, generation: u64, batch: Vec<Restamp>) {
+        self.restamps
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let moved: Vec<(Key, Option<Stamp>)> = batch
+            .into_iter()
+            .filter_map(|(key, home, before)| {
+                let unchanged = before.as_ref().is_some_and(|before| {
+                    *before == self.disk.stamp(&home, key.user_id, &key.org, &key.team)
+                });
+                (!unchanged).then_some((key, before))
+            })
+            .collect();
+        let mut inner = self.lock();
+        if inner.generation != generation {
+            return;
+        }
+        for (key, before) in moved {
+            // Leave an entry a fill replaced since the batch was taken.
+            let same = inner.entries.get(&key).is_some_and(|e| match &before {
+                Some(before) => e.stamp == *before,
+                None => matches!(e.resolution, ContextResolution::Unauthorized),
+            });
+            if same {
+                inner.entries.remove(&key);
+            }
+        }
+    }
+
+    /// Stamp the team's files and resolve it. Blocking.
+    fn fill(&self, home: PathBuf, key: Key) -> ContextResolution {
+        let generation = self.lock().generation;
+        let stamp = self.disk.stamp(&home, key.user_id, &key.org, &key.team);
+        let resolution = self.disk.resolve(&home, key.user_id, &key.org, &key.team);
         let mut inner = self.lock();
         // An invalidation during the read may mean it saw the old files: answer, but
         // don't keep it.
         if inner.generation == generation {
-            if inner.entries.len() >= PRUNE_ABOVE {
-                inner.entries.retain(|_, e| trusted(e, now));
-            }
             inner.entries.insert(
                 key,
                 Entry {
                     resolution: resolution.clone(),
                     stamp,
-                    checked_at: now,
+                    home,
                 },
             );
         }

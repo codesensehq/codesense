@@ -22,7 +22,7 @@
       "mcp": {
         "name": "accept_role_message",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6950
+        "line": 6947
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -40,7 +40,7 @@
       "mcp": {
         "name": "ack_role_message",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 7024
+        "line": 7021
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -58,7 +58,7 @@
       "mcp": {
         "name": "agent_delete",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5396
+        "line": 5393
       },
       "via": "exact",
       "note": null
@@ -76,7 +76,7 @@
       "mcp": {
         "name": "agent_preview",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5302
+        "line": 5299
       },
       "via": "exact",
       "note": null
@@ -94,7 +94,7 @@
       "mcp": {
         "name": "agent_unarchive",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5451
+        "line": 5448
       },
       "via": "exact",
       "note": null
@@ -130,7 +130,7 @@
       "mcp": {
         "name": "cancel_context_operation",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 3285
+        "line": 3282
       },
       "via": "exact",
       "note": null
@@ -166,7 +166,7 @@
       "mcp": {
         "name": "claim_role_messages",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6886
+        "line": 6883
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -182,7 +182,7 @@
       "mcp": {
         "name": "wv_watch_list",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6228
+        "line": 6225
       },
       "via": "map",
       "note": "Tauri side gained a `cmd_` prefix to disambiguate from a sibling type."
@@ -236,7 +236,7 @@
       "mcp": {
         "name": "context_repo_history",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6506
+        "line": 6503
       },
       "via": "exact",
       "note": null
@@ -254,7 +254,7 @@
       "mcp": {
         "name": "context_repo_status",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6465
+        "line": 6462
       },
       "via": "exact",
       "note": null
@@ -290,7 +290,7 @@
       "mcp": {
         "name": "delete_content_file",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6325
+        "line": 6322
       },
       "via": "exact",
       "note": null
@@ -344,7 +344,7 @@
       "mcp": {
         "name": "dismiss_agent_mark",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 9975
+        "line": 9972
       },
       "via": "exact",
       "note": null
@@ -398,7 +398,7 @@
       "mcp": {
         "name": "forget_missing_workspace",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 3026
+        "line": 3023
       },
       "via": "exact",
       "note": null
@@ -416,7 +416,7 @@
       "mcp": {
         "name": "get_active_agent_account",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 2290
+        "line": 2287
       },
       "via": "exact",
       "note": null
@@ -434,7 +434,7 @@
       "mcp": {
         "name": "get_human_status",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 7105
+        "line": 7102
       },
       "via": "exact",
       "note": null
@@ -452,7 +452,7 @@
       "mcp": {
         "name": "get_publish_set",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6432
+        "line": 6429
       },
       "via": "exact",
       "note": null
@@ -488,7 +488,7 @@
       "mcp": {
         "name": "list_agent_accounts",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 2260
+        "line": 2257
       },
       "via": "exact",
       "note": null
@@ -506,7 +506,7 @@
       "mcp": {
         "name": "list_agent_updates",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 7204
+        "line": 7201
       },
       "via": "exact",
       "note": null
@@ -578,7 +578,7 @@
       "mcp": {
         "name": "list_worktrees",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5014
+        "line": 5011
       },
       "via": "exact",
       "note": null
@@ -596,7 +596,7 @@
       "mcp": {
         "name": "move_content_file",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6347
+        "line": 6344
       },
       "via": "exact",
       "note": null
@@ -614,7 +614,7 @@
       "mcp": {
         "name": "notes_history",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 3644
+        "line": 3641
       },
       "via": "exact",
       "note": null
@@ -632,7 +632,7 @@
       "mcp": {
         "name": "notes_read_at",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 3657
+        "line": 3654
       },
       "via": "exact",
       "note": null
@@ -650,7 +650,7 @@
       "mcp": {
         "name": "notes_restore",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 3670
+        "line": 3667
       },
       "via": "exact",
       "note": null
@@ -686,7 +686,7 @@
       "mcp": {
         "name": "query_context",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 8855
+        "line": 8852
       },
       "via": "exact",
       "note": null
@@ -704,7 +704,7 @@
       "mcp": {
         "name": "read_epic_repos",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6249
+        "line": 6246
       },
       "via": "exact",
       "note": null
@@ -722,7 +722,7 @@
       "mcp": {
         "name": "read_run_evidence",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4811
+        "line": 4808
       },
       "via": "exact",
       "note": null
@@ -740,7 +740,7 @@
       "mcp": {
         "name": "read_run_work_product",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4824
+        "line": 4821
       },
       "via": "exact",
       "note": null
@@ -758,7 +758,7 @@
       "mcp": {
         "name": "register_role",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6788
+        "line": 6785
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -776,7 +776,7 @@
       "mcp": {
         "name": "release_role",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 7078
+        "line": 7075
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -884,7 +884,7 @@
       "mcp": {
         "name": "role_save",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5493
+        "line": 5490
       },
       "via": "exact",
       "note": null
@@ -902,7 +902,7 @@
       "mcp": {
         "name": "roles_list",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5475
+        "line": 5472
       },
       "via": "exact",
       "note": null
@@ -920,7 +920,7 @@
       "mcp": {
         "name": "route_file_to_context",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 2767
+        "line": 2764
       },
       "via": "exact",
       "note": null
@@ -938,7 +938,7 @@
       "mcp": {
         "name": "routine_arm_on",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4576
+        "line": 4573
       },
       "via": "exact",
       "note": null
@@ -956,7 +956,7 @@
       "mcp": {
         "name": "routine_get",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4486
+        "line": 4483
       },
       "via": "exact",
       "note": null
@@ -974,7 +974,7 @@
       "mcp": {
         "name": "routine_handover_release",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4652
+        "line": 4649
       },
       "via": "exact",
       "note": null
@@ -992,7 +992,7 @@
       "mcp": {
         "name": "routine_list",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4465
+        "line": 4462
       },
       "via": "exact",
       "note": null
@@ -1010,7 +1010,7 @@
       "mcp": {
         "name": "routine_refresh_on_machine",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4613
+        "line": 4610
       },
       "via": "exact",
       "note": null
@@ -1028,7 +1028,7 @@
       "mcp": {
         "name": "routine_result",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5087
+        "line": 5084
       },
       "via": "exact",
       "note": null
@@ -1046,7 +1046,7 @@
       "mcp": {
         "name": "routine_run_now",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4686
+        "line": 4683
       },
       "via": "exact",
       "note": null
@@ -1064,7 +1064,7 @@
       "mcp": {
         "name": "routine_runs",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4726
+        "line": 4723
       },
       "via": "exact",
       "note": null
@@ -1082,7 +1082,7 @@
       "mcp": {
         "name": "routine_set_enabled",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4543
+        "line": 4540
       },
       "via": "exact",
       "note": null
@@ -1136,7 +1136,7 @@
       "mcp": {
         "name": "send_role_message",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 7225
+        "line": 7222
       },
       "via": "map",
       "note": "Tauri side kept the `_cmd` suffix for the FE wrapper symmetry."
@@ -1154,7 +1154,7 @@
       "mcp": {
         "name": "session_read",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4851
+        "line": 4848
       },
       "via": "exact",
       "note": null
@@ -1172,7 +1172,7 @@
       "mcp": {
         "name": "set_active_agent_account",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 2340
+        "line": 2337
       },
       "via": "exact",
       "note": null
@@ -1190,7 +1190,7 @@
       "mcp": {
         "name": "set_epic_repos",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 6266
+        "line": 6263
       },
       "via": "exact",
       "note": null
@@ -1298,7 +1298,7 @@
       "mcp": {
         "name": "story_changes",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4835
+        "line": 4832
       },
       "via": "exact",
       "note": null
@@ -1316,7 +1316,7 @@
       "mcp": {
         "name": "story_totals",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4843
+        "line": 4840
       },
       "via": "exact",
       "note": null
@@ -1370,7 +1370,7 @@
       "mcp": {
         "name": "unroute_file_from_context",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 2842
+        "line": 2839
       },
       "via": "exact",
       "note": null
@@ -1424,7 +1424,7 @@
       "mcp": {
         "name": "why_line",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 4859
+        "line": 4856
       },
       "via": "exact",
       "note": null
@@ -1442,7 +1442,7 @@
       "mcp": {
         "name": "workspace_chat_read",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 9865
+        "line": 9862
       },
       "via": "exact",
       "note": null
@@ -1460,7 +1460,7 @@
       "mcp": {
         "name": "workspace_chat_send",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 9852
+        "line": 9849
       },
       "via": "exact",
       "note": null
@@ -1476,7 +1476,7 @@
       "mcp": {
         "name": "wv_list_overdue_harvests",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 9423
+        "line": 9420
       },
       "via": "exact",
       "note": null
@@ -1494,7 +1494,7 @@
       "mcp": {
         "name": "wv_settle_approval",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5751
+        "line": 5748
       },
       "via": "exact",
       "note": null
@@ -1512,7 +1512,7 @@
       "mcp": {
         "name": "wv_upsert_watermark",
         "file": "src-tauri/src/mcp/handler.rs",
-        "line": 5950
+        "line": 5947
       },
       "via": "exact",
       "note": null
@@ -6026,91 +6026,91 @@
     {
       "name": "add_source_repo",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9769,
+      "line": 9766,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "agent_create",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5338,
+      "line": 5335,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "agent_get",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5286,
+      "line": 5283,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "agent_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5271,
+      "line": 5268,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "agent_restore",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5427,
+      "line": 5424,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "agent_update",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5371,
+      "line": 5368,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "apply_canvas",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3309,
+      "line": 3306,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "archive_team",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9684,
+      "line": 9681,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "ask_user",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3981,
+      "line": 3978,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "attach_source_repo_path",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9794,
+      "line": 9791,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "avatar_add",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5529,
+      "line": 5526,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "avatar_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5513,
+      "line": 5510,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "avatar_share",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5560,
+      "line": 5557,
       "acknowledged": false,
       "rationale": null
     },
@@ -6124,35 +6124,35 @@
     {
       "name": "cancel_wakeup",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5251,
+      "line": 5248,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "close_terminal_tab",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8327,
+      "line": 8324,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "close_workspace",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8441,
+      "line": 8438,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "codesense_call_tool",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9936,
+      "line": 9933,
       "acknowledged": true,
       "rationale": "Meta-tool: invokes a named tool with validated args — the \"runtime bridge\" over the whole catalog. No standalone UI; every tool a user can invoke has its own concrete UI affordance."
     },
     {
       "name": "codesense_get_tool_schema",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9915,
+      "line": 9912,
       "acknowledged": true,
       "rationale": "Meta-tool: returns the args schema for a named MCP tool. UI surface is the mcp-explorer dashboard, which reads the shipped generated/mcp-tools.json manifest, not a live Tauri command."
     },
@@ -6166,154 +6166,154 @@
     {
       "name": "codesense_search_tools",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9878,
+      "line": 9875,
       "acknowledged": true,
       "rationale": "Meta-tool: searches the MCP tool catalog. The UI equivalent is the Command palette (⌘K), which is a frontend widget, not a Tauri command."
     },
     {
       "name": "command_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2584,
+      "line": 2581,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "command_run",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2597,
+      "line": 2594,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "context_operation_status",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3251,
+      "line": 3248,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "copy_between_contexts",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9524,
+      "line": 9521,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "create_content_file",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6314,
+      "line": 6311,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "create_dashboard",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 11751,
+      "line": 11748,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "create_team",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9646,
+      "line": 9643,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "delete_team",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9695,
+      "line": 9692,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "describe_setup",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9638,
+      "line": 9635,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "feedback_send",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6728,
+      "line": 6725,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "get_live_data_contract",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2385,
+      "line": 2382,
       "acknowledged": true,
       "rationale": "Returns the live-data contract document agents need to understand the kit primitives / bridge verbs. The UI equivalent is the shipped primitives explorer which reads a generated manifest, not a Tauri command."
     },
     {
       "name": "get_story_format",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2624,
+      "line": 2621,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "get_sync_status",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3041,
+      "line": 3038,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "get_viewer_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2404,
+      "line": 2401,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "health_ping",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2234,
+      "line": 2231,
       "acknowledged": true,
       "rationale": "Liveness probe for the MCP transport itself. The UI equivalent is process liveness (window still responsive); not reachable via a Tauri command."
     },
     {
       "name": "hydrate_story",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2797,
+      "line": 2794,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "hydrate_worktree",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3211,
+      "line": 3208,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "inbox_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7126,
+      "line": 7123,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "inbox_post",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6017,
+      "line": 6014,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_context_content",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9463,
+      "line": 9460,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_hydrated",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2821,
+      "line": 2818,
       "acknowledged": false,
       "rationale": null
     },
@@ -6327,7 +6327,7 @@
     {
       "name": "list_orgs_teams",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8871,
+      "line": 8868,
       "acknowledged": false,
       "rationale": null
     },
@@ -6341,56 +6341,56 @@
     {
       "name": "list_run_events",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4785,
+      "line": 4782,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_runs",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4772,
+      "line": 4769,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_sessions",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6644,
+      "line": 6641,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_source_repos",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2636,
+      "line": 2633,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "list_wakeups",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5233,
+      "line": 5230,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "mark_unread",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7155,
+      "line": 7152,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "model_rates",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4984,
+      "line": 4981,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "move_between_contexts",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9513,
+      "line": 9510,
       "acknowledged": false,
       "rationale": null
     },
@@ -6404,35 +6404,35 @@
     {
       "name": "notes_create",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3601,
+      "line": 3598,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "notes_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3575,
+      "line": 3572,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "notes_read",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3588,
+      "line": 3585,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "notes_search",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3631,
+      "line": 3628,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "notes_write",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3616,
+      "line": 3613,
       "acknowledged": false,
       "rationale": null
     },
@@ -6446,42 +6446,42 @@
     {
       "name": "open_terminal_tab",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7977,
+      "line": 7974,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "open_workspace",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6570,
+      "line": 6567,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "pane_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3350,
+      "line": 3347,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "pane_open",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3415,
+      "line": 3412,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "pane_write",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3382,
+      "line": 3379,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "post_agent_message",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3754,
+      "line": 3751,
       "acknowledged": false,
       "rationale": null
     },
@@ -6495,35 +6495,35 @@
     {
       "name": "preview_reverse_sync_worktree",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3172,
+      "line": 3169,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "publish_dashboard",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 11806,
+      "line": 11803,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "react",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6710,
+      "line": 6707,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "read_content_file",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6293,
+      "line": 6290,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "read_messages",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6678,
+      "line": 6675,
       "acknowledged": false,
       "rationale": null
     },
@@ -6537,119 +6537,119 @@
     {
       "name": "read_rendered_document",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3693,
+      "line": 3690,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "read_run",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4798,
+      "line": 4795,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "read_terminal_tab",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8142,
+      "line": 8139,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "read_worktree_config",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2997,
+      "line": 2994,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_collections",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3465,
+      "line": 3462,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_create",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3525,
+      "line": 3522,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_delete",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3555,
+      "line": 3552,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_history",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3505,
+      "line": 3502,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3475,
+      "line": 3472,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_read",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3485,
+      "line": 3482,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_read_at",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3515,
+      "line": 3512,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_restore",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3565,
+      "line": 3562,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_search",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3495,
+      "line": 3492,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_set_fields",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3545,
+      "line": 3542,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "records_write",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3535,
+      "line": 3532,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "refresh_frontmatter_cache",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6369,
+      "line": 6366,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "refresh_history",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4869,
+      "line": 4866,
       "acknowledged": false,
       "rationale": null
     },
@@ -6663,287 +6663,287 @@
     {
       "name": "remove_from_context",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9535,
+      "line": 9532,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "remove_source_repo",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9819,
+      "line": 9816,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "rename_team",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9673,
+      "line": 9670,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "rename_terminal_tab",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8240,
+      "line": 8237,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "rename_workspace",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9758,
+      "line": 9755,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "render_canvas",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3738,
+      "line": 3735,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "reorder_workspace",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2568,
+      "line": 2565,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "reply",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6695,
+      "line": 6692,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "report_artifact",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4398,
+      "line": 4395,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "report_context_sync",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6544,
+      "line": 6541,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "report_step_result",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4339,
+      "line": 4336,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "resolve_agent_account",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2313,
+      "line": 2310,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "reverse_sync_worktree",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 3128,
+      "line": 3125,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "role_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7182,
+      "line": 7179,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_cancel",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4756,
+      "line": 4753,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_context",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5110,
+      "line": 5107,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_create",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4430,
+      "line": 4427,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_delete",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5027,
+      "line": 5024,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_done",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5132,
+      "line": 5129,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_publish_result",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5052,
+      "line": 5049,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_run",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4741,
+      "line": 4738,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "routine_update",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4507,
+      "line": 4504,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "run_in_terminal_tab",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7837,
+      "line": 7834,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "schedule_wakeup",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5203,
+      "line": 5200,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "send_message",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6663,
+      "line": 6660,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "send_to_session",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7744,
+      "line": 7741,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "sense_sync_adopt",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2751,
+      "line": 2748,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "sense_sync_list_layers",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2862,
+      "line": 2859,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "sense_sync_move_layer",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2931,
+      "line": 2928,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "sense_sync_read_layer_file",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2889,
+      "line": 2886,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "sense_sync_read_lockfile",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2909,
+      "line": 2906,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "session_usage",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4881,
+      "line": 4878,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_active_team",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9590,
+      "line": 9587,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_model_rate",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4995,
+      "line": 4992,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_private_items_use",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9600,
+      "line": 9597,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_team_parent",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9706,
+      "line": 9703,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_team_starter_page",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9728,
+      "line": 9725,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "set_viewer_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2467,
+      "line": 2464,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "share_dashboard",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 11847,
+      "line": 11844,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "signal_done",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4085,
+      "line": 4082,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "signal_progress",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4261,
+      "line": 4258,
       "acknowledged": false,
       "rationale": null
     },
@@ -6957,35 +6957,35 @@
     {
       "name": "task_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4950,
+      "line": 4947,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "task_read",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4967,
+      "line": 4964,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "task_start",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4898,
+      "line": 4895,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "task_update",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 4933,
+      "line": 4930,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "unpublish_dashboard",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 11829,
+      "line": 11826,
       "acknowledged": false,
       "rationale": null
     },
@@ -7006,315 +7006,315 @@
     {
       "name": "validate_live_data_doc",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2393,
+      "line": 2390,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "validate_story",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2721,
+      "line": 2718,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "who_am_i",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6774,
+      "line": 6771,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_add",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8680,
+      "line": 8677,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_create",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8644,
+      "line": 8641,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_delete",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8702,
+      "line": 8699,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8632,
+      "line": 8629,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_remove",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8691,
+      "line": 8688,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_rename",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8656,
+      "line": 8653,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "workspace_group_set_members",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8668,
+      "line": 8665,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "write_worktree_config",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 2969,
+      "line": 2966,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_audit_prune",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9403,
+      "line": 9400,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_audit_query",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9376,
+      "line": 9373,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_check_t2_window",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5802,
+      "line": 5799,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_claim_queue",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8922,
+      "line": 8919,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_classify_action",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5714,
+      "line": 5711,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_close_t2_window",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5823,
+      "line": 5820,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_close_task",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9129,
+      "line": 9126,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_coord_read",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9256,
+      "line": 9253,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_dispatch_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7506,
+      "line": 7503,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_enqueue",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8890,
+      "line": 8887,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_escalate",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9324,
+      "line": 9321,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_handoff_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7623,
+      "line": 7620,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_mark_dispatched",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9065,
+      "line": 9062,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_open_t2_window",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5769,
+      "line": 5766,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_pause_t2_windows",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5844,
+      "line": 5841,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_peer_read_file",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9291,
+      "line": 9288,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_post_assertion",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6107,
+      "line": 6104,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_queue_list",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9177,
+      "line": 9174,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_read_posture",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5880,
+      "line": 5877,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_read_recent",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7642,
+      "line": 7639,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_report_cycle",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 9208,
+      "line": 9205,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_report_handoff",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7582,
+      "line": 7579,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_resolve_queue",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 8994,
+      "line": 8991,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_resume_t2_windows",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5862,
+      "line": 5859,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_retire_decision",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5622,
+      "line": 5619,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_scope_state",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 6204,
+      "line": 6201,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_set_posture",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5901,
+      "line": 5898,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_spawn_worker",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7322,
+      "line": 7319,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_upsert_attention",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5973,
+      "line": 5970,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_verify_done",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7533,
+      "line": 7530,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_wait",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7673,
+      "line": 7670,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_write_approval",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5640,
+      "line": 5637,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_write_decision",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 5595,
+      "line": 5592,
       "acknowledged": false,
       "rationale": null
     },
     {
       "name": "wv_write_dispatch",
       "file": "src-tauri/src/mcp/handler.rs",
-      "line": 7443,
+      "line": 7440,
       "acknowledged": false,
       "rationale": null
     }
