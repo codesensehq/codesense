@@ -106,15 +106,9 @@ export function addedLineSelection(record, sections) {
   return new Set(sections.flatMap(addedEntries).map((entry) => entry.line));
 }
 
-function* commitAdditions(cwd, commit) {
-  const [, ...parents] = git(["rev-list", "--parents", "--max-count=1", commit], cwd)
-    .trim()
-    .split(" ");
-  // First-parent diffs include merge resolutions and changes brought by the
-  // merged branch. rev-list below also visits every commit on that branch.
-  const command = parents.length
-    ? ["diff", parents[0], commit]
-    : ["diff-tree", "--root", "--no-commit-id", "-r", commit];
+// Each file the commit has, changed against one side: its blob and the line
+// numbers added there (null: the whole file).
+function sideAdditions(cwd, command) {
   const options = [
     "--no-ext-diff",
     "--no-textconv",
@@ -162,17 +156,42 @@ function* commitAdditions(cwd, commit) {
   );
   // A typechange can have separate deletion and creation sections for one path.
   const sections = pairCommitSections(records, patch);
+  return new Map(
+    records
+      .filter((record) => !record.deleted)
+      .map((record) => [
+        record.file,
+        { oid: record.oid, lineNumbers: addedLineSelection(record, sections.get(record.file)) },
+      ]),
+  );
+}
+
+const intersectLines = (a, b) =>
+  a === null ? b : b === null ? a : new Set([...a].filter((line) => b.has(line)));
+
+// A merge adds only the lines that are new against every parent: its own
+// resolutions. Lines a parent already has were added by a commit on that side,
+// which the scan visits too unless the destination already has it. Binary
+// files and paths changed against every parent are scanned whole.
+function* commitAdditions(cwd, commit) {
+  const [, ...parents] = git(["rev-list", "--parents", "--max-count=1", commit], cwd)
+    .trim()
+    .split(" ");
+  const [first, ...others] = parents.length
+    ? parents.map((parent) => sideAdditions(cwd, ["diff", parent, commit]))
+    : [sideAdditions(cwd, ["diff-tree", "--root", "--no-commit-id", "-r", commit])];
   const blobs = commitBlobs(
     cwd,
-    records.filter((record) => !record.deleted).map((record) => record.oid),
+    [...first.values()].map(({ oid }) => oid),
   );
-  for (const record of records) {
-    if (!record.deleted)
-      yield {
-        file: record.file,
-        data: blobs.get(record.oid),
-        lineNumbers: addedLineSelection(record, sections.get(record.file)),
-      };
+  for (const [file, { oid, lineNumbers }] of first) {
+    // A file some parent already has as is brings nothing new, its path included.
+    if (others.some((side) => !side.has(file))) continue;
+    const lines = others.reduce(
+      (acc, side) => intersectLines(acc, side.get(file).lineNumbers),
+      lineNumbers,
+    );
+    yield { file, data: blobs.get(oid), lineNumbers: lines };
   }
 }
 
@@ -307,24 +326,24 @@ export function isPublicRemote(url, extra = "") {
 
 const REMOTE_TIMEOUT_MS = 60_000;
 
-// Commit and tag tips the destination already has, as far as this clone holds
-// them; `missing` is set when it lists a tip this clone does not have. The
-// remote is asked directly: remote-tracking refs can describe another URL
-// (pushurl, set-url). Any failure to list it fails closed. Other refs (pull
-// requests) are left out: excluding fewer tips only scans more.
+// Commit and tag tips the destination already has. The remote is asked
+// directly: remote-tracking refs can describe another URL (pushurl, set-url).
+// Tips this clone lacks are fetched from that same URL by object id, without
+// writing a ref, so a push that merges a newer main than the last fetch is
+// still measured against everything the destination holds. Any failure to
+// list or fetch fails closed. Other refs (pull requests) are left out:
+// excluding fewer tips only scans more.
 // Never prompt inside a hook, and never hang: a timeout blocks the push.
 function remoteTips(cwd, url, timeout = REMOTE_TIMEOUT_MS) {
   if (url.startsWith("-")) throw new Error();
-  const listed = spawnSync(
-    "git",
-    ["--literal-pathspecs", "ls-remote", url, "refs/heads/*", "refs/tags/*"],
-    {
+  const remote = (args) =>
+    spawnSync("git", ["--literal-pathspecs", ...args], {
       ...gitOptions(cwd),
       encoding: "utf8",
       timeout,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
-    },
-  );
+    });
+  const listed = remote(["ls-remote", url, "refs/heads/*", "refs/tags/*"]);
   if (listed.status !== 0) throw new Error();
   const shas = [
     ...new Set(
@@ -334,13 +353,27 @@ function remoteTips(cwd, url, timeout = REMOTE_TIMEOUT_MS) {
         .map((line) => line.split("\t")[0]),
     ),
   ].map((value) => revision(value));
-  const objects = objectTypes(cwd, shas);
-  return {
-    tips: objects
-      .filter(([, type]) => type === "commit" || type === "tag")
-      .map(([sha]) => revision(sha)),
-    missing: objects.some(([, type]) => type === "missing"),
-  };
+  let objects = objectTypes(cwd, shas);
+  const missing = objects.filter(([, type]) => type === "missing").map(([sha]) => sha);
+  if (missing.length) {
+    const fetched = remote([
+      "-c",
+      "fetch.recurseSubmodules=false",
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--no-auto-maintenance",
+      url,
+      ...missing,
+    ]);
+    if (fetched.status !== 0) throw new PushRefused(FETCH_FIX);
+    objects = objectTypes(cwd, shas);
+    if (objects.some(([, type]) => type === "missing")) throw new PushRefused(FETCH_FIX);
+  }
+  return objects
+    .filter(([, type]) => type === "commit" || type === "tag")
+    .map(([sha]) => revision(sha));
 }
 
 // [sha, type] for each object id; type is "missing" for one this clone lacks.
@@ -381,6 +414,8 @@ function parseUpdates(updates) {
 
 // Counts only: the refusal never names a commit, ref or term.
 class PushRefused extends Error {}
+const FETCH_FIX =
+  "privacy-scan: cannot fetch the commits the destination already has; fetch and retry.";
 
 // Pre-push: the added lines and message of every pushed commit, the text of
 // every annotated tag (nested tags peeled), and each destination ref name.
@@ -403,7 +438,16 @@ export function scanPush({
   const pushes = parseUpdates(updates).filter(({ localSha }) => !ZERO.test(localSha));
   if (!pushes.length) return [];
   const localShas = pushes.map(({ localSha }) => localSha);
-  const { tips, missing } = remoteTips(cwd, url, remoteTimeoutMs);
+  // Each updated ref's old value, when this clone has it, is on the destination too.
+  const olds = pushes.map(({ remoteSha }) => remoteSha).filter((sha) => !ZERO.test(sha));
+  const tips = [
+    ...new Set([
+      ...remoteTips(cwd, url, remoteTimeoutMs),
+      ...objectTypes(cwd, olds)
+        .filter(([, type]) => type === "commit")
+        .map(([sha]) => revision(sha)),
+    ]),
+  ];
   const known = new Set(tips);
   const pushedTags = new Set(
     objectTypes(cwd, localShas)
@@ -423,9 +467,7 @@ export function scanPush({
     return texts;
   });
   if (Number.isFinite(maxNewObjects)) {
-    // Count up to one past the limit. A clone that lacks a tip the
-    // destination lists cannot tell its own commits from the destination's,
-    // so over the limit it is told to fetch first.
+    // Count up to one past the limit.
     const newTags = tags.flat().filter(({ object }) => !known.has(object)).length;
     const newCommits = Number(
       gitStdin(
@@ -437,12 +479,9 @@ export function scanPush({
     );
     if (newCommits + newTags > maxNewObjects)
       throw new PushRefused(
-        missing
-          ? "privacy-scan: this clone is behind the destination: fetch and retry; if " +
-              "it is still refused, the push carries private history."
-          : `privacy-scan: this push carries more than ${maxNewObjects} commits or tags ` +
-              "the public repo does not have; that is probably private history. Push a " +
-              "branch based on the public main (limit: CODESENSE_PRIVACY_MAX_NEW_COMMITS).",
+        `privacy-scan: this push carries more than ${maxNewObjects} commits or tags ` +
+          "the public repo does not have; that is probably private history. Push a " +
+          "branch based on the public main (limit: CODESENSE_PRIVACY_MAX_NEW_COMMITS).",
       );
   }
   const commits = pushedCommits(cwd, localShas, tips);

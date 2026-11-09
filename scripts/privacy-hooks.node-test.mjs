@@ -494,7 +494,7 @@ test("a push with too many new commits is refused at once, with counts only", (t
   passed(tag("1"));
 });
 
-test("a clone behind the destination is told to fetch first", (t) => {
+test("a clone behind the destination fetches the tips it lacks, then counts", (t) => {
   const s = sandbox(t);
   passed(s.install());
   s.commit("a.txt", "clean\n");
@@ -508,28 +508,86 @@ test("a clone behind the destination is told to fetch first", (t) => {
   assert.equal(ahead.status, 0, ahead.stderr);
   const env = { ...s.env, CODESENSE_PRIVACY_MAX_NEW_COMMITS: "20" };
   const push = (ref) => s.run(["push", "-q", "public", `HEAD:refs/heads/${ref}`], { env });
+  // Without a fetch first, the small push counts as one and is scanned; the large one is refused.
   s.git("checkout", "-q", "-b", "small", held);
   s.commit("b.txt", "clean\n");
-  const small = s.git("rev-parse", "HEAD").trim();
+  passed(push("small"));
   s.git("checkout", "-q", "-b", "large", held);
   addCommits(s, 25);
-  // Behind, both are refused at once with the reason, never naming the destination.
-  for (const ref of ["small", "large"]) {
-    s.git("checkout", "-q", ref === "small" ? small : "large");
-    const result = push(ref);
-    assert.notEqual(result.status, 0);
-    // git itself names the destination when a push fails; the hook never does.
-    assert.deepEqual(hookLines(result.stderr), [
-      "privacy-scan: this clone is behind the destination: fetch and retry; if it is still refused, the push carries private history.",
-    ]);
-    assert.ok(!hookLines(result.stderr).join("\n").includes(s.bare));
-  }
-  // After a fetch, the small push is counted as one and scanned; the large one is refused.
-  s.git("fetch", "-q", "public");
-  s.git("checkout", "-q", small);
-  passed(push("small"));
-  s.git("checkout", "-q", "large");
   assert.match(push("large").stderr, /this push carries more than 20 commits or tags/);
+  // The fetch wrote no ref: no local ref reaches the destination's new main.
+  const remoteMain = s.run(["--git-dir", s.bare, "rev-parse", "main"]).stdout.trim();
+  assert.equal(s.git("for-each-ref", "--contains", remoteMain), "");
+  assert.ok(!fs.existsSync(path.join(s.work, ".git", "FETCH_HEAD")));
+});
+
+test("a tip the destination lists but cannot send fails closed", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.seed("public", "main");
+  fs.writeFileSync(path.join(s.bare, "refs", "heads", "ghost"), `${"1234567890".repeat(4)}\n`);
+  s.git("switch", "-q", "-c", "topic");
+  s.commit("b.txt", "clean\n");
+  const result = s.run(["push", "-q", "public", "topic"]);
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(hookLines(result.stderr), [
+    "privacy-scan: cannot fetch the commits the destination already has; fetch and retry.",
+  ]);
+  assert.ok(!s.remoteHas("refs/heads/topic"));
+});
+
+// Main on the destination moves past this clone's last fetch. Its history holds
+// a commit the hook would block, already published (seeded without hooks).
+function staleMain(t) {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  // An address outside the allowed set, built so this file holds none.
+  s.commit(
+    "old.txt",
+    "clean\n",
+    `Old change\n\nCo-authored-by: Pat <${["pat", "mail.org"].join("@")}>`,
+  );
+  s.commit("term.txt", `${TERM}\n`);
+  s.seed("public", "main");
+  s.git("fetch", "-q", "public");
+  const fetched = s.git("rev-parse", "HEAD").trim();
+  const ahead = s.run(["--git-dir", s.bare, "fast-import", "--quiet"], {
+    input: commitStream(fetched, 3, "remote"),
+  });
+  assert.equal(ahead.status, 0, ahead.stderr);
+  return { s, fetched };
+}
+
+test("a branch that merges main is scanned for its new commits only", (t) => {
+  const { s } = staleMain(t);
+  s.git("switch", "-q", "-c", "topic", "HEAD~2");
+  s.commit("b.txt", "clean\n");
+  s.seed("public", "topic");
+  // The merge brings in the published history up to this clone's last fetch.
+  s.git("merge", "-q", "--no-edit", "--no-verify", "refs/remotes/public/main");
+  passed(s.run(["push", "-q", "public", "topic"]));
+  // A new commit that the hook blocks still fails.
+  s.commit("c.txt", `${TERM}\n`);
+  blocked(s.run(["push", "-q", "public", "topic"]));
+  s.git("reset", "-q", "--hard", "HEAD~1");
+  s.commit(
+    "d.txt",
+    "clean\n",
+    `New change\n\nCo-authored-by: Pat <${["pat", "mail.org"].join("@")}>`,
+  );
+  refused(s.run(["push", "-q", "public", "topic"]), "email");
+});
+
+test("a first push of a new branch scans only commits the destination lacks", (t) => {
+  const { s, fetched } = staleMain(t);
+  s.git("switch", "-q", "-c", "fresh", fetched);
+  s.commit("e.txt", "clean\n");
+  passed(s.run(["push", "-q", "public", "fresh"]));
+  s.git("switch", "-q", "-c", "fresh-bad", fetched);
+  s.commit("f.txt", `${TERM}\n`);
+  blocked(s.run(["push", "-q", "public", "fresh-bad"]));
 });
 
 test("a long push scan prints progress, counts only", (t) => {
