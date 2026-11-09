@@ -1122,7 +1122,10 @@ describe("human inbox pane through the real bridge", () => {
       messages.push(row(5, "Lee"));
       inboxChanged();
       if (state === "running")
-        await waitFor(() => expect(calls("agent_read_inbox").length).toBeGreaterThan(before));
+        await waitFor(
+          () => expect(calls("agent_read_inbox").length).toBeGreaterThan(before),
+          PACED,
+        );
       act(() => revealSlot("right-pane", { dashboard: PANEL, intent: { messageId: 5 } }));
       await waitFor(() => expect(calls("agent_read_inbox").length).toBeGreaterThan(before));
       await act(async () => releaseInbox());
@@ -1310,7 +1313,7 @@ describe("human inbox pane through the real bridge", () => {
     expect(messages.find((m) => m.messageId === 3)?.archivedAtMs).toBeUndefined();
     messages.push(row(5, "Mia", "human", { inReplyTo: 1, text: "A follow-up question" }));
     inboxChanged();
-    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2), PACED);
     await openThread(p);
     expect(el(p, "log").textContent).toContain("A follow-up question");
     expect(el(p, "log").textContent).not.toContain("Message 1");

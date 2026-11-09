@@ -2778,7 +2778,9 @@
         let badgeStale = true,
           urgentRefresh = false,
           refreshStartedAt = -Infinity,
-          bypassedAt = -Infinity,
+          bypassQueued = false,
+          bypassedLast = false,
+          intentWaited = false,
           refreshDue = 0;
         let refreshTimer,
           saveTimer,
@@ -5707,6 +5709,14 @@
             }, 600);
           }, 1200);
         }
+        function intentListed(intent) {
+          if (intent.focusList) return true;
+          if (intent.messageId != null)
+            return threads.some((t) => t.messages.some((m) => m.messageId === intent.messageId));
+          const team = intent.team ? { org: intent.org || contextOrg, team: intent.team } : null;
+          const key = conversationKey(intent.conversation, team || filterTeam || activeTeam);
+          return threads.some((t) => t.key === key);
+        }
         function applyIntent(intent, fresh = false) {
           // Architecture: a clean badge does not make a hidden reader ready to render an intent.
           if (!visible || !loaded || (dirty && !fresh) || refreshing) {
@@ -6511,7 +6521,7 @@
           if (!visible || refreshing) return;
           dirty = false;
           refreshing = true;
-          refreshStartedAt = performance.now();
+          startRead();
           const opened = selected;
           const reactionMark = reactionSaves;
           const changedIds = changedRows;
@@ -6714,8 +6724,13 @@
             if (visible) {
               if (loaded && pendingIntent) {
                 const intent = pendingIntent;
+                const waited = intentWaited;
                 pendingIntent = undefined;
-                applyIntent(intent, true);
+                intentWaited = false;
+                // Mail for the intent's thread may land just after this read started; if the
+                // list doesn't hold its target yet, it waits for one more read.
+                applyIntent(intent, waited || intentListed(intent));
+                if (pendingIntent) intentWaited = true;
               }
               flushHostCommands();
               if (!dirty) markVisible(true);
@@ -6737,7 +6752,7 @@
           let failed = false;
           refreshing = true;
           badgeStale = false;
-          refreshStartedAt = performance.now();
+          startRead();
           try {
             await contextReady;
             const inbox = crossTeam
@@ -6768,6 +6783,13 @@
             if (visible || !failed) queueRefresh();
           }
         }
+        // A read that starts serves every request queued so far and opens a new pacing window.
+        function startRead() {
+          refreshStartedAt = performance.now();
+          urgentRefresh = false;
+          bypassedLast = bypassQueued;
+          bypassQueued = false;
+        }
         // A refresh the human starts (or that follows the human's own write) runs at once.
         function scheduleRefresh() {
           dirty = badgeStale = urgentRefresh = true;
@@ -6793,9 +6815,7 @@
           refreshTimer = setTimeout(
             () => {
               refreshTimer = null;
-              // A direct read in flight re-queues when it lands, keeping an urgent request urgent.
-              if (refreshing) return;
-              urgentRefresh = false;
+              // A read in flight returns at once and re-queues when it lands.
               if (visible) refresh();
               else refreshBadge();
             },
@@ -7269,12 +7289,21 @@
             $("new-message").disabled = false;
             scheduleRefresh();
           });
+        // Loaded rows by key, rebuilt only when the list is replaced (every update replaces it).
+        let loadedIndex = { list: null, rows: null };
+        function loadedRow(key) {
+          if (loadedIndex.list !== messages)
+            loadedIndex = { list: messages, rows: new Map(messages.map((m) => [messageKey(m), m])) };
+          return loadedIndex.rows.get(key);
+        }
         // A change names the rows it touched; the next refresh re-reads those it has loaded.
         // Nudges carry only row ids, so new mail can't be told from agents' own traffic and
-        // waits for the pacing window (about a second at most). A change to a row this pane has
-        // loaded (a read, reaction or archive on the human's mail) skips the window, at most
-        // once a second. While hidden, only a change that names no rows, names a row this pane
-        // hasn't loaded, or names mail to the human can touch the human's unread set.
+        // waits for the pacing window (about a second at most). A change to loaded mail to the
+        // human (a read, reaction or archive) skips the wait: its read is the window's leading
+        // read and opens a new window, and a window it opened can't be skipped again, so
+        // nudges never cause more than two reads a second. While hidden, only a change that
+        // names no rows, names a row this pane hasn't loaded, or names mail to the human can
+        // touch the human's unread set.
         cs.onInboxChanged((change) => {
           const named = [];
           let unnamed = !change?.changes?.length;
@@ -7287,14 +7316,9 @@
           // Every change named another team's rows.
           if (!unnamed && !named.length) return;
           for (const key of named) changedRows.add(key);
-          const rows = named.map((key) => messages.find((m) => messageKey(m) === key));
-          if (
-            visible &&
-            rows.some(Boolean) &&
-            performance.now() - bypassedAt >= REFRESH_PACE_MS
-          ) {
-            bypassedAt = performance.now();
-            urgentRefresh = true;
+          const rows = named.map(loadedRow);
+          if (visible && !bypassedLast && !bypassQueued && rows.some((m) => m?.toHuman)) {
+            bypassQueued = urgentRefresh = true;
           }
           paceRefresh(unnamed || rows.some((m) => !m || m.toHuman !== false));
         });

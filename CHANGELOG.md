@@ -11,7 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Machine saves never overwrite a newer edit.** Saving a machine is refused if it changed since you opened it; reopen it and save again. Over MCP, `save_machine` now needs `declarationRevision` (the `declaration.revision` from `list_machines`) to change a legacy machine you can publish, personal or shared.
 - **A refused switch to a private account keeps your connection.** CodeSense makes every check it can before ending the machine's current connection.
 - **Private machines changed elsewhere say so.** One clear message shows on save, connect and the machine list, and only that machine is affected. Renaming a personal private machine now saves; renaming a team private machine is refused, since every teammate's setup shares its name.
-- **The Inbox pane stays light while agents are busy.** During a burst of inbox changes it refreshes about once a second, so new mail shows within a second (at once after a quiet second). Reading, reacting to or archiving your mail elsewhere still shows right away, and actions you take in the pane never wait. While the pane is hidden it only keeps its badge current.
+- **The Inbox pane stays light while agents are busy.** During a burst of inbox changes it refreshes about once a second, so new mail shows within about a second (at once after a quiet second). Reading, reacting to or archiving your mail elsewhere usually shows right away, and actions you take in the pane never wait. While the pane is hidden it only keeps its badge current.
 
 ### Privacy
 

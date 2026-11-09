@@ -17,6 +17,8 @@ function boot(rows: Row[], scope: Scope) {
   const nudges = new Set<(change: unknown) => void>();
   const shows = new Set<(shown: boolean) => void>();
   const intents = new Set<(intent: unknown) => void>();
+  // When each list read started, on the pane's monotonic clock.
+  const readAt: number[] = [];
   const view = () => {
     const messages = rows.map((m) => ({
       ...m,
@@ -55,8 +57,12 @@ function boot(rows: Row[], scope: Scope) {
     })),
     prefs: vi.fn(async () => ({})),
     setPrefs: vi.fn(async () => ({})),
-    inboxRollup: vi.fn(async () => view()),
+    inboxRollup: vi.fn(async () => {
+      readAt.push(performance.now());
+      return view();
+    }),
     inbox: vi.fn(async (query: { scope?: string }) => {
+      if (query.scope === "to-human") readAt.push(performance.now());
       const all = view();
       if (query.scope === "to-human")
         return { ...all, messages: all.messages.filter((m) => m.toHuman) };
@@ -101,6 +107,7 @@ function boot(rows: Row[], scope: Scope) {
     cs,
     rows,
     reads,
+    readAt,
     nudge: (ids?: number[], team = TEAM) =>
       nudges.forEach((cb) => cb(ids ? { changes: [{ team, messageIds: ids }] } : {})),
     show: (shown: boolean) => shows.forEach((cb) => cb(shown)),
@@ -151,15 +158,39 @@ describe("inbox pane refresh pacing", () => {
     },
   );
 
-  it("caps nudges for loaded rows at one window-skipping read a second", async () => {
+  it("keeps an agent burst mixed with changes to the human's loaded mail at two reads a second", async () => {
     const p = await shown([MIA, SENT]);
+    p.readAt.length = 0;
     for (let i = 0; i < 300; i++) {
-      p.nudge([1]);
+      p.nudge(i % 7 ? [100 + i] : [1]);
       await settle(10);
     }
     await settle(2000);
-    // Three seconds of nudges: a leading read, at most one skip and one trailing read a second.
-    expect(p.reads()).toBeLessThanOrEqual(7);
+    expect(p.readAt.length).toBeGreaterThanOrEqual(3);
+    // No second-long span holds more than two reads.
+    for (let i = 2; i < p.readAt.length; i++)
+      expect(p.readAt[i] - p.readAt[i - 2]).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("doesn't skip the window for changes to the human's own sent mail", async () => {
+    const p = await shown([MIA, SENT]);
+    p.nudge([100]);
+    await settle(30);
+    p.nudge([2]);
+    await settle(30);
+    expect(p.reads()).toBe(1);
+    await settle(1000);
+    expect(p.reads()).toBe(2);
+  });
+
+  it("paces on the monotonic clock, so a wall clock stepped back doesn't stall it", async () => {
+    const p = await shown([MIA]);
+    p.nudge([100]);
+    await settle(30);
+    vi.setSystemTime(Date.now() - 60_000);
+    p.nudge([101]);
+    await settle(1050);
+    expect(p.reads()).toBe(2);
   });
 
   it("skips nudges that name only another team's rows on a single-team pane", async () => {
@@ -179,7 +210,7 @@ describe("inbox pane refresh pacing", () => {
     expect(p.listRows()).toBe(2);
   });
 
-  it("shows the human's mail within a second inside a burst of agents' mail", async () => {
+  it("shows the human's mail within about a second inside a burst of agents' mail", async () => {
     const p = await shown([MIA]);
     p.nudge([100]);
     await settle(30);
@@ -190,7 +221,8 @@ describe("inbox pane refresh pacing", () => {
       await settle(10);
     }
     expect(p.listRows()).toBe(1);
-    await settle(1000);
+    // 1,050 ms after the human's mail was nudged.
+    await settle(850);
     expect(p.listRows()).toBe(2);
     expect(p.reads()).toBe(2);
   });
@@ -314,6 +346,32 @@ describe("inbox pane refresh pacing", () => {
       await settle(30);
       expect(p.reads()).toBe(2);
       expect(p.view()).toBe("thread");
+    });
+
+    it("opening a thread whose mail lands while the read is in flight", async () => {
+      const p = await insideWindow();
+      await settle(2000);
+      vi.clearAllMocks();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const read = p.cs.inboxRollup.getMockImplementation()!;
+      p.cs.inboxRollup.mockImplementationOnce(async () => {
+        const result = await read();
+        await held;
+        return result;
+      });
+      p.nudge([102]);
+      await settle(30);
+      expect(p.reads()).toBe(1);
+      // Lee's first mail lands after the held read took its snapshot.
+      p.intent({ conversation: "Lee", org: TEAM.org, team: TEAM.team });
+      p.rows.push({ id: 3, from: "Lee", to: "human", unread: true });
+      p.nudge([3]);
+      release();
+      await settle(30);
+      expect(p.reads()).toBe(2);
+      expect(p.view()).toBe("thread");
+      expect(document.getElementById("thread-name")!.textContent).toBe("Lee");
     });
 
     it("sending", async () => {
