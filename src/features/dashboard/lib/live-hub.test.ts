@@ -1981,9 +1981,25 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(post)).toEqual([
     { type: "codesense:inbox-changed", changes: [{ team, messageIds: [5] }] },
   ]);
-  expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
+  // Only another team's rows changed, so the ops frame hears nothing.
+  expect(inboxChanges(other)).toEqual([]);
   events.get("agent-inbox-changed")!({ payload: null });
   expect(inboxChanges(post).at(-1)).toEqual({ type: "codesense:inbox-changed" });
+  expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
+});
+
+it("holds nothing to post for a hidden team frame when only another team's rows changed", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("ops", "team:acme/ops", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  frame.visible(false);
+  post.mockClear();
+  const backend = { org: "acme", team: "backend" };
+  events.get("agent-inbox-changed")!({
+    payload: { changes: [{ team: backend, messageIds: [5] }] },
+  });
+  frame.visible(true);
+  expect(inboxChanges(post)).toEqual([]);
 });
 
 it("unions the committed ids per team while a frame is hidden and delivers them when it shows", async () => {

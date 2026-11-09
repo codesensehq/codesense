@@ -127,13 +127,19 @@ function inboxChangesOf(payload: unknown): InboxChange[] {
     : [];
 }
 /** What a frame may be told now: an inbox change names only its own team's rows, judged
- *  by the frame's current scope, so held ids never outlive a rekey. */
+ *  by the frame's current scope, so held ids never outlive a rekey. A change that named only
+ *  other teams' rows tells the frame nothing, so it isn't posted (`null`). */
 function deliverable(frame: Pick<Frame, "viewKey">, message: Record<string, unknown>) {
   const { changes, ...rest } = message;
-  const visible = (changes as InboxChange[] | undefined)?.filter(
+  if (!changes) return rest;
+  const visible = (changes as InboxChange[]).filter(
     (c) => !frame.viewKey.startsWith("team:") || frame.viewKey === teamScope(c.team),
   );
-  return visible?.length ? { ...rest, changes: visible } : rest;
+  return visible.length ? { ...rest, changes: visible } : null;
+}
+function postDeliverable(frame: Pick<Frame, "viewKey" | "post">, message: Record<string, unknown>) {
+  const delivered = deliverable(frame, message);
+  if (delivered) frame.post(delivered);
 }
 /** Host view state that is one for every team: the dock's folds and arrangement survive a team
  *  switch, whatever view key the frame's grant gives its data topics. */
@@ -370,11 +376,9 @@ export class LiveHub {
         else this.stale(frame);
         continue;
       }
-      frame.post(
-        type === "inbox-changed"
-          ? deliverable(frame, changes.length ? { ...message, changes } : message)
-          : message,
-      );
+      if (type === "inbox-changed")
+        postDeliverable(frame, changes.length ? { ...message, changes } : message);
+      else frame.post(message);
     }
   }
   seed(snapshot: HubSnapshot) {
@@ -656,7 +660,7 @@ export class LiveHub {
         frame.hiddenTimer = undefined;
         frame.pending = [];
         frame.stale = false;
-        for (const message of frame.invalidations.values()) frame.post(deliverable(frame, message));
+        for (const message of frame.invalidations.values()) postDeliverable(frame, message);
         frame.invalidations.clear();
         resyncAll();
         frame.waits.splice(0).forEach((resolve) => resolve());
@@ -1010,7 +1014,7 @@ export class LiveHub {
       frame.post({ type: "codesense:resync", topic, viewKey });
     }
     frame.resync.clear();
-    for (const message of frame.invalidations.values()) frame.post(deliverable(frame, message));
+    for (const message of frame.invalidations.values()) postDeliverable(frame, message);
     frame.invalidations.clear();
   }
   private schedule() {
