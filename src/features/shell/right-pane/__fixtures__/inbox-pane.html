@@ -2831,6 +2831,8 @@
         // Jump to latest and held unread until they jump or scroll back down.
         // Architecture: an explicit Mark unread survives refresh, layout and passive scrolling.
         const explicitlyUnread = new Set();
+        // Rows U is marking unread, shown unread before the write lands (unreadThread).
+        const markingUnread = new Set();
         let held = new Set(),
           logScope = null,
           logNewest = -Infinity;
@@ -3298,6 +3300,7 @@
             return;
           }
           rebuildThreads();
+          for (const t of threads) if (!t.unread && markingUnread.has(t.key)) t.unread = 1;
           if (crossTeam) drawFilter();
           const list = $("conversations");
           const rows = threads.map((t) => {
@@ -6041,10 +6044,15 @@
         }
         // The row menu's Mark unread, from the keyboard: the newest message to you turns
         // unread, as the host menu marks it. A conversation with none has nothing to mark.
+        // A loaded message to you proves there is one, so the row shows unread at once; with
+        // none loaded, it waits for the lookup and so never shows a state it takes back.
         const unreading = new Set();
         async function unreadThread(t) {
-          if (unreading.has(t.key)) return;
           unreading.add(t.key);
+          if (t.messages.some((m) => unread({ ...m, unread: true }))) {
+            markingUnread.add(t.key);
+            drawList();
+          }
           try {
             const latest = await latestToYou(t);
             if (!latest || latest.unread) return;
@@ -6052,19 +6060,23 @@
             explicitlyUnread.add(t.key);
             if (t.key === selected) readDone = false;
             drawLatest();
-            const failed = await unreadRows([latest]);
-            if (failed.size) showToast(retryIn(failed, "unread"));
+            // One message is one write: it lands or it throws.
+            await unreadRows([latest]);
           } catch {
             explicitlyUnread.delete(t.key);
             drawLatest();
             showToast("Couldn't mark unread. Try again.");
           } finally {
             unreading.delete(t.key);
+            if (markingUnread.delete(t.key)) drawList();
           }
         }
-        // U on a row: read it if anything is unread, else mark it unread.
+        // U on a row: read it if anything is unread, else mark it unread. A press while the
+        // row is still being marked unread does nothing more. A read role queue offers no
+        // Mark unread, so U does nothing on it.
         function toggleRead(t) {
-          if (!t.unread) return void unreadThread(t);
+          if (unreading.has(t.key)) return;
+          if (!t.unread) return isRole(t.key) ? undefined : void unreadThread(t);
           explicitlyUnread.delete(t.key);
           readThreads([t]).then(
             ({ failed }) =>
