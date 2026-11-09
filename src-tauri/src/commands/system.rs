@@ -214,9 +214,6 @@ pub(crate) async fn dashboard_policy<R: tauri::Runtime>(
         return Ok(policy);
     }
     await_blocking("dashboard_policy", move || {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
         load_dashboard_policy(
             &app.state::<super::local_profile::LocalProfileState>(),
             &path,
