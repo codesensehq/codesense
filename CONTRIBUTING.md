@@ -19,8 +19,11 @@ open issues first.
 ## Pull requests
 
 - Keep a change focused on one thing, and say what it does and why.
-- If users would notice the change, add a line under `## [Unreleased]` in
-  `CHANGELOG.md`. Write it for the people who use CodeSense.
+- If users would notice the change, add a changelog entry as a new file,
+  `changes/<slug>.md`, as [changes/README.md](changes/README.md) describes.
+  Don't edit `CHANGELOG.md`: entries are folded into it at release time, so
+  pull requests merged together never conflict. Write the entry for the people
+  who use CodeSense.
 - Sign off every commit (`git commit -s`) to certify the
   [Developer Certificate of Origin](https://developercertificate.org/). See
   [Sign-off](#sign-off-dco) below.
@@ -42,6 +45,10 @@ open issues first.
   commit you've since fixed, start a fresh branch from current `main` and
   reapply only the clean changes. Don't paste private values while explaining
   a failure.
+- **Changelog** checks the format of every file in `changes/`. If the pull
+  request changes the app (`src/`, `src-tauri/` or `src-emulator/`, apart from
+  tests), it also needs a new `changes/<slug>.md`. When users won't notice the
+  change, a maintainer adds the `no-changelog` label instead.
 - The other jobs lint, build and test the change.
 
 ### Sign-off (DCO)
