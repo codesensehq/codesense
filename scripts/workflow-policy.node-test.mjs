@@ -183,6 +183,45 @@ test("a merge_group workflow saves no cache on merge groups", () => {
   assert.deepEqual(workflowPolicy(plain), []);
 });
 
+// A merge group must run every job, so a job may only be skipped on pull requests.
+test("a merge_group workflow's job conditions skip only pull requests", () => {
+  const job = (condition) => queued().replace("  static:\n", `  static:\n    if: ${condition}\n`);
+  for (const condition of [
+    "github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')",
+    "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+  ])
+    assert.deepEqual(workflowPolicy(job(condition)), [], condition);
+  for (const condition of [
+    "github.event.pull_request.draft == false",
+    "github.event_name == 'pull_request' || github.event_name != 'pull_request'",
+    "(github.event_name != 'pull_request' || true) && false",
+    "${{ !github.event.pull_request.draft || github.event_name != 'pull_request' }}",
+    "false && github.event_name != 'pull_request' || true",
+  ])
+    assert.match(workflowPolicy(job(condition)).join("\n"), /if must begin with/, condition);
+  // Without merge_group the rule does not apply.
+  assert.deepEqual(
+    workflowPolicy(job("github.event.pull_request.draft == false").replace("  merge_group:\n", "")),
+    [],
+  );
+});
+
+test("rust.yml skips macOS only on draft and Dependabot pull requests, and Linux never", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  assert.deepEqual(workflow.on.pull_request.types, [
+    "opened",
+    "synchronize",
+    "reopened",
+    "ready_for_review",
+  ]);
+  assert.ok(Object.hasOwn(workflow.on, "merge_group"));
+  assert.equal(
+    workflow.jobs["rust-macos"].if,
+    "github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')",
+  );
+  assert.equal(workflow.jobs["rust-linux"].if, undefined);
+});
+
 test("pull-requests read is limited to the DCO job", () => {
   const dco = good
     .replace("  static:\n", "  dco:\n")
