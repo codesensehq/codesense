@@ -183,41 +183,76 @@ test("a merge_group workflow saves no cache on merge groups", () => {
   assert.deepEqual(workflowPolicy(plain), []);
 });
 
-// A merge group must run every job, so a job may only be skipped on pull requests.
-test("a merge_group workflow's job conditions skip only pull requests", () => {
-  const job = (condition) => queued().replace("  static:\n", `  static:\n    if: ${condition}\n`);
-  for (const condition of [
-    "github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')",
-    "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-  ])
-    assert.deepEqual(workflowPolicy(job(condition)), [], condition);
-  for (const condition of [
-    "github.event.pull_request.draft == false",
-    "github.event_name == 'pull_request' || github.event_name != 'pull_request'",
-    "(github.event_name != 'pull_request' || true) && false",
-    "${{ !github.event.pull_request.draft || github.event_name != 'pull_request' }}",
-    "false && github.event_name != 'pull_request' || true",
-  ])
-    assert.match(workflowPolicy(job(condition)).join("\n"), /if must begin with/, condition);
-  // Without merge_group the rule does not apply.
+// Merge groups, main and the nightly runs must run every job, so a job may only be skipped on
+// pull requests.
+const macosOptIn =
+  "github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))";
+const conditional = (workflow, condition) =>
+  workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
+test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
+  const scheduled = good
+    .replace("on: [pull_request, workflow_dispatch]", "on: [schedule]")
+    .replace("  static:", "  commit-emails:");
+  for (const [trigger, workflow, file] of [
+    ["merge_group", queued(), ""],
+    [
+      "push",
+      good.replace(
+        "on: [pull_request, workflow_dispatch]",
+        "on:\n  pull_request:\n  push:\n    branches: [main]",
+      ),
+      "",
+    ],
+    ["schedule", scheduled, "commit-emails.yml"],
+  ]) {
+    for (const condition of [
+      macosOptIn,
+      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+    ])
+      assert.deepEqual(
+        workflowPolicy(conditional(workflow, condition), file),
+        [],
+        `${trigger}: ${condition}`,
+      );
+    for (const condition of [
+      "github.event.pull_request.draft == false",
+      "contains(github.event.pull_request.labels.*.name, 'ci:macos')",
+      "github.event_name == 'merge_group' || contains(github.event.pull_request.labels.*.name, 'ci:macos')",
+      "github.event_name != 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:macos')",
+      `github.event_name != '${trigger}' || contains(github.event.pull_request.labels.*.name, 'ci:macos')`,
+      "github.event_name == 'pull_request' || github.event_name != 'pull_request'",
+      "(github.event_name != 'pull_request' || true) && false",
+      "${{ !github.event.pull_request.draft || github.event_name != 'pull_request' }}",
+      "false && github.event_name != 'pull_request' || true",
+    ])
+      assert.match(
+        workflowPolicy(conditional(workflow, condition), file).join("\n"),
+        /if must begin with/,
+        `${trigger}: ${condition}`,
+      );
+  }
+  // A workflow that runs on none of them may skip a job anywhere.
   assert.deepEqual(
-    workflowPolicy(job("github.event.pull_request.draft == false").replace("  merge_group:\n", "")),
+    workflowPolicy(conditional(good, "github.event.pull_request.draft == false")),
     [],
   );
 });
 
-test("rust.yml skips macOS only on draft and Dependabot pull requests, and Linux never", () => {
+test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   assert.deepEqual(workflow.on.pull_request.types, [
     "opened",
     "synchronize",
     "reopened",
-    "ready_for_review",
+    "labeled",
   ]);
-  assert.ok(Object.hasOwn(workflow.on, "merge_group"));
+  for (const trigger of ["merge_group", "push"])
+    assert.ok(Object.hasOwn(workflow.on, trigger), trigger);
+  assert.equal(workflow.jobs["rust-macos"].if, macosOptIn);
+  // Another label's run has a group of its own, so it cannot cancel the pull request's run.
   assert.equal(
-    workflow.jobs["rust-macos"].if,
-    "github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')",
+    workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, undefined);
 });
