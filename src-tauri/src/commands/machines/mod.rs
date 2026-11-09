@@ -347,7 +347,7 @@ const CANT_PUBLISH: &str = "You can't publish to that team's context from this M
 /// as none, since a saved value keeps whatever spacing it was typed with.
 fn keeps_address(host: &str, port: u16, jump: Option<&str>, input: &MachineDraftInput) -> bool {
     let jump_of = |jump: Option<&str>| jump.map(str::trim).filter(|jump| !str::is_empty(jump));
-    str::trim(host) == input.host.trim()
+    host.trim() == input.host.trim()
         && port == input.port
         && jump_of(jump) == jump_of(input.jump_host.as_deref())
 }

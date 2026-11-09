@@ -7,8 +7,10 @@ import {
   installMachinesBackend,
   resetMachinesUi,
   TEAM_KEY,
+  ZERO_LATENCY,
 } from "../__test-utils__/machines-backend";
-import type { MachineDraftInput, MachineTestReport } from "@/tauri/commands";
+import { machineHandlers } from "@/app/mock/handlers/machines";
+import type { MachineDraftInput, MachineSummary, MachineTestReport } from "@/tauri/commands";
 import { getTeamMachines, loadTeamMachines, useMachinesStore } from "../stores/machines-store";
 import { MachineReserve } from "./machine-reserve";
 
@@ -288,6 +290,69 @@ describe("Saving an edit", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "save_machine")).toBe(true));
     const save = calls.find((c) => c.cmd === "save_machine");
     expect((save?.args.input as MachineDraftInput).declarationRevision).toBe("after-install");
+  });
+
+  it("never adopts a teammate's edit after its own enroll reported a revision", async () => {
+    const real = machineHandlers("demo", ZERO_LATENCY);
+    let phase: "legacy" | "converted" | "edited" = "legacy";
+    const live = (m: MachineSummary): MachineSummary =>
+      m.machineId === "gpu-box-2" && m.declaration
+        ? {
+            ...m,
+            declaration: {
+              ...m.declaration,
+              mode: phase === "legacy" ? "legacy" : "private-account",
+              revision: { legacy: "opened", converted: "converted", edited: "teammate" }[phase],
+            },
+          }
+        : m;
+    let tests = 0;
+    const step = (
+      status: "ok" | "warn",
+      nextSteps: MachineTestReport["steps"][number]["nextSteps"],
+    ) =>
+      ({
+        steps: [{ id: "private-account", status, detail: status, nextSteps }],
+        installPlan: null,
+        fileViewOnly: false,
+      }) satisfies MachineTestReport;
+    const { calls } = installMachinesBackend("demo", {
+      list_machines: (args) => (real.list_machines!(args) as MachineSummary[]).map(live),
+      test_machine_connection: () =>
+        tests++ === 0 ? step("warn", ["enroll-private-account"]) : step("ok", []),
+      enroll_private_machine_account: () => {
+        phase = "converted";
+        return { ...step("warn", ["install-terminal-server"]), declarationRevision: "converted" };
+      },
+      install_terminal_server: () => {
+        phase = "edited";
+        throw new Error("install failed");
+      },
+      save_machine: () => getTeamMachines(TEAM_KEY)?.find((m) => m.machineId === "gpu-box-2"),
+    });
+    await loadTeamMachines(TEAM_KEY);
+    render(
+      <MachineReserve
+        panel={{ mode: "setUp", machineId: "gpu-box-2" }}
+        teamKey={TEAM_KEY}
+        onClose={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByTestId("add-machine-test"));
+    await userEvent.click(await screen.findByTestId("machine-next-enroll-private-account"));
+    await userEvent.click(await screen.findByTestId("machine-next-install-terminal-server"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "install_terminal_server")).toBe(true));
+    await waitFor(() =>
+      expect(
+        getTeamMachines(TEAM_KEY)?.find((m) => m.machineId === "gpu-box-2")?.declaration?.revision,
+      ).toBe("teammate"),
+    );
+    await userEvent.click(screen.getByTestId("add-machine-test"));
+    await waitFor(() => expect(screen.getByTestId("add-machine-connect")).toBeEnabled());
+    await userEvent.click(screen.getByTestId("add-machine-connect"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_machine")).toBe(true));
+    const save = calls.find((c) => c.cmd === "save_machine");
+    expect((save?.args.input as MachineDraftInput).declarationRevision).toBe("converted");
   });
 
   it("retries a save whose later step failed on the revision that save left", async () => {
