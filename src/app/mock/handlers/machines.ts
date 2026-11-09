@@ -159,6 +159,7 @@ function buildRecord(seed: Seed, canPublishTeam: boolean): MachineRecord {
           defaultBaseDir: "~/src",
           pinnedHostKeyFp: fingerprintOf(host),
           pinnedServerId: seed.setUp === false ? null : `mock-server-${seed.id}`,
+          revision: `mock-rev-${seed.id}-0`,
         },
     binding:
       isLocal || seed.setUp === false
@@ -366,6 +367,9 @@ export function machineHandlers(
   const interruptedOnce = new Set<string>();
   /** Keychain handles handed out (the passphrase itself never reaches the mock). */
   let passphraseHandles = 0;
+  /** Like the real registry's declaration revisions: a rewrite moves them. */
+  let revisions = 0;
+  const nextRevision = (id: string) => `mock-rev-${id}-${++revisions}`;
   const replacementReservations = new Map<string, string>();
   let nextReplacementToken = 1;
   /** SW-AGR-19 PR-8: the mock's last Update all run. */
@@ -895,6 +899,25 @@ export function machineHandlers(
         for (let n = 2; records.has(id); n++) id = `${base}-${n}`;
       }
       const existing = records.get(id);
+      const saved = existing?.summary.declaration;
+      // Like the real registry: no save overwrites a change made since it was
+      // opened, and changing a legacy machine you publish names its base. (The
+      // mock's enroll converts nothing, so a switch to a private account is
+      // let through as the real one would be after enrolling.)
+      if (
+        saved &&
+        draft.declarationRevision != null &&
+        draft.declarationRevision !== saved.revision
+      )
+        throw new Error("This machine changed since you opened it. Reopen it and save again.");
+      if (
+        saved &&
+        draft.declarationRevision == null &&
+        existing?.summary.canPublish &&
+        saved.mode !== "private-account" &&
+        draft.mode !== "private-account"
+      )
+        throw new Error("Saving changes to this machine needs declarationRevision.");
       const host = draft.host.trim();
       const signIn = draft.signIn;
       // A member setting up a teammate's machine only writes their own binding:
@@ -914,6 +937,7 @@ export function machineHandlers(
               defaultBaseDir: "~",
               pinnedHostKeyFp: draft.trustedHostKeyFp,
               pinnedServerId: connect ? `mock-server-${machineId}` : null,
+              revision: nextRevision(id),
             },
         binding: {
           username: draft.username,
@@ -975,7 +999,16 @@ export function machineHandlers(
 
     unshare_machine: ({ machineId }) => {
       const rec = getRemote(machineId);
-      rec.summary = { ...rec.summary, scope: PERSONAL, canPublish: true };
+      const declaration = rec.summary.declaration;
+      rec.summary = {
+        ...rec.summary,
+        scope: PERSONAL,
+        canPublish: true,
+        declaration: declaration && {
+          ...declaration,
+          revision: nextRevision(rec.summary.machineId),
+        },
+      };
       return rec.summary;
     },
 

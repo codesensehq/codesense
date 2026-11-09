@@ -145,6 +145,11 @@ export function AddMachinePanel({
     initialMode ?? decl?.mode ?? "private-account",
   );
   const [label, setLabel] = useState(machine?.label ?? "");
+  // The revision this panel opened the machine at, never the live store's: a
+  // save based on it is refused once someone else changes the machine. This
+  // panel's own enroll or install (a conversion, a first host-key pin) answers
+  // with the revision its writes left, which becomes the base.
+  const [baseRevision, setBaseRevision] = useState(() => decl?.revision ?? null);
   const [autoConnect, setAutoConnect] = useState(machine?.binding?.autoConnect === true);
   const [jumpHost, setJumpHost] = useState(decl?.jumpHost ?? "");
   const [showJump, setShowJump] = useState(Boolean(decl?.jumpHost));
@@ -226,6 +231,7 @@ export function AddMachinePanel({
           jumpHost: jumpHost.trim() || null,
           signIn,
           trustedHostKeyFp: fp,
+          declarationRevision: baseRevision,
         }
       : null;
   const scope: MachineScope =
@@ -268,6 +274,7 @@ export function AddMachinePanel({
     let result: InstallTerminalServerResult;
     try {
       result = await installTerminalServer(machine?.machineId ?? null, input);
+      if (result.ok && result.declarationRevision) setBaseRevision(result.declarationRevision);
     } catch (e) {
       if (seq !== editSeq.current) return;
       setInstall({ status: "idle" });
@@ -316,6 +323,7 @@ export function AddMachinePanel({
         setTesting(true);
         void enrollPrivateMachineAccount(machine?.machineId ?? null, input)
           .then((report) => {
+            if (report.declarationRevision) setBaseRevision(report.declarationRevision);
             if (seq === editSeq.current) setReport(report);
           })
           .catch((error) => {

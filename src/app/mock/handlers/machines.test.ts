@@ -286,6 +286,7 @@ describe("save_machine", () => {
       machineId: saved.machineId,
       input: draft("devbox-02.int", {
         signIn: { method: "keychainPassphrase", keyPath: "~/.ssh/locked", credentialRef: handle },
+        declarationRevision: saved.declaration?.revision,
       }),
       share: { kind: "personal" },
       connect: true,
@@ -296,6 +297,37 @@ describe("save_machine", () => {
       "a dismissed dialog keeps nothing",
     ).toBeNull();
     expect(saved.scope).toEqual({ kind: "team", orgSlug: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME });
+  });
+
+  it("refuses a save based on an older revision, and a publisher's change based on none", async () => {
+    const b = backend("demo");
+    const team = { kind: "team", orgSlug: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME };
+    const opened = b.list().find((m) => m.machineId === "gpu-box-2")?.declaration?.revision;
+    expect(opened).toBeTruthy();
+    const first = await b.call<MachineSummary>("save_machine", {
+      machineId: "gpu-box-2",
+      input: draft("gpu-box-2.int", { label: "first", declarationRevision: opened }),
+      share: team,
+      connect: false,
+    });
+    expect(first.declaration?.revision).not.toBe(opened);
+    expect(() =>
+      b.call("save_machine", {
+        machineId: "gpu-box-2",
+        input: draft("gpu-box-2.int", { label: "second", declarationRevision: opened }),
+        share: team,
+        connect: false,
+      }),
+    ).toThrow(/changed since you opened it/);
+    expect(() =>
+      b.call("save_machine", {
+        machineId: "gpu-box-2",
+        input: draft("gpu-box-2.int", { label: "third" }),
+        share: team,
+        connect: false,
+      }),
+    ).toThrow(/declarationRevision/);
+    expect(b.list().find((m) => m.machineId === "gpu-box-2")?.label).toBe("first");
   });
 
   it("hide / unshare / remove", async () => {
@@ -315,7 +347,10 @@ describe("save_machine", () => {
     await b.call("set_machine_auto_connect", { machineId: "archive-box", autoConnect: true });
     const resaved = await b.call<MachineSummary>("save_machine", {
       machineId: "archive-box",
-      input: draft("archive-box.int"),
+      input: draft("archive-box.int", {
+        declarationRevision: b.list().find((m) => m.machineId === "archive-box")?.declaration
+          ?.revision,
+      }),
       share: { kind: "personal" },
       connect: true,
     });
