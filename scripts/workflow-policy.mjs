@@ -41,11 +41,13 @@ const JOB_PERMISSIONS = new Map([
 // its cache in a post step, so on a merge_group workflow it may cache only off merge groups.
 const SETUP_NODE_CACHE = "${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
 const PUSH_ONLY = "github.event_name == 'push'";
-// A job in a merge_group workflow may be conditional only on pull requests, so a merge group,
-// which must report every required check, always runs it. GitHub reads || as the
-// lowest-precedence operator, so an expression that begins with this term is true off
-// pull requests whatever follows.
+// A job in a workflow that runs on merge_group, push or schedule may be conditional only on
+// pull requests: a merge group must report every required check, and main and the nightly runs
+// must test everything. A pull request may skip a job (rust.yml's macOS job runs there only with
+// the ci:macos label). GitHub reads || as the lowest-precedence operator, so an expression that
+// begins with this term is true off pull requests whatever follows.
 const OFF_PULL_REQUESTS = "github.event_name != 'pull_request' ||";
+const NEVER_SKIPPED_ON = ["merge_group", "push", "schedule"];
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -205,14 +207,18 @@ export function workflowPolicy(text, file = "") {
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
     const flakyIssues = file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job;
-    if (triggers.includes("merge_group") && !flakyIssues && Object.hasOwn(job, "if")) {
+    if (
+      NEVER_SKIPPED_ON.some((t) => triggers.includes(t)) &&
+      !flakyIssues &&
+      Object.hasOwn(job, "if")
+    ) {
       const condition = String(job.if)
         .trim()
         .replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
         .trim();
       if (!condition.startsWith(OFF_PULL_REQUESTS))
         errors.push(
-          `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge groups always run it`,
+          `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge_group, push and schedule always run it`,
         );
     }
     // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
