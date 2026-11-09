@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Mark unread on a conversation now marks only its newest message to you, and the inbox menus use one short wording.
+
 ### Privacy
 
 - Clarified: the app has no sign-in and no usage tracking; sharing a dashboard uses owner and viewer accounts on share.codesense.ai.
