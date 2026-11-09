@@ -56,7 +56,7 @@
     "src-tauri/src/mcp/dispatch.rs": "a522351523ecef156473b34e8b33f8e3ec5c8c72943c432e03249452d85fef1a",
     "src-tauri/src/mcp/feedback_tool.rs": "3bfd3c954ae0eae4b7f2d01cddd0e0f8076f40489c4dc84638052fc8c73e5cf5",
     "src-tauri/src/mcp/flat_params.rs": "e117e4759f6dfaf98256eaa76472960ca4227ccd459ceb751540a82d27de8e96",
-    "src-tauri/src/mcp/handler.rs": "3eaf5fdb77daef1f52e9865190df64c04e57c295f27440db1947c0476e1265b7",
+    "src-tauri/src/mcp/handler.rs": "ed9ba3c8298bcc22f81a497391d6e7ca72b822daf55e8458838b5c6696b65dd5",
     "src-tauri/src/mcp/handler/caller_scope_tests.rs": "c2e1aa648ca85ae70497b803d83b67e505b7ec36f694c198eac099eb7f9a456f",
     "src-tauri/src/mcp/handler/cp2_inventory_tests.rs": "e2e68a4d1696684de257c44bfbdb2163e18f890228d8ee4634ad4eba2da17cf6",
     "src-tauri/src/mcp/handler/cp2_mutation_tests.rs": "2a0cef8d12acabbdc81fc9aafd0294a35bc31a69cab9a848335187b560baf1e8",
@@ -76,7 +76,7 @@
     "src-tauri/src/mcp/local_mcp_relay/transport.rs": "6ad9880cab5bd6c08deaa8cf0e0b9f5e968da66276273ea5d843f32e93301715",
     "src-tauri/src/mcp/local_setup.rs": "c45fd0a9f9ab6b0ac8c0709638c9f4d0f80ed0121f853072674522de40272de4",
     "src-tauri/src/mcp/local_tools.rs": "be611805961a8e1cf8248985fda2bae8d87609328bfa34ee6ca57471d1c176c6",
-    "src-tauri/src/mcp/machine_tools.rs": "f1584ecd4814da41c00dd86a17a5800ffa30f8cb9577342e43e816aa9167f394",
+    "src-tauri/src/mcp/machine_tools.rs": "e790453d2e80a7352b484db4038cd17687a0b2fd39b6a6ffa5e496935655cf4a",
     "src-tauri/src/mcp/mod.rs": "16fbf46cf7950f807db6febbeba34383c3eb8f1ba776b30504a47eb4522b06d0",
     "src-tauri/src/mcp/move_workspace.rs": "d52eabe62a4a2f7b8018d41039e710a7d60833a8afb0d8a952ab3d9ff56ef335",
     "src-tauri/src/mcp/nav_lens.rs": "8e0a43737911bfe2574d20fc1db9821491f34d113f78f183a58355711223b9cd",
@@ -151,7 +151,7 @@
     "src-tauri/src/weft/tier_picker.rs": "0ae5e6eb9cad474060a923a2b501b07f5aa286f3a9eb029640edbf1b28d656a3"
   },
   "payloads": {
-    "default": "a0c6abcc1478ae38dfcb476f9d86291da37572c7c6765ec63bfff31f1614529d",
-    "dashboard-publish": "9fb8243155c03443340c0d7fcd77c7bd3ff77bba811aaf9f0515c4abe1b60074"
+    "default": "bf4623dc78e9bc1ef371b01ab80399e44c7e70e2d5459861c5bfbf7b8eac6ec3",
+    "dashboard-publish": "d7ac8e70cf1126b6597d64c3768c724140c3ef0579178b3e798937a4ea6453a2"
   }
 }
