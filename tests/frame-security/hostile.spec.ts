@@ -439,6 +439,8 @@ for (const index of [2, 4]) {
     }, origin);
     expect(result.loaded).toEqual([false, false]);
     expect(result.directives).toHaveLength(4);
+    // Promise.all keeps order: the last report is the nested frame's own.
+    expect(result.directives[3]).toMatch(/^(frame|child)-src$/);
     expect(
       externalHits.filter((hit) =>
         /^\/(outside-script|outside-image|outside-frame|socket)/.test(hit),
