@@ -272,8 +272,7 @@ export function buildCrossref({ libRs, handlerRs, commandsTs, mapYaml, allowYaml
 
   // De-dup by name — the invoke_handler block has no duplicates today, but
   // keep the generator robust against a future cfg-arm variant that lands
-  // the same ident twice (we'd keep the first; drift surfaces as a review
-  // signal via the committed JSON).
+  // the same ident twice (we'd keep the first).
   const tauriByName = new Map();
   for (const cmd of tauriCmds) {
     if (!tauriByName.has(cmd.name)) tauriByName.set(cmd.name, cmd);
@@ -353,7 +352,7 @@ export function buildCrossref({ libRs, handlerRs, commandsTs, mapYaml, allowYaml
       };
     });
 
-  // Stable order so committed JSON diffs are small.
+  // Stable order, so the output is deterministic.
   paired.sort((a, b) => a.name.localeCompare(b.name));
   uiOnly.sort((a, b) => a.name.localeCompare(b.name));
   mcpOnly.sort((a, b) => a.name.localeCompare(b.name));

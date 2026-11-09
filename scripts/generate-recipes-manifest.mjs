@@ -559,7 +559,7 @@ export function buildManifest() {
     });
   }
 
-  // Stable order: by kind then id. Keeps the committed JSON diff-friendly.
+  // Stable order: by kind then id.
   recipes.sort((a, b) => {
     if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
     return a.id.localeCompare(b.id);
