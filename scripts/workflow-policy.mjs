@@ -34,6 +34,11 @@ const JOB_PERMISSIONS = new Map([
 // its cache in a post step, so on a merge_group workflow it may cache only off merge groups.
 const SETUP_NODE_CACHE = "${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
 const PUSH_ONLY = "github.event_name == 'push'";
+// A job in a merge_group workflow may be conditional only on pull requests, so a merge group,
+// which must report every required check, always runs it. GitHub reads || as the
+// lowest-precedence operator, so an expression that begins with this term is true off
+// pull requests whatever follows.
+const OFF_PULL_REQUESTS = "github.event_name != 'pull_request' ||";
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -183,8 +188,19 @@ export function workflowPolicy(text, file = "") {
       }
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
+    const flakyIssues = file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job;
+    if (triggers.includes("merge_group") && !flakyIssues && Object.hasOwn(job, "if")) {
+      const condition = String(job.if)
+        .trim()
+        .replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
+        .trim();
+      if (!condition.startsWith(OFF_PULL_REQUESTS))
+        errors.push(
+          `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge groups always run it`,
+        );
+    }
     // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
-    if (file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job) {
+    if (flakyIssues) {
       const terms = topLevelConjuncts(String(job.if ?? ""));
       for (const required of [
         "github.event_name == 'push'",
