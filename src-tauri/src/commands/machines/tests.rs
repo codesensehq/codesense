@@ -5034,7 +5034,7 @@ async fn refused_private_switch_never_disconnects() {
             },
             switch.clone(),
             true,
-            "private account unavailable",
+            "machine access is unavailable for this profile",
         ),
     ] {
         let (result, disconnects) = run(env, input, rewrites).await;
