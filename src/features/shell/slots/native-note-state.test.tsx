@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const hub = vi.hoisted(() => ({
   callback: null as ((value: any) => void) | null,
@@ -24,6 +24,10 @@ vi.mock("@/features/dashboard/lib/live-hub", () => ({
     },
     writeUi: hub.write,
   },
+}));
+// The real panel (rendered by the title tests at the end) listens for window focus.
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onFocusChanged: async () => () => {} }),
 }));
 vi.mock("@/features/viewer/components/scratch-note-panel", () => ({
   ScratchNotePanel: () => null,
@@ -168,7 +172,6 @@ it("waits for the active org's actual notes load and ignores shared notes outsid
     notes: metas("a-alpha", "a-beta"),
     activeNoteId: "a-beta",
     scratchNoteContent: "A beta",
-    emptyScratchReapDone: true,
   });
   usePaneStore.setState({ pendingIntents: {} });
   useOrgStore.setState({ activeOrgSlug: "other" });
@@ -196,4 +199,41 @@ it("waits for the active org's actual notes load and ignores shared notes outsid
   act(() => useViewerStore.setState({ notes: metas("b-note", "new-note") }));
   await waitFor(() => expect(useViewerStore.getState().activeNoteId).toBe("new-note"));
   expect(noteApi.read.mock.calls.map((call) => call[1])).toEqual(["b-note", "new-note"]);
+});
+
+it.each([
+  [
+    "⌘N on the title field",
+    (title: HTMLElement) => fireEvent.keyDown(title, { key: "n", metaKey: true }),
+  ],
+  [
+    "… → New note",
+    () => {
+      fireEvent.click(screen.getByRole("button", { name: "Note actions" }));
+      fireEvent.click(screen.getByRole("button", { name: /New note/ }));
+    },
+  ],
+])("%s saves a typed title before it creates", async (_how, newNote) => {
+  // The real panel: this file stubs it for the slot tests above.
+  const { ScratchNotePanel } = await vi.importActual<
+    typeof import("@/features/viewer/components/scratch-note-panel")
+  >("@/features/viewer/components/scratch-note-panel");
+  const renameNote = vi.fn(async () => {});
+  const createNote = vi.fn(async () => "new-note");
+  useViewerStore.setState({
+    notes: [{ id: "n1", title: "My Note", pinned: false, lastOpenedAt: 1 }],
+    activeNoteId: "n1",
+    scratchNoteContent: "body",
+    renameNote,
+    createNote,
+  });
+  render(<ScratchNotePanel />);
+  const title = screen.getByRole("textbox", { name: "Note title" });
+  fireEvent.change(title, { target: { value: "Plans" } });
+  newNote(title);
+  expect(renameNote).toHaveBeenCalledWith("n1", "Plans");
+  expect(createNote).toHaveBeenCalledTimes(1);
+  expect(renameNote.mock.invocationCallOrder[0]).toBeLessThan(
+    createNote.mock.invocationCallOrder[0],
+  );
 });

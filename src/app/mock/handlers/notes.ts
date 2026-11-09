@@ -15,6 +15,7 @@ import type {
 } from "@/tauri/commands";
 import { NOTES_CHANGED_EVENT, type NotesChangedPayload } from "@/tauri/events";
 import { summarize } from "@/features/notes/lib/note-summary";
+import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE } from "@/shared/lib/blank-note";
 
 /**
  * The notes commands in the mock: an in-memory store of notes with a revision history,
@@ -176,7 +177,7 @@ function seedFirstLook(now: number): MockNote[] {
   return [
     {
       id: "note-1",
-      title: "Note",
+      title: DEFAULT_NOTE_TITLE,
       pinned: false,
       lastOpenedAt: now,
       content: "",
@@ -294,7 +295,7 @@ export function notesHandlers(events: MockEventBus, search = ""): HandlerRegistr
     create_note: (args) => {
       const note: MockNote = {
         id: `note-${Math.random().toString(36).slice(2, 8)}`,
-        title: String(args.title ?? "Untitled"),
+        title: String(args.title ?? UNTITLED_NOTE_TITLE),
         pinned: args.pinned === true,
         lastOpenedAt: Date.now(),
         content: typeof args.content === "string" ? args.content : "",
@@ -347,7 +348,6 @@ export function notesHandlers(events: MockEventBus, search = ""): HandlerRegistr
       if (list.length === 0) list.push(...seedFirstLook(Date.now()));
       return written(args, note, true);
     },
-    reap_empty_scratch_notes: (args) => notesOf(args).map(meta),
     notes_dir_path: () => NOTES_DIR,
     ...(demo
       ? {

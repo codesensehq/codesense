@@ -12,7 +12,7 @@ use std::time::SystemTime;
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
-/// Serializes migration, local recency and the one-time seed/reap operations.
+/// Serializes migration, local recency and the one-time seed operations.
 static NOTES_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire `NOTES_LOCK`, tolerant of poisoning (a panic mid-mutation must not
@@ -181,9 +181,7 @@ pub(crate) fn rebuild_index_from_bodies(nd: &Path) -> Result<Vec<NoteMeta>, Stri
 }
 
 /// The default title every seed path gives a note (fresh-install migration,
-/// corrupt-index rebuild, delete-last reseed) and the marker SW-SN-13's reaper
-/// uses to tell "untouched default" from "user-renamed". One source of truth so
-/// the reaper's title-match can never drift from what the seeds actually write.
+/// corrupt-index rebuild, delete-last reseed).
 pub(crate) const DEFAULT_SCRATCH_TITLE: &str = "Note";
 
 /// Upgrade the legacy sidecar once, or seed a new store from the single-file notes.
@@ -497,88 +495,6 @@ pub(crate) fn update_note_meta_at(
         touch(nd, id, at)?;
     }
     Ok(read_note_at(nd, id)?.meta())
-}
-
-/// SW-SN-13 AC-4: one-time, guarded cleanup of the empty duplicate "Note"
-/// notes the SW-SN-12 null-active-note lazy-create minted on cold boot. Reaps a
-/// note ONLY when EVERY guard holds: it is in `boot_ids` (the caller's snapshot of
-/// the notes that existed at session start), its title is still the default
-/// `"Note"`, it is not pinned, it is not the caller's active note (`keep_id`),
-/// and its body is empty/whitespace. Never deletes a note with any body content or
-/// a user-renamed title, and never leaves a zero-notes state — the sole survivor is
-/// always kept (which also avoids tripping `delete_note_at`'s reseed).
-///
-/// `boot_ids` is the concurrency guard: a note created AFTER the snapshot (e.g. via
-/// the panel's 3s editable-hatch lazy-create racing this reap) is not in the set,
-/// so it is never reaped even if momentarily empty — closing the reap-vs-create
-/// data-loss race. It also sharpens the AC-4 intent: reap only the fallout "already
-/// on disk", never a note born this session.
-///
-/// One atomic locked pass: the keep-set is computed up front, reaped bodies are
-/// removed, and the index is rewritten once. Idempotent — a clean store returns
-/// unchanged with no write. An unreadable body is treated as "keep" (never delete
-/// on uncertainty). A read: takes `lock_notes()` for the whole compute+write so it
-/// can't interleave with a concurrent create/delete.
-///
-/// With `history`, the reap is a person's delete like any other: their pending
-/// saves are committed first, then the reap as its own revision.
-pub(crate) fn reap_empty_scratch_notes_at(
-    nd: &Path,
-    history: Option<&NotesLocation>,
-    keep_id: Option<&str>,
-    boot_ids: &[String],
-) -> Result<Vec<NoteMeta>, String> {
-    let history = history.map(|loc| (super::history::hold_history(), loc));
-    let _guard = lock_notes();
-    super::store::serialize_writes(|| {
-        let boot: std::collections::HashSet<&str> = boot_ids.iter().map(|s| s.as_str()).collect();
-        let mut keep: Vec<NoteMeta> = Vec::new();
-        let mut reap: Vec<NoteMeta> = Vec::new();
-        for m in read_index(nd)?.into_iter() {
-            let candidate = boot.contains(m.id.as_str())
-                && m.title == DEFAULT_SCRATCH_TITLE
-                && !m.pinned
-                && keep_id != Some(m.id.as_str());
-            let body_empty = candidate
-                && match fs::read_to_string(note_body_path(nd, &m.id)) {
-                    Ok(c) => super::store::split_document(&c).1.trim().is_empty(),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-                    Err(_) => false, // unreadable → keep (never delete on uncertainty)
-                };
-            if body_empty {
-                reap.push(m);
-            } else {
-                keep.push(m);
-            }
-        }
-        // Idempotent no-op: nothing reapable → don't rewrite the index.
-        if reap.is_empty() {
-            return Ok(keep);
-        }
-        // Never a zero-notes state: if EVERY note was reapable, keep the most-recent
-        // one as the sole survivor (mirrors `delete_note_at`'s never-zero invariant
-        // without reseeding a brand-new note).
-        if keep.is_empty() {
-            reap.sort_by_key(|m| std::cmp::Reverse(m.last_opened_at));
-            keep.push(reap.remove(0));
-        }
-        if let Some((hold, loc)) = &history {
-            super::history::commit_outside_changes(hold, loc)?;
-        }
-        for m in &reap {
-            let _ = fs::remove_file(note_body_path(nd, &m.id)); // best-effort
-        }
-        if let Some((hold, loc)) = &history {
-            hold.commit(
-                loc,
-                &NoteActor::human(),
-                super::history::ChangeKind::Delete,
-                "Removed empty notes",
-                &[],
-            )?;
-        }
-        Ok(keep)
-    })
 }
 
 #[cfg(test)]
@@ -1005,34 +921,10 @@ pub(crate) fn read_at(
 }
 
 pub(crate) fn prepare_list(loc: &NotesLocation, options: &super::Options) -> Result<(), String> {
-    let root = loc.root.as_path();
-    static REAPED: std::sync::LazyLock<Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
-    ensure_notes_migrated(root)?;
+    ensure_notes_migrated(&loc.root)?;
     if options.seed.iter().any(|s| s == "Prompts") {
-        ensure_prompts_seeded(root);
+        ensure_prompts_seeded(&loc.root);
     }
-    if !options.reap_empty {
-        return Ok(());
-    }
-    let mut reaped = REAPED.lock().unwrap_or_else(|e| e.into_inner());
-    if reaped.contains(root) {
-        return Ok(());
-    }
-    let nd = notes_dir(root);
-    let boot = read_index(&nd)?;
-    let keep = boot
-        .iter()
-        .filter(|m| m.title == DEFAULT_SCRATCH_TITLE && !m.pinned)
-        .max_by_key(|m| m.last_opened_at)
-        .map(|m| m.id.as_str());
-    reap_empty_scratch_notes_at(
-        &nd,
-        Some(loc),
-        keep,
-        &boot.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
-    )?;
-    reaped.insert(root.into());
     Ok(())
 }
 
