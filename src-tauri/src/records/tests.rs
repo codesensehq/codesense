@@ -541,17 +541,35 @@ fn history_reads_and_restore_flush_pending_human_edits() {
     );
 }
 
+fn history_head(loc: &history::NotesLocation) -> Option<git2::Oid> {
+    git2::Repository::open(&loc.repo)
+        .ok()
+        .and_then(|repo| repo.head().ok()?.target())
+}
+
 #[test]
-fn listing_reaps_old_duplicates_once_and_keeps_notes_created_after_boot() {
+fn listing_notes_never_deletes_or_commits() {
     let tmp = tempdir().unwrap();
-    let loc = history::NotesLocation::in_scratch(tmp.path().into(), tmp.path().into());
-    let initial = notes::list(&loc).unwrap();
-    assert!(initial.iter().any(|n| n.title == "Note"));
-    let created = notes::create(&loc, "Note", "", false, &Actor::human(), None).unwrap();
-    assert!(notes::list(&loc)
-        .unwrap()
-        .iter()
-        .any(|n| n.id == created.note.id));
+    let loc = history::NotesLocation::local(tmp.path().into());
+    let blank = |title| {
+        notes::create(&loc, title, "", false, &agent(), None)
+            .unwrap()
+            .note
+            .id
+    };
+    let ids = [blank(notes::DEFAULT_SCRATCH_TITLE), blank("Untitled")];
+    let head = history_head(&loc).expect("creating the notes made a commit");
+    let notes_store = notes::store(&loc).unwrap();
+    for _ in 0..2 {
+        let listed = notes::list(&loc).unwrap();
+        let records = notes_store.list().unwrap();
+        for id in &ids {
+            assert!(listed.iter().any(|n| &n.id == id), "list keeps {id}");
+            assert!(records.iter().any(|r| &r.id == id), "records keep {id}");
+            assert!(loc.notes_dir().join(format!("{id}.md")).exists());
+        }
+        assert_eq!(history_head(&loc), Some(head), "a list commits nothing");
+    }
 }
 
 #[test]
@@ -756,36 +774,6 @@ fn deleting_right_after_typing_restores_the_last_body() {
     let deleted = notes::delete(&loc, &id, None).unwrap();
     assert!(deleted.commit.is_some(), "the delete is its own revision");
     assert_eq!(restored_before_delete(&loc, &id), "first and then more");
-}
-
-#[test]
-fn reaping_a_note_just_emptied_restores_the_empty_body() {
-    let tmp = tempdir().unwrap();
-    let loc = history::NotesLocation::local(tmp.path().into());
-    let human = Actor::human();
-    notes::create(&loc, "Keep", "kept", false, &agent(), None).unwrap();
-    let emptied = notes::create(
-        &loc,
-        notes::DEFAULT_SCRATCH_TITLE,
-        "hello",
-        false,
-        &agent(),
-        None,
-    )
-    .unwrap()
-    .note
-    .id;
-    let erase = BodyEdit::Replace(String::new());
-    notes::write(&loc, &emptied, &erase, None, None, &human, None).unwrap();
-    let history = notes::store(&loc).unwrap().location().unwrap();
-    let boot: Vec<String> = notes::read_index(&loc.notes_dir())
-        .unwrap()
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
-    notes::reap_empty_scratch_notes_at(&loc.notes_dir(), Some(&history), None, &boot).unwrap();
-    assert!(!loc.notes_dir().join(format!("{emptied}.md")).exists());
-    assert_eq!(restored_before_delete(&loc, &emptied), "");
 }
 
 #[test]

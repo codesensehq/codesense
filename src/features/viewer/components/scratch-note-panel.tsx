@@ -41,6 +41,7 @@ import { useNoteHistory } from "@/features/notes/lib/use-note-history";
 import { useNoteListSummaries } from "@/features/notes/lib/use-note-summaries";
 import { useNow } from "@/shared/hooks/use-now";
 import { formatAgo } from "@/shared/lib/format-updated-ago";
+import { BLANK_NOTE_TITLES, UNTITLED_NOTE_TITLE } from "@/shared/lib/blank-note";
 import { currentNotesScope } from "@/shared/lib/notes-scope";
 import { sendTextToTerminal } from "@/shared/lib/send-to-terminal";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -99,9 +100,6 @@ const EDITOR_ROOT = ".scratch-note-editor";
 const SENDABLE_LINES = ["li", "> p", "> h1", "> h2", "> h3"]
   .map((line) => `${EDITOR_ROOT} ${line}`)
   .join(", ");
-
-/** The titles a note has before anyone names it. */
-const BLANK_TITLES = new Set(["", "Note", "Untitled"]);
 
 /** At or above this pane width the note list and the outline become columns. */
 export const NOTES_WIDE_PX = 880;
@@ -431,7 +429,7 @@ function NotesPane() {
     }),
     [activeNoteId, notesOrg, notesDir],
   );
-  const noteTitle = activeNote?.title ?? "Untitled";
+  const noteTitle = activeNote?.title ?? UNTITLED_NOTE_TITLE;
 
   // ---- "Send to…" ----
   const openSend = useCallback(
@@ -652,16 +650,6 @@ function NotesPane() {
   const deleteTarget = notes.find((n) => n.id === deleteTargetId) ?? null;
   const titleRef = useRef<HTMLInputElement>(null);
 
-  const handleCreate = useCallback(
-    (title?: string) => {
-      setListOpen(false);
-      setEmptyDismissed(true);
-      void createNote(title)
-        .then(() => requestAnimationFrame(() => titleRef.current?.select()))
-        .catch(() => toast.error("Could not create note"));
-    },
-    [createNote],
-  );
   const handleSelect = useCallback(
     (id: string) => {
       setListOpen(false);
@@ -689,12 +677,27 @@ function NotesPane() {
     setTitleFor({ id: activeNoteId, title: activeNote?.title });
     setTitleDraft(activeNote?.title ?? "");
   }
-  const commitTitle = (text = titleDraft) => {
-    if (!activeNote) return;
-    const next = text.trim();
-    if (next && next !== activeNote.title) void renameNote(activeNote.id, next);
-    else setTitleDraft(activeNote.title);
-  };
+  const commitTitle = useCallback(
+    (text = titleDraft) => {
+      if (!activeNote) return;
+      const next = text.trim();
+      if (next && next !== activeNote.title) void renameNote(activeNote.id, next);
+      else setTitleDraft(activeNote.title);
+    },
+    [activeNote, titleDraft, renameNote],
+  );
+  const handleCreate = useCallback(
+    (title?: string) => {
+      setListOpen(false);
+      setEmptyDismissed(true);
+      // A title typed but not yet committed is the open note's before New note.
+      commitTitle();
+      void createNote(title)
+        .then(() => requestAnimationFrame(() => titleRef.current?.select()))
+        .catch(() => toast.error("Could not create note"));
+    },
+    [createNote, commitTitle],
+  );
 
   // ---- headings + outline ----
   const headings = useNoteHeadings(editor, activeNoteId);
@@ -845,7 +848,7 @@ function NotesPane() {
     notes.length <= 1 &&
     content.trim() === "" &&
     scratchNoteLoadStatus !== "pending" &&
-    BLANK_TITLES.has(activeNote?.title ?? "");
+    BLANK_NOTE_TITLES.has(activeNote?.title ?? "");
   const showEmpty = isBlank && !emptyDismissed;
 
   // ⌘B toggles the list (narrow), ⌘N makes a note — while focus is in the pane.
@@ -1028,7 +1031,7 @@ function NotesPane() {
                   ref={titleRef}
                   className="nt-title"
                   value={titleDraft}
-                  placeholder="Untitled"
+                  placeholder={UNTITLED_NOTE_TITLE}
                   aria-label="Note title"
                   disabled={!activeNote}
                   onChange={(e) => setTitleDraft(e.target.value)}
