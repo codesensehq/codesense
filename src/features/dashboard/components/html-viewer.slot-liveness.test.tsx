@@ -459,7 +459,7 @@ it("keeps one startup deadline across the shim and iframe load", async () => {
   act(() => vi.advanceTimersByTime(1));
   expect(screen.getByTestId("slot-fallback-strip")).toBeInTheDocument();
 });
-it("render-checks a slot page only once it calls ready, again on each reveal and in-frame reload, and reloads it once when it drew nothing", async () => {
+it("render-checks a slot page once it calls ready, again on each reveal and in-frame reload, and reloads it once when it drew nothing", async () => {
   const base = ipc.getMockImplementation()!;
   let minted = 0;
   ipc.mockImplementation(async (command, args) =>
@@ -514,6 +514,64 @@ it("render-checks a slot page only once it calls ready, again on each reveal and
   expect(pings().at(-1).render).toBeUndefined();
   pong(true);
   act(() => announce(first, "codesense:live"));
+  tick();
+  expect(pings().at(-1).render).toBe(true);
+  expect(minted).toBe(1);
+  pong(false);
+  await act(async () => vi.advanceTimersByTimeAsync(500));
+  expect(minted).toBe(2);
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+});
+it("render-checks a page live only through its subscribe from its next reveal, never on load", async () => {
+  const base = ipc.getMockImplementation()!;
+  let minted = 0;
+  ipc.mockImplementation(async (command, args) => {
+    if (command === "mint_frame") return { ...record, kind: "team", frameId: `sub-${++minted}` };
+    if (command === "verb_dispatch") return { status: "admit", callId: "slot-subscribe" };
+    if (command === "live_hub_subscribe")
+      return { topic: "sessions", viewKey: "all", rev: 0, snapshot: [] };
+    return base(command, args);
+  });
+  vi.useFakeTimers();
+  const view = (visible: boolean) => (
+    <SlotDashboardHost
+      slotId="dock"
+      entry={{ ...pane, id: "board", surface: undefined }}
+      contentRoot="/ctx/content"
+      visible={visible}
+    />
+  );
+  let rerender!: ReturnType<typeof render>["rerender"];
+  await act(async () => {
+    ({ rerender } = render(view(true)));
+  });
+  const first = document.querySelector("iframe")!;
+  const postMessage = vi.fn();
+  Object.defineProperty(first, "contentWindow", { value: { postMessage }, configurable: true });
+  const pings = () =>
+    postMessage.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:ping");
+  const pong = (rendered: boolean) => act(() => announce(first, "codesense:pong", { rendered }));
+  const tick = () => act(() => vi.advanceTimersByTime(5000));
+  act(() => announce(first, "codesense:ready"));
+  fireEvent.load(first);
+  // Like the built-in agent list: live through its first subscribe, never calling ready().
+  await act(async () => {
+    announce(first, "codesense:invoke", {
+      id: 1,
+      command: "subscribe",
+      args: { topic: "sessions" },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  // On load it may still be waiting for its data: plain heartbeats only.
+  for (let i = 0; i < 2; i++) {
+    tick();
+    expect(pings().at(-1).render).toBeUndefined();
+    pong(true);
+  }
+  // Shown again, it is checked; drawing nothing reloads it once, with no strip.
+  rerender(view(false));
+  rerender(view(true));
   tick();
   expect(pings().at(-1).render).toBe(true);
   expect(minted).toBe(1);

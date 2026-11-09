@@ -911,11 +911,11 @@ export function HtmlViewer({
   // Whether the doc now loaded has announced itself; pushes wait for it, and a
   // new load announces again.
   const docReadyRef = useRef(false);
-  /** The page itself called `codesense.ready()`: it has drawn what it means to show. A page
-   *  that is only subscribed may still be waiting for its data, so it is never render-checked. */
+  /** The page is live: it called `codesense.ready()` or made its first subscribe. */
   const pageLiveRef = useRef(false);
-  /** The next ping asks whether the page drew anything (set when it goes live and on each
-   *  reveal). */
+  /** The next ping asks whether the page drew anything. Set on each reveal, and when a page
+   *  calls `codesense.ready()` (it has drawn what it means to show). A page live only through
+   *  its subscribe may still be waiting for data on load, so it is checked from its next reveal. */
   const renderCheckDue = useRef(false);
   const loadedDocumentKey = useRef<string | null>(null);
   const documentLoads = useRef(0);
@@ -1048,6 +1048,7 @@ export function HtmlViewer({
   // Every page call enters the native admission gate before a host handler runs.
   // The page's own readiness: its host hears it and queued commands are delivered.
   const docLive = useCallback(() => {
+    pageLiveRef.current = true;
     if (frameRecord) markFrameLive(frameRecord.frameId);
     onDocLiveRef.current?.();
   }, [frameRecord]);
@@ -1485,8 +1486,8 @@ export function HtmlViewer({
   useEffect(() => {
     missedPongs.current = 0;
     if (!live || !docVisible || retiring || !frameRecord) return;
-    // A slot pane's first ping after its page is live or revealed also asks whether the page
-    // drew anything, so a frame that answers but shows nothing is caught too.
+    // A slot pane's first ping after it is revealed (or its page calls ready) also asks whether
+    // the page drew anything, so a frame that answers but shows nothing is caught too.
     renderCheckDue.current = true;
     const timer = setInterval(() => {
       if (!docReadyRef.current || retiringRef.current) return;
@@ -1674,7 +1675,6 @@ export function HtmlViewer({
       }
       if (type === "codesense:live") {
         if (!live) return;
-        pageLiveRef.current = true;
         renderCheckDue.current = true;
         docLive();
         return;
@@ -1695,9 +1695,13 @@ export function HtmlViewer({
           () =>
             `ready doc=${documentKey} t=${nowMs()} sinceDocStart=${nowMs() - docStartedAt.current} again=${docReadyRef.current} visible=${visibleRef.current}${lagField(data.sentAt)}`,
         );
-        // Every load, an in-frame reload included, is render-checked once it is live again. A
+        // A new load (an in-frame reload included) starts not live and unchecked: a check armed
+        // as its frame mounted would otherwise run before a subscribe-only page paints. A
         // repeated ready (a lost first one) may come after the page already went live.
-        if (data.retry !== true) pageLiveRef.current = false;
+        if (data.retry !== true) {
+          pageLiveRef.current = false;
+          renderCheckDue.current = false;
+        }
         if (docReadyRef.current) {
           outbox.begin(`${documentKey}:load:${++documentLoads.current}`);
           onPageStartRef.current?.(`${documentKey}:load:${documentLoads.current}`);
