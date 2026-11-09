@@ -1988,6 +1988,28 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
 });
 
+it("a hidden live team frame's timed flush skips another team's change but keeps an unnamed one", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("ops", "team:acme/ops", post, true, false, undefined, {
+    badge: "live",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  frame.visible(false);
+  post.mockClear();
+  const backend = { org: "acme", team: "backend" };
+  events.get("agent-inbox-changed")!({
+    payload: { changes: [{ team: backend, messageIds: [5] }] },
+  });
+  // Nothing is held, so no flush is scheduled.
+  expect(vi.getTimerCount()).toBe(0);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(post).not.toHaveBeenCalled();
+  events.get("agent-inbox-changed")!({ payload: {} });
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(inboxChanges(post)).toEqual([{ type: "codesense:inbox-changed" }]);
+  frame.dispose();
+});
+
 it("holds nothing to post for a hidden team frame when only another team's rows changed", async () => {
   const post = vi.fn();
   const frame = hub.attach("ops", "team:acme/ops", post, true);
@@ -1998,6 +2020,8 @@ it("holds nothing to post for a hidden team frame when only another team's rows 
   events.get("agent-inbox-changed")!({
     payload: { changes: [{ team: backend, messageIds: [5] }] },
   });
+  // Not marked stale either, so showing it re-reads nothing.
+  expect(post).not.toHaveBeenCalled();
   frame.visible(true);
   expect(inboxChanges(post)).toEqual([]);
 });

@@ -119,7 +119,7 @@ function shim(
   let message!: (e: unknown) => void;
   const parent = {};
   const agentListeners = new Set<() => void>();
-  const inboxListeners = new Set<() => void>();
+  const inboxListeners = new Set<(change?: unknown) => void>();
   const invoke = vi.fn(
     async (verb: string, args: Record<string, unknown>): Promise<unknown> =>
       respond
@@ -139,7 +139,7 @@ function shim(
       agentListeners.add(callback);
       return () => agentListeners.delete(callback);
     },
-    onInboxChanged: (callback: () => void) => {
+    onInboxChanged: (callback: (change?: unknown) => void) => {
       inboxListeners.add(callback);
       return () => inboxListeners.delete(callback);
     },
@@ -175,9 +175,9 @@ function shim(
   return {
     codesense,
     invoke,
-    ping: () => {
+    ping: (change?: unknown) => {
       agentListeners.forEach((cb) => cb());
-      inboxListeners.forEach((cb) => cb());
+      inboxListeners.forEach((cb) => cb(change));
     },
     show: (v: boolean) => {
       shown = v;
@@ -412,6 +412,27 @@ it("agent changes follow definitions and sessions while inbox changes retain the
   expect(inbox).toHaveBeenCalledTimes(2);
   expect(s.invoke).toHaveBeenCalledWith("unsubscribe", { topic: "sessions" });
   expect(s.invoke).toHaveBeenLastCalledWith("unsubscribe", { topic: "sessions" });
+});
+
+it("passes inbox changes through and marks a sessions re-read as naming no inbox rows", async () => {
+  const s = shim();
+  s.show(true);
+  const inbox = vi.fn();
+  const stop = s.codesense.onInboxChanged(inbox);
+  await vi.waitFor(() => expect(inbox).toHaveBeenCalledOnce());
+  // The sessions re-read changes no inbox rows; an empty change list says so.
+  expect(inbox).toHaveBeenLastCalledWith({ type: "codesense:inbox-changed", changes: [] });
+  inbox.mockClear();
+  const change = {
+    type: "codesense:inbox-changed",
+    changes: [{ team: { org: "acme", team: "web" }, messageIds: [5] }],
+  };
+  s.ping(change);
+  expect(inbox).toHaveBeenCalledWith(change);
+  // The ping also re-reads sessions, which follows as an empty change.
+  await vi.waitFor(() => expect(inbox).toHaveBeenCalledTimes(2));
+  expect(inbox).toHaveBeenLastCalledWith({ type: "codesense:inbox-changed", changes: [] });
+  stop();
 });
 
 it("the actual injected SDK getter exposes the hub firstPaint snapshot", () => {

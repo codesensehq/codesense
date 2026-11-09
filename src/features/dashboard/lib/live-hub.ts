@@ -349,6 +349,8 @@ export class LiveHub {
     };
     const changes = type === "inbox-changed" ? inboxChangesOf(payload) : [];
     for (const frame of this.frames.values()) {
+      // A change that named only other teams' rows tells a team frame nothing.
+      if (changes.length && !deliverable(frame, { ...message, changes })) continue;
       if (!frame.visible) {
         // An invalidation can change data outside the delta stream, so consumers must reread.
         const held = frame.invalidations.get(type);
