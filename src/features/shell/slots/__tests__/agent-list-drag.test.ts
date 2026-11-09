@@ -2,14 +2,8 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import {
-  cardDropTarget,
-  CARD_MOVE_REFUSED,
-  teamSlotCards,
-} from "@/features/viewer/lib/agents-pane-drag";
 import { stepSlot } from "@/features/viewer/lib/workspace-order";
-import { NO_WORKSPACE_ID } from "@/features/agents/lib/agent-list-layout";
-import type { PaneRow } from "@/features/viewer/lib/agents-pane-rows";
+import expected from "../__fixtures__/agent-list-card-math.json";
 
 const html = readFileSync("src/features/shell/slots/__fixtures__/agent-list-pane.html", "utf8");
 const source = html.match(/<script id="al-card-math">([\s\S]*?)<\/script>/)?.[1];
@@ -30,13 +24,18 @@ const rows = [
   { kind: "team", team: "b", height: 30 },
   { kind: "workspace", workspace: "other", height: 34 },
 ];
-const native = rows.map((r) => ({
-  ...r,
-  kind: r.kind === "workspace" ? "ws" : r.kind,
-  teamKey: r.team,
-  group: { workspaceId: r.workspace || NO_WORKSPACE_ID },
-})) as unknown as PaneRow[];
-// Architecture: compare the shipped pane's math with native, including undrawn rows.
+// The pane's card math must answer as the native agents pane it replaced did. Those answers are
+// frozen in the fixture: per order and card, one character per sampled point (an index into
+// `values`), plus the card slots and the keyboard steps.
+const CARD_MOVE_REFUSED = {
+  filtered: "Cards can't move while a search or filter is on. Clear them to move it.",
+  byStatus: "Cards move in the By team arrangement. Switch to it to move this one.",
+  noPill: "This card has no pill in the tray, so it has no place in the order to move.",
+  nowhere: "This card has no other card in its team to move past.",
+};
+const DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";
+type Case = { drops: string; cards: unknown; up: unknown; down: unknown };
+const cases = expected.cases as Record<string, Case>;
 describe("pane card math at native parity", () => {
   it("provides the pane math", () => expect(math).toBeDefined());
   it("uses native refusal words", () => expect(math.CARD_MOVE_REFUSED).toEqual(CARD_MOVE_REFUSED));
@@ -52,15 +51,17 @@ describe("pane card math at native parity", () => {
         b.end + 24,
       ]);
       for (const id of ["one", "two", "three", "no-pill"]) {
-        for (const y of ys)
-          for (const x of [-49, -48, 118, 284, 285]) {
-            const pane = { x, left: 0, right: 236 };
-            expect(math.cardDropTarget(rows, boxes, "a", id, y, order, pane)).toEqual(
-              cardDropTarget(native, boxes, "a", id, y, order, pane),
-            );
-          }
+        const want = cases[`${order.join(",")}|${id}`]!;
+        const drops = ys.flatMap((y: number) =>
+          [-49, -48, 118, 284, 285].map((x) =>
+            math.cardDropTarget(rows, boxes, "a", id, y, order, { x, left: 0, right: 236 }),
+          ),
+        );
+        expect(drops).toEqual([...want.drops].map((c) => expected.values[DIGITS.indexOf(c)]));
         const cards = math.teamSlotCards(rows, "a", order);
-        expect(cards).toEqual(teamSlotCards(native, "a", order));
+        expect(cards).toEqual(want.cards);
+        expect(math.stepSlot(cards, id, "up")).toEqual(want.up);
+        expect(math.stepSlot(cards, id, "down")).toEqual(want.down);
         for (const dir of ["up", "down"] as const)
           expect(math.stepSlot(cards, id, dir)).toEqual(stepSlot(cards, id, dir));
       }
