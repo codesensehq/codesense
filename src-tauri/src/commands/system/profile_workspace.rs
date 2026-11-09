@@ -182,8 +182,7 @@ fn remember(path: &Path, value: &Value) {
             .get("dashboardPolicy")
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})),
-        claimable: storage.is_none()
-            || (value.get(LEGACY).is_some() && value.get(UNATTRIBUTED).is_none()),
+        claimable: storage.is_none() || claims_legacy(value),
     };
     POLICIES
         .lock()
@@ -196,10 +195,16 @@ fn forget(path: &Path) {
         .unwrap_or_else(|e| e.into_inner())
         .remove(path);
 }
-/// An edit to `path` from outside the app drops the policies kept for it. The next read
-/// under `IO` keeps the file's own; until then a verb loads it.
+/// A change to `path` seen by the file watcher, the app's own saves included: keep the
+/// file's policies, read under `IO` so an in-process write cannot interleave. Verbs keep
+/// the last kept policy meanwhile and never fall back to a load.
 pub(crate) fn outside_change(path: &Path) {
-    forget(path);
+    match crate::shared::lock_ext::lock_named(&IO, "app-state I/O") {
+        Ok(_io) => {
+            let _ = read(path);
+        }
+        Err(_) => forget(path),
+    }
 }
 /// The `dashboardPolicy` that `load(path, Some(principal))` would return, from memory.
 /// `None` when only a load can tell: the file was never read, or it would first be migrated.
@@ -277,6 +282,10 @@ fn migrate_global_grids(value: &mut Value, principal: Option<&str>) -> bool {
     true
 }
 
+/// A profile without a workspace of its own would be given the unassigned legacy one.
+fn claims_legacy(value: &Value) -> bool {
+    value.get(LEGACY).is_some() && value.get(UNATTRIBUTED).is_none()
+}
 fn prepare(value: &mut Value, principal: Option<&str>) -> bool {
     let mut changed = false;
     if value.get(STORAGE).is_none() {
@@ -290,10 +299,7 @@ fn prepare(value: &mut Value, principal: Option<&str>) -> bool {
     // An unassigned snapshot is retained when there is no selected namespace.
     // It can be attributed once, before a switch publishes its destination.
     if let Some(principal) = principal {
-        if value.get(UNATTRIBUTED).is_none()
-            && value.get(LEGACY).is_some()
-            && value[STORAGE].get(principal).is_none()
-        {
+        if claims_legacy(value) && value[STORAGE].get(principal).is_none() {
             changed = true;
             let legacy = value
                 .as_object_mut()
@@ -633,21 +639,14 @@ mod tests {
         outside_change(&path);
         assert_eq!(
             cached_policy(&path, "41"),
-            None,
-            "an outside edit leaves nothing kept, so the next verb loads the file"
-        );
-        read_prefs_source(&path, "41").unwrap();
-        assert_eq!(
-            cached_policy(&path, "41"),
-            Some(serde_json::json!({"preset": "team-safe"})),
-            "the watcher's own re-read keeps the edited policy"
+            Some(serde_json::json!({"preset": "team-safe"}))
         );
         std::fs::write(&path, "{ not json").unwrap();
-        assert!(read_prefs_source(&path, "41").is_err());
+        outside_change(&path);
         assert_eq!(
             cached_policy(&path, "41"),
             None,
-            "an unreadable file keeps nothing"
+            "an unreadable file keeps nothing, so the next verb loads it"
         );
     }
 
