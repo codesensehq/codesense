@@ -68,7 +68,6 @@
     "fmt:rust": "cd src-tauri && cargo fmt --check -p codesense-guards -p codesense -p codesense-host-proto -p codesense-pty-core -p codesense-fs-core -p codesense-session-server",
     "gen:theme": "tsx scripts/generate-theme-tokens.ts",
     "gen:theme:check": "tsx scripts/generate-theme-tokens.ts --check",
-    "check:agent-row-layout": "node scripts/check-agent-row-layout.mjs",
     "lint": "node scripts/check-hardcoded-colors.mjs && node scripts/check-terminal-arch.mjs && node scripts/check-agent-cli-boundary.mjs && node scripts/check-agent-cli-boundary-ts.mjs && node scripts/check-context-walk.mjs && eslint . && prettier --check .",
     "check:terminal-arch": "node scripts/check-terminal-arch.mjs",
     "check:agent-cli-boundary": "node scripts/check-agent-cli-boundary.mjs",

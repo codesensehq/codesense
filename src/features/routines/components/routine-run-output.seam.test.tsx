@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createInvokeRouter } from "@/app/mock/mock-router";
@@ -8,7 +8,6 @@ import { MockEventBus } from "@/app/mock/mock-events";
 import { buildTauriInternals } from "@/app/mock/tauri-internals";
 import { createMockRoutines, type MockRoutine } from "@/app/mock/handlers/routines";
 import { AgentRunOutputHost } from "@/features/viewer/components/agent-run-output-host";
-import { RunsView, useRunHistory } from "@/features/viewer/components/runs-view";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useAgentResultStore } from "@/shared/stores/use-agent-result-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -26,10 +25,6 @@ import { RoutinesTab } from "./routines-tab";
 
 const TEAM = "acme:backend";
 
-/** The Agents pane's Run history view, fetched while it shows. */
-function RunHistory({ teamKey }: { teamKey: string }) {
-  return <RunsView teamKey={teamKey} runs={useRunHistory(true)} />;
-}
 const KEY = "acme/backend/digest";
 
 function world(): MockRoutine[] {
@@ -115,7 +110,6 @@ function renderApp() {
     <TooltipProvider>
       <RoutinesTab filePath="virtual://routines" teamContentPath="" />
       <div data-testid="agent-area" className="relative">
-        <RunHistory teamKey={TEAM} />
         <div data-testid="cli-tile">live terminal</div>
         <AgentRunOutputHost teamKey={TEAM} repoPath="/repo" />
       </div>
@@ -355,25 +349,16 @@ describe("Routine run output in the agent area", () => {
       terminalVisible: true,
     });
     renderApp();
-    const recent = await screen.findByRole("region", { name: "Run history" });
-    fireEvent.click(await within(recent).findByRole("button", { name: /digest/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Digest" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open run digest-run-1" }));
+    const detail = await screen.findByTestId("routine-open-run");
+    fireEvent.click(within(detail).getByRole("button", { name: "Open transcript" }));
     const output = await screen.findByRole("region", { name: "Run output" });
     fireEvent.keyDown(output, { key: "Escape" });
 
     expect(screen.queryByRole("region", { name: "Run output" })).toBeNull();
     expect(useViewerStore.getState().layoutMode).toBe("shared");
     expect(useViewerStore.getState().terminalVisible).toBe(true);
-  });
-
-  it("reopens a finished run from the Run history", async () => {
-    renderApp();
-    const recent = await screen.findByRole("region", { name: "Run history" });
-    fireEvent.click(await within(recent).findByRole("button", { name: /digest/ }));
-
-    const output = await screen.findByRole("region", { name: "Run output" });
-    await waitFor(() => expect(output).toHaveTextContent("digest-run-1"));
-    expect(
-      await within(output).findByText(/Three PRs merged overnight\./, { selector: "pre" }),
-    ).toBeInTheDocument();
   });
 });

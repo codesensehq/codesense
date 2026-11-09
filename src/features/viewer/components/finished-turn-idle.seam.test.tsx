@@ -93,7 +93,7 @@ import { projectedSession } from "@/features/viewer/lib/agent-list-projection";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { selectNeedsYouKind } from "@/features/viewer/lib/session-status-signals";
 import { useDashboardStream } from "@/app/hooks/use-dashboard-stream";
-import { blockedLine, activityLine } from "./agents-tree-view";
+import { activityLine } from "@/features/viewer/lib/agent-list-search";
 
 class FakeResizeObserver {
   constructor(private cb: ResizeObserverCallback) {}
@@ -745,9 +745,10 @@ describe("a finished turn reads Idle on every surface", () => {
       emit("mcp:agent-progress", { sessionId: S, phase: "blocked", note: "New obstacle" });
       receiveMark("blocked");
       expectEveryMark(surfaces, "blocked");
-      expect(blockedLine(useViewerStore.getState().progressBySession[S])).toBe(
-        "Blocked: New obstacle",
-      );
+      expect(useViewerStore.getState().progressBySession[S]).toMatchObject({
+        phase: "blocked",
+        note: "New obstacle",
+      });
       host({ revision: 8, turnGeneration: 3 });
       emit("mcp:agent-progress", { sessionId: S, phase: "dev", note: "Continuing" });
       receiveMark("thinking");

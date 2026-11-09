@@ -214,11 +214,6 @@
   "src/features/viewer/components/agent-identity.tsx": {
     "#fff": 1
   },
-  "src/features/viewer/components/agents-tree-view.tsx": {
-    "border-amber-500": 1,
-    "text-amber-700": 1,
-    "text-amber-400": 1
-  },
   "src/features/viewer/components/commit-graph-rail.tsx": {
     "#b58900": 1
   },

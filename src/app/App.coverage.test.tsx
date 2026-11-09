@@ -266,7 +266,6 @@ vi.mock("@/features/viewer/components/global-cli", () => ({
 vi.mock("@/features/viewer/components/shared-workspace-tray", () => ({
   SharedWorkspaceTray: () => <div data-testid="workspace-tray" />,
 }));
-vi.mock("@/features/viewer/components/agents-list", () => ({ AgentsList: () => null }));
 vi.mock("@/features/viewer/components/workspace-drag-ghost", () => ({
   WorkspaceDragGhost: () => null,
 }));

@@ -25,9 +25,6 @@ vi.mock("@/features/dashboard/lib/verb-dispatch", async () =>
   (await import("@/test/verb-dispatch-mock")).openVerbDispatchMock(),
 );
 vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async () => "42" }));
-vi.mock("@/features/viewer/components/agents-list", () => ({
-  AgentsList: () => <div>Built-in Agents</div>,
-}));
 
 import { PaneSourceProjection } from "@/app/mock/pane-source-projection";
 import { DockSlotHost } from "./dock-slot-host";

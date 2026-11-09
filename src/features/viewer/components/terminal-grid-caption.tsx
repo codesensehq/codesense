@@ -24,7 +24,7 @@ import { FOCUS_PANE_ATTR } from "../lib/focus-indicator";
 import { GitPromptSegment, MachineChip, PromptPathLabel } from "./terminal-prompt-segment";
 import { setSourceDiffReturnFocus, takeSourceDiffReturnFocus } from "./source-diff-return-focus";
 import { useSessionProgress } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
-import { activityLine } from "./agents-tree-view";
+import { activityLine } from "../lib/agent-list-search";
 import {
   useSourceDiffShown,
   useWorktreeEditorOpen,
