@@ -1052,6 +1052,51 @@ mod tests {
     }
 
     #[test]
+    fn a_json_escaped_credential_never_reaches_the_raw_log_or_its_read_path() {
+        use crate::routines::test_support::OPENCODE_TEXT_RUN;
+        let secret = "fakeval1234";
+        // The model's text is a JSON string in the stdout, so its credential assignment is escaped.
+        let escaped = format!(r#"{{\"password\":\"{secret}\"}}"#);
+        let opencode = OPENCODE_TEXT_RUN.replace("the fake model says hello", &escaped);
+        let anthropic = STREAM_JSON.replace("file contents here", &escaped);
+        for (run_id, format, stdout) in [
+            ("run-oc", TranscriptFormat::OpenCodeRunJson, &opencode),
+            (
+                "run-claude",
+                TranscriptFormat::AnthropicStreamJson,
+                &anthropic,
+            ),
+        ] {
+            assert!(
+                stdout.contains(secret),
+                "{run_id}: the fixture carries the secret"
+            );
+            let dir = tempfile::tempdir().unwrap();
+            persist_structured_to(dir.path(), run_id, format, stdout.as_bytes(), b"");
+            let log = std::fs::read_to_string(dir.path().join(format!("{run_id}.log"))).unwrap();
+            assert!(!log.contains(secret), "{run_id}: raw log: {log}");
+            for line in log.lines() {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .unwrap_or_else(|e| panic!("{run_id}: log line no longer parses: {e}: {line}"));
+            }
+            let turns = read_turns_from(dir.path(), run_id);
+            assert_eq!(
+                turns.is_some(),
+                !stored_by_session(format),
+                "{run_id}: per-run turns only where the CLI keeps no session log"
+            );
+            let rendered = serde_json::to_string(&turns).unwrap();
+            assert!(!rendered.contains(secret), "{run_id}: turns: {rendered}");
+
+            // The read path scrubs a log written raw (older evidence, or the plain capture).
+            std::fs::write(dir.path().join(format!("{run_id}.log")), stdout).unwrap();
+            let read = super::super::run_artifact::read_artifact_from(dir.path(), run_id)
+                .expect("reads the log");
+            assert!(!read.contains(secret), "{run_id}: read path: {read}");
+        }
+    }
+
+    #[test]
     fn result_summary_prefers_the_result_event_over_raw_text() {
         // AC-6: summary comes from the `result` event, not a clamp of raw JSON.
         assert_eq!(
