@@ -61,7 +61,6 @@ vi.mock("@/app/update-toast", () => ({
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdate } from "@/tauri/commands";
-import { PUBLIC_DOWNLOAD_URL } from "@/features/license/channel";
 import { SettingsPanel } from "./settings-panel";
 import { resetDetectedEditorsCache } from "@/shared/hooks/use-detected-editors";
 
@@ -950,8 +949,7 @@ describe("C.6d — About row", () => {
     };
     expect(options.action.label).toBe("Download manually");
     options.action.onClick();
-    expect(openUrl).toHaveBeenCalledWith(PUBLIC_DOWNLOAD_URL);
-    expect(PUBLIC_DOWNLOAD_URL).toBe("https://codesense.ai/download");
+    expect(openUrl).toHaveBeenCalledWith("https://codesense.ai/download");
     toastError.mockRestore();
   });
 });

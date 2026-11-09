@@ -27,7 +27,7 @@ export const COPY = {
   /** SW-PB-23: installing the offered build at a restart failed. */
   updateInstallFailed: "CodeSense couldn't install the new build.",
   /** SV-PBF-278: the by-hand line's link to the public download. */
-  downloadLatest: "Download the latest CodeSense from codesense.ai",
+  downloadLatest: "Download the latest CodeSense",
   updatesOff: "Updates are off in this build.",
   /** SW-PB-23 AC-1: install the staged build and relaunch, the user's own action. */
   restartToUpdate: "Restart to update",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, afterEach } from "vitest";
 
-import { isBetaChannel, readBuildChannel } from "./channel";
+import { downloadUrl, isBetaChannel, readBuildChannel } from "./channel";
 
 describe("readBuildChannel", () => {
   afterEach(() => {
@@ -23,6 +23,16 @@ describe("readBuildChannel", () => {
       channel: "beta-staging",
       publicHost: "staging.example.invalid",
     });
+  });
+
+  it("uses the current build's public host for manual downloads", () => {
+    expect(downloadUrl()).toBe("https://codesense.ai/download");
+    window.__CODESENSE_CHANNEL__ = "beta";
+    window.__CODESENSE_PUBLIC_HOST__ = "codesense.ai";
+    expect(downloadUrl()).toBe("https://codesense.ai/download");
+    window.__CODESENSE_CHANNEL__ = "beta-staging";
+    window.__CODESENSE_PUBLIC_HOST__ = "preview.example.invalid";
+    expect(downloadUrl()).toBe("https://preview.example.invalid/download");
   });
 
   it("treats the internal channel, a missing injection and an unknown value as internal", () => {

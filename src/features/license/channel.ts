@@ -31,8 +31,7 @@ export function isBetaChannel(info: BuildChannelInfo): boolean {
   return info.channel !== "internal";
 }
 
-/**
- * SV-PBF-278: where a person downloads CodeSense by hand. One constant until the public download
- * page's address is confirmed.
- */
-export const PUBLIC_DOWNLOAD_URL = "https://codesense.ai/download";
+/** Where a person downloads CodeSense by hand for this build's channel. */
+export function downloadUrl(): string {
+  return `https://${readBuildChannel().publicHost}/download`;
+}
