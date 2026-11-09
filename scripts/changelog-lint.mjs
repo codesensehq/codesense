@@ -25,9 +25,12 @@ export function presenceError({ changes, labels = [], author = "" }) {
   if (labels.includes(NO_CHANGELOG_LABEL)) return "";
   const rows = changes.map((line) => line.split("\t"));
   const fragment = new RegExp(`^${FRAGMENT_DIR}/(?!README\\.md$)[^/]+\\.md$`);
-  if (rows.some(([status, file]) => status !== "D" && fragment.test(file))) return "";
-  // A release pull request assembles the fragments into CHANGELOG.md itself.
-  if (rows.some(([, file]) => file === "CHANGELOG.md")) return "";
+  if (rows.some(([status, file]) => status === "A" && fragment.test(file))) return "";
+  // A release pull request folds fragments into CHANGELOG.md: it deletes them and changes it.
+  const release =
+    rows.some(([, file]) => file === "CHANGELOG.md") &&
+    rows.some(([status, file]) => status === "D" && fragment.test(file));
+  if (release) return "";
   const source = rows.map(([, file]) => file).filter(isUserFacing);
   if (!source.length) return "";
   return (

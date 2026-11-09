@@ -136,10 +136,13 @@ test("a pull request that changes the app needs a fragment, a label or a release
   const app = ["M\tsrc/features/inbox/view.tsx"];
   assert.match(presenceError({ changes: app }), /adds no changelog entry/);
   assert.equal(presenceError({ changes: [...app, "A\tchanges/inbox.md"] }), "");
-  assert.equal(presenceError({ changes: [...app, "M\tchanges/inbox.md"] }), "");
+  // Editing an existing fragment, deleting one or touching CHANGELOG.md alone is no new entry.
+  assert.match(presenceError({ changes: [...app, "M\tchanges/inbox.md"] }), /no changelog/);
   assert.match(presenceError({ changes: [...app, "D\tchanges/inbox.md"] }), /no changelog/);
   assert.match(presenceError({ changes: [...app, "A\tchanges/README.md"] }), /no changelog/);
-  assert.equal(presenceError({ changes: [...app, "M\tCHANGELOG.md"] }), "");
+  assert.match(presenceError({ changes: [...app, "M\tCHANGELOG.md"] }), /no changelog/);
+  // A release folds fragments in: it deletes them and changes CHANGELOG.md.
+  assert.equal(presenceError({ changes: [...app, "M\tCHANGELOG.md", "D\tchanges/inbox.md"] }), "");
   assert.equal(presenceError({ changes: app, labels: ["no-changelog"] }), "");
   assert.equal(presenceError({ changes: app, author: "dependabot[bot]" }), "");
   assert.equal(presenceError({ changes: ["M\tscripts/x.mjs", "M\tREADME.md"] }), "");
