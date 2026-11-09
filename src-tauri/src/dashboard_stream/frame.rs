@@ -9,6 +9,7 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
+use url::{Host, Url};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameTeam {
@@ -125,9 +126,9 @@ impl AllowedHosts {
 /// The origin `value` names when it is exactly `https://host[:port]` with a named host;
 /// CSP-safe by construction.
 fn exact_https_origin(value: &str) -> Option<String> {
-    let url = Result::ok(url::Url::parse(value))?;
-    let named = match url::Url::host(&url)? {
-        url::Host::Domain(domain) => {
+    let url = Result::ok(Url::parse(value))?;
+    let named = match Url::host(&url)? {
+        Host::Domain(domain) => {
             !domain.starts_with('.')
                 && !domain.ends_with('.')
                 && !domain.contains("..")
@@ -140,15 +141,15 @@ fn exact_https_origin(value: &str) -> Option<String> {
                 && (!is_local_name(domain) || fixture_loopback(domain))
         }
         // Policy: IP literals (loopback, private, link-local or public) are never declarable.
-        url::Host::Ipv4(_) | url::Host::Ipv6(_) => false,
+        Host::Ipv4(_) | Host::Ipv6(_) => false,
     };
     (named
         && url.scheme() == "https"
-        && url::Url::port(&url) != Some(0)
+        && Url::port(&url) != Some(0)
         && str::is_empty(url.username())
         && url.password().is_none()
-        && url::Url::path(&url) == "/"
-        && url::Url::query(&url).is_none()
+        && Url::path(&url) == "/"
+        && Url::query(&url).is_none()
         && url.fragment().is_none())
     .then(|| url.origin().ascii_serialization())
 }
