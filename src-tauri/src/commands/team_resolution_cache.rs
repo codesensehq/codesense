@@ -4,13 +4,15 @@
 //! parses the org's registry files and stats the team's content folder on the
 //! blocking pool.
 //!
-//! A hit is a map lookup: no blocking-pool task and no file I/O. Every result is kept,
-//! `Unauthorized` and `NotSynced` included. Entries are dropped by the app events that
-//! report a registry, attachment or git change. Changes no event reports (a hand edit,
-//! a folder made in a terminal, a pull in an org whose git isn't watched) are caught by
-//! one re-stamp per [`MAX_AGE`] window: the first read after the window stats every
-//! cached team's registry files and content folder in a single blocking task and drops
-//! the entries whose stamp moved, and the reads after it are hits again.
+//! A hit is a map lookup: no blocking-pool task and no file I/O. `Ok` and `NotSynced`
+//! are kept until something moves; `Unauthorized` is kept only until the next
+//! re-stamp, since a failed registry read gives the same answer. Entries are dropped
+//! by the app events that report a registry, attachment or git change. Changes no
+//! event reports (a hand edit, a folder made in a terminal, a pull in an org whose git
+//! isn't watched) are caught by one re-stamp per [`MAX_AGE`] window: the first read
+//! after the window stats every cached team's registry files and content folder in a
+//! single blocking task and drops the entries whose stamp moved, and the reads after
+//! it are hits again.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +135,11 @@ struct Inner {
     entries: HashMap<Key, Entry>,
     /// When the current re-stamp window opened.
     window: Instant,
+    /// A re-stamp is running; no other starts until it ends and opens the next window.
+    restamping: bool,
+    /// Bumped by every window claim, so a fill that straddles one doesn't store: the
+    /// re-stamp it straddled didn't see it.
+    claims: u64,
 }
 
 /// One entry as a re-stamp sees it: `None` for an `Unauthorized` entry, which is
@@ -146,8 +153,20 @@ pub(crate) struct TeamResolutionCache {
     inner: Arc<Mutex<Inner>>,
     disk: Arc<dyn Disk>,
     clock: Clock,
-    /// Re-stamps run, for tests.
+    #[cfg(test)]
     restamps: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Ends a re-stamp, even one that panicked, and opens the next window.
+struct RestampEnd<'a>(&'a TeamResolutionCache);
+
+impl Drop for RestampEnd<'_> {
+    fn drop(&mut self) {
+        let now = (self.0.clock)();
+        let mut inner = self.0.lock();
+        inner.restamping = false;
+        inner.window = now;
+    }
 }
 
 impl Default for TeamResolutionCache {
@@ -164,9 +183,12 @@ impl TeamResolutionCache {
                 generation: 0,
                 entries: HashMap::new(),
                 window,
+                restamping: false,
+                claims: 0,
             })),
             disk,
             clock,
+            #[cfg(test)]
             restamps: Arc::default(),
         }
     }
@@ -213,18 +235,21 @@ impl TeamResolutionCache {
         super::await_blocking("team_resolution_fill", move || Ok(cache.fill(home, key))).await
     }
 
-    /// When the window has closed, open the next one and take the entries to re-stamp.
-    /// Reads that arrive while the re-stamp runs answer from the entries as they are.
+    /// When the window has closed and no re-stamp is running, claim it and take the
+    /// entries to re-stamp. Reads that arrive while the re-stamp runs answer from the
+    /// entries as they are.
     fn claim_window(&self) -> Option<(u64, Vec<Restamp>)> {
         let now = (self.clock)();
         let mut inner = self.lock();
-        if now.saturating_duration_since(inner.window) < MAX_AGE {
+        if inner.restamping || now.saturating_duration_since(inner.window) < MAX_AGE {
             return None;
         }
-        inner.window = now;
+        inner.claims += 1;
         if inner.entries.is_empty() {
+            inner.window = now;
             return None;
         }
+        inner.restamping = true;
         let batch = inner
             .entries
             .iter()
@@ -239,6 +264,8 @@ impl TeamResolutionCache {
 
     /// Stat every entry in `batch` and drop those whose stamp moved. Blocking.
     fn restamp(&self, generation: u64, batch: Vec<Restamp>) {
+        let _end = RestampEnd(self);
+        #[cfg(test)]
         self.restamps
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let moved: Vec<(Key, Option<Stamp>)> = batch
@@ -268,13 +295,16 @@ impl TeamResolutionCache {
 
     /// Stamp the team's files and resolve it. Blocking.
     fn fill(&self, home: PathBuf, key: Key) -> ContextResolution {
-        let generation = self.lock().generation;
+        let started = {
+            let inner = self.lock();
+            (inner.generation, inner.claims)
+        };
         let stamp = self.disk.stamp(&home, key.user_id, &key.org, &key.team);
         let resolution = self.disk.resolve(&home, key.user_id, &key.org, &key.team);
         let mut inner = self.lock();
-        // An invalidation during the read may mean it saw the old files: answer, but
-        // don't keep it.
-        if inner.generation == generation {
+        // An invalidation during the read may mean it saw the old files, and a window
+        // claimed during it re-stamped without this entry: answer, but don't keep it.
+        if (inner.generation, inner.claims) == started {
             inner.entries.insert(
                 key,
                 Entry {

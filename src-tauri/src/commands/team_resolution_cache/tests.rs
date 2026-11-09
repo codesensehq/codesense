@@ -47,7 +47,9 @@ fn write_teams(home: &Path, teams_yml: &str) {
 struct CountingDisk {
     stamps: AtomicUsize,
     resolves: AtomicUsize,
-    /// Run during the registry read, to land an invalidation mid-fill.
+    /// Run during each stat, to land a window claim mid-re-stamp.
+    during_stamp: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// Run during the registry read, to land an invalidation or a claim mid-fill.
     during_resolve: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
@@ -63,6 +65,9 @@ impl CountingDisk {
 impl Disk for CountingDisk {
     fn stamp(&self, home: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
         self.stamps.fetch_add(1, Ordering::SeqCst);
+        if let Some(during) = self.during_stamp.lock().unwrap().as_ref() {
+            during();
+        }
         LocalDisk.stamp(home, user_id, org, team)
     }
     fn resolve(&self, home: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution {
@@ -341,6 +346,79 @@ async fn one_restamp_per_window_covers_every_cached_team() {
             "each team stat'ed once per window, nothing re-read"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reads_across_a_window_boundary_restamp_once() {
+    let f = Fixture::new();
+    let teams = ["backend", "frontend"];
+    for team in teams {
+        f.resolve(team).await;
+    }
+
+    f.clock.advance(MAX_AGE);
+    let reads: Vec<_> = (0..16)
+        .map(|i| {
+            let (cache, home) = (f.cache.clone(), f.home().to_path_buf());
+            tokio::spawn(async move { cache.resolve(home, UID, ORG, teams[i % 2]).await })
+        })
+        .collect();
+    for read in reads {
+        read.await.unwrap().unwrap();
+    }
+    assert_eq!(f.restamps(), 1, "one reader claimed the window");
+    assert_eq!(
+        f.counts(),
+        (4, 2),
+        "each team stat'ed once, nothing re-read"
+    );
+}
+
+#[tokio::test]
+async fn a_restamp_that_outlasts_the_window_blocks_a_second_one() {
+    let f = Fixture::new();
+    f.resolve("backend").await;
+
+    let (cache, clock) = (f.cache.clone(), f.clock.clone());
+    let overlapped = Arc::new(AtomicUsize::new(0));
+    let seen = overlapped.clone();
+    *f.disk.during_stamp.lock().unwrap() = Some(Box::new(move || {
+        clock.advance(MAX_AGE);
+        if cache.claim_window().is_some() {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    f.clock.advance(MAX_AGE);
+    f.resolve("backend").await;
+    *f.disk.during_stamp.lock().unwrap() = None;
+
+    assert_eq!(
+        overlapped.load(Ordering::SeqCst),
+        0,
+        "no claim while one runs"
+    );
+    assert_eq!(f.restamps(), 1);
+    // The window opened when the re-stamp ended, so the next read is a hit.
+    f.resolve("backend").await;
+    assert_eq!((f.restamps(), f.counts()), (1, (2, 1)));
+}
+
+#[tokio::test]
+async fn a_fill_that_straddles_a_window_claim_is_not_kept() {
+    let f = Fixture::new();
+    let (cache, clock) = (f.cache.clone(), f.clock.clone());
+    *f.disk.during_resolve.lock().unwrap() = Some(Box::new(move || {
+        clock.advance(MAX_AGE);
+        cache.claim_window();
+    }));
+    assert!(
+        is_ok(&f.resolve("backend").await, "backend"),
+        "the straddling fill still answers"
+    );
+    *f.disk.during_resolve.lock().unwrap() = None;
+
+    assert!(is_ok(&f.resolve("backend").await, "backend"));
+    assert_eq!(f.counts(), (2, 2), "the straddling answer wasn't kept");
 }
 
 #[tokio::test]
