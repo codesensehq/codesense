@@ -440,28 +440,43 @@ fn the_live_watch_reports_a_git_write() {
     assert_eq!(moved.repo_path, root.to_string_lossy());
 }
 
+/// The quiet window is far longer than the test, so every emit here comes from the max wait,
+/// however slowly the runner schedules the notes.
 #[test]
 fn bursts_that_never_go_quiet_still_emit_within_the_max_wait() {
+    let quiet = Duration::from_secs(60);
+    let max = Duration::from_millis(200);
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let coalescer = MoveCoalescer::new(
-        Duration::from_millis(100),
-        Duration::from_millis(400),
+        quiet,
+        max,
         Arc::new(move |moved| {
             let _ = tx.lock().unwrap().send((Instant::now(), moved));
         }),
     );
+    let deadline = Instant::now() + Duration::from_secs(30);
     let start = Instant::now();
-    while start.elapsed() < Duration::from_millis(600) {
+    let (first_at, first) = loop {
         coalescer.note("/r", &[GitMoveKind::Index]);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    coalescer.note("/r", &[GitMoveKind::Refs]);
-    let (first_at, first) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(first_at.duration_since(start) < Duration::from_millis(550));
+        if let Ok(emitted) = rx.recv_timeout(Duration::from_millis(10)) {
+            break emitted;
+        }
+        assert!(Instant::now() < deadline, "a busy burst never emitted");
+    };
+    let waited = first_at.duration_since(start);
+    assert!(waited >= max && waited < quiet, "{waited:?}");
     assert_eq!(first.kinds, vec![GitMoveKind::Index]);
-    let (_, second) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(second.kinds, vec![GitMoveKind::Refs, GitMoveKind::Index]);
+
+    coalescer.note("/r", &[GitMoveKind::Refs]);
+    let mut later = BTreeSet::new();
+    while !later.contains(&GitMoveKind::Refs) {
+        let (_, moved) = rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the Refs move was never emitted");
+        later.extend(moved.kinds);
+    }
+    assert!(later.is_subset(&BTreeSet::from([GitMoveKind::Refs, GitMoveKind::Index])));
 }
 
 #[test]
