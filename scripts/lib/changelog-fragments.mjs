@@ -119,7 +119,7 @@ export function assembleChangelog(changelog, fragments, { version, date } = {}) 
       throw new Error(`date must be YYYY-MM-DD (got ${date})`);
     if (!body)
       throw new Error("nothing to release: [Unreleased] is empty and there are no fragments");
-    if (new RegExp(`^## \\[${version.replace(/\./g, "\\.")}\\]`, "m").test(changelog))
+    if (changelog.split("\n").some((line) => line.startsWith(`## [${version}]`)))
       throw new Error(`CHANGELOG.md already has a ${version} section`);
     out = `${head}## [Unreleased]\n\n## [${version}] - ${date}\n\n${body}\n\n${tail}`;
     out = updateLinks(out, version);
