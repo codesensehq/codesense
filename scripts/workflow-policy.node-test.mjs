@@ -112,6 +112,95 @@ for (const [name, fixture, error] of badFixtures) {
 
 test("accept the valid fixture", () => assert.deepEqual(workflowPolicy(good), []));
 
+const queued = (filter = "") =>
+  good.replace(
+    "on: [pull_request, workflow_dispatch]",
+    `on:\n  pull_request:\n  merge_group:${filter}`,
+  );
+test("merge_group is allowed bare or for checks_requested only", () => {
+  assert.deepEqual(workflowPolicy(queued()), []);
+  assert.deepEqual(workflowPolicy(good.replace("pull_request,", "pull_request, merge_group,")), []);
+  assert.deepEqual(workflowPolicy(queued("\n    types: [checks_requested]")), []);
+  for (const filter of ["\n    types: [destroyed]", "\n    branches: [main]", " {}"])
+    assert.match(workflowPolicy(queued(filter)).join("\n"), /merge_group takes no filter/, filter);
+});
+
+// The merge queue waits for every required check, so each one must also run on merge_group, and
+// a concurrency group keyed on the pull request alone would make queued runs cancel each other.
+test("every pull request workflow also runs on merge groups, each in its own concurrency group", () => {
+  for (const file of files) {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    if (!Object.hasOwn(workflow.on ?? {}, "pull_request")) continue;
+    assert.ok(Object.hasOwn(workflow.on, "merge_group"), `${file} must run on merge_group`);
+    const group = workflow.concurrency.group;
+    if (group.includes("github.event.pull_request.number"))
+      assert.match(group, /pull_request\.number \|\| github\.(ref|sha|run_id) \}\}/, file);
+  }
+});
+
+// No cache is saved on a merge group: each caching step is checked on a merge_group workflow.
+const cacheStep = (step) =>
+  queued() +
+  "      - name: Cache\n" +
+  step
+    .split("\n")
+    .map((line) => `        ${line}`)
+    .join("\n") +
+  "\n";
+const pin = "@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1";
+const gatedNode = "cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
+test("a merge_group workflow saves no cache on merge groups", () => {
+  for (const step of [
+    `uses: actions/setup-node${pin}\nwith:\n  ${gatedNode}`,
+    `uses: actions/setup-node${pin}\nwith:\n  node-version: "24"`,
+    `uses: actions/cache/restore${pin}\nwith:\n  path: x\n  key: k`,
+    `if: github.event_name == 'push' && github.ref == 'refs/heads/main'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+    `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}`,
+  ])
+    assert.deepEqual(workflowPolicy(cacheStep(step)), [], step);
+  for (const [step, error] of [
+    [`uses: actions/setup-node${pin}\nwith:\n  cache: pnpm`, /cache must be/],
+    [`uses: actions/setup-node${pin}\nwith:\n  cache: \${{ 'pnpm' }}`, /cache must be/],
+    [`uses: actions/cache${pin}\nwith:\n  path: x\n  key: k`, /saves on merge groups/],
+    [`uses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`, /if must require/],
+    [
+      `if: github.event_name != 'merge_group'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [
+      `if: github.event_name == 'push' || true\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [`uses: Swatinem/rust-cache${pin}\nwith:\n  shared-key: x`, /save-if must require/],
+    [`uses: Swatinem/rust-cache${pin}`, /save-if must require/],
+  ])
+    assert.match(workflowPolicy(cacheStep(step)).join("\n"), error, step);
+  // Without merge_group the rule does not apply.
+  const plain = cacheStep(`uses: actions/setup-node${pin}\nwith:\n  cache: pnpm`).replace(
+    "  merge_group:\n",
+    "",
+  );
+  assert.deepEqual(workflowPolicy(plain), []);
+});
+
+test("pull-requests read is limited to the DCO job", () => {
+  const dco = good
+    .replace("  static:\n", "  dco:\n")
+    .replace("      contents: read", "      contents: read\n      pull-requests: read");
+  assert.deepEqual(workflowPolicy(dco, "dco.yml"), []);
+  assert.match(workflowPolicy(dco, "ci.yml").join("\n"), /permissions must grant exactly/);
+  assert.match(
+    workflowPolicy(dco.replace("  dco:\n", "  other:\n"), "dco.yml").join("\n"),
+    /permissions must grant exactly/,
+  );
+  assert.match(
+    workflowPolicy(dco.replace("pull-requests: read", "pull-requests: write"), "dco.yml").join(
+      "\n",
+    ),
+    /permissions must grant exactly/,
+  );
+});
+
 const afterFailure = (condition, run = "cargo test --doc") => `      - id: compile
         run: cargo test --no-run
       - name: Doctests
@@ -305,6 +394,7 @@ for (const trigger of ["schedule", "branch_protection_rule"]) {
 
 for (const trigger of [
   "pull_request",
+  "merge_group",
   "pull_request_target",
   "pull_request_review",
   "pull_request_review_comment",

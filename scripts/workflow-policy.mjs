@@ -22,6 +22,7 @@ const HOSTED_RUNNERS = new Set([
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
 const JOB_PERMISSIONS = new Map([
+  ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
   [
@@ -29,6 +30,10 @@ const JOB_PERMISSIONS = new Map([
     { contents: "read", "security-events": "write", "id-token": "write" },
   ],
 ]);
+// A merge group is a temporary ref: caches it saved would only evict main's. setup-node saves
+// its cache in a post step, so on a merge_group workflow it may cache only off merge groups.
+const SETUP_NODE_CACHE = "${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
+const PUSH_ONLY = "github.event_name == 'push'";
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -87,11 +92,16 @@ export function workflowPolicy(text, file = "") {
   const scorecardWorkflow = file === SCORECARD.file;
   const allowedTriggers = scorecardWorkflow
     ? ["push", "schedule", "branch_protection_rule", "workflow_dispatch"]
-    : ["pull_request", "push", "workflow_dispatch"];
+    : ["pull_request", "merge_group", "push", "workflow_dispatch"];
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
   if (!triggers.length || triggers.some((t) => !allowedTriggers.includes(t)))
     errors.push("triggers must match the workflow allowlist; Scorecard forbids pull requests");
+  if (triggers.includes("merge_group")) {
+    const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
+    if (mergeGroup !== null && JSON.stringify(mergeGroup) !== '{"types":["checks_requested"]}')
+      errors.push("merge_group takes no filter other than types: [checks_requested]");
+  }
   if (triggers.includes("push")) {
     const push = mapping(workflow.on) ? workflow.on.push : null;
     if (
@@ -149,6 +159,28 @@ export function workflowPolicy(text, file = "") {
           `${name}: step "${step.name ?? step.run}" runs cargo after a failure; also require an earlier step's steps.<id>.outcome == 'success'`,
         );
       if (typeof step.id === "string") earlierIds.add(step.id);
+      if (triggers.includes("merge_group")) {
+        const action = typeof step.uses === "string" ? step.uses.split("@")[0] : "";
+        const inputs = mapping(step.with) ? step.with : {};
+        const label = `${name}: step "${step.name ?? action}"`;
+        if (action === "actions/cache")
+          errors.push(
+            `${label} saves on merge groups; use actions/cache/restore and a push-only save`,
+          );
+        if (action === "actions/cache/save" && !topLevelConjuncts(condition).includes(PUSH_ONLY))
+          errors.push(`${label}: if must require ${PUSH_ONLY} at the top level`);
+        if (
+          action === "Swatinem/rust-cache" &&
+          !topLevelConjuncts(String(inputs["save-if"] ?? "")).includes(PUSH_ONLY)
+        )
+          errors.push(`${label}: save-if must require ${PUSH_ONLY} at the top level`);
+        if (
+          action === "actions/setup-node" &&
+          Object.hasOwn(inputs, "cache") &&
+          inputs.cache !== SETUP_NODE_CACHE
+        )
+          errors.push(`${label}: cache must be ${SETUP_NODE_CACHE}`);
+      }
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
     // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
