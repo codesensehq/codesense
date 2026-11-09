@@ -22,7 +22,7 @@
     "src-tauri/src/mcp/live_data_authoring.rs": "f7a710d88121d1c4fd6f703898208c66bfaa6ffdc9348db2e09d6ad3ea27f173",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/commands.rs": "e850a56fb795505d67f0836d2e3646bb30b01ec1f6b52da210380813c02d1974",
+    "src-tauri/src/verbs/commands.rs": "b335efc518a4f5ebfb50ed755d4dd17b4d184f8b8e961d06e84331bd3b52a3b7",
     "src-tauri/src/verbs/dispatcher.rs": "5bce60593af23b8fdbc81f36506aadcaa22fb80898c33bb7a30468caf892a91f",
     "src-tauri/src/verbs/grant_tests.rs": "d3f3a39dae1da2927310eb36376bf93a7d19ba5f12e9cc8a885e4cef715c9f6f",
     "src-tauri/src/verbs/mod.rs": "67d8f4dbe9889cd0f3983dbd4d85400aa7fd3485a88a1b3b442e8405438f566a",
