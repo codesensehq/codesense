@@ -138,6 +138,51 @@ test("every pull request workflow also runs on merge groups, each in its own con
   }
 });
 
+// No cache is saved on a merge group: each caching step is checked on a merge_group workflow.
+const cacheStep = (step) =>
+  queued() +
+  "      - name: Cache\n" +
+  step
+    .split("\n")
+    .map((line) => `        ${line}`)
+    .join("\n") +
+  "\n";
+const pin = "@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1";
+const gatedNode = "cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
+test("a merge_group workflow saves no cache on merge groups", () => {
+  for (const step of [
+    `uses: actions/setup-node${pin}\nwith:\n  ${gatedNode}`,
+    `uses: actions/setup-node${pin}\nwith:\n  node-version: "24"`,
+    `uses: actions/cache/restore${pin}\nwith:\n  path: x\n  key: k`,
+    `if: github.event_name == 'push' && github.ref == 'refs/heads/main'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+    `uses: Swatinem/rust-cache${pin}\nwith:\n  save-if: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}`,
+  ])
+    assert.deepEqual(workflowPolicy(cacheStep(step)), [], step);
+  for (const [step, error] of [
+    [`uses: actions/setup-node${pin}\nwith:\n  cache: pnpm`, /cache must be/],
+    [`uses: actions/setup-node${pin}\nwith:\n  cache: \${{ 'pnpm' }}`, /cache must be/],
+    [`uses: actions/cache${pin}\nwith:\n  path: x\n  key: k`, /saves on merge groups/],
+    [`uses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`, /if must require/],
+    [
+      `if: github.event_name != 'merge_group'\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [
+      `if: github.event_name == 'push' || true\nuses: actions/cache/save${pin}\nwith:\n  path: x\n  key: k`,
+      /if must require/,
+    ],
+    [`uses: Swatinem/rust-cache${pin}\nwith:\n  shared-key: x`, /save-if must require/],
+    [`uses: Swatinem/rust-cache${pin}`, /save-if must require/],
+  ])
+    assert.match(workflowPolicy(cacheStep(step)).join("\n"), error, step);
+  // Without merge_group the rule does not apply.
+  const plain = cacheStep(`uses: actions/setup-node${pin}\nwith:\n  cache: pnpm`).replace(
+    "  merge_group:\n",
+    "",
+  );
+  assert.deepEqual(workflowPolicy(plain), []);
+});
+
 test("pull-requests read is limited to the DCO job", () => {
   const dco = good
     .replace("  static:\n", "  dco:\n")
