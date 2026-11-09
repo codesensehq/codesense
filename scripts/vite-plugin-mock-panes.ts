@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { FrameRecord, MintFrameArgs } from "../src/tauri/commands";
 import { SLOT_GRANT_CEILINGS } from "../src/features/dashboard/lib/verb-registry.generated";
 import { shimSource } from "../tests/support/page-shim";
@@ -23,9 +25,27 @@ import type { Plugin, ViteDevServer } from "vite";
  *   `pane_write` or a file delete does), then push `mock-panes:changed` to the
  *   page over the HMR socket, where the mock backend re-emits it as the app's
  *   `pane-changed` event.
+ * - The built-in agent list (`builtin/agent-list`) is the shipped `agent-list-pane.html`, the
+ *   file the app bundles, with the dashboard kit linked as the app links it (`GET /kit/v1/…`),
+ *   so the mock dock shows the real HTML list.
  *
  * Applied only in mock mode; never part of a build.
  */
+
+/** The shipped agent list (`AGENT_LIST_PANE` in `scripts/lib/builtin-panes.mjs`). */
+const AGENT_LIST_PANE = "src/features/shell/slots/__fixtures__/agent-list-pane.html";
+/** The dashboard kit's files, which the app links into every live doc (`kit_tags`). */
+const KIT_DIR = "src-tauri/src/http/routes/dashboard_kit";
+const KIT_FILES: Record<string, string> = {
+  "tokens.css": "text/css",
+  "kit.css": "text/css",
+  "kit.js": "text/javascript",
+  "virtual-list.js": "text/javascript",
+  "fonts/geist.woff2": "font/woff2",
+};
+const KIT_TAGS =
+  '<link rel="stylesheet" href="/kit/v1/tokens.css"><link rel="stylesheet" href="/kit/v1/kit.css">' +
+  '<script src="/kit/v1/kit.js"></script><script src="/kit/v1/virtual-list.js"></script>';
 
 /** Panes keyed `${team or "-"}/${id}`; `-` is the private space. */
 type PaneStore = Map<string, { html: string; modified: string }>;
@@ -125,12 +145,18 @@ export function mockPanes(): Plugin {
     SEED.map(([key, html]) => [key, { html, modified: new Date().toISOString() }]),
   );
   let shim = "";
+  let root = "";
   const frames = new Map<string, FrameRecord>();
   return {
     name: "codesense-mock-panes",
     apply: (_config, env) => env.mode === "mock",
     configResolved(config) {
       shim = shimSource(config.root);
+      root = config.root;
+      panes.set("builtin/agent-list", {
+        html: KIT_TAGS + readFileSync(resolve(config.root, AGENT_LIST_PANE), "utf8"),
+        modified: new Date().toISOString(),
+      });
     },
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
@@ -144,9 +170,11 @@ export function mockPanes(): Plugin {
             kind:
               args.message || args.slot === "message"
                 ? "message"
-                : layer && layer !== "-"
-                  ? "team"
-                  : "private",
+                : args.documentPath.includes("/builtin/panes/")
+                  ? "builtin"
+                  : layer && layer !== "-"
+                    ? "team"
+                    : "private",
             frameId,
             origin,
             token: randomUUID(),
@@ -223,6 +251,20 @@ export function mockPanes(): Plugin {
           notify(server, write[1], write[2]);
           res.statusCode = 204;
           res.end();
+          return;
+        }
+        const kit = url.pathname.startsWith("/kit/v1/") ? url.pathname.slice(8) : null;
+        if (kit && KIT_FILES[kit]) {
+          res.setHeader("content-type", KIT_FILES[kit]);
+          res.end(readFileSync(resolve(root, KIT_DIR, kit)));
+          return;
+        }
+        // The shipped avatar faces, for `kit.avatar`.
+        const face = kit && /^avatars\/(builtin-[a-z]+)\/([a-z0-9-]+\.svg)$/.exec(kit);
+        const facePath = face && resolve(root, "src/assets/avatar-packs", face[1], face[2]);
+        if (facePath && existsSync(facePath)) {
+          res.setHeader("content-type", "image/svg+xml");
+          res.end(readFileSync(facePath));
           return;
         }
         if (url.pathname === "/api/v1/sprints" || url.pathname === "/api/v1/taxonomy") {

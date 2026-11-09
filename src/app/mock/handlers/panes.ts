@@ -94,8 +94,27 @@ function entry(org: string, p: ServedPane): PaneEntry {
   };
 }
 
+/** A served `builtin/…` pane as `org` lists it: a built-in ref and the private panel id. */
+function builtinEntry(org: string, p: ServedPane): PaneEntry {
+  const { team: _team, ...listed } = entry(org, p);
+  return {
+    ...listed,
+    scope: "private",
+    dashboardRef: { scope: "built-in", org, id: p.id },
+    panelId: `pane:private:${org}/${p.id}`,
+  };
+}
+
+async function servedPanes(): Promise<ServedPane[]> {
+  return (await (await fetch("/__mock-panes")).json()) as ServedPane[];
+}
+
+function builtins(org: string, served: ServedPane[]): PaneEntry[] {
+  return served.filter((p) => p.team === "builtin").map((p) => builtinEntry(org, p));
+}
+
 async function listPanes(org: string, team: string): Promise<PaneListing> {
-  const served = (await (await fetch("/__mock-panes")).json()) as ServedPane[];
+  const served = await servedPanes();
   const visible = served.filter((p) => p.team === team || p.team === "-");
   visible.sort(
     (a, b) => (a.team === "-" ? 1 : 0) - (b.team === "-" ? 1 : 0) || a.id.localeCompare(b.id),
@@ -103,7 +122,7 @@ async function listPanes(org: string, team: string): Promise<PaneListing> {
   return {
     contentRoot: `${MOCK_ROOT}/${team}/content`,
     chain: [team],
-    panes: visible.map((p) => entry(org, p)),
+    panes: [...visible.map((p) => entry(org, p)), ...builtins(org, served)],
   };
 }
 
@@ -119,14 +138,14 @@ export function paneHandlers(
 ): HandlerRegistry {
   const sources = new PaneSourceProjection(listPanes, (event, value) => events.emit(event, value));
   const profiles = new Map<string, DashboardProfile>();
-  // The mock serves no built-in panes, so its dock defaults to the classic list.
+  // With no dock choice, the dock shows the served built-in agent list.
   const profileOf = (org: unknown): DashboardProfile =>
     profiles.get(String(org)) ?? {
       id: "default",
       name: "Default",
       posture: "",
       cliLayout: "default",
-      slots: { dock: "native" },
+      slots: {},
       chrome: {},
     };
   const workspace: WorkspaceConfig = { repos: {} };
@@ -260,6 +279,11 @@ export function paneHandlers(
       currentOrg = String(args.org);
       return sources.read(args);
     },
+    list_builtin_panes: async ({ org, team }) => ({
+      contentRoot: `${MOCK_ROOT}/${team}/content`,
+      chain: [String(team)],
+      panes: builtins(String(org), await servedPanes()),
+    }),
     live_hub_subscribe: (args) => {
       if (args.topic === "profile" || args.topic === "workspaceConfig" || args.topic === "prefs") {
         if (args.subscriptionId)

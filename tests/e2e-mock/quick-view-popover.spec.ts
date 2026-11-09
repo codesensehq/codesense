@@ -22,6 +22,22 @@ async function setTheme(page: Page, theme: AppTheme, scheme: "light" | "dark") {
     .toBe(`${theme}/${scheme}`);
 }
 
+/** An agent's row in the dock's built-in HTML list, by its name, and the row's main button. */
+function dockRow(page: Page, name: string) {
+  const list = page.getByTestId("agents-dock").frameLocator("iframe");
+  const quick = list.getByRole("button", { name: `Quick view of ${name}`, exact: true });
+  const row = list.locator(".al-row").filter({ has: quick }).first();
+  return { row, main: row.locator(".al-main") };
+}
+
+/** Opens an agent's Quick view from its row (Q, as the row's tooltip says); returns the row's
+ *  main button, where focus comes back when the Quick view closes. */
+async function openQuickView(page: Page, name: string) {
+  const { main } = dockRow(page, name);
+  await main.press("q");
+  return main;
+}
+
 // The mock world supplies terminals; seed the same projection the Rust host normally pushes.
 test.beforeEach(async ({ page }) => {
   await page.goto("/?agents=teams");
@@ -73,11 +89,10 @@ for (const theme of ["codesense", "nord"] as const) {
   for (const scheme of ["light", "dark"] as const) {
     test(`quick view card ${theme} ${scheme}`, async ({ page }) => {
       await page.setViewportSize({ width: 1280, height: 800 });
-      const row = page.locator('.ag-row[data-agent-handle="BUG-142#dev"]').first();
+      const { row } = dockRow(page, "Implement retry fix");
       await expect(row).toBeVisible();
       await setTheme(page, theme, scheme);
-      await row.hover();
-      await row.getByTestId("agent-row-cli").click();
+      const quickButton = await openQuickView(page, "Implement retry fix");
       const quick = page.getByTestId("agent-quick-send");
       await expect(quick).toBeVisible();
       await expect(quick.getByRole("button", { name: "Open tab" })).toBeVisible();
@@ -91,7 +106,7 @@ for (const theme of ["codesense", "nord"] as const) {
       });
       await quick.getByRole("button", { name: "Close", exact: true }).click();
       await expect(quick).toBeHidden();
-      await expect(row.getByTestId("agent-row-cli")).toBeFocused();
+      await expect(quickButton).toBeFocused();
     });
   }
 }
@@ -99,9 +114,7 @@ for (const theme of ["codesense", "nord"] as const) {
 for (const hold of ["keyboard", "drag"] as const) {
   test(`quick view bounds during a ${hold} resize hold and window shrink`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    const row = page.locator('.ag-row[data-agent-handle="BUG-142#dev"]').first();
-    await row.hover();
-    await row.getByTestId("agent-row-cli").click();
+    await openQuickView(page, "Implement retry fix");
     const quick = page.getByTestId("agent-quick-send");
     const grip = quick.getByRole("separator", { name: "Resize popup" });
     if (hold === "keyboard") {
@@ -163,10 +176,9 @@ for (const hold of ["keyboard", "drag"] as const) {
 
 test("quick view chrome contrast across all six themes in light and dark", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const row = page.locator('.ag-row[data-agent-handle="BUG-142#dev"]').first();
+  const { row } = dockRow(page, "Implement retry fix");
   await expect(row).toBeVisible();
-  await row.hover();
-  await row.getByTestId("agent-row-cli").click();
+  await openQuickView(page, "Implement retry fix");
   const quick = page.getByTestId("agent-quick-send");
   await expect(quick).toBeVisible();
   for (const theme of [
@@ -283,10 +295,9 @@ test("quick view chrome contrast across all six themes in light and dark", async
 test("a parent's header shares the row's Working word and compact subagent count", async ({
   page,
 }) => {
-  const row = page.locator('.ag-row[data-agent-handle="BUG-142#lead"]').first();
+  const { row } = dockRow(page, "Login timeout lead");
   await expect(row).toBeVisible();
-  await row.hover();
-  await row.getByTestId("agent-row-cli").click();
+  await openQuickView(page, "Login timeout lead");
   const quick = page.getByTestId("agent-quick-send");
   await expect(quick.locator(".ag-quick-send-state")).toHaveText("Working2");
   await expect(quick.getByRole("img", { name: "2 subagents running" })).toBeVisible();
@@ -299,9 +310,7 @@ test("CodeSense light keeps a visible focus ring over an explicitly selected Nor
   await page.evaluate(() =>
     window.__stores!.useViewerStore.getState().updateSettings({ terminalTheme: "nord" }),
   );
-  const row = page.locator('.ag-row[data-agent-handle="BUG-142#dev"]').first();
-  await row.hover();
-  await row.getByTestId("agent-row-cli").click();
+  await openQuickView(page, "Implement retry fix");
   const terminal = page.getByTestId("agent-quick-send").locator(".ag-quick-send-terminal");
   await expect(terminal).toHaveCSS("background-color", "rgb(46, 52, 64)");
   await expect(terminal.locator("textarea")).toBeFocused();

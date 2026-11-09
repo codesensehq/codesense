@@ -10,7 +10,9 @@ test("sibling dock source pushes body and commands, defers hidden loads, and rec
     <p>${title} body</p><button>Find</button><script>window.stales=0; addEventListener('message', e => { if(e.data?.type==='codesense:stale') window.stales++ }); codesense.ready()</script>`;
   await page.request.put("/__mock-panes/a/people", { data: html("People", "Alt+P") });
   await page.goto("/?harness=dock-sources");
-  const body = () => page.frameLocator('[data-testid="agents-dock"] iframe');
+  // The chosen page's frame (the built-in list's frame is the fallback beside it).
+  const body = () =>
+    page.frameLocator('[data-testid="agents-dock"] iframe:not([src*="/agent-list.html"])');
   await expect(body().locator("p")).toHaveText("People body");
   await page.evaluate(() => {
     const w = window as any;
@@ -59,8 +61,12 @@ test("sibling dock source pushes body and commands, defers hidden loads, and rec
   await page.getByRole("button", { name: "Fold dock" }).click();
   await expect(body().locator("p")).toHaveText("Hidden update body");
   await page.request.delete("/__mock-panes/a/people");
-  await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
+  // A removed dock page falls back to the built-in HTML list under a Retry bar.
+  const fallback = page.locator(
+    '[data-testid="agents-dock"] [data-slot-fallback-entry="agent-list"]',
+  );
+  await expect(fallback.getByRole("button", { name: "Retry" })).toBeVisible();
   await page.request.put("/__mock-panes/a/people", { data: html("Returned", "Alt+R") });
   await expect(body().locator("p")).toHaveText("Returned body");
-  await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
+  await expect(fallback).toHaveCount(0);
 });
