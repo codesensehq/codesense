@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: MIT
 //! Only workspace choices are profile scoped. Global preferences stay at their old paths.
 use serde_json::{Map, Value};
-use std::{path::Path, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 static IO: Mutex<()> = Mutex::new(());
+/// Each app-state file's dashboard policies as last read or written under `IO`, so a
+/// dashboard verb checks its policy without profile I/O or parsing the file.
+static POLICIES: Mutex<BTreeMap<PathBuf, Policies>> = Mutex::new(BTreeMap::new());
+struct Policies {
+    /// Each profile's `dashboardPolicy`, `None` when its workspace has none.
+    scoped: BTreeMap<String, Option<Value>>,
+    /// The policy `load` returns for a profile without one of its own.
+    unscoped: Value,
+    /// `load` would first attribute legacy fields to a profile without a workspace.
+    claimable: bool,
+}
 const STORAGE: &str = "localProfileWorkspacesV1";
 const LEGACY: &str = "unassignedLegacyWorkspaceV1";
 const UNATTRIBUTED: &str = "legacyWorkspaceUnattributedV1";
@@ -81,6 +96,14 @@ const LEGACY_VIEWER: &[&str] = &[
     "cliTeamKey",
 ];
 fn read(path: &Path) -> Result<Value, String> {
+    let value = read_disk(path);
+    match &value {
+        Ok(value) => remember(path, value),
+        Err(_) => forget(path),
+    }
+    value
+}
+fn read_disk(path: &Path) -> Result<Value, String> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let value: Value = serde_json::from_slice(&bytes)
@@ -141,7 +164,53 @@ fn write(path: &Path, value: &Value) -> Result<(), String> {
         path,
         &serde_json::to_vec(value).map_err(|e| e.to_string())?,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    remember(path, value);
+    Ok(())
+}
+fn remember(path: &Path, value: &Value) {
+    let storage = value.get(STORAGE).and_then(Value::as_object);
+    let policies = Policies {
+        scoped: storage
+            .into_iter()
+            .flatten()
+            .map(|(principal, workspace)| {
+                (principal.clone(), workspace.get("dashboardPolicy").cloned())
+            })
+            .collect(),
+        unscoped: value
+            .get("dashboardPolicy")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+        claimable: storage.is_none()
+            || (value.get(LEGACY).is_some() && value.get(UNATTRIBUTED).is_none()),
+    };
+    POLICIES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), policies);
+}
+fn forget(path: &Path) {
+    POLICIES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(path);
+}
+/// An edit to `path` from outside the app drops the policies kept for it. The next read
+/// under `IO` keeps the file's own; until then a verb loads it.
+pub(crate) fn outside_change(path: &Path) {
+    forget(path);
+}
+/// The `dashboardPolicy` that `load(path, Some(principal))` would return, from memory.
+/// `None` when only a load can tell: the file was never read, or it would first be migrated.
+pub(super) fn cached_policy(path: &Path, principal: &str) -> Option<Value> {
+    let policies = POLICIES.lock().unwrap_or_else(|e| e.into_inner());
+    let file = policies.get(path)?;
+    match file.scoped.get(principal) {
+        Some(Some(policy)) => Some(policy.clone()),
+        None if file.claimable => None,
+        _ => Some(file.unscoped.clone()),
+    }
 }
 fn take_workspace(value: &mut Value) -> Value {
     let mut scoped = Map::new();
@@ -471,6 +540,116 @@ mod tests {
     }
 
     use super::*;
+
+    fn write_policy(path: &Path, policy: Value) {
+        std::fs::write(
+            path,
+            serde_json::json!({STORAGE: {"41": {"dashboardPolicy": policy}}}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_refreshes_the_kept_dashboard_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_policy(&path, serde_json::json!({"preset": "open"}));
+        assert_eq!(
+            cached_policy(&path, "41"),
+            None,
+            "nothing kept before a read"
+        );
+        load(&path, Some("41")).unwrap();
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "open"}))
+        );
+        write_policy(&path, serde_json::json!({"preset": "team-safe"}));
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "open"})),
+            "the kept policy is served from memory"
+        );
+        load(&path, Some("41")).unwrap();
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "team-safe"}))
+        );
+    }
+
+    #[test]
+    fn save_refreshes_the_kept_dashboard_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_policy(&path, serde_json::json!({"preset": "open"}));
+        load(&path, Some("41")).unwrap();
+        save(&path, "41", r#"{"dashboardPolicy":{"preset":"team-safe"}}"#).unwrap();
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "team-safe"}))
+        );
+    }
+
+    #[test]
+    fn save_value_patch_refreshes_the_kept_dashboard_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_policy(&path, serde_json::json!({"preset": "open"}));
+        load(&path, Some("41")).unwrap();
+        save_value(
+            &path,
+            "41",
+            r#"{"dashboardPolicy":{"switches":{"privateInstall":true}}}"#,
+            true,
+        )
+        .unwrap();
+        let expected = serde_json::json!({"preset": "open", "switches": {"privateInstall": true}});
+        assert_eq!(cached_policy(&path, "41"), Some(expected.clone()));
+        let loaded: Value = serde_json::from_str(&load(&path, Some("41")).unwrap()).unwrap();
+        assert_eq!(loaded["dashboardPolicy"], expected);
+    }
+
+    #[test]
+    fn save_groups_refreshes_the_kept_dashboard_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_policy(&path, serde_json::json!({"preset": "open"}));
+        load(&path, Some("41")).unwrap();
+        write_policy(&path, serde_json::json!({"preset": "team-safe"}));
+        save_groups(&path, "41", "a:one", serde_json::json!([]), 1).unwrap();
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "team-safe"}))
+        );
+    }
+
+    #[test]
+    fn an_outside_edit_replaces_the_kept_dashboard_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_policy(&path, serde_json::json!({"preset": "open"}));
+        load(&path, Some("41")).unwrap();
+        write_policy(&path, serde_json::json!({"preset": "team-safe"}));
+        outside_change(&path);
+        assert_eq!(
+            cached_policy(&path, "41"),
+            None,
+            "an outside edit leaves nothing kept, so the next verb loads the file"
+        );
+        read_prefs_source(&path, "41").unwrap();
+        assert_eq!(
+            cached_policy(&path, "41"),
+            Some(serde_json::json!({"preset": "team-safe"})),
+            "the watcher's own re-read keeps the edited policy"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(read_prefs_source(&path, "41").is_err());
+        assert_eq!(
+            cached_policy(&path, "41"),
+            None,
+            "an unreadable file keeps nothing"
+        );
+    }
 
     #[test]
     fn cp3_unchanged_load_does_not_write() {

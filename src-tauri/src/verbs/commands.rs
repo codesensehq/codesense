@@ -15,14 +15,8 @@ pub(crate) async fn read_policy<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     principal: &str,
 ) -> Result<Policy, String> {
-    let raw = crate::commands::system::load_app_state(app, Some(principal.into())).await?;
-    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    serde_json::from_value(
-        v.get("dashboardPolicy")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
-    )
-    .map_err(|e| e.to_string())
+    let policy = crate::commands::system::dashboard_policy(app, principal.into()).await?;
+    serde_json::from_value(policy).map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub async fn verb_dispatch(
@@ -35,7 +29,7 @@ pub async fn verb_dispatch(
     flushing: Option<bool>,
 ) -> Result<Decision, String> {
     // A frame's actor can be a stored message sender. Policy belongs to the
-    // renderer's immutable local profile; load_app_state fences profile changes.
+    // renderer's immutable local profile; the published profile fences changes.
     let policy = read_policy(app.clone(), &expected_principal).await?;
     use tauri::Manager;
     let frame = app
