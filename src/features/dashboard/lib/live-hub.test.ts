@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: MIT
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
+import ts from "typescript";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { LiveHub, paneViewKey, type HubDelta, type HubRow, type HubSnapshot } from "./live-hub";
+import {
+  LiveHub,
+  liveHub,
+  paneViewKey,
+  type HubDelta,
+  type HubRow,
+  type HubSnapshot,
+} from "./live-hub";
 import runReviewFixture from "../../../../tests/fixtures/run-review.json";
 import configurationFixture from "./configuration-writer-trace.json";
 import prefsFixture from "./prefs-writer-trace.json";
@@ -18,7 +26,14 @@ const scopedRaceFrames = [
     .map(({ payload }) => payload),
 ] as (HubSnapshot | HubDelta)[];
 
-const { viewKey } = vi.hoisted(() => ({ viewKey: vi.fn() }));
+const { viewKey, pasteTarget } = vi.hoisted(() => {
+  const off = vi.fn();
+  return {
+    viewKey: vi.fn(),
+    pasteTarget: { off, subscribe: vi.fn((_listener: (canPaste: boolean) => void) => off) },
+  };
+});
+vi.mock("@/shared/lib/send-to-terminal", () => ({ subscribePasteTarget: pasteTarget.subscribe }));
 vi.mock("@/tauri/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/tauri/commands")>()),
   liveHubViewKey: viewKey,
@@ -688,10 +703,101 @@ it("replays all affected context scopes after hidden changes in different orgs",
     post.mock.calls.filter(([message]) => message.type === "codesense:context-changed"),
   ).toHaveLength(1);
 });
-it("never imports send-to-terminal statically: that closes a store import cycle and breaks boot", () => {
-  const source = readFileSync(resolve("src/features/dashboard/lib/live-hub.ts"), "utf8");
-  expect(source).not.toMatch(/^import[^;]*["']@\/shared\/lib\/send-to-terminal["']/m);
-  expect(source).toContain('import("@/shared/lib/send-to-terminal")');
+/** The project modules `entry` loads through static value imports and re-exports
+ *  (type-only imports and dynamic `import()` are not followed), repo-relative. */
+function staticImportClosure(entry: string): Set<string> {
+  const resolveModule = (from: string, specifier: string) => {
+    const path = specifier.replace(/\?.*$/, "");
+    const base = path.startsWith("@/")
+      ? resolve("src", path.slice(2))
+      : path.startsWith(".")
+        ? resolve(dirname(from), path)
+        : null;
+    // A package import is outside the project's store graph.
+    if (!base) return null;
+    const source = [base, base.replace(/\.js$/, ".ts"), base.replace(/\.js$/, ".tsx")]
+      .flatMap((stem) => [
+        stem,
+        `${stem}.ts`,
+        `${stem}.tsx`,
+        `${stem}/index.ts`,
+        `${stem}/index.tsx`,
+      ])
+      .find((candidate) => /\.tsx?$/.test(candidate) && existsSync(candidate));
+    if (source) return source;
+    // Assets load no modules; anything else unresolved would hide an edge, so it fails.
+    if (/\.(json|css|html|svg|md)$/.test(base) && existsSync(base)) return null;
+    throw new Error(`Cannot resolve ${specifier} from ${relative(process.cwd(), from)}`);
+  };
+  const seen = new Set<string>();
+  const queue = [resolve(entry)];
+  while (queue.length) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
+    for (const node of source.statements) {
+      let specifier: ts.Expression | undefined;
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const bindings = clause?.namedBindings;
+        const typeOnly =
+          !!clause &&
+          (clause.isTypeOnly ||
+            (!clause.name &&
+              !!bindings &&
+              ts.isNamedImports(bindings) &&
+              bindings.elements.length > 0 &&
+              bindings.elements.every((element) => element.isTypeOnly)));
+        if (!typeOnly) specifier = node.moduleSpecifier;
+      } else if (ts.isExportDeclaration(node) && !node.isTypeOnly) {
+        specifier = node.moduleSpecifier;
+      }
+      if (specifier && ts.isStringLiteral(specifier)) {
+        const next = resolveModule(file, specifier.text);
+        if (next) queue.push(next);
+      }
+    }
+  }
+  return new Set([...seen].map((file) => relative(process.cwd(), file)));
+}
+
+it("never statically reaches the stores or send-to-terminal: that closes an import cycle and breaks boot", () => {
+  const closure = staticImportClosure("src/features/dashboard/lib/live-hub.ts");
+  // The walker follows the alias and relative imports it should (a canary against a blind walk).
+  expect(closure).toContain("src/features/dashboard/lib/live-hub.ts");
+  expect(closure.size).toBeGreaterThan(5);
+  expect(
+    [...closure].filter(
+      (file) =>
+        file.startsWith("src/shared/stores/") || file === "src/shared/lib/send-to-terminal.ts",
+    ),
+  ).toEqual([]);
+});
+
+it("wires the paste-target subscription only after send-to-terminal loads lazily", async () => {
+  vi.useRealTimers();
+  pasteTarget.subscribe.mockClear();
+  pasteTarget.off.mockClear();
+  // The production hub's own dependency, not a stub.
+  const { watchPasteTarget } = (
+    liveHub as unknown as { deps: ConstructorParameters<typeof LiveHub>[0] }
+  ).deps;
+  const changed = vi.fn();
+  let stop = watchPasteTarget!(changed);
+  // A stop before the module loads leaves nothing subscribed.
+  stop();
+  await vi.dynamicImportSettled();
+  expect(pasteTarget.subscribe).not.toHaveBeenCalled();
+
+  stop = watchPasteTarget!(changed);
+  expect(pasteTarget.subscribe).not.toHaveBeenCalled();
+  await vi.dynamicImportSettled();
+  expect(pasteTarget.subscribe).toHaveBeenCalledTimes(1);
+  pasteTarget.subscribe.mock.calls[0][0](true);
+  expect(changed).toHaveBeenCalledTimes(1);
+  stop();
+  expect(pasteTarget.off).toHaveBeenCalledTimes(1);
 });
 it("nudges every frame when the paste target changes and holds it for a hidden frame", async () => {
   hub.dispose();

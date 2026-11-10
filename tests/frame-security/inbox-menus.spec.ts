@@ -78,8 +78,8 @@ test("inbox context menu: message", async ({ page }) => {
   const message = frame.locator("#message-1 .bd");
   await message.click({ button: "right" });
   await expect(menu(page, "Copy text")).toBeVisible();
-  await expect(menu(page, "Mark as unread")).toBeVisible();
-  await menu(page, "Mark as unread").click();
+  await expect(menu(page, "Mark unread")).toBeVisible();
+  await menu(page, "Mark unread").click();
   await expect(frame.locator("#latest-count")).toHaveText("Marked unread");
   await frame.locator("#log").evaluate((el) => el.dispatchEvent(new Event("scroll")));
   await expect
@@ -109,6 +109,7 @@ test("inbox context menu: role queue", async ({ page }) => {
     .click({ button: "right" });
   for (const name of ["Open queue", "Edit role…", "Archive"])
     await expect(menu(page, name)).toBeVisible();
+  await expect(menu(page, "Archive")).toContainText("E");
   await menu(page, "Open queue").click();
   await expect(frame.locator("#thread-name")).toHaveText("#docs");
 });
@@ -117,7 +118,7 @@ test("inbox context menu: composer", async ({ page }) => {
   await frame.locator("#draft").fill("Keep my draft");
   await frame.locator("#draft").click({ button: "right" });
   await expect(menu(page, /^Paste/)).toBeVisible();
-  await expect(menu(page, "Archive message")).toHaveCount(0);
+  await expect(menu(page, "Archive")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(frame.locator("#draft")).toBeFocused();
   await expect(frame.locator("#draft")).toHaveValue("Keep my draft");
@@ -181,7 +182,7 @@ test("inbox context menu: terminal chip has the agent menu", async ({ page }) =>
   await openMia();
   await frame.getByRole("button", { name: "Go to Mia", exact: true }).click({ button: "right" });
   await expect(menu(page, "Show")).toBeVisible();
-  await expect(menu(page, "Archive message")).toHaveCount(0);
+  await expect(menu(page, "Archive")).toHaveCount(0);
 });
 
 test("inbox context menu: HTML copies readable paragraphs", async ({ page }) => {
@@ -212,7 +213,7 @@ test("inbox context menu: stacked restore preserves marked unread", async ({ pag
   await expect(frame.locator("#inbox")).toHaveAttribute("data-layout", "stack");
   await openMia();
   await frame.locator("#message-1 .bd").click({ button: "right" });
-  await menu(page, "Mark as unread").click();
+  await menu(page, "Mark unread").click();
   const toggle = () =>
     page
       .locator("iframe")
@@ -258,15 +259,16 @@ test("inbox context menu: cross-team avatars and filter restore", async ({ page 
   await frame.locator("#team-filter").click();
   await frame.locator("#filter-menu button").filter({ hasText: "web" }).click();
   await expect(frame.locator("#latest-count")).toHaveText("Marked unread");
+  // Only the newest message to you turns unread.
   await expect
     .poll(() =>
       page.evaluate(() =>
         (window as any).inboxRows
-          .filter((m: any) => m.toHuman && m.conversation === "Mia")
-          .every((m: any) => m.unread),
+          .filter((m: any) => m.toHuman && m.conversation === "Mia" && m.unread)
+          .map((m: any) => m.messageId),
       ),
     )
-    .toBe(true);
+    .toEqual([3]);
   await frame.locator("#thread-name").click({ button: "right" });
   await menu(page, "Open").click();
   await expect
@@ -278,4 +280,29 @@ test("inbox context menu: cross-team avatars and filter restore", async ({ page 
       ),
     )
     .toBe(true);
+});
+
+test("a hostile page cannot add or spoof host-menu shortcut text", async ({ page }) => {
+  const showMenu = (items: unknown[]) =>
+    frame.evaluate(
+      (items) =>
+        (window as any).codesense
+          .showMenu({ anchorRect: { x: 0, y: 0, width: 1, height: 1 }, items })
+          .then(
+            () => "shown",
+            (error: Error) => error.message,
+          ),
+      items,
+    );
+  for (const shortcut of ["E", "U", "⌘Q", "Enter", 1])
+    expect(await showMenu([{ id: "spoof", label: "Spoof", shortcut }])).toMatch(
+      /shortcuts are host-only/,
+    );
+  expect(
+    await showMenu([
+      { id: "more", label: "More", submenu: [{ id: "x", label: "X", shortcut: "⌘Q" }] },
+    ]),
+  ).toMatch(/shortcuts are host-only/);
+  await expect(menu(page, "Spoof")).toHaveCount(0);
+  await expect(page.locator('[data-slot="dropdown-menu-shortcut"]')).toHaveCount(0);
 });
