@@ -64,7 +64,6 @@ import {
   writeNote,
   updateNoteMeta,
   deleteNote as deleteNoteCmd,
-  reapEmptyScratchNotes,
   type NoteMeta,
   type NoteActor,
   pushViewerState,
@@ -137,6 +136,7 @@ import {
   notesScopeKey,
   type NotesScope,
 } from "@/shared/lib/notes-scope";
+import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/lib/blank-note";
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
@@ -2237,11 +2237,6 @@ export interface ViewerState {
    *  `toggleRightPane` to retry the notes load on first open when the startup
    *  load failed transiently. NOT persisted — only meaningful within a session. */
   scratchNoteLoadStatus: "pending" | "loaded" | "error";
-  /** SW-SN-13 AC-4: gate so the one-shot empty-duplicate-"Scratch" reap runs at
-   *  most ONCE per session (on the first `loadNotes`), never on an SN-7 hot-reload
-   *  refresh — which would otherwise police a note the user just emptied. NOT
-   *  persisted — session-internal. */
-  emptyScratchReapDone: boolean;
   /** SLW-PT-19: the scope (profile + org) the loaded notes belong to. Every write
    *  to a loaded note uses it — never the CURRENT org — so an edit typed after an
    *  org switch but before the reload lands saves into the note's own org. NOT
@@ -2981,7 +2976,8 @@ export interface ViewerState {
   ) => void;
   setActiveNote: (id: string) => Promise<void>;
   /** SW-SN-10: `initialBody` seeds the note's markdown at creation, so "New note
-   *  about this" can pre-link the open doc. Omitted → a blank body. */
+   *  about this" can pre-link the open doc. Omitted → a blank body. A blank new
+   *  note opens an existing blank note instead, when there is one. */
   createNote: (title?: string, initialBody?: string) => Promise<string>;
   renameNote: (id: string, title: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
@@ -5383,12 +5379,6 @@ let noActiveNoteContent: string | null = null;
 let creatingNoteForBuffer = false;
 let lazyCreateInFlight: Promise<void> | null = null;
 
-// SW-SN-13: the default title given to a lazily/deterministically created note.
-// MUST match Rust's `DEFAULT_SCRATCH_TITLE` (scratch.rs) — the reaper only reaps
-// empty notes still bearing this title, so a drift here would leave FE-minted
-// empties un-reapable.
-const DEFAULT_SCRATCH_TITLE = "Note";
-
 /** SW-SN-1: the most-recently-opened note (highest `lastOpenedAt`), or
  *  undefined when the list is empty. The active-note pick on load + after a
  *  delete. Copies before sorting so the caller's array isn't mutated. */
@@ -5404,6 +5394,146 @@ function mostRecentNote(notes: NoteMeta[]): NoteMeta | undefined {
  *  change that lands mid-refresh (a refresh must never yank the user off a note
  *  they just switched to). */
 let activeSwitchGeneration = 0;
+
+/** Sets fields of note `id` in the loaded list. */
+function patchNote(id: string, patch: Partial<Pick<NoteMeta, "title" | "pinned">>): void {
+  useViewerStore.setState((s) => ({
+    notes: s.notes.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+  }));
+}
+
+type NoteMetaValue = NoteMeta["title" | "pinned"];
+/** Outstanding writes share the last saved value, never an optimistic rollback base. */
+const pendingMetaWrites = new Map<
+  string,
+  { saved: NoteMetaValue; savedSeq: number; writes: Map<number, NoteMetaValue> }
+>();
+let metaWriteSeq = 0;
+
+function visibleNoteMeta(
+  write: NonNullable<ReturnType<typeof pendingMetaWrites.get>>,
+): NoteMetaValue {
+  let value = write.saved;
+  let seq = write.savedSeq;
+  for (const [pendingSeq, pendingValue] of write.writes) {
+    if (pendingSeq > seq) {
+      seq = pendingSeq;
+      value = pendingValue;
+    }
+  }
+  return value;
+}
+
+/** Keep pending intent and fields changed since an asynchronous snapshot started. */
+function withPendingNoteMeta(
+  scope: NotesScope,
+  note: NoteMeta,
+  readFrom?: NoteMeta,
+  pendingAtReadStart?: readonly string[],
+): NoteMeta {
+  const result = { ...note };
+  const current =
+    pendingAtReadStart && holdsNotesOf(scope)
+      ? useViewerStore.getState().notes.find((row) => row.id === note.id)
+      : undefined;
+  for (const field of ["title", "pinned"] as const) {
+    const key = `${noteBaseKey(scope, note.id)}:${field}`;
+    const write = pendingMetaWrites.get(key);
+    if (write) Object.assign(result, { [field]: visibleNoteMeta(write) });
+    else if (current && (current[field] !== readFrom?.[field] || pendingAtReadStart?.includes(key)))
+      Object.assign(result, { [field]: current[field] });
+  }
+  return result;
+}
+
+/** Show the latest intent immediately; failed overlapping writes return to saved metadata. */
+async function writeNoteMeta<K extends "title" | "pinned">(
+  id: string,
+  field: K,
+  value: NoteMeta[K],
+): Promise<void> {
+  const scope = loadedNotesScope();
+  const key = `${noteBaseKey(scope, id)}:${field}`;
+  const before = useViewerStore.getState().notes.find((m) => m.id === id);
+  const write = pendingMetaWrites.get(key) ?? {
+    saved: before?.[field] ?? value,
+    savedSeq: 0,
+    writes: new Map<number, NoteMetaValue>(),
+  };
+  const seq = ++metaWriteSeq;
+  write.writes.set(seq, value);
+  pendingMetaWrites.set(key, write);
+  patchNote(id, { [field]: value });
+  try {
+    const meta = await updateNoteMeta(scope, id, { [field]: value });
+    if (seq > write.savedSeq) {
+      write.saved = meta[field];
+      write.savedSeq = seq;
+    }
+  } catch (e) {
+    logger.error("viewer", `update ${field} of note ${id} failed: ${e}`);
+  } finally {
+    write.writes.delete(seq);
+    if (holdsNotesOf(scope)) patchNote(id, { [field]: visibleNoteMeta(write) });
+    if (write.writes.size === 0) pendingMetaWrites.delete(key);
+  }
+}
+
+/** Join only a blank creation that still owns the current navigation intent. */
+let blankCreate: { scope: string; generation: number; note: Promise<string> } | null = null;
+
+/** Create -> activate. Flush the outgoing save so the new blank note can't
+ *  inherit a late write from the previous one. A blank New note on a blank open note
+ *  stays on it, so blank notes never pile up. Rethrows so a caller can surface the
+ *  failure, but logs it too. */
+async function createNoteNow(
+  title: string,
+  initialBody: string | undefined,
+  blank: boolean,
+): Promise<string> {
+  // Bump BEFORE the flush await (like setActiveNote) so invocation order ==
+  // generation order — a switch invoked after this create still wins.
+  const gen = ++activeSwitchGeneration;
+  await debouncedScratchSave.flush();
+  try {
+    const s = useViewerStore.getState();
+    const open = s.notes.find((n) => n.id === s.activeNoteId);
+    if (blank && open && s.scratchNoteLoadStatus === "loaded") {
+      if (isBlankNote(open, s.scratchNoteContent)) return open.id;
+    }
+    const note = await createNoteCmd(
+      loadedNotesScope(),
+      title,
+      initialBody === undefined ? {} : { content: initialBody },
+    );
+    rememberNoteBase(loadedNotesScope(), note.id, note.content);
+    const meta = {
+      id: note.id,
+      title: note.title,
+      pinned: note.pinned,
+      lastOpenedAt: note.lastOpenedAt,
+      ...localPreview(loadedNotesScope(), note.content),
+    };
+    // Always add the new note to the list; only steal focus if no newer
+    // active-note change (a switch/load) superseded us mid-create.
+    if (gen !== activeSwitchGeneration) {
+      useViewerStore.setState((s) => ({ notes: upsertNote(s.notes, meta) }));
+      return note.id;
+    }
+    useViewerStore.setState((s) => ({
+      notes: upsertNote(s.notes, meta),
+      activeNoteId: note.id,
+      // Reflect the seeded body from the create result — never re-reading via
+      // setActiveNote (which no-ops on the already-active new id).
+      scratchNoteContent: note.content,
+      scratchNoteLoadStatus: "loaded",
+    }));
+    return note.id;
+  } catch (e) {
+    logger.error("viewer", `createNote failed: ${e}`);
+    throw e;
+  }
+}
 
 /** SW-SN-1: merge a fresh (disk) note list over the current one, keeping any
  *  current-only ids the stale snapshot lacks (e.g. a note created concurrently
@@ -6751,7 +6881,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   rightPaneRatio: 0.33,
   worktreeEstablishTick: 0,
   scratchNoteLoadStatus: "pending",
-  emptyScratchReapDone: false,
   notesLoadedScope: null,
   rightPaneSplitRatio: {},
   rightPaneLayout: defaultRightPaneLayout(),
@@ -7975,7 +8104,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     creatingNoteForBuffer = true;
     lazyCreateInFlight = (async () => {
       try {
-        const newId = await get().createNote(DEFAULT_SCRATCH_TITLE);
+        const newId = await get().createNote(DEFAULT_NOTE_TITLE);
         const latest = noActiveNoteContent;
         // Re-check after the await: reject a create failure (newId falsy), a null
         // buffer, OR a buffer that went empty while we created (the edit was
@@ -8026,57 +8155,38 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     // SLW-PT-19: the scope this load reads; it becomes the loaded notes' scope.
     const scope = notesScope();
     const sameScope = holdsNotesOf(scope);
+    const metadataAtReadStart = sameScope ? get().notes : [];
+    const pendingAtReadStart = [...pendingMetaWrites.keys()];
     try {
-      let notes: NoteMeta[] = await listNotes(scope);
-      // SW-SN-13 AC-4: one-shot, guarded reap of the empty duplicate "Scratch"
-      // notes the SN-12 lazy-create minted. Runs ONCE per session (not on an
-      // SN-7 hot-reload refresh) and off the first-paint path (the panel shows a
-      // loading affordance until "loaded"). Idempotent + best-effort: a reap
-      // failure must never break the load. Preserves the active note; the Rust
-      // reaper never drops the sole survivor.
-      if (!get().emptyScratchReapDone) {
-        // Latch BEFORE the await so a re-entrant loadNotes (hot-reload) can't
-        // double-run the reap; reset on failure so a transient IPC error retries
-        // on the next load rather than forfeiting the cleanup for the session.
-        set({ emptyScratchReapDone: true });
-        try {
-          // `notes` here is the boot snapshot (from listNotes above) — pass its ids
-          // as the reap-eligible set so a note created concurrently with the reap
-          // (e.g. via the panel's 3s editable hatch) is structurally immune.
-          const reaped = await reapEmptyScratchNotes(
-            scope,
-            get().activeNoteId ?? undefined,
-            notes.map((n) => n.id),
-          );
-          if (reaped) {
-            // The reap returns bare metadata: keep each survivor's listed preview.
-            const listed = new Map(notes.map((n) => [n.id, n]));
-            notes = reaped.map((n) => ({ ...listed.get(n.id), ...n }));
-          }
-        } catch (e) {
-          set({ emptyScratchReapDone: false });
-          logger.error("viewer", `reapEmptyScratchNotes failed: ${e}`);
-        }
-      }
+      const notes: NoteMeta[] = await listNotes(scope);
       // Another org's notes are another set: keep the active note only on a refresh
       // of the SAME scope.
       const current = sameScope ? get().activeNoteId : null;
       const target = (current && notes.find((n) => n.id === current)) || mostRecentNote(notes);
       const note = target ? await readNote(scope, target.id) : null;
+      // A write may finish before this read: compare with its starting metadata too.
+      const reconciled = notes.map((row) =>
+        withPendingNoteMeta(
+          scope,
+          row,
+          metadataAtReadStart.find((before) => before.id === row.id),
+          pendingAtReadStart,
+        ),
+      );
       // An explicit active-note change superseded this refresh — keep ITS active
       // note; only merge the fresh list metadata (without dropping a note it may
       // have just created).
       if (gen !== activeSwitchGeneration) {
-        set((s) => ({ notes: mergeNotesById(s.notes, notes) }));
+        set((s) => ({ notes: mergeNotesById(s.notes, reconciled) }));
         return;
       }
       if (target && note) {
         if (sameScope && target.id === current && typedSince(current, typedFrom)) {
-          set({ notes, notesLoadedScope: scope, scratchNoteLoadStatus: "loaded" });
+          set({ notes: reconciled, notesLoadedScope: scope, scratchNoteLoadStatus: "loaded" });
           return;
         }
         set({
-          notes,
+          notes: reconciled,
           notesLoadedScope: scope,
           ...adoptedNoteBody(scope, target.id, note.content),
           scratchNoteLoadStatus: "loaded",
@@ -8088,9 +8198,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         // the exact window this story closes). Deterministically create ONE
         // canonical note to land on. `createNote` bumps + gates the generation
         // token itself, so a concurrent explicit switch still wins.
-        set({ notes, notesLoadedScope: scope });
+        set({ notes: reconciled, notesLoadedScope: scope });
         try {
-          await get().createNote(DEFAULT_SCRATCH_TITLE);
+          await get().createNote(DEFAULT_NOTE_TITLE);
         } catch (e) {
           logger.error("viewer", `loadNotes empty-branch createNote failed: ${e}`);
           set({ activeNoteId: null, scratchNoteContent: "", scratchNoteLoadStatus: "error" });
@@ -8105,7 +8215,16 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   applyNotesProjection: (scope, rows, change) => {
     if (!holdsNotesOf(scope)) return;
     const known = new Map(get().notes.map((n) => [n.id, n]));
-    const notes = rows.map((row) => noteFromRow(row, known.get(row.id)));
+    const notes = rows.map((row) => {
+      const note = noteFromRow(row, known.get(row.id));
+      // A projection is authoritative saved metadata, even while local intent is
+      // visible. Async load/delete snapshots must not advance this rollback base.
+      for (const field of ["title", "pinned"] as const) {
+        const write = pendingMetaWrites.get(`${noteBaseKey(scope, note.id)}:${field}`);
+        if (write) write.saved = note[field];
+      }
+      return withPendingNoteMeta(scope, note);
+    });
     const id = get().activeNoteId;
     const before = id ? known.get(id) : undefined;
     const after = id ? notes.find((n) => n.id === id) : undefined;
@@ -8153,57 +8272,27 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
   },
 
-  // SW-SN-1: create -> activate. Flush the outgoing save so the new blank note
-  // can't inherit a late write from the previous one. Rethrows so a caller can
-  // surface the failure — but logs it too.
-  createNote: async (title = "Untitled", initialBody) => {
-    // Bump BEFORE the flush await (like setActiveNote) so invocation order ==
-    // generation order — a switch invoked after this create still wins.
-    const gen = ++activeSwitchGeneration;
-    await debouncedScratchSave.flush();
-    try {
-      const note = await createNoteCmd(
-        loadedNotesScope(),
-        title,
-        initialBody === undefined ? {} : { content: initialBody },
-      );
-      rememberNoteBase(loadedNotesScope(), note.id, note.content);
-      const meta = {
-        id: note.id,
-        title: note.title,
-        pinned: note.pinned,
-        lastOpenedAt: note.lastOpenedAt,
-        ...localPreview(loadedNotesScope(), note.content),
+  createNote: (title = UNTITLED_NOTE_TITLE, initialBody) => {
+    // Overlapping blank New notes make one note: a later one joins the first.
+    const blank = isBlankNote({ title, pinned: false }, initialBody ?? "");
+    const scope = notesScopeKey(loadedNotesScope());
+    if (blank && blankCreate?.scope === scope && blankCreate.generation === activeSwitchGeneration)
+      return blankCreate.note;
+    const created = createNoteNow(title, initialBody, blank);
+    if (blank) {
+      const entry = { scope, generation: activeSwitchGeneration, note: created };
+      blankCreate = entry;
+      const clear = () => {
+        if (blankCreate === entry) blankCreate = null;
       };
-      // Always add the new note to the list; only steal focus if no newer
-      // active-note change (a switch/load) superseded us mid-create.
-      if (gen !== activeSwitchGeneration) {
-        set((s) => ({ notes: upsertNote(s.notes, meta) }));
-        return note.id;
-      }
-      set((s) => ({
-        notes: upsertNote(s.notes, meta),
-        activeNoteId: note.id,
-        // Reflect the seeded body from the create result — never re-reading via
-        // setActiveNote (which no-ops on the already-active new id).
-        scratchNoteContent: note.content,
-        scratchNoteLoadStatus: "loaded",
-      }));
-      return note.id;
-    } catch (e) {
-      logger.error("viewer", `createNote failed: ${e}`);
-      throw e;
+      created.then(clear, clear);
     }
+    return created;
   },
 
-  renameNote: async (id, title) => {
-    try {
-      const meta = await updateNoteMeta(loadedNotesScope(), id, { title });
-      set((s) => ({ notes: s.notes.map((m) => (m.id === id ? { ...m, title: meta.title } : m)) }));
-    } catch (e) {
-      logger.error("viewer", `renameNote(${id}) failed: ${e}`);
-    }
-  },
+  // The new title and pin show at once (New note reads them before the write lands);
+  // a failed write puts the old ones back.
+  renameNote: (id, title) => writeNoteMeta(id, "title", title),
 
   // SW-SN-1 AC-4: the command reseeds a fresh note if this was the last one and
   // returns the resulting list. If the active note was deleted, switch to the
@@ -8213,7 +8302,17 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const wasActive = get().activeNoteId === id;
     await debouncedScratchSave.flush();
     try {
-      const list = await deleteNoteCmd(loadedNotesScope(), id);
+      const scope = loadedNotesScope();
+      const metadataAtReadStart = get().notes;
+      const pendingAtReadStart = [...pendingMetaWrites.keys()];
+      const list = (await deleteNoteCmd(scope, id)).map((row) =>
+        withPendingNoteMeta(
+          scope,
+          row,
+          metadataAtReadStart.find((before) => before.id === row.id),
+          pendingAtReadStart,
+        ),
+      );
       set({ notes: list });
       if (wasActive) {
         const next = mostRecentNote(list);
@@ -8230,16 +8329,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
   },
 
-  setNotePinned: async (id, pinned) => {
-    try {
-      const meta = await updateNoteMeta(loadedNotesScope(), id, { pinned });
-      set((s) => ({
-        notes: s.notes.map((m) => (m.id === id ? { ...m, pinned: meta.pinned } : m)),
-      }));
-    } catch (e) {
-      logger.error("viewer", `setNotePinned(${id}) failed: ${e}`);
-    }
-  },
+  setNotePinned: (id, pinned) => writeNoteMeta(id, "pinned", pinned),
 
   toggleRightPane: () => {
     beginContextNavigation();

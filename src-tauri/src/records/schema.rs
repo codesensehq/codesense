@@ -32,8 +32,6 @@ pub struct Options {
     #[serde(default)]
     pub human_only: Vec<String>,
     #[serde(default)]
-    pub reap_empty: bool,
-    #[serde(default)]
     pub seed: Vec<String>,
     #[serde(default)]
     pub recency: Option<String>,
@@ -267,7 +265,6 @@ impl Collection {
             order: vec!["pinned desc".into(), "updatedAt desc".into()],
             options: Options {
                 human_only: vec!["delete".into()],
-                reap_empty: true,
                 seed: vec!["Prompts".into()],
                 recency: Some("local".into()),
                 ..Options::default()
