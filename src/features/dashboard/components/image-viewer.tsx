@@ -46,7 +46,11 @@ export function ImageViewer({
   const frameDocumentPath = baselineSource
     ? `${baselineSource.orgRoot.replace(/\/$/, "")}/${baselineSource.relPath.replace(/^\/+/, "")}`
     : filePath;
-  const { frameRecord: frame, frameError } = useFrameRecord(
+  const {
+    frameRecord: frame,
+    frameError,
+    documentMissing,
+  } = useFrameRecord(
     port,
     filePath && frameDocumentPath
       ? {
@@ -113,6 +117,7 @@ export function ImageViewer({
     (port !== null &&
       !failed &&
       !frameError &&
+      !documentMissing &&
       (!frame || frame.grant.dashboard !== frameDocumentPath))
   ) {
     return (
@@ -122,7 +127,7 @@ export function ImageViewer({
     );
   }
 
-  if (failed || frameError) {
+  if (failed || frameError || documentMissing) {
     // `||` (not `??`) so a trailing-slash path whose `pop()` is "" still
     // falls back to a label rather than rendering empty.
     const fileName = filePath.split("/").pop() || "Image";

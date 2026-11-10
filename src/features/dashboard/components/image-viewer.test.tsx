@@ -5,10 +5,16 @@ import { ImageViewer } from "./image-viewer";
 
 // Mock the Tauri port command (URL-served pattern, mirrors html-viewer test).
 const mockGetHttpApiPort = vi.fn();
-vi.mock("@/tauri/commands", async () => ({
-  ...(await import("../../../../tests/support/fixtures/frame")).frameCommands(),
-  getHttpApiPort: () => mockGetHttpApiPort(),
-}));
+const mintFailure = vi.hoisted(() => ({ error: null as string | null }));
+vi.mock("@/tauri/commands", async () => {
+  const commands = (await import("../../../../tests/support/fixtures/frame")).frameCommands();
+  return {
+    ...commands,
+    mintFrame: (args: Parameters<typeof commands.mintFrame>[0]) =>
+      mintFailure.error ? Promise.reject(mintFailure.error) : commands.mintFrame(args),
+    getHttpApiPort: () => mockGetHttpApiPort(),
+  };
+});
 
 // closeTab is only invoked from the placeholder's Close button; stub the store.
 vi.mock("@/shared/stores/viewer-store", () => ({
@@ -17,6 +23,7 @@ vi.mock("@/shared/stores/viewer-store", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mintFailure.error = null;
 });
 
 afterEach(() => {
@@ -72,6 +79,19 @@ describe("ImageViewer (SW-SC-7)", () => {
       expect(screen.getByText("missing.png")).toBeInTheDocument();
       expect(screen.getByText("This file was removed from disk")).toBeInTheDocument();
     });
+  });
+
+  it("shows the missing-file placeholder when the native mint reports a deleted image", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    mintFailure.error = "missing: the document no longer exists";
+    render(<ImageViewer filePath="/repo/gone.png" teamContentPath="/repo" />);
+    await waitFor(() => {
+      expect(screen.getByText("gone.png")).toBeInTheDocument();
+      expect(screen.getByText("This file was removed from disk")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Close Tab/ })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(document.querySelector("img")).toBeNull();
   });
 
   it("hot-reloads only when THIS file changed (AC-7)", async () => {
