@@ -1424,6 +1424,23 @@ describe("HtmlViewer changedPaths reload gate", () => {
     );
   });
 
+  it("shows the missing-file placeholder when an open document is deleted", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    const props = { filePath, teamContentPath: "/repo" };
+    const { rerender } = render(<HtmlViewer {...props} refreshKey={1} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    const initialMints = vi.mocked(mintFrame).mock.calls.length;
+    vi.mocked(revalidateFrame).mockResolvedValueOnce("missing");
+    rerender(<HtmlViewer {...props} refreshKey={2} changedPaths={new Set([filePath])} />);
+    await waitFor(() =>
+      expect(screen.getByText("This file was removed from disk")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Close Tab")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to create document frame/)).toBeNull();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(mintFrame).toHaveBeenCalledTimes(initialMints);
+  });
+
   it("retries a failed centre mint when an ancestor declaration is corrected", async () => {
     mockGetHttpApiPort.mockResolvedValue(9123);
     vi.mocked(mintFrame).mockRejectedValueOnce(new Error("invalid allowed_hosts"));

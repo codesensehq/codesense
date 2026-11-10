@@ -82,6 +82,7 @@ export function useFrameRecord(
     frame: FrameRecord | null;
     error: string | null;
     evicted?: boolean;
+    missing?: boolean;
     approvedRevision?: number;
   } | null>(null);
   // The lifetime owns allocation/budget/release. A refresh only cancels its comparison.
@@ -126,6 +127,11 @@ export function useFrameRecord(
         lifetime.unregister = undefined;
         lifetime.frame = null;
         retire(current);
+        // A deleted document keeps no authority; the viewer shows its missing-file state.
+        if (result === "missing") {
+          setState({ key, frame: null, error: null, missing: true });
+          return;
+        }
       }
       const frame = await mintFrame(request);
       if (!active) {
@@ -199,5 +205,6 @@ export function useFrameRecord(
     approvedRevision: state?.key === key ? state.approvedRevision : undefined,
     frameRecord: frame,
     frameError: state?.key === key ? state.error : null,
+    documentMissing: state?.key === key && !!state.missing,
   };
 }

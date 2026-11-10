@@ -244,6 +244,8 @@ async fn prepare_frame<R: tauri::Runtime>(
 pub enum FrameRevalidation {
     Unchanged,
     RemintRequired,
+    /// The document was deleted: the viewer shows its missing-file state, not a frame error.
+    Missing,
 }
 
 /// No renderer-selected paths or permissions, and no allocation or mutation on comparison.
@@ -261,6 +263,9 @@ pub async fn revalidate_frame<R: tauri::Runtime>(
     // Refresh validation belongs to centre documents. Slot/child lifetimes keep their host policy.
     if record.grant.slot != "centre" || record.parent_frame.is_some() || record.message.is_some() {
         return Err("denied: this frame is not a centre document".into());
+    }
+    if !std::path::Path::new(&record.document_path).exists() {
+        return Ok(FrameRevalidation::Missing);
     }
     let prepared = prepare_frame(
         &app,
@@ -1008,6 +1013,8 @@ mod tests {
         )
         .await
         .is_err());
+        std::fs::remove_file(&page).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Missing);
         frames.release(&record.frame_id);
         assert!(check().await.is_err());
     }

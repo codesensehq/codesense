@@ -69,6 +69,22 @@ it("remints changed authority, retires invalid authority and retries its correct
   expect(mintFrame).toHaveBeenCalledTimes(3);
   unmount();
 });
+it("retires a deleted document's authority without an error or a remint", async () => {
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  vi.mocked(revalidateFrame).mockResolvedValueOnce("missing");
+  rerender({ revision: 2 });
+  await waitFor(() => expect(result.current.documentMissing).toBe(true));
+  expect(result.current.frameRecord).toBeNull();
+  expect(result.current.frameError).toBeNull();
+  expect(releaseFrame).toHaveBeenCalledExactlyOnceWith("test");
+  expect(mintFrame).toHaveBeenCalledTimes(1);
+  unmount();
+});
 it("ignores stale comparisons without releasing a reused frame", async () => {
   vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
   const { result, rerender, unmount } = renderHook(

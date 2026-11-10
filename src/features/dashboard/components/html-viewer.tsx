@@ -2391,7 +2391,7 @@ export function HtmlViewer({
     );
   }
 
-  if (fileDeleted) {
+  if (fileDeleted || minted.documentMissing) {
     if (renderMissing) return <>{renderMissing()}</>;
     const fileName = filePath.split("/").pop() ?? "File";
     return <FileDeletedPlaceholder fileName={fileName} onClose={handleClose} />;
