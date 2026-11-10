@@ -22,7 +22,7 @@ Per story, you also see how much of the change agents wrote and how much people 
 
 > **Note**
 >
-> Attribution notes are local. They never leave your machine unless you choose to share them. Lines are traced for Claude Code and Codex agents that run on your Mac.
+> Attribution notes are local. They never leave your machine unless you choose to share them. Lines are traced when a Claude Code or Codex agent running on your Mac made the edit.
 
 ## The session record
 
