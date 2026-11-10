@@ -3,8 +3,8 @@ name: Rust tests
 
 on:
   pull_request:
-    # The defaults, plus ready_for_review: a draft skips macOS (below) until it is marked ready.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # The defaults, plus labeled: adding ci:macos starts the macOS job (below) on the pull request.
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
   merge_group:
@@ -13,7 +13,8 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # A label other than ci:macos gets a group of its own, so it never cancels the pull request's run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
@@ -24,12 +25,13 @@ env:
 jobs:
   rust-macos:
     name: Rust (macOS arm64)
-    # macOS runners are scarce: skip draft and Dependabot pull requests. GitHub counts a skipped
-    # required job as passing on the pull request, which is acceptable only because the merge
-    # queue reruns this job on merge_group, where it always runs (as on push and
+    # macOS runners are scarce: on a pull request this job runs only with the ci:macos label, never
+    # on a Dependabot pull request, and not again when another label is added. GitHub counts a
+    # skipped required job as passing on the pull request, which is acceptable only because the
+    # merge queue reruns this job on merge_group, where it always runs (as on push and
     # workflow_dispatch); nothing merges without it. workflow-policy keeps the leading
     # github.event_name != 'pull_request' || so that holds.
-    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.actor != 'dependabot[bot]')
+    if: github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))
     runs-on: macos-15
     # Room for a full compile of the set, most of which the dependency cache does not
     # cover, followed by tests and doctests.
