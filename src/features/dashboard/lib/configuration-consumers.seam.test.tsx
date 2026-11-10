@@ -60,7 +60,7 @@ function Consumer() {
   const convention = useConfigStore((s) => s.teamMainDocPreferences[teamKey]?.mainDoc ?? "");
   return (
     <>
-      <output aria-label="slot">{singleSlotChoice("dock")?.id ?? "native"}</output>
+      <output aria-label="slot">{singleSlotChoice("dock")?.id ?? "none"}</output>
       <output aria-label="main doc">{convention}</output>
       <output aria-label="retained convention">
         {retained.kind === "ready" ? retained.source.mainDoc : "unavailable"}
@@ -202,7 +202,7 @@ it("does no consumer work while hidden and catches up on reveal", async () => {
   await act(async () => advance());
   expect(read).toHaveBeenCalledTimes(reads);
   expect(posted.filter((message) => message.type === "codesense:stale")).toHaveLength(2);
-  expect(screen.getByLabelText("slot")).toHaveTextContent("native");
+  expect(screen.getByLabelText("slot")).toHaveTextContent("agent-list");
   expect(screen.getByLabelText("main doc")).toBeEmptyDOMElement();
   await act(async () => connection!.visible(true));
   await waitFor(() => expect(screen.getByLabelText("slot")).toHaveTextContent("agents"));
@@ -238,7 +238,7 @@ it.each(["principal", "org"])(
     await act(async () => {
       for (const event of trace.deltas) deliverEvent(event);
     });
-    expect(screen.getByLabelText("slot")).toHaveTextContent("native");
+    expect(screen.getByLabelText("slot")).toHaveTextContent("agent-list");
     expect(useDashboardProfileStore.getState().profile).toBeNull();
     expect(screen.getByLabelText("main doc")).toBeEmptyDOMElement();
   },

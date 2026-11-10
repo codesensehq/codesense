@@ -12,4 +12,4 @@ allow entries or paste private values while explaining a failure.
 - [ ] What this changes and why:
 - [ ] Every commit is signed off (`git commit -s`) under the DCO.
 - [ ] Checks I ran (see CONTRIBUTING.md → Local checks):
-- [ ] A line under `## [Unreleased]` in `CHANGELOG.md`, if users would notice the change.
+- [ ] A changelog entry in `changes/<slug>.md` (see `changes/README.md`), if users would notice the change.

@@ -275,6 +275,32 @@ it("acks flush after async handlers settle, including a rejection, and answers p
   hostMessage("codesense:ping");
   expect(post).toHaveBeenLastCalledWith({ type: "codesense:pong" }, "*");
 });
+it("answers a render check with whether the page drew anything, and only when asked", () => {
+  const post = install();
+  const pong = () => post.mock.lastCall![0] as Record<string, unknown>;
+  document.body.replaceChildren();
+  hostMessage("codesense:ping");
+  expect(pong()).toMatchObject({ type: "codesense:pong" });
+  expect(pong().rendered).toBeUndefined();
+  hostMessage("codesense:ping", { render: true });
+  expect(pong()).toMatchObject({ type: "codesense:pong", rendered: false });
+  const row = document.createElement("div");
+  document.body.append(row);
+  // A child with no box is still nothing to see.
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(false);
+  // A zero-box wrapper (display: contents, or a collapsed parent) still counts its children.
+  const cell = document.createElement("span");
+  row.append(cell);
+  vi.spyOn(cell, "getBoundingClientRect").mockReturnValue({ width: 200, height: 24 } as DOMRect);
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(true);
+  // A frame with no viewport (folded or display:none) can't tell, so it never reports blank.
+  row.remove();
+  vi.spyOn(window, "innerWidth", "get").mockReturnValue(0);
+  hostMessage("codesense:ping", { render: true });
+  expect(pong().rendered).toBe(true);
+});
 it("delivers slot context and its nav alias, teardown, and default/custom focus-in", async () => {
   install();
   const cs = (window as any).codesense;
@@ -293,11 +319,18 @@ it("delivers slot context and its nav alias, teardown, and default/custom focus-
   const input = document.createElement("input");
   document.body.append(input);
   vi.spyOn(input, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
+  vi.spyOn(input, "getBoundingClientRect").mockReturnValue({
+    top: 10,
+    left: 10,
+    bottom: 30,
+    right: 100,
+  } as DOMRect);
   vi.spyOn(window, "getComputedStyle").mockReturnValue({
     visibility: "visible",
   } as CSSStyleDeclaration);
   hostMessage("codesense:focus-in");
-  expect(document.activeElement).not.toBe(input);
+  expect(document.activeElement).toBe(input);
+  input.blur();
   const focus = vi.fn();
   const off = cs.onFocusIn(focus);
   hostMessage("codesense:focus-in");
@@ -508,7 +541,7 @@ it("frozen arrows cannot reach native controls or page editing handlers; app cho
 
 // jsdom does not scroll or move real focus between windows; the scrollTop and Enter
 // assertions live in tests/frame-security/html-focus-return.spec.ts (WebKit).
-it("focus-in and focus-return never focus the doc's first control; the anchor is restored with preventScroll", () => {
+it("focus-in and focus-return never focus an offscreen first control; the anchor is restored with preventScroll", () => {
   install();
   const first = document.createElement("input");
   const anchor = document.createElement("button");
@@ -528,4 +561,41 @@ it("focus-in and focus-return never focus the doc's first control; the anchor is
   expect(focus.mock.instances).not.toContain(first);
   first.remove();
   anchor.remove();
+});
+
+// The first visible control takes focus-in only while it is in view (without scrolling);
+// a doc read mid-way keeps document focus, so Enter activates nothing.
+it("focus-in focuses the first control only when it is in view, with preventScroll", () => {
+  install();
+  const first = document.createElement("button");
+  const later = document.createElement("button");
+  document.body.append(first, later);
+  for (const el of [first, later])
+    vi.spyOn(el, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
+  vi.spyOn(window, "getComputedStyle").mockReturnValue({
+    visibility: "visible",
+  } as CSSStyleDeclaration);
+  const rect = vi.spyOn(first, "getBoundingClientRect");
+  vi.spyOn(later, "getBoundingClientRect").mockReturnValue({
+    top: 40,
+    left: 0,
+    bottom: 60,
+    right: 80,
+  } as DOMRect);
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  const windowFocus = vi.spyOn(window, "focus").mockImplementation(() => {});
+  // Scrolled past the first control: document focus, no control, even with one in view.
+  rect.mockReturnValue({ top: -400, left: 0, bottom: -380, right: 80 } as DOMRect);
+  hostMessage("codesense:focus-in");
+  expect(document.activeElement).not.toBe(first);
+  expect(document.activeElement).not.toBe(later);
+  expect(windowFocus).toHaveBeenCalledTimes(1);
+  // At the top: the first control takes focus without scrolling.
+  rect.mockReturnValue({ top: 0, left: 0, bottom: 20, right: 80 } as DOMRect);
+  hostMessage("codesense:focus-in");
+  expect(document.activeElement).toBe(first);
+  expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  expect(windowFocus).toHaveBeenCalledTimes(1);
+  first.remove();
+  later.remove();
 });

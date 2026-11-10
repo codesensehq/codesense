@@ -396,6 +396,7 @@ describe("Connections → Machines group", () => {
             defaultBaseDir: null,
             pinnedHostKeyFp: "pin",
             pinnedServerId: "server",
+            revision: "rev-1",
           },
           binding: {
             username: "dev",
@@ -458,6 +459,7 @@ describe("Connections → Machines group", () => {
         defaultBaseDir: null,
         pinnedHostKeyFp: "pin",
         pinnedServerId: "server",
+        revision: "rev-1",
       },
       binding: null,
       canPublish: true,

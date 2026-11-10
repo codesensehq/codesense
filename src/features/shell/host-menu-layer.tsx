@@ -19,6 +19,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
@@ -86,6 +87,7 @@ function MenuLabel({ item }: { item: HostMenuItem }) {
           {item.count}
         </span>
       )}
+      {item.shortcut && <DropdownMenuShortcut aria-hidden>{item.shortcut}</DropdownMenuShortcut>}
     </>
   );
 }
