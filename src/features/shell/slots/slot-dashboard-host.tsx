@@ -283,6 +283,14 @@ export function SlotDashboardHost({
   const retryFocused = useRef(false);
   const manualSourceRefresh = useRef(false);
   const previousDiagnostic = useRef<SlotDiagnosticState | null>(null);
+  // A live page that dies or draws nothing is reloaded once per reveal, silently; the attempt
+  // that reload started (and when) is remembered so its outcome can be logged and, if it fails,
+  // the dead page is dropped for the fallback.
+  const autoReloaded = useRef(false);
+  const autoRecovery = useRef<{ attempt: number; startedAt: number } | null>(null);
+  useEffect(() => {
+    if (!visible) autoReloaded.current = false;
+  }, [visible]);
   const onPageStart = useCallback(
     (key: string) => {
       if (!key || key === documentIdentity.current) return;
@@ -368,8 +376,31 @@ export function SlotDashboardHost({
     const owner = document.activeElement;
     return !owner || owner === document.body || !!root.current?.contains(owner);
   }, []);
+  const logRecovery = useCallback(
+    (step: string, extra?: Record<string, unknown>) =>
+      logger.info(
+        "slot-recovery",
+        JSON.stringify({
+          slot: slotId,
+          panelId,
+          ref: dashboardKey ?? entry.path,
+          step,
+          attempt: badgeAttempt.current,
+          ...extra,
+        }),
+      ),
+    [slotId, panelId, dashboardKey, entry.path],
+  );
   const fail = useCallback(
     (problem: SlotFailure) => {
+      const recovering = autoRecovery.current?.attempt === badgeAttempt.current;
+      if (recovering) {
+        logRecovery("fell-back", {
+          reason: problem.kind,
+          elapsedMs: Math.round(performance.now() - autoRecovery.current!.startedAt),
+        });
+        autoRecovery.current = null;
+      }
       if (failedAttempt.current !== badgeAttempt.current && !retainedRef.current) onBadge?.(null);
       failedAttempt.current = badgeAttempt.current;
       setFailureAttempt(badgeAttempt.current);
@@ -396,7 +427,8 @@ export function SlotDashboardHost({
       setFrozen(false);
       unfreezeFrames.current();
       preparation.current = null;
-      if (retainedRef.current && !retainedRef.current.wasLive) {
+      // A failed automatic reload never keeps the dead page it replaced.
+      if (retainedRef.current && (!retainedRef.current.wasLive || recovering)) {
         retainedRef.current = null;
         setRetained(null);
       }
@@ -416,7 +448,16 @@ export function SlotDashboardHost({
       if (retryFocused.current && focusStillOurs()) setReturnFocus(true);
       retryFocused.current = false;
     },
-    [dashboardKey, panelId, onBadge, slotId, entry.path, fallbackConfig, focusStillOurs],
+    [
+      dashboardKey,
+      panelId,
+      onBadge,
+      slotId,
+      entry.path,
+      fallbackConfig,
+      focusStillOurs,
+      logRecovery,
+    ],
   );
   useEffect(() => {
     if (unavailableKind) fail({ kind: unavailableKind, technical: unavailableTechnical ?? "" });
@@ -511,6 +552,12 @@ export function SlotDashboardHost({
       failedAttempt.current = null;
     }
     live.current = true;
+    if (autoRecovery.current?.attempt === attempts) {
+      logRecovery("recovered", {
+        elapsedMs: Math.round(performance.now() - autoRecovery.current.startedAt),
+      });
+      autoRecovery.current = null;
+    }
     attemptRoot.current.settled = true;
     setReadyEpoch((epoch) => epoch + 1);
     shownAttempt.current = attempts;
@@ -560,6 +607,7 @@ export function SlotDashboardHost({
     keepFailedForLateLive,
     onBadge,
     onIntentDelivered,
+    logRecovery,
   ]);
   // Let the replacement commit paint before hiding and flushing the outgoing document.
   useLayoutEffect(() => {
@@ -574,41 +622,6 @@ export function SlotDashboardHost({
     });
     return () => cancelAnimationFrame(paint);
   }, [retained, isLive]);
-  const onDocProblem = useCallback(
-    (problem: DocProblem) => {
-      if (!isCurrentAttempt(attempts)) return;
-      // A blocked load is one problem row, before or after ready; it never fails the pane.
-      if (
-        problem.kind === "bridge" ||
-        problem.kind === "csp" ||
-        (problem.kind === "script" && live.current)
-      ) {
-        setProblems((previous) =>
-          (problem.kind === "script" &&
-            previous
-              .slice(-3)
-              .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))) ||
-          (problem.kind === "csp" &&
-            previous.some((p) => p.kind === "csp" && p.message === problem.message))
-            ? previous
-            : [...previous.slice(-49), problem],
-        );
-        return;
-      }
-      fail({
-        kind:
-          problem.message === "frame crashed" || problem.message === "frame stopped responding"
-            ? "crash"
-            : problem.kind === "script"
-              ? "script"
-              : problem.message.includes("not found") || problem.message.includes("404")
-                ? "missing"
-                : "connection",
-        technical: problem.message,
-      });
-    },
-    [attempts, fail, isCurrentAttempt],
-  );
   const begin = useCallback(
     (next: PaneEntry | null) => {
       if (failedAttempt.current === badgeAttempt.current) return;
@@ -624,6 +637,8 @@ export function SlotDashboardHost({
       clearTimeout(sourceTimer.current);
       // Invalidate every callback from a superseded candidate before it can report ready.
       badgeAttempt.current += 1;
+      // A Reload or source refresh supersedes an automatic reload; its outcome is not logged.
+      autoRecovery.current = null;
       failedAttempt.current = null;
       pageReceivedIntent.current = false;
       documentIdentity.current = null;
@@ -678,6 +693,58 @@ export function SlotDashboardHost({
     freezeForReload();
     mountPrepared();
   }, [freezeForReload, mountPrepared]);
+  const onDocProblem = useCallback(
+    (problem: DocProblem) => {
+      if (!isCurrentAttempt(attempts)) return;
+      // A blocked load is one problem row, before or after ready; it never fails the pane.
+      if (
+        problem.kind === "bridge" ||
+        problem.kind === "csp" ||
+        (problem.kind === "script" && live.current)
+      ) {
+        setProblems((previous) =>
+          (problem.kind === "script" &&
+            previous
+              .slice(-3)
+              .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))) ||
+          (problem.kind === "csp" &&
+            previous.some((p) => p.kind === "csp" && p.message === problem.message))
+            ? previous
+            : [...previous.slice(-49), problem],
+        );
+        return;
+      }
+      const dead = problem.cause === "unresponsive";
+      const blank = problem.cause === "blank";
+      if (!live.current) {
+        // A page still starting answers to the startup deadline, not the blank check.
+        if (blank) return;
+      } else if (dead || blank) {
+        logRecovery(dead ? "unresponsive" : "blank", {
+          pageAgeMs: Math.round(performance.now() - startupStarted.current),
+        });
+        if (!autoReloaded.current) {
+          autoReloaded.current = true;
+          startAttempt();
+          autoRecovery.current = { attempt: badgeAttempt.current, startedAt: performance.now() };
+          logRecovery("auto-reload");
+          return;
+        }
+        logRecovery("fell-back", { reason: "repeat" });
+      }
+      fail({
+        kind: problem.cause
+          ? "crash"
+          : problem.kind === "script"
+            ? "script"
+            : problem.message.includes("not found") || problem.message.includes("404")
+              ? "missing"
+              : "connection",
+        technical: problem.message,
+      });
+    },
+    [attempts, fail, isCurrentAttempt, logRecovery, startAttempt],
+  );
   const onPageBadge = useCallback(
     (badge: DocBadge | null) => {
       if (
@@ -789,6 +856,7 @@ export function SlotDashboardHost({
     };
   }, []);
   const reload = () => {
+    autoReloaded.current = false;
     retryFocused.current = !!root.current?.contains(document.activeElement);
     manualSourceRefresh.current = !!onReload;
     startAttempt();
@@ -884,7 +952,9 @@ export function SlotDashboardHost({
   const strip = failure && !showingEntryFallback && (
     <SlotFallbackStrip
       entry={entry}
-      surface={retained && !isLive ? undefined : fallbackInbox ? "Inbox" : native?.label}
+      surface={
+        retained && !isLive ? undefined : fallbackInbox ? "Inbox" : nativeBody && native?.label
+      }
       keepingPrevious={!!retained && !isLive}
       failure={failure}
       reloading={reloading}

@@ -4,7 +4,7 @@ import { listBuiltinPanes } from "@/tauri/commands";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { SlotDashboardHost } from "./slot-dashboard-host";
 import type { DocBadge } from "@/features/dashboard/components/html-viewer";
 import { registerPanel, unregisterPanel } from "../right-pane/panel-registry";
@@ -83,6 +83,14 @@ const fallbackProps = {
   contentRoot: "/ctx",
   readyWithinMs: 3_000,
 };
+const DEAD = { kind: "load", message: "frame stopped responding", cause: "unresponsive" } as const;
+const BLANK = { kind: "load", message: "frame rendered nothing", cause: "blank" } as const;
+const dead = () => act(() => props.current.onDocProblem(DEAD));
+/** The current attempt goes live and the page it replaced retires. */
+const settle = async () => {
+  act(() => props.current.onDocLive());
+  await act(async () => vi.advanceTimersByTimeAsync(32));
+};
 afterEach(() => {
   cleanup();
   unregisterPanel("scratch");
@@ -149,7 +157,7 @@ it("uses the generic slot fallback on a cold frame error and lets late ready rec
       fallback={fallbackProps}
     />,
   );
-  act(() => props.primary.onDocProblem({ kind: "load", message: "frame stopped responding" }));
+  act(() => props.primary.onDocProblem(DEAD));
   expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeTruthy();
   act(() => props.primary.onDocLive());
   expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeNull();
@@ -167,7 +175,7 @@ it("retries the selected pane from its generic fallback", () => {
       fallback={fallbackProps}
     />,
   );
-  act(() => props.primary.onDocProblem({ kind: "load", message: "frame stopped responding" }));
+  act(() => props.primary.onDocProblem(DEAD));
   expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeTruthy();
   const beforeRetry = props.mounts;
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -176,7 +184,8 @@ it("retries the selected pane from its generic fallback", () => {
   act(() => props.primary.onDocLive());
   expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeNull();
 });
-it("shows the generic fallback when a live pane later fails", () => {
+it("shows the generic fallback when a live pane fails again after its automatic reload", async () => {
+  vi.useFakeTimers();
   render(
     <SlotDashboardHost
       slotId="dock"
@@ -187,8 +196,119 @@ it("shows the generic fallback when a live pane later fails", () => {
     />,
   );
   act(() => props.primary.onDocLive());
-  act(() => props.primary.onDocProblem({ kind: "load", message: "frame stopped responding" }));
+  act(() => props.primary.onDocProblem(DEAD));
+  expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeNull();
+  await settle();
+  act(() => props.primary.onDocProblem(DEAD));
   expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeTruthy();
+});
+const dock = (visible = true, refreshKey?: number) => (
+  <SlotDashboardHost
+    slotId="dock"
+    entry={entry}
+    contentRoot="/ctx"
+    visible={visible}
+    refreshKey={refreshKey}
+  />
+);
+/** A fresh `logger.info` spy for this test only, restored even when the test fails. */
+const spyInfo = () => {
+  const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+  info.mockClear();
+  onTestFinished(() => info.mockRestore());
+  return info;
+};
+const recoverySteps = (info: { mock: { calls: unknown[][] } }) =>
+  info.mock.calls
+    .filter(([tag]) => tag === "slot-recovery")
+    .map(([, body]) => JSON.parse(body as string).step);
+it("reloads a live pane that stops responding once, then shows the strip alone with Reload", async () => {
+  vi.useFakeTimers();
+  const info = spyInfo();
+  render(dock());
+  act(() => props.current.onDocLive());
+  const mounts = props.mounts;
+  dead();
+  // Silent: a new attempt and no strip.
+  expect(props.mounts).toBe(mounts + 1);
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  await settle();
+  expect(screen.getAllByTestId("dashboard")).toHaveLength(1);
+  dead();
+  expect(props.mounts).toBe(mounts + 1);
+  // The automatic reload was an attempt too.
+  expect(screen.getByTestId("slot-fallback-strip")).toHaveTextContent(
+    "Triage inbox pane still didn't load.",
+  );
+  expect(screen.queryAllByTestId("dashboard")).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  expect(recoverySteps(info)).toEqual([
+    "unresponsive",
+    "auto-reload",
+    "recovered",
+    "unresponsive",
+    "fell-back",
+  ]);
+  const logged = info.mock.calls.filter(([tag]) => tag === "slot-recovery").map(([, b]) => b);
+  for (const body of logged)
+    expect(Object.keys(JSON.parse(body as string))).toEqual(
+      expect.arrayContaining(["attempt", "panelId", "ref", "slot", "step"]),
+    );
+});
+it("reloads a live pane that draws nothing once; a reload that never gets ready drops it for the strip", () => {
+  vi.useFakeTimers();
+  const info = spyInfo();
+  render(dock());
+  // A page still starting answers to its startup deadline, never the blank check.
+  const mounts = props.mounts;
+  act(() => props.current.onDocProblem(BLANK));
+  expect(props.mounts).toBe(mounts);
+  act(() => props.current.onDocLive());
+  act(() => props.current.onDocProblem(BLANK));
+  expect(props.mounts).toBe(mounts + 1);
+  expect(screen.getByText("Updating…")).toBeInTheDocument();
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  act(() => vi.advanceTimersByTime(30_000));
+  expect(screen.getByTestId("slot-fallback-strip")).toBeInTheDocument();
+  expect(screen.queryAllByTestId("dashboard")).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  expect(recoverySteps(info)).toEqual(["blank", "auto-reload", "fell-back"]);
+});
+it("a manual Reload re-arms the automatic reload, and supersedes one in flight", async () => {
+  vi.useFakeTimers();
+  const info = spyInfo();
+  const view = render(dock());
+  await settle();
+  dead();
+  await settle();
+  dead();
+  expect(screen.getByTestId("slot-fallback-strip")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await settle();
+  const mounts = props.mounts;
+  dead();
+  expect(props.mounts).toBe(mounts + 1);
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  // A source refresh lands while that automatic reload starts: the refresh owns the outcome.
+  view.rerender(dock(true, 2));
+  act(() => vi.advanceTimersByTime(150));
+  await settle();
+  expect(recoverySteps(info).slice(-2)).toEqual(["unresponsive", "auto-reload"]);
+});
+it("gives each reveal its own automatic reload, and a healthy pane none", async () => {
+  vi.useFakeTimers();
+  const view = render(dock());
+  act(() => props.current.onDocLive());
+  const mounts = props.mounts;
+  act(() => vi.advanceTimersByTime(60_000));
+  expect(props.mounts).toBe(mounts);
+  dead();
+  await settle();
+  view.rerender(dock(false));
+  view.rerender(dock(true));
+  act(() => props.current.onDocProblem(BLANK));
+  expect(props.mounts).toBe(mounts + 2);
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
 });
 it("pauses the shown-cold readiness deadline while hidden and remembers hidden liveness", () => {
   vi.useFakeTimers();
@@ -323,7 +443,7 @@ it("keeps the absolute deadline for a retry made while the fallback is displayed
       fallback={fallbackProps}
     />,
   );
-  act(() => props.primary.onDocProblem({ kind: "load", message: "frame stopped responding" }));
+  act(() => props.primary.onDocProblem(DEAD));
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   act(() => vi.advanceTimersByTime(150));
   act(() => vi.advanceTimersByTime(30_100));
@@ -408,9 +528,7 @@ it("shows rejected and plain dashboards in the same standard strip without mount
       visible
     />,
   );
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Triage inbox pane didn't load — showing the built-in Agents list.",
-  );
+  expect(screen.getByRole("status")).toHaveTextContent("Triage inbox pane didn't load.");
   expect(props.mounts).toBe(before);
   fireEvent.click(screen.getByRole("button", { name: "Details" }));
   expect(screen.getByText(/Remove or correct/)).toBeTruthy();
