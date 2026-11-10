@@ -154,6 +154,7 @@ it("composes colliding origins, edits, replacement and access loss without local
       defaultBaseDir: null,
       pinnedHostKeyFp: null,
       pinnedServerId: null,
+      revision: "rev-1",
     },
   });
   // A renamed / re-addressed declaration keeps the same admitted origin.

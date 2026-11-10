@@ -3,14 +3,20 @@ name: Rust tests
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    # The defaults, plus labeled: adding ci:macos starts the macOS job (below) on the pull request.
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+  # No push: main moves only through the merge queue, which already ran these jobs on the exact
+  # commit it merges. A nightly run on main saves the caches and tracks flaky tests instead.
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # A label other than ci:macos gets a group of its own, so it never cancels the pull request's run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
@@ -21,6 +27,13 @@ env:
 jobs:
   rust-macos:
     name: Rust (macOS arm64)
+    # macOS runners are scarce: on a pull request this job runs only with the ci:macos label, never
+    # on a Dependabot pull request, and not again when another label is added. GitHub counts a
+    # skipped required job as passing on the pull request, which is acceptable only because the
+    # merge queue reruns this job on merge_group, where it always runs (as on the nightly schedule and
+    # workflow_dispatch); nothing merges without it. workflow-policy keeps the leading
+    # github.event_name != 'pull_request' || so that holds.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))
     runs-on: macos-15
     # Room for a full compile of the set, most of which the dependency cache does not
     # cover, followed by tests and doctests.
@@ -54,7 +67,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/pnpm-install.log"
       - name: Set up Rust
@@ -63,7 +76,7 @@ jobs:
       - name: Restore scanner archives
         # Archives named by their sha256; install-scanners verifies each against the lock before use.
         id: scanner-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: scanner-archives-nextest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
@@ -72,8 +85,8 @@ jobs:
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
       - name: Save scanner archives
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: ${{ steps.scanner-cache.outputs.cache-primary-key }}
@@ -81,7 +94,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-macos
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Fetch git-ai
         run: bash scripts/fetch-git-ai.sh 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/fetch-git-ai.log"
@@ -102,6 +115,11 @@ jobs:
           read -r -a packages <<< "$RUST_PACKAGES"
           cargo nextest run --profile ci "${packages[@]}" \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-test.log"
+      - name: List flaky tests
+        # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
+        # and tracked as a public issue by flaky-issues on main.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
       - name: Test macOS doctests
         timeout-minutes: 15
         # Runs after failed tests, but not when the test build never ran; on macOS the build script
@@ -113,7 +131,7 @@ jobs:
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-doctest.log"
       - name: Upload JUnit report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-macos-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/nextest/ci/junit.xml
@@ -124,7 +142,7 @@ jobs:
         run: git diff --exit-code 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/tracked-files.log"
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-macos-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rust-ci-logs/
@@ -166,7 +184,7 @@ jobs:
       - name: Restore scanner archives
         # Archives named by their sha256; install-scanners verifies each against the lock before use.
         id: scanner-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: scanner-archives-nextest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
@@ -175,8 +193,8 @@ jobs:
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
       - name: Save scanner archives
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: ${{ steps.scanner-cache.outputs.cache-primary-key }}
@@ -184,7 +202,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-linux
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Compile Linux tests
         id: compile
@@ -197,6 +215,11 @@ jobs:
           read -r -a packages <<< "$RUST_PACKAGES"
           cargo nextest run --profile ci "${packages[@]}" \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-test.log"
+      - name: List flaky tests
+        # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
+        # and tracked as a public issue by flaky-issues on main.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
       - name: Test Linux doctests
         timeout-minutes: 15
         # Runs after failed tests, but not when the test build never ran, so an earlier failure
@@ -208,7 +231,7 @@ jobs:
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-doctest.log"
       - name: Upload JUnit report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-linux-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/nextest/ci/junit.xml
@@ -219,9 +242,50 @@ jobs:
         run: git diff --exit-code 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/tracked-files.log"
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-linux-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rust-ci-logs/
           retention-days: 7
           if-no-files-found: warn
+
+  flaky-issues:
+    name: Track flaky Rust tests
+    needs: [rust-macos, rust-linux]
+    # The only job that writes issues: the nightly run on main in this repository, never pull
+    # requests, merge groups or forks. It reads the uploaded JUnit reports; the test jobs stay read-only.
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    # One run at a time, so two runs (a nightly and a rerun, say) cannot both open an issue for the
+    # same test. GitHub keeps at most one more waiting and cancels an older waiting run, whose
+    # flakes then go untracked; a test that keeps flaking is tracked on its next flake.
+    concurrency:
+      group: flaky-issues
+      cancel-in-progress: false
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Download JUnit reports
+        # This attempt's reports, one directory per artifact. A job whose tests never built uploaded
+        # none, and a pattern that matches nothing downloads nothing.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: rust-*-junit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit
+      - name: Open or update flaky test issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          node scripts/flaky-tests.mjs track "$RUNNER_TEMP/junit"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

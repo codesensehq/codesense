@@ -110,6 +110,7 @@ pub(super) fn saved_reach_input(
         jump_host: declaration.jump_host.clone(),
         sign_in: stored_sign_in(&snapshot.binding)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     Ok((input, pinned))
 }
