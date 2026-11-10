@@ -218,7 +218,7 @@
           <div class="here-rail" role="img" aria-label="Current arc in the arc map"></div>
           <div class="here-rail-captions">
             <span>A</span>
-            <span style="color:var(--cs-fg);">L · factory</span>
+            <span style="color:var(--cs-fg);"></span>
             <span>N</span>
           </div>
         </div>
@@ -371,10 +371,11 @@
           const idx = ARCS.findIndex(([L]) => L === arcLetter);
           rail.innerHTML = ARCS.map((_, i) =>
             `<span class="seg" data-current="${i === idx}"></span>`).join('');
-          const name = ARCS[idx]?.[1] || '—';
+          // No known arc: leave the middle caption empty rather than invent one.
+          const here = idx < 0 ? '' : `${ARCS[idx][0]} · ${ARCS[idx][1]}`;
           captions.innerHTML = `
             <span>A</span>
-            <span style="color: var(--cs-fg);">${arcLetter} · ${name}</span>
+            <span style="color: var(--cs-fg);">${here}</span>
             <span>N</span>
           `;
         }

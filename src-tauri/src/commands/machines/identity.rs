@@ -41,16 +41,45 @@ pub struct IdentityChange {
     observed_server_id: Option<String>,
 }
 
+fn json_digest(value: &impl Serialize) -> String {
+    crate::shared::hash::sha256_hex(
+        &serde_json::to_vec(value).expect("machine records are serializable"),
+    )
+}
+
 fn revision(binding: &Binding, declaration: &Declaration) -> String {
-    let bytes = serde_json::to_vec(&(
+    json_digest(&(
         &binding.accepted_identity,
         AcceptedIdentity::from(declaration),
     ))
-    .expect("identity is serializable");
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+}
+
+/// The declaration revision a save is based on: a digest of the parsed
+/// declaration and the layer it lives in, so it survives a restart and moves
+/// with any edit, git update or unshare.
+pub(super) fn declaration_revision(scope: &Scope, declaration: &Declaration) -> String {
+    json_digest(&(scope, declaration))
+}
+
+pub(super) const CHANGED_SINCE_OPENED: &str =
+    "This machine changed since you opened it. Reopen it and save again.";
+
+/// No silent overwrite: a save carries the revision it was based on, and one
+/// that rewrites a declaration (`rewrites`) must carry it.
+pub(super) fn check_base(
+    scope: &Scope,
+    declaration: &Declaration,
+    base: Option<&str>,
+    rewrites: bool,
+) -> Result<(), String> {
+    match base {
+        Some(base) if base == declaration_revision(scope, declaration) => Ok(()),
+        Some(_) => Err(CHANGED_SINCE_OPENED.into()),
+        None if rewrites => Err(
+            "Saving changes to this machine needs the revision it was based on: pass declarationRevision, the declaration.revision list_machines returns. Reopen it and save again.".into(),
+        ),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn change(
@@ -105,11 +134,13 @@ pub(super) fn binding_for_private(env: &Env, id: &str) -> Result<Option<Binding>
     }))
 }
 
-fn saved_declaration(env: &Env, id: &str) -> Result<Option<(Declaration, bool)>, String> {
+/// A saved machine's declaration as a legacy one, with its layer and whether
+/// it is private.
+fn saved_declaration(env: &Env, id: &str) -> Result<Option<(Scope, Declaration, bool)>, String> {
     if private_setup::claims(env, id)? {
         return match registry::private::PrivateRegistry::inventory_for(&env.registry)?.remove(id) {
-            Some(registry::private::PrivateEntry::Ready(_, declaration, _)) => {
-                Ok(Some((private_setup::legacy(&declaration), true)))
+            Some(registry::private::PrivateEntry::Ready(scope, declaration, _)) => {
+                Ok(Some((scope, private_setup::legacy(&declaration), true)))
             }
             _ => Err(REFUSAL.into()),
         };
@@ -117,7 +148,16 @@ fn saved_declaration(env: &Env, id: &str) -> Result<Option<(Declaration, bool)>,
     Ok(env
         .registry
         .find(id)?
-        .map(|(_, declaration)| (declaration, false)))
+        .map(|(scope, declaration)| (scope, declaration, false)))
+}
+
+/// A base revision the caller supplied must match the machine as saved now.
+pub(super) fn check_saved_base(env: &Env, id: &str, base: Option<&str>) -> Result<(), String> {
+    let Some(base) = base else {
+        return Ok(());
+    };
+    let (scope, declaration, _) = saved_declaration(env, id)?.ok_or(CHANGED_SINCE_OPENED)?;
+    check_base(&scope, &declaration, Some(base), false)
 }
 
 pub(super) fn validate_saved(
@@ -125,7 +165,7 @@ pub(super) fn validate_saved(
     id: &str,
     input: Option<&MachineDraftInput>,
 ) -> Result<(), String> {
-    let Some((declaration, private)) = saved_declaration(env, id)? else {
+    let Some((_, declaration, private)) = saved_declaration(env, id)? else {
         return Ok(());
     };
     let binding = if private {
@@ -146,15 +186,12 @@ pub(super) fn validate_snapshot(
     if let Some(binding) = binding {
         binding.validate_declaration(declaration)?;
         if let (Some(accepted), Some(input)) = (&binding.accepted_identity, input) {
-            if accepted.host != input.host.trim()
-                || accepted.port != input.port
-                || accepted.jump_host.as_deref()
-                    != input
-                        .jump_host
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|host| !host.is_empty())
-            {
+            if !keeps_address(
+                &accepted.host,
+                accepted.port,
+                accepted.jump_host.as_deref(),
+                input,
+            ) {
                 return Err(format!(
                     "{REFUSAL}. Save the address, then confirm it in Machines before connecting."
                 ));
@@ -197,7 +234,7 @@ pub(super) fn resolve(env: &Env, id: &str, reviewed: &str, accept: bool) -> Resu
     let _held = transaction
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let (declaration, private) = saved_declaration(env, id)?.ok_or("no machine")?;
+    let (_, declaration, private) = saved_declaration(env, id)?.ok_or("no machine")?;
     let binding = env
         .registry
         .bindings()?
