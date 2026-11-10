@@ -13,6 +13,9 @@ export interface LiveFrame {
   /** The team whose view mounts the frame (not its grant's source team); gates commands and focus. */
   teamKey?: string;
   element?: HTMLIFrameElement;
+  /** Focuses the frame and tells its page once, whether or not the engine reports the frame's own
+   *  focus; false when the frame cannot take focus yet (a slot's page still starting, hidden). */
+  focus?: () => boolean;
   post: (message: Record<string, unknown>) => void;
   hide: () => void;
   remint?: () => void;
@@ -40,9 +43,10 @@ const frames = new Map<string, Entry>();
 const onScreenFrame = (frame: LiveFrame) =>
   !frame.teamKey || warmScopes.tierOf(frame.teamKey) !== "warm";
 let nextId = 0;
-const focusRequests = new Set<string>();
+/** The one panel still waiting for focus: the user's latest request wins over older ones. */
+let pendingFocus: string | null = null;
 export function requestFrameFocus(panelId: string): void {
-  focusRequests.add(panelId);
+  pendingFocus = panelId;
   for (const entry of frames.values()) {
     if (
       entry.frame.panelId === panelId &&
@@ -50,17 +54,23 @@ export function requestFrameFocus(panelId: string): void {
       !entry.tornDown &&
       onScreenFrame(entry.frame)
     ) {
-      focusRequests.delete(panelId);
-      entry.frame.element?.focus();
+      if (entry.frame.focus && !entry.frame.focus()) continue;
+      if (!entry.frame.focus) entry.frame.element?.focus();
+      if (pendingFocus === panelId) pendingFocus = null;
     }
   }
+}
+/** A ready frame that could not take a queued focus request takes it once it is shown. */
+export function retryFrameFocus(frameId: string): void {
+  const entry = frames.get(frameId);
+  if (entry?.ready && entry.frame.panelId && pendingFocus === entry.frame.panelId)
+    requestFrameFocus(entry.frame.panelId);
 }
 export function markFrameReady(frameId: string): void {
   const entry = frames.get(frameId);
   if (!entry) return;
   entry.ready = true;
-  if (entry.frame.panelId && focusRequests.has(entry.frame.panelId))
-    requestFrameFocus(entry.frame.panelId);
+  retryFrameFocus(frameId);
 }
 export function registerFrame(frame: LiveFrame): () => void {
   const entry: Entry = { frame, tornDown: false, ready: false, live: false };
@@ -82,6 +92,12 @@ export function registerFrame(frame: LiveFrame): () => void {
       entry.pending.finish();
     }
     if (frames.get(frame.frameId) === entry) frames.delete(frame.frameId);
+    // A focus request waits for its panel's frame to take input, not for a panel that is gone.
+    if (
+      pendingFocus === frame.panelId &&
+      ![...frames.values()].some((e) => !e.tornDown && e.frame.panelId === frame.panelId)
+    )
+      pendingFocus = null;
     // If the host leaves before readiness, restore the never-mounted backstop.
     for (const queued of commandQueue) {
       if (!commandMatchesFrame(queued, frame) || queued.timer) continue;

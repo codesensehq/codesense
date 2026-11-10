@@ -744,6 +744,33 @@ fn draft(sign_in: MachineSignIn) -> MachineDraftInput {
         jump_host: None,
         sign_in,
         trusted_host_key_fp: None,
+        declaration_revision: None,
+    }
+}
+
+/// `input` based on the machine's declaration as listed now, legacy or
+/// private, as the Machines panel sends it.
+fn based(env: &Env, id: &str, input: &MachineDraftInput) -> MachineDraftInput {
+    MachineDraftInput {
+        declaration_revision: summary_of(env, id)
+            .ok()
+            .and_then(|summary| summary.declaration)
+            .map(|declaration| declaration.revision),
+        ..input.clone()
+    }
+}
+
+/// A second handle on `env`'s machines, for an operation that takes its own.
+fn same_env(env: &Env) -> Env {
+    Env {
+        private_authority: env.private_authority.clone(),
+        registry: env.registry.clone(),
+        codesense_home: env.codesense_home.clone(),
+        home: env.home.clone(),
+        artifacts: env.artifacts.clone(),
+        shell_init: env.shell_init.clone(),
+        askpass_program: env.askpass_program.clone(),
+        ssh_program: env.ssh_program.clone(),
     }
 }
 
@@ -853,7 +880,7 @@ fn a_personal_machine_follows_the_profile_and_round_trips_share_unshare() {
         &env,
         &store,
         Some(&id),
-        &draft(keychain_sign_in("handle-7")),
+        &based(&env, &id, &draft(keychain_sign_in("handle-7"))),
         &team(),
         false,
     )
@@ -1001,7 +1028,7 @@ fn auto_connect_changes_only_through_its_explicit_personal_setting() {
         &env,
         &store,
         Some(&saved.machine_id),
-        &changed_reach,
+        &based(&env, &saved.machine_id, &changed_reach),
         &Scope::Personal,
         false,
     )
@@ -1293,13 +1320,14 @@ fn attach_save_setter_remove_and_unshare_share_one_machine_transaction() {
         jump_host: decl.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     assert_waits_for_machine_transaction(id, move || {
         save(
             &save_env,
             save_store.as_ref(),
             Some(id),
-            &matching,
+            &based(&save_env, id, &matching),
             &Scope::Personal,
             false,
         )
@@ -1359,8 +1387,17 @@ fn generation_revalidation_tracks_save_setting_scope_and_removal() {
         jump_host: decl.jump_host.clone(),
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
-    save(&env, &store, Some(id), &changed, &Scope::Personal, false).unwrap();
+    save(
+        &env,
+        &store,
+        Some(id),
+        &based(&env, id, &changed),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
     assert_eq!(
         revalidate_transport_generation(&env, id, &before_save),
         Err(PinnedTransportGenerationError::Stale)
@@ -1458,12 +1495,13 @@ fn stale_transport_generation_is_closed_before_publication() {
         jump_host: declaration.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     save(
         &env,
         &FakeStore::default(),
         Some(id),
-        &changed,
+        &based(&env, id, &changed),
         &Scope::Personal,
         false,
     )
@@ -1771,7 +1809,7 @@ fn a_replaced_passphrase_leaves_the_keychain() {
         &env,
         &store,
         Some(&first.machine_id),
-        &draft(keychain_sign_in("new")),
+        &based(&env, &first.machine_id, &draft(keychain_sign_in("new"))),
         &Scope::Personal,
         false,
     )
@@ -1992,7 +2030,7 @@ fn a_moved_machine_drops_its_old_pins() {
         &env,
         &store,
         Some("gpu-box-1a2b3c"),
-        &same,
+        &based(&env, "gpu-box-1a2b3c", &same),
         &Scope::Personal,
         false,
     )
@@ -2011,7 +2049,7 @@ fn a_moved_machine_drops_its_old_pins() {
         &env,
         &store,
         Some("gpu-box-1a2b3c"),
-        &other_user,
+        &based(&env, "gpu-box-1a2b3c", &other_user),
         &Scope::Personal,
         false,
     )
@@ -2025,7 +2063,7 @@ fn a_moved_machine_drops_its_old_pins() {
         &env,
         &store,
         Some("gpu-box-1a2b3c"),
-        &moved,
+        &based(&env, "gpu-box-1a2b3c", &moved),
         &Scope::Personal,
         false,
     )
@@ -2061,7 +2099,15 @@ fn setting_up_a_shared_machine_rewrites_nothing_teammates_see() {
         port: decl.port,
         ..draft(MachineSignIn::Agent)
     };
-    save(&env, &store, Some("gpu-box-1a2b3c"), &input, &team(), false).unwrap();
+    save(
+        &env,
+        &store,
+        Some("gpu-box-1a2b3c"),
+        &based(&env, "gpu-box-1a2b3c", &input),
+        &team(),
+        false,
+    )
+    .unwrap();
     assert_eq!(
         std::fs::metadata(&file).unwrap().modified().unwrap(),
         before
@@ -2108,6 +2154,7 @@ fn the_checklist_and_install_serialize_as_the_ui_contract() {
         ok: true,
         version: "v".into(),
         logout_warning: Some("w".into()),
+        declaration_revision: None,
     };
     assert_eq!(
         serde_json::to_value(installed).unwrap(),
@@ -2265,53 +2312,222 @@ fn concurrent_declaration_writes_never_share_a_staging_file() {
     assert!(declarations[0].label.starts_with("writer-"));
 }
 
+/// Compare-and-swap: saves opened at one revision race; exactly one wins and
+/// commits one coherent declaration and binding, the rest are refused.
 #[test]
-fn concurrent_saves_commit_one_coherent_machine_snapshot() {
+fn concurrent_saves_from_one_base_admit_exactly_one() {
     let root = tempfile::tempdir().unwrap();
     let env = std::sync::Arc::new(env_for(root.path(), 1));
     let store = std::sync::Arc::new(FakeStore::default());
+    let id = "gpu-box-1a2b3c";
     env.registry
-        .write(&Scope::Personal, &declaration("gpu-box-1a2b3c"))
+        .write(&Scope::Personal, &declaration(id))
         .unwrap();
+    let base = based(&env, id, &draft(MachineSignIn::Agent)).declaration_revision;
+    assert!(base.is_some());
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
     let threads: Vec<_> = (0..8)
         .map(|n| {
             let env = env.clone();
             let store = store.clone();
             let barrier = barrier.clone();
+            let base = base.clone();
             std::thread::spawn(move || {
                 let mut input = draft(MachineSignIn::Agent);
                 input.label = format!("writer-{n}");
                 input.host = format!("host-{n}.int");
                 input.username = Some(format!("user-{n}"));
+                input.declaration_revision = base;
                 barrier.wait();
                 save(
                     &env,
                     store.as_ref(),
-                    Some("gpu-box-1a2b3c"),
+                    Some(id),
                     &input,
                     &Scope::Personal,
                     false,
                 )
-                .unwrap();
+                .map(|_| n)
             })
         })
         .collect();
-    threads
+    let (won, refused): (Vec<_>, Vec<_>) = threads
         .into_iter()
-        .for_each(|thread| thread.join().unwrap());
+        .map(|thread| thread.join().unwrap())
+        .partition(Result::is_ok);
+    assert_eq!(won.len(), 1, "{won:?}");
+    for error in refused {
+        assert_eq!(error.unwrap_err(), identity::CHANGED_SINCE_OPENED);
+    }
 
-    let declaration = env.registry.find("gpu-box-1a2b3c").unwrap().unwrap().1;
-    let binding = env
-        .registry
-        .bindings()
-        .unwrap()
-        .remove("gpu-box-1a2b3c")
-        .unwrap();
-    let n = declaration.label.strip_prefix("writer-").unwrap();
+    let n = won[0].clone().unwrap();
+    let declaration = env.registry.find(id).unwrap().unwrap().1;
+    assert_eq!(declaration.label, format!("writer-{n}"));
     assert_eq!(declaration.host, format!("host-{n}.int"));
+    let binding = env.registry.bindings().unwrap().remove(id).unwrap();
     let expected_user = format!("user-{n}");
     assert_eq!(binding.username.as_deref(), Some(expected_user.as_str()));
+}
+
+/// Saves that need no base (binding-only edits of a private machine) still
+/// queue: every one lands, and the binding left is one writer's, coherent with
+/// its declaration.
+#[test]
+fn concurrent_unbased_saves_keep_one_coherent_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let env = std::sync::Arc::new(legacy_test_env(root.path()));
+    let store = std::sync::Arc::new(FakeStore::default());
+    let id = save(
+        &env,
+        store.as_ref(),
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|n| {
+            let (env, store, barrier, id) =
+                (env.clone(), store.clone(), barrier.clone(), id.clone());
+            std::thread::spawn(move || {
+                let input = MachineDraftInput {
+                    username: Some(format!("user-{n}")),
+                    ..private_draft()
+                };
+                barrier.wait();
+                save(
+                    &env,
+                    store.as_ref(),
+                    Some(&id),
+                    &input,
+                    &Scope::Personal,
+                    false,
+                )
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap().unwrap();
+    }
+    let listed = summary_of(&env, &id).unwrap();
+    assert!(
+        !matches!(listed.status, MachineStatus::ConnectionFailed { .. }),
+        "{:?}",
+        listed.status
+    );
+    let username = listed.binding.unwrap().username.unwrap();
+    assert!(username.starts_with("user-"), "{username}");
+}
+
+/// Compare-and-swap: a save based on a machine removed since is refused; it
+/// never recreates the machine under its old id.
+#[test]
+fn a_based_save_of_a_removed_machine_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = "dev-box-legacy";
+    let legacy = draft(MachineSignIn::KeyFile {
+        key_path: "/tmp/legacy-key".into(),
+    });
+    save_legacy_machine(&env, id, &legacy);
+    let opened = based(&env, id, &legacy);
+    assert!(opened.declaration_revision.is_some());
+    env.registry.delete(&Scope::Personal, id).unwrap();
+    for mode in [MachineMode::Legacy, MachineMode::PrivateAccount] {
+        let input = MachineDraftInput {
+            mode: Some(mode),
+            ..opened.clone()
+        };
+        let error = save(&env, &store, Some(id), &input, &Scope::Personal, false).unwrap_err();
+        assert_eq!(error, identity::CHANGED_SINCE_OPENED, "{mode:?}");
+        assert!(env.registry.find(id).unwrap().is_none(), "{mode:?}");
+        assert!(!private_setup::claims(&env, id).unwrap(), "{mode:?}");
+    }
+}
+
+/// Compare-and-swap: a save based on an older revision, or on none, never
+/// overwrites a newer edit; one based on the current revision is saved.
+#[test]
+fn stale_label_save_keeps_the_newer_declaration() {
+    let root = tempfile::tempdir().unwrap();
+    let env = env_for(root.path(), 1);
+    let store = FakeStore::default();
+    let id = "gpu-box-1a2b3c";
+    env.registry
+        .write(&Scope::Personal, &declaration(id))
+        .unwrap();
+    let opened = summary_of(&env, id).unwrap().declaration.unwrap().revision;
+    assert_eq!(
+        summary_of(&env_for(root.path(), 1), id)
+            .unwrap()
+            .declaration
+            .unwrap()
+            .revision,
+        opened,
+        "a restart reads the same revision"
+    );
+    let relabel = |revision: Option<String>| MachineDraftInput {
+        label: "mine".into(),
+        host: "gpu.int".into(),
+        port: 22,
+        declaration_revision: revision,
+        ..draft(MachineSignIn::Agent)
+    };
+
+    // Another writer (a git pull, another save) relabels it after it was opened.
+    let mut newer = declaration(id);
+    newer.label = "newer".into();
+    env.registry.write(&Scope::Personal, &newer).unwrap();
+    let file = env
+        .registry
+        .dir(&Scope::Personal)
+        .unwrap()
+        .join(format!("{id}.yaml"));
+    let before = std::fs::read(&file).unwrap();
+    let bindings = env.registry.bindings().unwrap();
+    for (case, base, refusal) in [
+        ("stale", Some(opened), identity::CHANGED_SINCE_OPENED),
+        ("missing", None, "declarationRevision"),
+    ] {
+        let error = save(
+            &env,
+            &store,
+            Some(id),
+            &relabel(base),
+            &Scope::Personal,
+            false,
+        )
+        .expect_err(case);
+        assert!(error.contains(refusal), "{case}: {error}");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "{case}: file changed"
+        );
+        assert_eq!(
+            env.registry.bindings().unwrap(),
+            bindings,
+            "{case}: binding written"
+        );
+    }
+
+    let current = summary_of(&env, id).unwrap().declaration.unwrap().revision;
+    let saved = save(
+        &env,
+        &store,
+        Some(id),
+        &relabel(Some(current.clone())),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
+    assert_eq!(saved.label, "mine");
+    assert_eq!(env.registry.find(id).unwrap().unwrap().1.label, "mine");
+    assert_ne!(saved.declaration.unwrap().revision, current);
 }
 
 #[test]
@@ -2342,7 +2558,7 @@ fn a_late_save_failure_rolls_back_and_reports_rollback_failure() {
         &env,
         &store,
         Some(&original.machine_id),
-        &changed,
+        &based(&env, &original.machine_id, &changed),
         &Scope::Personal,
         false,
     )
@@ -2366,7 +2582,7 @@ fn a_late_save_failure_rolls_back_and_reports_rollback_failure() {
         &env,
         &store,
         Some(&original.machine_id),
-        &changed,
+        &based(&env, &original.machine_id, &changed),
         &Scope::Personal,
         false,
     )
@@ -2407,7 +2623,7 @@ fn a_pin_snapshot_failure_prevents_every_save_mutation() {
         &env,
         &store,
         Some(&original.machine_id),
-        &changed,
+        &based(&env, &original.machine_id, &changed),
         &Scope::Personal,
         false,
     )
@@ -2537,6 +2753,7 @@ pub(super) mod container {
             jump_host: None,
             sign_in,
             trusted_host_key_fp: trusted,
+            declaration_revision: None,
         }
     }
 
@@ -2916,7 +3133,7 @@ pub(super) mod container {
                 &environment,
                 &store,
                 Some(&saved_draft.machine_id),
-                &draft,
+                &based(&environment, &saved_draft.machine_id, &draft),
                 &Scope::Personal,
                 true,
             )
@@ -3112,7 +3329,7 @@ pub(super) mod container {
             &environment,
             &store,
             Some(&saved_draft.machine_id),
-            &draft,
+            &based(&environment, &saved_draft.machine_id, &draft),
             &Scope::Personal,
             true,
         )
@@ -3346,7 +3563,7 @@ pub(super) mod container {
             &environment,
             &store,
             Some(&id),
-            &private,
+            &based(&environment, &id, &private),
             &Scope::Personal,
             true,
         )
@@ -3561,7 +3778,7 @@ pub(super) mod container {
             &env,
             &store,
             Some(&saved.machine_id),
-            &trusted,
+            &based(&env, &saved.machine_id, &trusted),
             &Scope::Personal,
             true,
         )
@@ -4588,7 +4805,15 @@ fn saving_a_legacy_machine_as_a_private_account_converts_it_in_place() {
 
     // A saved legacy record set up as a private account never needs repair.
     input.mode = Some(MachineMode::PrivateAccount);
-    let saved = save(&env, &store, Some(id), &input, &Scope::Personal, false).unwrap();
+    let saved = save(
+        &env,
+        &store,
+        Some(id),
+        &based(&env, id, &input),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
 
     assert_eq!(saved.machine_id, id);
     let declaration = saved.declaration.unwrap();
@@ -4645,7 +4870,15 @@ fn an_mcp_save_of_a_legacy_machine_without_a_mode_keeps_it_legacy() {
     let input = MachineDraftInput::from(params);
     let id = "dev-box-legacy";
     save_legacy_machine(&env, id, &input);
-    let saved = save(&env, &store, Some(id), &input, &Scope::Personal, false).unwrap();
+    let saved = save(
+        &env,
+        &store,
+        Some(id),
+        &based(&env, id, &input),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
     assert_eq!(saved.declaration.unwrap().mode, MachineMode::Legacy);
     assert!(env.registry.find(id).unwrap().is_some());
     assert!(!private_setup::claims(&env, id).unwrap());
@@ -4687,12 +4920,741 @@ fn a_retried_save_of_a_new_machine_under_its_minted_id_never_adds_a_twin() {
     let mut input = draft(MachineSignIn::Agent);
     input.mode = Some(MachineMode::PrivateAccount);
     let id = registry::new_machine_id("droplet");
-    let first = save(&env, &store, Some(&id), &input, &Scope::Personal, false).unwrap();
-    let again = save(&env, &store, Some(&id), &input, &Scope::Personal, false).unwrap();
+    let first = save(
+        &env,
+        &store,
+        Some(&id),
+        &based(&env, &id, &input),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
+    let again = save(
+        &env,
+        &store,
+        Some(&id),
+        &based(&env, &id, &input),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
     assert_eq!(first.machine_id, id);
     assert_eq!(again.machine_id, id);
     assert_eq!(private_setup::summaries(&env).unwrap().len(), 1);
-    assert!(save(&env, &store, Some("../x"), &input, &Scope::Personal, false).is_err());
+    assert!(save(
+        &env,
+        &store,
+        Some("../x"),
+        &based(&env, "../x", &input),
+        &Scope::Personal,
+        false
+    )
+    .is_err());
+}
+
+/// Refuse before disconnecting: every refusal a legacy→private switch can know from
+/// local files comes before its working connection is ended.
+#[tokio::test]
+async fn refused_private_switch_never_disconnects() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let id = "dev-box-legacy";
+    let legacy = draft(MachineSignIn::KeyFile {
+        key_path: "/tmp/legacy-key".into(),
+    });
+    save_legacy_machine(&env, id, &legacy);
+    let switch = based(
+        &env,
+        id,
+        &MachineDraftInput {
+            mode: Some(MachineMode::PrivateAccount),
+            ..legacy.clone()
+        },
+    );
+    let stale = MachineDraftInput {
+        declaration_revision: Some("0".repeat(64)),
+        ..switch.clone()
+    };
+    let run = |env: Env, input: MachineDraftInput, rewrites: bool| async move {
+        let disconnects = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = disconnects.clone();
+        let result =
+            end_legacy_connection_before_switch(env, Some(id), &input, rewrites, move |_| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::ready(())
+            })
+            .await
+            .map(drop);
+        (
+            result,
+            disconnects.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
+
+    for (case, env, input, rewrites, refusal) in [
+        (
+            "a changed address",
+            same_env(&env),
+            MachineDraftInput {
+                port: 2223,
+                ..switch.clone()
+            },
+            true,
+            "Undo the address change",
+        ),
+        (
+            "a stale revision",
+            same_env(&env),
+            stale.clone(),
+            true,
+            identity::CHANGED_SINCE_OPENED,
+        ),
+        (
+            "an enroll at a stale revision",
+            same_env(&env),
+            stale,
+            false,
+            identity::CHANGED_SINCE_OPENED,
+        ),
+        (
+            "a save without a revision",
+            same_env(&env),
+            MachineDraftInput {
+                declaration_revision: None,
+                ..switch.clone()
+            },
+            true,
+            "declarationRevision",
+        ),
+        (
+            "no private authority",
+            Env {
+                private_authority: None,
+                ..same_env(&env)
+            },
+            switch.clone(),
+            true,
+            "machine access is unavailable for this profile",
+        ),
+    ] {
+        let (result, disconnects) = run(env, input, rewrites).await;
+        let error = result.expect_err(case);
+        assert!(error.contains(refusal), "{case}: {error}");
+        assert_eq!(disconnects, 0, "{case} ended the working connection");
+    }
+    assert!(!private_setup::claims(&env, id).unwrap());
+
+    // An accepted switch ends the legacy connection, once.
+    let (result, disconnects) = run(same_env(&env), switch.clone(), true).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(disconnects, 1);
+
+    // A changed identity is refused before the connection ends, too.
+    let mut elsewhere = env.registry.find(id).unwrap().unwrap().1;
+    elsewhere.host = "elsewhere.int".into();
+    env.registry
+        .update_bindings(|all| {
+            all.get_mut(id).unwrap().accepted_identity =
+                Some(registry::AcceptedIdentity::from(&elsewhere));
+        })
+        .unwrap();
+    let (result, disconnects) = run(same_env(&env), switch, true).await;
+    let error = result.unwrap_err();
+    assert!(error.contains(identity::REFUSAL), "{error}");
+    assert_eq!(disconnects, 0);
+}
+
+/// A saved private machine's declaration file.
+fn private_file(env: &Env, scope: &Scope, id: &str) -> PathBuf {
+    registry::private::PrivateRegistry::dir_for(&env.registry, scope)
+        .unwrap()
+        .join(format!("{id}.yaml"))
+}
+
+/// A saved private machine's declaration file, edited as by hand or by git.
+fn edit_private_declaration(env: &Env, scope: &Scope, id: &str) {
+    let path = private_file(env, scope, id);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("label: Dev Box"), "{text}");
+    std::fs::write(
+        &path,
+        text.replace("label: Dev Box", "label: Edited elsewhere"),
+    )
+    .unwrap();
+}
+
+fn private_draft() -> MachineDraftInput {
+    MachineDraftInput {
+        mode: Some(MachineMode::PrivateAccount),
+        ..draft(MachineSignIn::Agent)
+    }
+}
+
+/// Private edits: a private declaration changed outside this Mac stays
+/// refused, with one clear message on save, connect and the list.
+#[test]
+fn private_declaration_edit_reads_the_clear_message() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = save(
+        &env,
+        &store,
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    edit_private_declaration(&env, &Scope::Personal, &id);
+    let message = registry::private::PRIVATE_DECLARATION_CHANGED;
+
+    let saving = save(
+        &env,
+        &store,
+        Some(&id),
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(saving, message);
+    let connecting = private_setup::open(&env, &store, &id, &OpenProgress::default())
+        .err()
+        .expect("an edited private declaration never connects");
+    assert_eq!(connecting, message);
+    assert_eq!(
+        summary_of(&env, &id).unwrap().status,
+        MachineStatus::ConnectionFailed {
+            last_error: message.into()
+        }
+    );
+}
+
+/// Private edits: one edited private machine fails only itself; every
+/// other machine still lists.
+#[test]
+fn one_edited_private_machine_does_not_break_the_list() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let edited = save(
+        &env,
+        &store,
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let healthy = save(
+        &env,
+        &store,
+        None,
+        &MachineDraftInput {
+            label: "Other Box".into(),
+            host: "other.int".into(),
+            ..private_draft()
+        },
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    env.registry
+        .write(&team(), &declaration("gpu-box-1a2b3c"))
+        .unwrap();
+    edit_private_declaration(&env, &Scope::Personal, &edited);
+
+    let listed = machines_for(&env, "acme/context", Some("platform"), 0).unwrap();
+    let status = |id: &str| {
+        listed
+            .iter()
+            .find(|m| m.machine_id == id)
+            .unwrap_or_else(|| panic!("{id} is not listed"))
+            .status
+            .clone()
+    };
+    assert_eq!(
+        status(edited.as_str()),
+        MachineStatus::ConnectionFailed {
+            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+        }
+    );
+    assert_eq!(status(healthy.as_str()), MachineStatus::NeedsCredential);
+    assert_eq!(status("gpu-box-1a2b3c"), MachineStatus::NeedsCredential);
+}
+
+/// Private edits: list_machines lays the connection manager's state over
+/// the registry's rows; an edited private machine stays refused under it.
+#[tokio::test]
+async fn an_edited_private_machine_stays_refused_through_the_list_overlay() {
+    use super::super::host_connection_manager::{HostConnectionManager, MachineManagerRecord};
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let id = save(
+        &env,
+        &FakeStore::default(),
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let manager = HostConnectionManager::default();
+    let record = || MachineManagerRecord {
+        machine_id: id.clone(),
+        scope: Some(Scope::Personal),
+        revision: None,
+        fingerprint: "same".into(),
+        set_up: true,
+        auto_connect: false,
+        open_tabs: false,
+    };
+    manager
+        .observe_mutation(manager.reserve_observation(), id.clone(), Some(record()))
+        .await;
+    manager.set_failure_for_test(&id, "ssh ended");
+    manager
+        .observe_mutation(manager.reserve_observation(), id.clone(), Some(record()))
+        .await;
+    edit_private_declaration(&env, &Scope::Personal, &id);
+
+    // list_machines: the registry's rows, then the manager's states over them.
+    let mut listed = machines_for(&env, "acme/context", Some("platform"), 0).unwrap();
+    apply_projection_snapshot(&manager, &mut listed);
+    let edited = listed.iter().find(|m| m.machine_id == id).unwrap();
+    assert_eq!(
+        edited.status,
+        MachineStatus::ConnectionFailed {
+            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+        }
+    );
+}
+
+/// Refuse before disconnecting: a switch that would change a team machine's published
+/// label is refused before its connection ends or anything converts.
+#[tokio::test]
+async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let id = "gpu-box-1a2b3c";
+    env.registry.write(&team(), &declaration(id)).unwrap();
+    let file = env
+        .registry
+        .dir(&team())
+        .unwrap()
+        .join(format!("{id}.yaml"));
+    let before = std::fs::read(&file).unwrap();
+    let renamed = based(
+        &env,
+        id,
+        &MachineDraftInput {
+            mode: Some(MachineMode::PrivateAccount),
+            label: "Renamed".into(),
+            host: "gpu.int".into(),
+            port: 22,
+            ..draft(MachineSignIn::Agent)
+        },
+    );
+    let disconnects = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = disconnects.clone();
+    let error =
+        end_legacy_connection_before_switch(same_env(&env), Some(id), &renamed, true, move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(())
+        })
+        .await
+        .map(drop)
+        .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    // The panel enrolls before it saves: the enroll's preflight and its
+    // conversion step refuse the label too, before anything ends or converts.
+    let counted = disconnects.clone();
+    let error =
+        end_legacy_connection_before_switch(same_env(&env), Some(id), &renamed, false, move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(())
+        })
+        .await
+        .map(drop)
+        .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let error = based_setup(&env, Some(id), &renamed, || {
+        private_setup::convert_if_legacy(&env, Some(id), &renamed)
+    })
+    .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert!(!private_setup::claims(&env, id).unwrap());
+
+    // The writer itself refuses it before converting, too.
+    let error = save(
+        &env,
+        &FakeStore::default(),
+        Some(id),
+        &renamed,
+        &team(),
+        false,
+    )
+    .unwrap_err();
+    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert!(!private_setup::claims(&env, id).unwrap());
+
+    // Keeping its label, the switch goes ahead.
+    let kept = MachineDraftInput {
+        label: "gpu-box".into(),
+        ..renamed
+    };
+    assert_eq!(
+        end_legacy_connection_before_switch(same_env(&env), Some(id), &kept, true, |_| {
+            std::future::ready(())
+        })
+        .await
+        .map(drop),
+        Ok(())
+    );
+}
+
+/// Compare-and-swap: a setup step (enroll, install) runs only at the
+/// caller's current revision, and reports a revision only for a declaration it
+/// wrote itself. A git change while a step that writes nothing runs (a legacy
+/// install's SSH) is never adopted: the caller's later save is refused.
+#[test]
+fn a_setup_step_reports_only_a_revision_it_wrote() {
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = "dev-box-legacy";
+    let legacy = draft(MachineSignIn::KeyFile {
+        key_path: "/tmp/legacy-key".into(),
+    });
+    save_legacy_machine(&env, id, &legacy);
+    let revision = |env: &Env| summary_of(env, id).unwrap().declaration.unwrap().revision;
+    let opened = revision(&env);
+    let at = |base: &str| MachineDraftInput {
+        declaration_revision: Some(base.into()),
+        ..legacy.clone()
+    };
+
+    // A git pull relabels it during a step that writes nothing.
+    let reported = based_setup(&env, Some(id), &at(opened.as_str()), || {
+        let (scope, mut pulled) = env.registry.find(id)?.ok_or("no machine")?;
+        pulled.label = "From git".into();
+        env.registry.write(&scope, &pulled)?;
+        Ok(None::<String>)
+    })
+    .unwrap();
+    assert_eq!(reported, None, "the step wrote nothing");
+    // So the panel keeps its base, and its save there is refused.
+    let error = save(
+        &env,
+        &store,
+        Some(id),
+        &at(opened.as_str()),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(error, identity::CHANGED_SINCE_OPENED);
+    assert_eq!(env.registry.find(id).unwrap().unwrap().1.label, "From git");
+
+    // A step at a stale base never runs.
+    let mut ran = false;
+    let error = based_setup(&env, Some(id), &at(opened.as_str()), || {
+        ran = true;
+        Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(error, identity::CHANGED_SINCE_OPENED);
+    assert!(!ran);
+
+    // A conversion reports exactly the revision of the declaration it wrote;
+    // converting nothing reports none.
+    let switch = MachineDraftInput {
+        mode: Some(MachineMode::PrivateAccount),
+        ..at(revision(&env).as_str())
+    };
+    let wrote = based_setup(&env, Some(id), &switch, || {
+        private_setup::convert_if_legacy(&env, Some(id), &switch)
+    })
+    .unwrap();
+    assert_eq!(wrote, Some(revision(&env)));
+    assert_eq!(
+        private_setup::convert_if_legacy(&env, Some(id), &switch),
+        Ok(None)
+    );
+    let saved = MachineDraftInput {
+        declaration_revision: wrote,
+        ..switch
+    };
+    save(&env, &store, Some(id), &saved, &Scope::Personal, false).unwrap();
+}
+
+/// Private label edits: a label edit on a private machine is written (personal) or
+/// refused with a clear message (team), never reported saved and dropped. A
+/// team legacy machine is the control; a stale revision is refused for both.
+#[test]
+fn a_private_label_edit_is_written_or_refused_never_dropped() {
+    for case in [
+        "personal private",
+        "team private",
+        "team legacy",
+        "stale private",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let env = legacy_test_env(root.path());
+        let store = FakeStore::default();
+        let (id, scope, input) = if case == "team legacy" {
+            let id = "gpu-box-1a2b3c".to_string();
+            let saved = declaration(&id);
+            env.registry.write(&team(), &saved).unwrap();
+            let input = MachineDraftInput {
+                mode: Some(MachineMode::Legacy),
+                label: saved.label,
+                host: saved.host,
+                port: saved.port,
+                ..draft(MachineSignIn::Agent)
+            };
+            (id, team(), input)
+        } else {
+            let scope = if case == "team private" {
+                team()
+            } else {
+                Scope::Personal
+            };
+            let id = save(&env, &store, None, &private_draft(), &scope, false)
+                .unwrap()
+                .machine_id;
+            (id, scope, private_draft())
+        };
+        let opened = summary_of(&env, &id).unwrap().declaration.unwrap().revision;
+        let renamed = MachineDraftInput {
+            label: "Renamed".into(),
+            declaration_revision: Some(if case == "stale private" {
+                "0".repeat(64)
+            } else {
+                opened
+            }),
+            ..input
+        };
+        let result = save(&env, &store, Some(&id), &renamed, &scope, false);
+        let listed = summary_of(&env, &id).unwrap();
+        match case {
+            "personal private" | "team legacy" => {
+                assert_eq!(result.unwrap().label, "Renamed", "{case}");
+                assert_eq!(listed.label, "Renamed", "{case}");
+                assert!(
+                    !matches!(listed.status, MachineStatus::ConnectionFailed { .. }),
+                    "{case}: {:?}",
+                    listed.status
+                );
+            }
+            "team private" => {
+                let error = result.unwrap_err();
+                assert!(error.contains("can't be changed from this Mac"), "{error}");
+                assert_eq!(listed.label, "Dev Box");
+            }
+            "stale private" => {
+                assert_eq!(result.unwrap_err(), identity::CHANGED_SINCE_OPENED);
+                assert_eq!(listed.label, "Dev Box");
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// Private edits: a save that changes a saved private machine's address, or a
+/// team private machine's label, is refused before it writes anything: its
+/// passphrase bookkeeping, declaration and binding stay as they were.
+#[test]
+fn a_refused_private_edit_writes_nothing_first() {
+    use registry::private::PrivateRegistry;
+    for (case, scope) in [
+        ("label", team()),
+        ("host", Scope::Personal),
+        ("port", team()),
+        ("jump host", Scope::Personal),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let env = legacy_test_env(root.path());
+        let store = FakeStore::default();
+        store.set("kept", &Secret::new("pw")).unwrap();
+        let input = MachineDraftInput {
+            sign_in: keychain_sign_in("kept"),
+            ..private_draft()
+        };
+        let id = save(&env, &store, None, &input, &scope, false)
+            .unwrap()
+            .machine_id;
+        env.registry
+            .update_issued_passphrases(|issued| {
+                issued.insert("kept".into(), 1);
+            })
+            .unwrap();
+        let private = PrivateRegistry::new(
+            env.registry.clone(),
+            env.private_authority.as_ref().unwrap(),
+        )
+        .unwrap();
+        let file = private_file(&env, &scope, &id);
+        let bytes = std::fs::read(&file).unwrap();
+        let binding = serde_json::to_value(private.binding(&id).unwrap()).unwrap();
+        let mut edit = based(&env, &id, &input);
+        let refusal = match case {
+            "label" => {
+                edit.label = "Renamed".into();
+                "can't be changed from this Mac"
+            }
+            "host" => {
+                edit.host = "elsewhere.int".into();
+                "address changed"
+            }
+            "port" => {
+                edit.port = 2223;
+                "address changed"
+            }
+            "jump host" => {
+                edit.jump_host = Some("bastion.int".into());
+                "address changed"
+            }
+            _ => unreachable!(),
+        };
+        let error = save(&env, &store, Some(&id), &edit, &scope, false).unwrap_err();
+        assert!(error.contains(refusal), "{case}: {error}");
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "{case}");
+        assert_eq!(
+            serde_json::to_value(private.binding(&id).unwrap()).unwrap(),
+            binding,
+            "{case}"
+        );
+        let issued = env
+            .registry
+            .update_issued_passphrases(|issued| issued.get("kept").copied())
+            .unwrap();
+        assert_eq!(issued, Some(1), "{case}: passphrase bookkeeping ran");
+    }
+}
+
+/// Private label edits: a relabel whose file write fails puts the ledger back,
+/// so the machine keeps its old label instead of reading as changed outside
+/// this Mac, and a later save goes through.
+#[test]
+fn a_failed_relabel_write_keeps_the_machine_listed() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let env = legacy_test_env(root.path());
+    let store = FakeStore::default();
+    let id = save(
+        &env,
+        &store,
+        None,
+        &private_draft(),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap()
+    .machine_id;
+    let dir = private_file(&env, &Scope::Personal, &id)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let renamed = |env: &Env| MachineDraftInput {
+        label: "Renamed".into(),
+        ..based(env, &id, &private_draft())
+    };
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = save(
+        &env,
+        &store,
+        Some(&id),
+        &renamed(&env),
+        &Scope::Personal,
+        false,
+    );
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        result.is_err(),
+        "the write into a read-only directory failed"
+    );
+    let listed = summary_of(&env, &id).unwrap();
+    assert_eq!(listed.label, "Dev Box");
+    assert!(
+        !matches!(listed.status, MachineStatus::ConnectionFailed { .. }),
+        "{:?}",
+        listed.status
+    );
+    let saved = save(
+        &env,
+        &store,
+        Some(&id),
+        &renamed(&env),
+        &Scope::Personal,
+        false,
+    )
+    .unwrap();
+    assert_eq!(saved.label, "Renamed");
+}
+
+/// Compare-and-swap: enroll's first host-key pin reports the revision it
+/// wrote only when the caller's base (or the step's own conversion) is the
+/// declaration it pinned; a second pin of the same key passes the step's
+/// revision through.
+#[test]
+fn a_first_pin_reports_its_revision_only_over_the_callers_base() {
+    use registry::private::PrivateRegistry;
+    for stale in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let env = legacy_test_env(root.path());
+        let store = FakeStore::default();
+        let id = save(
+            &env,
+            &store,
+            None,
+            &private_draft(),
+            &Scope::Personal,
+            false,
+        )
+        .unwrap()
+        .machine_id;
+        let private = PrivateRegistry::new(
+            env.registry.clone(),
+            env.private_authority.as_ref().unwrap(),
+        )
+        .unwrap();
+        let base = if stale {
+            "0".repeat(64)
+        } else {
+            based(&env, &id, &private_draft())
+                .declaration_revision
+                .unwrap()
+        };
+        let key = "ssh-ed25519 test";
+        let wrote = private_setup::adopt_pin(&private, &id, key, None, Some(&base)).unwrap();
+        let current = based(&env, &id, &private_draft()).declaration_revision;
+        if stale {
+            assert_eq!(wrote, None, "a stale base adopts nothing");
+            continue;
+        }
+        assert_eq!(wrote, current, "the pin's own revision");
+        assert_eq!(
+            private_setup::adopt_pin(&private, &id, key, Some("step".into()), None).unwrap(),
+            Some("step".into()),
+            "an existing pin writes nothing"
+        );
+        let saved = MachineDraftInput {
+            declaration_revision: wrote,
+            ..private_draft()
+        };
+        save(&env, &store, Some(&id), &saved, &Scope::Personal, false).unwrap();
+    }
 }
 
 #[test]
@@ -4881,9 +5843,16 @@ fn every_accepted_identity_field_blocks_connect_setup_launch_and_shared_mcp() {
         assert!(install_server(&env, &store, Some(id), &input)
             .unwrap_err()
             .contains(identity::REFUSAL));
-        assert!(save(&env, &store, Some(id), &input, &team(), true)
-            .unwrap_err()
-            .contains(identity::REFUSAL));
+        assert!(save(
+            &env,
+            &store,
+            Some(id),
+            &based(&env, id, &input),
+            &team(),
+            true
+        )
+        .unwrap_err()
+        .contains(identity::REFUSAL));
         // Read through the actual registry list, with the declaration's team lens.
         let Scope::Team {
             org_slug,
@@ -5082,7 +6051,7 @@ fn native_endpoint_edit_accepts_its_own_change_while_an_agent_cannot() {
         &env,
         &FakeStore::default(),
         Some(id),
-        &input,
+        &based(&env, id, &input),
         &team(),
         false,
     )
@@ -5173,7 +6142,15 @@ fn externally_converted_private_destination_is_refused_before_ssh_or_binding_ado
                 "test" => test_connection(&env, &store, Some(id), &input).unwrap_err(),
                 "enroll" => private_setup::enroll(&env, &store, Some(id), &input).unwrap_err(),
                 "install" => private_setup::install(&env, &store, Some(id), &input).unwrap_err(),
-                "save" => save(&env, &store, Some(id), &input, &team(), false).unwrap_err(),
+                "save" => save(
+                    &env,
+                    &store,
+                    Some(id),
+                    &based(&env, id, &input),
+                    &team(),
+                    false,
+                )
+                .unwrap_err(),
                 _ => unreachable!(),
             };
             assert!(
@@ -5258,6 +6235,7 @@ fn unchanged_external_conversion_and_established_private_keep_private_setup_sema
     assert_eq!(binding_bytes(&env), before);
     let input = MachineDraftInput {
         mode: Some(MachineMode::PrivateAccount),
+        label: destination.label,
         host: destination.host,
         port: destination.port,
         jump_host: destination.jump_host,
@@ -5267,7 +6245,7 @@ fn unchanged_external_conversion_and_established_private_keep_private_setup_sema
         &env,
         &FakeStore::default(),
         Some(id),
-        &input,
+        &based(&env, id, &input),
         &team(),
         false,
     )
@@ -5340,16 +6318,17 @@ fn agent_receiving_seams_refuse_confirmation_and_endpoint_edits_without_binding_
                 "signIn": { "method": "agent" },
             },
             "share": { "kind": "personal" }, "connect": false,
+            "declarationRevision": based(&env, id, &draft(MachineSignIn::Agent)).declaration_revision,
         }))
         .unwrap();
-        let input = MachineDraftInput::from(params.input);
+        let (machine_id, input, share, connect) = params.into_parts();
         let error = save_for_agent(
             &env,
             &FakeStore::default(),
-            params.machine_id.as_deref(),
+            machine_id.as_deref(),
             &input,
-            &Scope::from(params.share),
-            params.connect,
+            &share,
+            connect,
         )
         .unwrap_err();
         assert!(error.contains(identity::REFUSAL), "{error}");
@@ -5487,13 +6466,14 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
         jump_host: expected.jump_host.clone(),
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: Some(HostKey::parse(KEY).unwrap().fingerprint()),
+        declaration_revision: None,
     };
     let native = std::thread::spawn(move || {
         save(
             &native_env,
             &FakeStore::default(),
             Some(id),
-            &native_input,
+            &based(&native_env, id, &native_input),
             &team(),
             true,
         )
@@ -5517,6 +6497,8 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
     let transaction = save_transaction(id);
     assert_eq!(Arc::strong_count(&transaction), 2);
     let agent_env = env.clone();
+    // Based on the declaration the person's save lands, so the agent's stale
+    // endpoint passes the revision check and reaches the identity guard.
     let stale_input = MachineDraftInput {
         mode: Some(MachineMode::Legacy),
         label: original.label,
@@ -5526,6 +6508,7 @@ fn agent_save_queued_behind_native_checklist_cannot_revert_human_acceptance() {
         jump_host: original.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: Some(identity::declaration_revision(&team(), &expected)),
     };
     let agent = std::thread::spawn(move || {
         save_for_agent(
@@ -5587,12 +6570,13 @@ fn rejected_agent_save_operation_propagates_refusal_without_writing_either_file(
         jump_host: original.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     assert!(save_for_agent(
         &env,
         &FakeStore::default(),
         Some(id),
-        &input,
+        &based(&env, id, &input),
         &team(),
         false
     )
@@ -5625,7 +6609,7 @@ fn private_agent_save_uses_the_shared_machine_transaction_without_reentry() {
             &env,
             &FakeStore::default(),
             Some(&id),
-            &input,
+            &based(&env, &id, &input),
             &Scope::Personal,
             false,
         )
@@ -5649,12 +6633,13 @@ fn agent_settings_save_preserves_the_accepted_endpoint() {
         jump_host: declaration.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let saved = save_for_agent(
         &env,
         &FakeStore::default(),
         Some(id),
-        &input,
+        &based(&env, id, &input),
         &team(),
         false,
     )
@@ -5719,12 +6704,13 @@ fn agent_save_uses_the_validated_snapshot_when_git_changes_the_pin() {
         jump_host: declaration.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let saved = save_for_agent(
         &env,
         &FakeStore::default(),
         Some(id),
-        &input,
+        &based(&env, id, &input),
         &team(),
         false,
     )
@@ -5758,9 +6744,17 @@ fn first_agent_setup_accepts_only_the_validated_snapshot_when_git_changes_the_pi
         jump_host: declaration.jump_host,
         sign_in: MachineSignIn::Agent,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
-    let saved = save_for_agent(&env, &FakeStore::default(), Some(id), &input, &team(), true)
-        .expect("initial setup must use validated A despite a later git pin update");
+    let saved = save_for_agent(
+        &env,
+        &FakeStore::default(),
+        Some(id),
+        &based(&env, id, &input),
+        &team(),
+        true,
+    )
+    .expect("initial setup must use validated A despite a later git pin update");
     assert!(saved.declaration.unwrap().identity_change.is_some());
     assert_git_pin_change_remains_unaccepted(&env, id, &changed_key);
 }

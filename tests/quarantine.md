@@ -64,3 +64,48 @@ quarantined. Runners treat invalid or expired entries as unlisted.
 configs do not: they belong to the website toolchain and need an explicit setup
 adapter before website entries can be quarantined. Other Playwright suites must
 import the adapter too; the frame-security specs and pane harness already do.
+
+## One visible retry for Rust tests in CI
+
+The nextest `ci` profile (`.config/nextest.toml`) retries every failed Rust test once in
+CI. That retry is allowed because it is visible and tracked; silent retries stay banned.
+This rule covers the Rust suite only, and local `pnpm test:rust` passes `--retries 0`.
+Playwright's retries are existing, separate exceptions: `playwright.config.ts` retries
+twice in CI, the website's Playwright config retries once in CI, and its staging project
+retries once everywhere, local runs included.
+
+- **Visible:** a test that passes only on its retry is FLAKY. Each Rust job lists its flaky
+  tests in the job summary with a warning annotation, and nextest records the failed attempt
+  as `flakyFailure` (or `flakyError`) in the uploaded JUnit report. A test that fails both
+  attempts fails the job as before.
+- **Tracked:** on the nightly run on `main` only, the `flaky-issues` job in `rust.yml` reads
+  the JUnit reports and runs `node scripts/flaky-tests.mjs track`. It keeps one public issue per test,
+  labelled `flaky-test` and found by the marker `<!-- flaky:<key> -->` in its body. A first
+  flake opens the issue, a repeat comments with the run link and date, and a repeat after the
+  issue was closed reopens it. Keep the label and the marker line. Pull requests, merge
+  queue runs and forks never write issues; that job alone has `issues: write`, and the test
+  jobs stay read-only. A flake seen only on a pull request or in the merge queue shows in
+  that job's summary, but is tracked only if it recurs on a nightly run. One tracking run
+  goes at a time. GitHub keeps one more waiting and cancels any older waiting run, whose
+  flakes then go untracked; a test that keeps flaking is tracked on its next flake.
+- **Key:** `<key>` is `cargo:<binary-id>#<test>`: nextest's binary id, `#`, then the test's
+  module path and name. The `#` keeps a library test and an integration-test target with
+  the same path apart (`pkg#foo::bar` against `pkg::foo#bar`). The ledger id names the same
+  test differently, with `::` throughout, and every ledger crate name uses `_` for `-`:
+  - a library test: the binary id is the package name (`my-crate`); the ledger id starts
+    with the library name (`cargo:my_crate::module::test`);
+  - an integration test: the binary id is `<package>::<target>`; the ledger id starts with
+    the target name (`cargo:<target>::module::test`);
+  - a binary target's own tests: the binary id is `<package>::bin/<name>`; the ledger id
+    starts with the binary's target name (`cargo:<name>::module::test`).
+
+  A binary id or test name with any character other than ASCII letters and digits and
+  `_ . : / -` is keyed `cargo:sha256-<16 hex>` (a hash of `<binary-id>#<test>`) and shown
+  with each such character replaced by `_`; its warning points to the JUnit report for the
+  exact name.
+
+- **Deadline:** the 30-day window starts when the issue first opens. A comment or a reopen
+  does not restart it. By the deadline, either make the test pass deterministically and
+  close the issue, or quarantine it: add a ledger entry and the `#[ignore]` attribute
+  described above, both naming this issue. A test that flakes again after its issue was
+  closed past the deadline must be fixed or quarantined at once.

@@ -691,6 +691,29 @@ async fn open_workspace_team_workspace_launches_in_context_worktree() {
 }
 
 #[tokio::test]
+async fn open_workspace_team_workspace_launches_for_a_team_named_main() {
+    let home = tempfile::tempdir().unwrap();
+    let mut host = FakeHost::new(home.path(), 4);
+    let content = home.path().join("context-repo/main/content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(content.join("README.md"), "main team").unwrap();
+    host.content_roots.insert("main".into(), content);
+    let scope = ActiveTeam {
+        org: ORG.to_string(),
+        team: "main".to_string(),
+    };
+
+    let result = open_agent(&host, &scope, &team_workspace("Sprint 1", None))
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, OpenStatus::Opened, "{}", result.message);
+    let worktree = result.worktree.unwrap();
+    assert_eq!(worktree.branch, "cs/main/sprint-1");
+    assert!(worktree.created);
+}
+
+#[tokio::test]
 async fn open_workspace_without_an_agent_launches_the_preferred_builtin_and_modes_still_work() {
     let home = tempfile::tempdir().unwrap();
     let host = FakeHost::new(home.path(), 4);
