@@ -1439,6 +1439,19 @@ describe("HtmlViewer changedPaths reload gate", () => {
     expect(screen.queryByText(/Failed to create document frame/)).toBeNull();
     expect(document.querySelector("iframe")).toBeNull();
     expect(mintFrame).toHaveBeenCalledTimes(initialMints);
+    // A later ancestor declaration refresh remints; native refuses the absent document.
+    vi.mocked(mintFrame).mockRejectedValueOnce("missing: the document no longer exists");
+    rerender(
+      <HtmlViewer {...props} refreshKey={3} changedPaths={new Set(["/repo/docs/dashboard.yml"])} />,
+    );
+    await waitFor(() => expect(mintFrame).toHaveBeenCalledTimes(initialMints + 1));
+    await act(async () => {});
+    expect(screen.getByText("This file was removed from disk")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to create document frame/)).toBeNull();
+    // Recreating the file mints a fresh frame.
+    rerender(<HtmlViewer {...props} refreshKey={4} changedPaths={new Set([filePath])} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    expect(screen.queryByText("This file was removed from disk")).toBeNull();
   });
 
   it("retries a failed centre mint when an ancestor declaration is corrected", async () => {

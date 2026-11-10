@@ -168,6 +168,11 @@ export function useFrameRecord(
       lifetime.unregister = undefined;
       if (lifetime.frame) retire(lifetime.frame);
       lifetime.frame = null;
+      // Native mint reports a deleted document as missing on every refresh, retry or remint.
+      if (String(error).startsWith("missing:")) {
+        setState({ key, frame: null, error: null, missing: true });
+        return;
+      }
       setState({ key, frame: null, error: `Failed to create document frame: ${String(error)}` });
     });
     return () => {

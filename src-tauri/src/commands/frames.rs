@@ -629,6 +629,9 @@ fn mint_grant(
     )
 }
 
+/// The viewer shows its missing-file state for this mint error.
+const MISSING_DOCUMENT: &str = "missing: the document no longer exists";
+
 fn frame_document_target(path: &std::path::Path, baseline: bool) -> Result<PathBuf, String> {
     if baseline && !path.exists() {
         return path
@@ -637,6 +640,10 @@ fn frame_document_target(path: &std::path::Path, baseline: bool) -> Result<PathB
             .ok_or("Document has no existing ancestor")?
             .canonicalize()
             .map_err(|e| e.to_string());
+    }
+    // Every mint reports a deleted document as missing, not as invalid authority.
+    if !path.exists() {
+        return Err(MISSING_DOCUMENT.into());
     }
     let real = path.canonicalize().map_err(|e| e.to_string())?;
     if !real.is_file() {
@@ -1615,7 +1622,10 @@ mod tests {
             frame_document_target(&path, true).unwrap(),
             dir.path().canonicalize().unwrap()
         );
-        assert!(frame_document_target(&path, false).is_err());
+        assert_eq!(
+            frame_document_target(&path, false).unwrap_err(),
+            MISSING_DOCUMENT
+        );
         assert!(frame_document_target(dir.path(), true).is_err());
     }
     #[tokio::test]

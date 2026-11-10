@@ -85,6 +85,67 @@ it("retires a deleted document's authority without an error or a remint", async 
   expect(mintFrame).toHaveBeenCalledTimes(1);
   unmount();
 });
+const MISSING = "missing: the document no longer exists";
+it("keeps a deleted document missing through later refreshes until it is recreated", async () => {
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  vi.mocked(revalidateFrame).mockResolvedValueOnce("missing");
+  rerender({ revision: 2 });
+  await waitFor(() => expect(result.current.documentMissing).toBe(true));
+  // A declaration or source refresh while the file is absent remints and is refused natively.
+  vi.mocked(mintFrame).mockRejectedValueOnce(MISSING);
+  rerender({ revision: 3 });
+  await waitFor(() => expect(mintFrame).toHaveBeenCalledTimes(2));
+  await act(async () => {});
+  expect(result.current.documentMissing).toBe(true);
+  expect(result.current.frameError).toBeNull();
+  vi.mocked(mintFrame).mockResolvedValueOnce({ ...frameFixture(first), frameId: "recreated" });
+  rerender({ revision: 4 });
+  await waitFor(() => expect(result.current.frameRecord?.frameId).toBe("recreated"));
+  expect(result.current.documentMissing).toBe(false);
+  expect(result.current.approvedRevision).toBe(4);
+  unmount();
+});
+it("keeps a deleted document missing when a retry remints it", async () => {
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  vi.mocked(revalidateFrame).mockResolvedValueOnce("missing");
+  rerender({ revision: 2 });
+  await waitFor(() => expect(result.current.documentMissing).toBe(true));
+  vi.mocked(mintFrame).mockRejectedValueOnce(MISSING);
+  act(() => result.current.remintFrame());
+  await waitFor(() => expect(mintFrame).toHaveBeenCalledTimes(2));
+  await act(async () => {});
+  expect(result.current.documentMissing).toBe(true);
+  expect(result.current.frameError).toBeNull();
+  unmount();
+});
+it("shows a missing document when its first mint or a team remint is refused", async () => {
+  const initial = { ...first, slot: "dock", contentRoot: "/ctx/team-a/content" };
+  vi.mocked(mintFrame).mockRejectedValueOnce(MISSING);
+  const { result, rerender, unmount } = renderHook(({ args }) => useFrameRecord(9123, args), {
+    initialProps: { args: first },
+  });
+  await waitFor(() => expect(result.current.documentMissing).toBe(true));
+  expect(result.current.frameError).toBeNull();
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(initial));
+  rerender({ args: initial });
+  await waitFor(() => expect(result.current.frameRecord).not.toBeNull());
+  vi.mocked(mintFrame).mockRejectedValueOnce(MISSING);
+  rerender({ args: { ...initial, contentRoot: "/ctx/team-b/content" } });
+  await waitFor(() => expect(result.current.documentMissing).toBe(true));
+  expect(result.current.frameRecord).toBeNull();
+  expect(result.current.frameError).toBeNull();
+  unmount();
+});
 it("ignores stale comparisons without releasing a reused frame", async () => {
   vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
   const { result, rerender, unmount } = renderHook(
