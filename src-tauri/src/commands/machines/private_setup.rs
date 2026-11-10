@@ -4,12 +4,14 @@ use super::*;
 use codesense_session_server::private_account::{Bootstrap, HelperUpload, VerifiedAccount};
 use registry::private::{
     PrivateAccount, PrivateBinding, PrivateDeclaration, PrivateRegistry, PrivateSetup,
+    PRIVATE_DECLARATION_CHANGED,
 };
 
 const REFUSED: &str = "private account unavailable; check account enrollment";
 /// This profile has no machine access at all, which enrollment can't fix.
 const NO_MACHINE_ACCESS: &str =
     "machine access is unavailable for this profile; set up machine access in Settings";
+const ADDRESS_CHANGED: &str = "private machine address changed; create a new declaration";
 fn authority(
     env: &Env,
 ) -> Result<&crate::commands::auth::private_authority::PrivateAuthoritySnapshot, String> {
@@ -33,6 +35,12 @@ pub(super) fn legacy(declaration: &PrivateDeclaration) -> Declaration {
         pinned_server_id: None,
     }
 }
+fn keeps_saved_address(
+    saved: &registry::private::PrivateMachine,
+    input: &MachineDraftInput,
+) -> bool {
+    keeps_address(&saved.host, saved.port, saved.jump_host.as_deref(), input)
+}
 fn account(observed: &VerifiedAccount) -> PrivateAccount {
     PrivateAccount {
         uid: observed.uid(),
@@ -52,11 +60,8 @@ fn prepare(
     authority(env)?;
     let saved = id.map(|id| registry(env)?.find(id)).transpose()?.flatten();
     if let Some((_, saved)) = &saved {
-        if saved.machine.host != input.host
-            || saved.machine.port != input.port
-            || saved.machine.jump_host != input.jump_host
-        {
-            return Err("private machine address changed; create a new declaration".into());
+        if !keeps_saved_address(&saved.machine, input) {
+            return Err(ADDRESS_CHANGED.into());
         }
     }
     let declaration = saved.as_ref().map(|(_, d)| legacy(d));
@@ -97,7 +102,7 @@ fn saved_legacy(
     let Some((scope, old)) = env.registry.find(id)? else {
         return Ok(None);
     };
-    if old.host != input.host || old.port != input.port || old.jump_host != input.jump_host {
+    if !keeps_address(&old.host, old.port, old.jump_host.as_deref(), input) {
         return Err(format!(
             "This machine is saved at {}:{}{}. Undo the address change to switch it to a private account.",
             old.host,
@@ -107,19 +112,98 @@ fn saved_legacy(
     }
     Ok(Some((scope, old)))
 }
+/// Every refusal switching the saved legacy machine `id` to a private account
+/// can know from local files, made before its connection ends: the private
+/// authority, the saved identity, a changed address, who may publish the
+/// declaration, a team machine's changed label and the revision it was based
+/// on, which a save (`rewrites`) must supply.
+pub(super) fn preflight_switch(
+    env: &Env,
+    id: Option<&str>,
+    input: &MachineDraftInput,
+    rewrites: bool,
+) -> Result<(), String> {
+    authority(env)?;
+    let Some((scope, old)) = saved_legacy(env, id, input)? else {
+        return Ok(());
+    };
+    if !env.registry.can_publish(&scope) {
+        return Err(CANT_PUBLISH.into());
+    }
+    super::identity::check_base(
+        &scope,
+        &old,
+        input.declaration_revision.as_deref(),
+        rewrites,
+    )?;
+    keeps_team_label(&scope, &old.label, input)
+}
+/// The label a save gives a machine: the one typed, else its host.
+fn saved_label(input: &MachineDraftInput) -> String {
+    if str::is_empty(input.label.trim()) {
+        input.host.clone()
+    } else {
+        input.label.clone()
+    }
+}
+/// A team machine keeps its published label through a switch to a private
+/// account (see `PrivateRegistry::relabel`): a save or setup step that changes
+/// it is refused before the connection ends or anything converts.
+fn keeps_team_label(scope: &Scope, label: &str, input: &MachineDraftInput) -> Result<(), String> {
+    if matches!(scope, Scope::Team { .. }) && saved_label(input) != label {
+        return Err(registry::private::team_label_refusal(label));
+    }
+    Ok(())
+}
 /// A saved legacy machine set up as a private account converts in place: it
 /// keeps its id, label, address, verified host key and personal settings.
 /// Only private accounts open terminal tabs, so this is the one way forward
 /// for a legacy machine rather than adding a second record for the host. The
 /// caller reaches this only by asking for a private account explicitly.
-fn convert_if_legacy(env: &Env, id: Option<&str>, input: &MachineDraftInput) -> Result<(), String> {
+/// A team machine keeps its label, so a draft that changes it is refused.
+/// Answers with the revision of the declaration it converted, if it did.
+pub(super) fn convert_if_legacy(
+    env: &Env,
+    id: Option<&str>,
+    input: &MachineDraftInput,
+) -> Result<Option<String>, String> {
     if input.mode != Some(MachineMode::PrivateAccount) {
-        return Ok(());
+        return Ok(None);
     }
-    if let (Some(id), Some((scope, _))) = (id, saved_legacy(env, id, input)?) {
-        registry(env)?.convert_legacy(&scope, id)?;
+    let mut wrote = None;
+    if let (Some(id), Some((scope, old))) = (id, saved_legacy(env, id, input)?) {
+        keeps_team_label(&scope, &old.label, input)?;
+        let converted = registry(env)?.convert_legacy(&scope, id)?;
+        wrote = Some(written(&scope, &converted));
     }
-    adopt_legacy_binding(env, id)
+    adopt_legacy_binding(env, id)?;
+    Ok(wrote)
+}
+/// Pin `key` as a saved draft's first host key. `wrote`: the revision this step
+/// already wrote (a conversion), else `base`, the caller's. The pin is adopted
+/// only over the declaration the caller was based on: a git change during the
+/// SSH before it stays the caller's to see. Answers with the revision the
+/// caller's next save is based on, if this step wrote it.
+pub(super) fn adopt_pin(
+    registry: &PrivateRegistry,
+    id: &str,
+    key: &str,
+    wrote: Option<String>,
+    base: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some((scope, pinned)) = registry.pin_draft(id, key)? else {
+        return Ok(wrote);
+    };
+    let mut unpinned = pinned.clone();
+    unpinned.machine.pinned_host_key = None;
+    let based_on = wrote.or_else(|| base.map(String::from));
+    Ok((based_on == Some(written(&scope, &unpinned))).then(|| written(&scope, &pinned)))
+}
+/// The revision of a private declaration this call wrote: what its caller's
+/// next save is based on. Never read back from disk, where a git change may
+/// have landed since.
+fn written(scope: &Scope, declaration: &PrivateDeclaration) -> String {
+    super::identity::declaration_revision(scope, &legacy(declaration))
 }
 /// Carry this person's legacy sign-in and settings onto a private machine
 /// that has none yet: the publisher's own on conversion, and a teammate's
@@ -195,6 +279,7 @@ fn report(detail: &str, status: &'static str, next: Vec<&'static str>) -> Machin
         }],
         install_plan: None,
         file_view_only: false,
+        declaration_revision: None,
     }
 }
 pub(super) fn test(
@@ -245,6 +330,7 @@ pub(super) fn test(
             }],
             install_plan: None,
             file_view_only: false,
+            declaration_revision: None,
         });
     }
     let (reach, bootstrap, _) = prepare(
@@ -295,7 +381,7 @@ pub(super) fn enroll(
     id: Option<&str>,
     input: &MachineDraftInput,
 ) -> Result<MachineTestReportDto, String> {
-    convert_if_legacy(env, id, input)?;
+    let mut wrote = convert_if_legacy(env, id, input)?;
     let (_reach, bootstrap, key) = prepare(
         env,
         store,
@@ -318,7 +404,13 @@ pub(super) fn enroll(
     };
     validate_observed(env, id, &observed)?;
     if let Some(id) = id {
-        registry.pin_draft(id, &key.to_line())?;
+        wrote = adopt_pin(
+            &registry,
+            id,
+            &key.to_line(),
+            wrote,
+            input.declaration_revision.as_deref(),
+        )?;
         let (_, _, revision) = registry.capture(id)?.ok_or(REFUSED)?;
         let setup = match prior.as_ref().map(|b| &b.setup) {
             Some(ready @ PrivateSetup::Ready { .. }) => ready.clone(),
@@ -345,11 +437,14 @@ pub(super) fn enroll(
         };
         registry.save_binding(id, binding, prior.map(|b| b.revision))?;
     }
-    Ok(report(
-        "Private account enrolled",
-        "warn",
-        vec!["install-terminal-server"],
-    ))
+    Ok(MachineTestReportDto {
+        declaration_revision: wrote,
+        ..report(
+            "Private account enrolled",
+            "warn",
+            vec!["install-terminal-server"],
+        )
+    })
 }
 pub(super) fn install(
     env: &Env,
@@ -357,7 +452,7 @@ pub(super) fn install(
     id: Option<&str>,
     input: &MachineDraftInput,
 ) -> Result<InstallTerminalServerResult, String> {
-    convert_if_legacy(env, id, input)?;
+    let wrote = convert_if_legacy(env, id, input)?;
     let (_reach, bootstrap, _) = prepare(
         env,
         store,
@@ -376,6 +471,7 @@ pub(super) fn install(
         ok: true,
         version,
         logout_warning: None,
+        declaration_revision: wrote,
     })
 }
 /// The shared writer holds save_transaction(id) through validation, conversion
@@ -390,14 +486,6 @@ pub(super) fn save_locked(
 ) -> Result<MachineSummary, String> {
     let authority = authority(env)?;
     convert_if_legacy(env, Some(id), input)?;
-    if let Some(handle) = input.sign_in.credential_ref() {
-        passphrase::load(store, handle)?;
-        env.registry.update_issued_passphrases(|issued| {
-            if let Some(at) = issued.get_mut(&handle.account) {
-                *at = now_secs();
-            }
-        })?;
-    }
     let registry = registry(env)?;
     let id = id.to_string();
     let existing = registry.capture(&id)?;
@@ -405,6 +493,23 @@ pub(super) fn save_locked(
     // a failure updates that machine instead of adding a second one.
     if existing.is_none() && !registry::is_machine_id(&id) {
         return Err(format!("{id:?} can't name a machine"));
+    }
+    // Existing published reach/host identity is immutable through personal
+    // setup, and so is a team machine's label: refused before anything is
+    // written.
+    if let Some((scope, saved, _)) = &existing {
+        if !keeps_saved_address(&saved.machine, input) {
+            return Err(ADDRESS_CHANGED.into());
+        }
+        keeps_team_label(scope, &saved.machine.label, input)?;
+    }
+    if let Some(handle) = input.sign_in.credential_ref() {
+        passphrase::load(store, handle)?;
+        env.registry.update_issued_passphrases(|issued| {
+            if let Some(at) = issued.get_mut(&handle.account) {
+                *at = now_secs();
+            }
+        })?;
     }
     let old = if existing.is_some() {
         registry.binding(&id)?
@@ -466,11 +571,7 @@ pub(super) fn save_locked(
     }
     let declaration = PrivateDeclaration::from_legacy(Declaration {
         machine_id: id.clone(),
-        label: if input.label.trim().is_empty() {
-            input.host.clone()
-        } else {
-            input.label.clone()
-        },
+        label: saved_label(input),
         host: input.host.clone(),
         port: input.port,
         jump_host: input.jump_host.clone(),
@@ -491,16 +592,13 @@ pub(super) fn save_locked(
         .clone();
     if existing.is_none() {
         registry.publish(&scope, &declaration)?;
-    } else if let Some(key) = &key {
-        registry.pin_draft(&id, key)?;
+    } else {
+        if let Some(key) = &key {
+            registry.pin_draft(&id, key)?;
+        }
+        registry.relabel(&id, &declaration.machine.label)?;
     }
     let (_, saved, revision) = registry.capture(&id)?.ok_or(REFUSED)?;
-    // Existing published reach/host identity is immutable through personal setup.
-    if saved.machine.host != declaration.machine.host
-        || saved.machine.port != declaration.machine.port
-    {
-        return Err(REFUSED.into());
-    }
     let ready = matches!(setup, PrivateSetup::Ready { .. });
     let restore = old.as_ref().is_some_and(|b| b.restore_auto_connect);
     let binding = PrivateBinding {
@@ -714,6 +812,7 @@ pub(super) fn open(
         jump_host: declaration.machine.jump_host.clone(),
         sign_in: stored_sign_in(&personal)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let (reach, bootstrap, key) = prepare(
         env,
@@ -811,12 +910,26 @@ pub(super) fn summaries(env: &Env) -> Result<Vec<MachineSummary>, String> {
     let mut result = Vec::new();
     for (id, entry) in registry.inventory()? {
         if let registry::private::PrivateEntry::Ready(scope, declaration, _) = entry {
-            result.push(private_summary(
-                env,
-                scope,
-                &declaration,
-                registry.binding(&id)?.as_ref(),
-            )?);
+            // A binding this machine's declaration no longer matches fails
+            // only this machine; the rest still list.
+            result.push(match PrivateRegistry::binding(&registry, &id) {
+                Ok(binding) => private_summary(env, scope, &declaration, binding.as_ref())?,
+                Err(error) if error == PRIVATE_DECLARATION_CHANGED => {
+                    let mut summary = match private_summary(env, scope, &declaration, None) {
+                        Ok(summary) => summary,
+                        Err(summary_error) => {
+                            log::warn!(target: "machines", "listing {id}: {summary_error}");
+                            continue;
+                        }
+                    };
+                    summary.status = MachineStatus::ConnectionFailed { last_error: error };
+                    if let Some(declaration) = &mut summary.declaration {
+                        declaration.configuration_refused = true;
+                    }
+                    summary
+                }
+                Err(error) => return Err(error),
+            });
         }
     }
     Ok(result)
@@ -866,6 +979,7 @@ fn prepared_saved(
         jump_host: declaration.machine.jump_host.clone(),
         sign_in: stored_sign_in(&personal)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let (reach, bootstrap, key) = prepare(
         env,
@@ -914,6 +1028,7 @@ pub(super) fn reach_input(env: &Env, id: &str) -> Result<(MachineDraftInput, Str
         jump_host: declaration.machine.jump_host.clone(),
         sign_in: stored_sign_in(&personal)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     Ok((input, pinned))
 }
@@ -1157,6 +1272,7 @@ mod launch_tests {
             jump_host: None,
             sign_in: MachineSignIn::Agent,
             trusted_host_key_fp: None,
+            declaration_revision: None,
         };
         assert_eq!(
             unreachable_detail(&input, "Operation timed out\n"),

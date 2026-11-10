@@ -28,7 +28,10 @@ vi.mock("@/app/update-toast", () => ({ runUpdateCheck: vi.fn() }));
 import { GeneralSection } from "./general-section";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { usePaneStore } from "@/features/shell/right-pane/panes/pane-store";
-import { useDashboardProfileStore } from "@/features/dashboard/lib/dashboard-profile";
+import {
+  builtinAgentListRef,
+  useDashboardProfileStore,
+} from "@/features/dashboard/lib/dashboard-profile";
 
 const ref = { scope: "team" as const, org: "acme", team: "a", id: "agents" };
 const entry = {
@@ -105,26 +108,15 @@ describe("Agents list row", () => {
   });
 });
 
-it("offers the HTML list and the classic list, and the unset choice is the classic one while the HTML default is off", async () => {
+it("offers the HTML list and the classic list, and the unset choice is the HTML one", async () => {
   useDashboardProfileStore.setState({
     profile: { ...useDashboardProfileStore.getState().profile!, slots: {} },
   });
   render(<GeneralSection query="agents list" />);
   const html = screen.getByRole("radio", { name: "Agent list (HTML)" });
   const classic = screen.getByRole("radio", { name: "Built-in list (classic)" });
-  expect(classic).toHaveAttribute("aria-checked", "true");
-  expect(html).toHaveAttribute("aria-checked", "false");
-  fireEvent.click(html);
-  await waitFor(() =>
-    expect(writeDashboardProfile).toHaveBeenLastCalledWith(
-      "acme",
-      expect.objectContaining({
-        slots: { dock: { scope: "built-in", org: "acme", id: "agent-list" } },
-      }),
-      undefined,
-    ),
-  );
-  await waitFor(() => expect(html).toHaveAttribute("aria-checked", "true"));
+  expect(html).toHaveAttribute("aria-checked", "true");
+  expect(classic).toHaveAttribute("aria-checked", "false");
   fireEvent.click(classic);
   await waitFor(() =>
     expect(writeDashboardProfile).toHaveBeenLastCalledWith(
@@ -134,4 +126,13 @@ it("offers the HTML list and the classic list, and the unset choice is the class
     ),
   );
   await waitFor(() => expect(classic).toHaveAttribute("aria-checked", "true"));
+  fireEvent.click(html);
+  await waitFor(() =>
+    expect(writeDashboardProfile).toHaveBeenLastCalledWith(
+      "acme",
+      expect.objectContaining({ slots: { dock: builtinAgentListRef("acme") } }),
+      undefined,
+    ),
+  );
+  await waitFor(() => expect(html).toHaveAttribute("aria-checked", "true"));
 });

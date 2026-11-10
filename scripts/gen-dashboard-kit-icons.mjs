@@ -90,6 +90,7 @@ export const KIT_ICONS = [
   "shield-check",
   "square",
   "square-kanban",
+  "sticky-note",
   "terminal",
   "timer",
   "triangle-alert",

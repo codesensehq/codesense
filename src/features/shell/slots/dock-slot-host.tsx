@@ -245,13 +245,6 @@ export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: b
                 entry={host.entry}
                 contentRoot={host.contentRoot}
                 visible={open && documentVisible && !outgoing}
-                // A failed page falls back to the built-in HTML list when its pane is listed; with
-                // no such pane to show, the native list stands in, so the dock is never blank.
-                renderNative={
-                  host.entry.dashboardRef?.scope === "built-in" || !hostFallback
-                    ? renderNative
-                    : undefined
-                }
                 stripClassName="max-h-[60%] shrink-0 overflow-y-auto"
                 headerless
                 unavailable={
@@ -261,6 +254,8 @@ export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: b
                 }
                 refreshKey={host.refreshKey}
                 onReload={host.reload}
+                // A failed page falls back to the built-in HTML list when its pane is listed;
+                // otherwise the strip stands alone with Reload (no native list beneath it).
                 fallback={hostFallback}
               />
             </div>

@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
-# Run CI and local Rust tests with cargo nextest run --profile ci.
+# Run CI and local Rust tests with cargo nextest run --profile ci; local runs (pnpm test:rust)
+# pass --retries 0, so only CI takes the retry below.
 [profile.ci]
 slow-timeout = { period = "60s", terminate-after = 5 }
 fail-fast = false
+# One visible retry: a test that passes on retry is reported FLAKY in the job summary and the
+# JUnit report, and gets a tracked public issue (tests/quarantine.md).
+retries = 1
 
 [profile.ci.junit]
 path = "junit.xml"
