@@ -674,7 +674,7 @@ fn cp2_production_projection_callbacks_publish_mcp_outside_and_delayed_commits()
     let written = next(&notes_key, "write")["upserts"][0].clone();
     let human_native = loop {
         let event = legacy.recv_timeout(Duration::from_secs(3)).unwrap();
-        if event["kind"] == "write" {
+        if event["kind"] == "write" && event["id"] == note.record.id {
             break event;
         }
     };
