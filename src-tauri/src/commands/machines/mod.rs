@@ -340,6 +340,22 @@ impl RuntimeWorkspaceReference {
 /// The id a machine being added connects as, until it is saved.
 const DRAFT_ID: &str = "draft";
 
+const CANT_PUBLISH: &str = "You can't publish to that team's context from this Mac";
+
+/// Whether `input` reaches a machine at the address it was saved at:
+/// `host:port`, via `jump`. Both sides compare trimmed, with an empty jump host
+/// as none, since a saved value keeps whatever spacing it was typed with.
+fn keeps_address(host: &str, port: u16, jump: Option<&str>, input: &MachineDraftInput) -> bool {
+    host.trim() == input.host.trim()
+        && port == input.port
+        && jump_of(jump) == jump_of(input.jump_host.as_deref())
+}
+
+/// A jump host trimmed, with an empty one as none.
+fn jump_of(jump: Option<&str>) -> Option<&str> {
+    jump.map(|jump| jump.trim()).filter(|jump| !jump.is_empty())
+}
+
 // ---------------------------------------------------------------------------
 // The contract (mirrors `src/tauri/commands.ts`)
 // ---------------------------------------------------------------------------
@@ -354,8 +370,14 @@ pub struct MachineDeclarationDto {
     pub default_base_dir: Option<String>,
     pub pinned_host_key_fp: Option<String>,
     pub pinned_server_id: Option<String>,
+    /// What a save that rewrites this declaration passes back as its base.
+    pub revision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_change: Option<identity::IdentityChange>,
+    /// Its configuration is refused (a private declaration changed outside
+    /// this Mac): its status says why, whatever the connection manager holds.
+    #[serde(skip)]
+    pub configuration_refused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -574,6 +596,10 @@ pub struct MachineDraftInput {
     pub jump_host: Option<String>,
     pub sign_in: MachineSignIn,
     pub trusted_host_key_fp: Option<String>,
+    /// The `declaration.revision` the caller opened the machine at. A save
+    /// that rewrites a saved declaration needs it, and a stale one is refused.
+    #[serde(default)]
+    pub declaration_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -601,6 +627,10 @@ pub struct MachineTestReportDto {
     pub steps: Vec<MachineTestStepDto>,
     pub install_plan: Option<InstallPlanDto>,
     pub file_view_only: bool,
+    /// After enrolling a saved machine: the declaration revision its own
+    /// writes left, the base for the caller's next save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declaration_revision: Option<String>,
 }
 
 /// An install's outcome. A failed one is always safe to run again: an
@@ -615,6 +645,10 @@ pub enum InstallTerminalServerResult {
         /// Set when the machine ends the terminal server at logout: what
         /// happens, and the commands that prevent it.
         logout_warning: Option<String>,
+        /// For a saved machine: the declaration revision its own writes
+        /// left, the base for the caller's next save.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        declaration_revision: Option<String>,
     },
     Failed {
         ok: bool,
@@ -1354,6 +1388,7 @@ fn open_pinned_saved_with(
         jump_host: declaration.jump_host.clone(),
         sign_in: stored_sign_in(binding)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let reach = reach(env, store, machine_id, &input)?;
     progress.enter("reading the installed terminal protocol");
@@ -1436,7 +1471,7 @@ fn open_pinned_saved_with(
 // The operations (Tauri-free, so tests drive them directly)
 // ---------------------------------------------------------------------------
 
-fn declaration_dto(decl: &Declaration) -> MachineDeclarationDto {
+fn declaration_dto(scope: &Scope, decl: &Declaration) -> MachineDeclarationDto {
     MachineDeclarationDto {
         mode: MachineMode::Legacy,
         host: decl.host.clone(),
@@ -1449,7 +1484,9 @@ fn declaration_dto(decl: &Declaration) -> MachineDeclarationDto {
             .and_then(|k| HostKey::parse(k).ok())
             .map(|k| k.fingerprint()),
         pinned_server_id: decl.pinned_server_id.clone(),
+        revision: identity::declaration_revision(scope, decl),
         identity_change: None,
+        configuration_refused: false,
     }
 }
 
@@ -1471,7 +1508,7 @@ fn summary(
     binding: Option<&Binding>,
 ) -> MachineSummary {
     let set_up = binding.is_some_and(|b| b.set_up) && decl.pinned_host_key.is_some();
-    let mut declaration = declaration_dto(decl);
+    let mut declaration = declaration_dto(&scope, decl);
     declaration.identity_change = identity::change(env, &scope, decl, binding);
     let changed = declaration.identity_change.is_some();
     MachineSummary {
@@ -1682,6 +1719,7 @@ fn report_dto(report: &check::Report) -> MachineTestReportDto {
             commands: offer.commands.clone(),
         }),
         file_view_only: report.file_view_only,
+        declaration_revision: None,
     }
 }
 
@@ -1759,6 +1797,7 @@ pub(crate) fn install_server(
                     ok: true,
                     version: installed.version,
                     logout_warning,
+                    declaration_revision: None,
                 }
             }
             // An upload cut off is resumed by running the install again;
@@ -1884,6 +1923,7 @@ fn save_as(
         if input.mode == Some(MachineMode::Legacy) {
             return Err("private machine requires private setup".into());
         }
+        identity::check_saved_base(env, &id, input.declaration_revision.as_deref())?;
         identity::validate_saved(
             env,
             &id,
@@ -1895,9 +1935,22 @@ fn save_as(
         .map(|id| env.registry.find(id))
         .transpose()?
         .flatten();
+    // A base names the declaration its caller opened: one removed since is
+    // never recreated under its old id.
+    if machine_id.is_some() && existing.is_none() && input.declaration_revision.is_some() {
+        return Err(identity::CHANGED_SINCE_OPENED.into());
+    }
     let bindings = env.registry.bindings()?;
     let old_binding = bindings.get(&id).cloned().unwrap_or_default();
-    if let Some((_, declaration)) = &existing {
+    if let Some((scope, declaration)) = &existing {
+        // Only whoever can publish rewrites the declaration; anyone else
+        // saves their own binding to it.
+        identity::check_base(
+            scope,
+            declaration,
+            input.declaration_revision.as_deref(),
+            env.registry.can_publish(scope),
+        )?;
         identity::validate_snapshot(
             declaration,
             Some(&old_binding),
@@ -1927,7 +1980,7 @@ fn save_as(
         _ => share.clone(),
     };
     if !env.registry.can_publish(&target) && publisher {
-        return Err("You can't publish to that team's context from this Mac".into());
+        return Err(CANT_PUBLISH.into());
     }
     // What was set up stays set up only while nothing about reaching the
     // machine changed: its address, its jump host, and how this person signs in.
@@ -1936,14 +1989,9 @@ fn save_as(
         .as_deref()
         .map(str::trim)
         .filter(|u| !u.is_empty());
-    let new_jump = input
-        .jump_host
-        .as_deref()
-        .map(str::trim)
-        .filter(|j| !j.is_empty());
-    let same_address = existing.as_ref().is_some_and(|(_, d)| {
-        d.host == input.host.trim() && d.port == input.port && d.jump_host.as_deref() == new_jump
-    });
+    let same_address = existing
+        .as_ref()
+        .is_some_and(|(_, d)| keeps_address(&d.host, d.port, d.jump_host.as_deref(), input));
     let same_reach = same_address
         && old_binding.username.as_deref() == new_user
         && old_binding.key_path.as_deref() == input.sign_in.key_path()
@@ -3240,7 +3288,7 @@ fn apply_manager_state(
     if summary
         .declaration
         .as_ref()
-        .is_some_and(|d| d.identity_change.is_some())
+        .is_some_and(|d| d.identity_change.is_some() || d.configuration_refused)
     {
         return;
     }
@@ -3639,6 +3687,7 @@ fn legacy_host_proof_saved(
         jump_host: declaration.jump_host.clone(),
         sign_in: stored_sign_in(binding)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let reach = reach(env, store, machine_id, &input)?;
     check::verified_host_key(&reach.connector, Trust::Pinned(&pinned), &env.scratch())?;
@@ -3741,6 +3790,7 @@ fn replace_pinned_saved(
         jump_host: declaration.jump_host.clone(),
         sign_in: stored_sign_in(binding).map_err(fail)?,
         trusted_host_key_fp: None,
+        declaration_revision: None,
     };
     let reach = reach(env, store, machine_id, &input).map_err(fail)?;
     check::verified_host_key(&reach.connector, Trust::Pinned(&pinned), &env.scratch())
@@ -4053,26 +4103,75 @@ fn switches_legacy(env: &Env, machine_id: Option<&str>, input: &MachineDraftInpu
         })
 }
 
-/// Switching a connected legacy machine first ends its legacy connection, so
-/// nothing keeps using the shared-account transport under the private record.
-async fn end_legacy_connection_before_switch(
-    app: &tauri::AppHandle,
+/// Whether this call switches a saved legacy machine to a private account,
+/// once every refusal the switch can know from local files has been made:
+/// a refused switch must leave the working connection alone. `rewrites`: the
+/// call is a save, which rewrites the declaration.
+fn switch_preflight(
+    env: &Env,
     machine_id: Option<&str>,
     input: &MachineDraftInput,
-) {
-    let Ok(env) = env_of(app).await else { return };
+    rewrites: bool,
+) -> Result<bool, String> {
+    if !switches_legacy(env, machine_id, input) {
+        return Ok(false);
+    }
+    private_setup::preflight_switch(env, machine_id, input, rewrites)?;
+    Ok(true)
+}
+
+/// Switching a connected legacy machine first ends its legacy connection, so
+/// nothing keeps using the shared-account transport under the private record.
+/// A switch that will be refused fails here, before `disconnect` runs.
+/// Answers with `env`, for the caller's own step.
+async fn end_legacy_connection_before_switch<F>(
+    env: Env,
+    machine_id: Option<&str>,
+    input: &MachineDraftInput,
+    rewrites: bool,
+    disconnect: impl FnOnce(String) -> F,
+) -> Result<Env, String>
+where
+    F: std::future::Future<Output = ()>,
+{
     let (id, input) = (machine_id.map(String::from), input.clone());
-    let switching = crate::commands::await_blocking("machine switch check", {
+    let (env, switching) = crate::commands::await_blocking("machine switch check", {
         let id = id.clone();
-        move || Ok(switches_legacy(&env, id.as_deref(), &input))
+        move || switch_preflight(&env, id.as_deref(), &input, rewrites).map(|s| (env, s))
     })
-    .await
-    .unwrap_or(false);
+    .await?;
     if let (true, Some(id)) = (switching, id) {
-        let manager = app.state::<super::host_connection_manager::HostConnectionManager>();
-        if let Err(error) = manager.disconnect(&id).await {
-            log::info!(target: "machines", "switching {id} to a private account: {error}");
-        }
+        disconnect(id).await;
+    }
+    Ok(env)
+}
+
+/// A setup step (enroll, install) on a saved machine, based on the revision
+/// its caller opened it at: a stale base is refused before the step runs,
+/// under the machine's save transaction. The step itself reports a revision
+/// only for a declaration it wrote (a conversion, a first host-key pin), never
+/// whatever is on disk afterwards, so a git change during it stays unadopted.
+fn based_setup<T>(
+    env: &Env,
+    machine_id: Option<&str>,
+    input: &MachineDraftInput,
+    step: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(id) = machine_id else {
+        return step();
+    };
+    let transaction = save_transaction(id);
+    let _transaction = transaction.lock().unwrap_or_else(|e| e.into_inner());
+    identity::check_saved_base(env, id, input.declaration_revision.as_deref())?;
+    step()
+}
+
+async fn disconnect_for_switch(app: tauri::AppHandle, id: String) {
+    let manager = app.state::<super::host_connection_manager::HostConnectionManager>();
+    if let Err(error) =
+        super::host_connection_manager::HostConnectionManager::disconnect(&manager, &id).await
+    {
+        log::info!(target: "machines", "switching {id} to a private account: {error}");
     }
 }
 
@@ -4087,11 +4186,20 @@ pub async fn enroll_private_machine_account(
     if input.mode == Some(MachineMode::Legacy) {
         return Err("private mode required".into());
     }
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(&app, machine_id.as_deref(), &input).await;
+    let env = end_legacy_connection_before_switch(
+        env_of(&app).await?,
+        machine_id.as_deref(),
+        &input,
+        false,
+        |id| disconnect_for_switch(app.clone(), id),
+    )
+    .await?;
     let enrolled_id = machine_id.clone();
     let report = crate::commands::await_blocking("enroll_private_machine_account", move || {
-        private_setup::enroll(&env, keychain().as_ref(), machine_id.as_deref(), &input)
+        let id = machine_id.as_deref();
+        based_setup(&env, id, &input, || {
+            private_setup::enroll(&env, keychain().as_ref(), id, &input)
+        })
     })
     .await?;
     // Enrollment rewrites a saved machine's private binding, which the
@@ -4108,10 +4216,19 @@ pub async fn install_terminal_server(
     machine_id: Option<String>,
     input: MachineDraftInput,
 ) -> Result<InstallTerminalServerResult, String> {
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(&app, machine_id.as_deref(), &input).await;
+    let env = end_legacy_connection_before_switch(
+        env_of(&app).await?,
+        machine_id.as_deref(),
+        &input,
+        false,
+        |id| disconnect_for_switch(app.clone(), id),
+    )
+    .await?;
     crate::commands::await_blocking("install_terminal_server", move || {
-        install_server(&env, keychain().as_ref(), machine_id.as_deref(), &input)
+        let id = machine_id.as_deref();
+        based_setup(&env, id, &input, || {
+            install_server(&env, keychain().as_ref(), id, &input)
+        })
     })
     .await
 }
@@ -4183,8 +4300,14 @@ async fn save_machine_as(
     connect: bool,
     actor: crate::panes::commands::Actor,
 ) -> Result<MachineSummary, String> {
-    let env = env_of(&app).await?;
-    end_legacy_connection_before_switch(&app, machine_id.as_deref(), &input).await;
+    let env = end_legacy_connection_before_switch(
+        env_of(&app).await?,
+        machine_id.as_deref(),
+        &input,
+        true,
+        |id| disconnect_for_switch(app.clone(), id),
+    )
+    .await?;
     let (prior, saved) = crate::commands::await_blocking("save_machine", move || {
         let prior = machine_id.as_deref().and_then(|id| current_scope(&env, id));
         let operation = match actor {

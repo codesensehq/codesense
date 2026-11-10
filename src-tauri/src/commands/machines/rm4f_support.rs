@@ -148,6 +148,7 @@ impl OwnedMachines {
                     key_path: endpoint.key,
                 },
                 trusted_host_key_fp: None,
+                declaration_revision: None,
             };
             let report = test_connection(&env, &store, None, &draft)?;
             let observed = report

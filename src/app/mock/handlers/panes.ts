@@ -119,6 +119,16 @@ export function paneHandlers(
 ): HandlerRegistry {
   const sources = new PaneSourceProjection(listPanes, (event, value) => events.emit(event, value));
   const profiles = new Map<string, DashboardProfile>();
+  // The mock serves no built-in panes, so its dock defaults to the classic list.
+  const profileOf = (org: unknown): DashboardProfile =>
+    profiles.get(String(org)) ?? {
+      id: "default",
+      name: "Default",
+      posture: "",
+      cliLayout: "default",
+      slots: { dock: "native" },
+      chrome: {},
+    };
   const workspace: WorkspaceConfig = { repos: {} };
   const views = new Map<string, HubSnapshot>();
   const subscriptions = new Map<string, string>();
@@ -219,17 +229,10 @@ export function paneHandlers(
         name === "profile"
           ? `profile:${expectedPrincipal}:${org}`
           : `workspaceConfig:${expectedPrincipal}:native`;
-      return publishConfiguration(name, key, configurationRows(name, profiles.get(String(org))));
+      return publishConfiguration(name, key, configurationRows(name, profileOf(org)));
     },
     write_dashboard_profile: ({ org, patch }) => {
-      const previous = profiles.get(String(org)) ?? {
-        id: "default",
-        name: "Default",
-        posture: "",
-        cliLayout: "default",
-        slots: {},
-        chrome: {},
-      };
+      const previous = profileOf(org);
       const fields = patch as Partial<DashboardProfile>;
       const profile = {
         ...previous,

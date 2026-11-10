@@ -1079,7 +1079,7 @@ export function AgentLaunchSheet({
                     : ""}
                   {selectedWorktree
                     ? `Opens as a new tab in ${selectedWorktree.name}, in ${team}/content on branch ${selectedWorktree.branch}. ${selectedWorktree.agents.length} agents already work there.`
-                    : `Creates branch ${team}/${launchHandle({ where: "team-workspace", storyId: "", name: worktreeName })} from your clone's main and opens in ${team}/content. Edits stay on that branch until an agent commits or syncs them.`}
+                    : `Creates branch cs/${team}/${launchHandle({ where: "team-workspace", storyId: "", name: worktreeName })} from your clone's main and opens in ${team}/content. Edits stay on that branch until an agent commits or syncs them.`}
                 </p>
               </div>
             )}
