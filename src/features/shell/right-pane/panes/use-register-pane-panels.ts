@@ -219,7 +219,14 @@ export function useRegisterPanePanels(): void {
           !!resolved.dashboard &&
           layout.sections.some((section) => section.group.panelIds.includes(nativeId));
         if (sync || lateNative) {
-          for (const id of ids) layout = replacePanel(layout, id, target);
+          for (const id of ids) {
+            const next = replacePanel(layout, id, target);
+            // Architecture: a pending reveal follows its body through a swap in either
+            // direction; of two pending reveals, the newer one wins.
+            if (surface === "notes" && next !== layout)
+              usePaneStore.getState().moveIntent(id, target);
+            layout = next;
+          }
           const maximized = viewer.maximizedPanel[teamKey];
           if (maximized && ids.has(maximized)) viewer.setMaximized(teamKey, target);
         }

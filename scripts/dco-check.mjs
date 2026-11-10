@@ -2,7 +2,9 @@
 // Developer Certificate of Origin check for a pull request: every non-merge
 // commit in DCO_BASE..DCO_HEAD needs a Signed-off-by trailer with its author's
 // email. Dependabot cannot sign off: its bot-email commits are exempt, but only
-// on a pull request that Dependabot opened.
+// on a pull request that Dependabot opened. A merge group (DCO_EVENT=merge_group)
+// has no pull request author, so the exemption there is derived per queued pull
+// request: see dependabotCommits.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { git, revision } from "./ci-scan-range.mjs";
@@ -52,17 +54,66 @@ export function unsignedCommits({ cwd, base, head, prAuthor = "" }) {
     });
 }
 
+// The merge queue merges each entry with a merge commit on the first-parent
+// chain whose second parent is that pull request's head. Of the unsigned
+// commits in `candidates`, returns those under the head of a pull request that
+// `authorOf(head sha)` says Dependabot opened. Anything else stays unsigned.
+export async function dependabotCommits({ cwd, base, head, candidates, authorOf }) {
+  const exempt = new Set();
+  if (!candidates.size) return exempt;
+  const entries = git(["log", "--first-parent", "--merges", "--format=%P", `${base}..${head}`], cwd)
+    .split("\n")
+    .filter(Boolean)
+    .map((parents) => parents.split(" "));
+  for (const [parent, pull] of entries) {
+    const under = git(["rev-list", "--no-merges", `${parent}..${pull}`], cwd)
+      .split("\n")
+      .filter((sha) => candidates.has(sha));
+    if (!under.length || (await authorOf(pull)) !== DEPENDABOT) continue;
+    for (const sha of under) exempt.add(sha);
+  }
+  return exempt;
+}
+
+// The login of whoever opened the pull requests whose head is `sha`, or "" when
+// none or several people did.
+export async function pullAuthor(sha, env = process.env) {
+  const api = env.GITHUB_API_URL || "https://api.github.com";
+  const response = await fetch(`${api}/repos/${env.GITHUB_REPOSITORY}/commits/${sha}/pulls`, {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      "x-github-api-version": "2022-11-28",
+    },
+  });
+  if (!response.ok)
+    throw new Error(`dco: cannot look up the pull request for ${sha}: HTTP ${response.status}`);
+  const authors = new Set(
+    (await response.json())
+      .filter((pull) => pull.head?.sha === sha)
+      .map((pull) => pull.user?.login),
+  );
+  return authors.size === 1 ? [...authors][0] : "";
+}
+
 if (
   process.argv[1] &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))
 ) {
   try {
-    const unsigned = unsignedCommits({
+    const range = {
       cwd: process.cwd(),
       base: process.env.DCO_BASE,
       head: process.env.DCO_HEAD,
-      prAuthor: process.env.DCO_PR_AUTHOR,
-    });
+    };
+    let unsigned = unsignedCommits({ ...range, prAuthor: process.env.DCO_PR_AUTHOR });
+    if (process.env.DCO_EVENT === "merge_group") {
+      const candidates = new Set(
+        unsigned.filter(({ author }) => BOT_EMAIL.test(author)).map(({ sha }) => sha),
+      );
+      const exempt = await dependabotCommits({ ...range, candidates, authorOf: pullAuthor });
+      unsigned = unsigned.filter(({ sha }) => !exempt.has(sha));
+    }
     if (unsigned.length) {
       console.error("dco: these commits have no Signed-off-by matching the author email:");
       for (const { sha, author } of unsigned)

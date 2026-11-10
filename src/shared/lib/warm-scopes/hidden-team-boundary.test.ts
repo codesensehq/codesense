@@ -32,9 +32,9 @@ const SITES: Record<string, { count: number; reason: string }> = {
       "window message listener; answers only the frame whose window sent it (event.source), never by a repeating id.",
   },
   "src/features/dashboard/components/html-viewer.tsx": {
-    count: 3,
+    count: 4,
     reason:
-      "visibilitychange (page-level), focusin that only records the focus owner (no action), and a message listener matched on event.source.",
+      "visibilitychange (page-level), focusin that only records the focus owner (no action), window blur that only clears this viewer's own focus hand-off flag when the app loses focus (no input, no id lookup), and a message listener matched on event.source.",
   },
   "src/features/dashboard/components/markdown-viewer.tsx": {
     count: 1,

@@ -49,7 +49,10 @@ function readDocument(text: string) {
 export function recordsHandlers(events: MockEventBus, fallback: HandlerRegistry): HandlerRegistry {
   const frames = new Map<string, FrameRecord>();
   const stores = new Map<string, Map<string, RecordRow>>();
-  const histories = new Map<string, Array<{ record: RecordRow; content: string }>>();
+  const histories = new Map<
+    string,
+    Array<{ record: RecordRow; content: string; change: string }>
+  >();
   const receipts = new Map<string, { at: number; value: unknown }>();
   type ProjectionRow = ReturnType<typeof row> & { order: number };
   const views = new Map<
@@ -313,10 +316,10 @@ export function recordsHandlers(events: MockEventBus, fallback: HandlerRegistry)
       }
       const versions = histories.get(`${key}:${id}`) ?? [];
       if (operation === "history")
-        return versions.map(({ record: v }) => ({
+        return versions.map(({ record: v, change }) => ({
           commit: v.rev,
           actor: { kind: "human", name: "You" },
-          change: "write",
+          change,
           at: v.fields.updatedAt,
           summary: "Edited by you",
           added: 0,
@@ -396,7 +399,11 @@ export function recordsHandlers(events: MockEventBus, fallback: HandlerRegistry)
         if (operation !== "delete") store.set(record.id, structuredClone(record));
         if (collection.scope === "private")
           histories.set(`${key}:${record.id}`, [
-            { record: structuredClone(record), content: document(store.get(record.id)) },
+            {
+              record: structuredClone(record),
+              content: document(store.get(record.id)),
+              change: operation === "restore" ? "restore" : "write",
+            },
             ...versions,
           ]);
         change(key, String(operation), request);

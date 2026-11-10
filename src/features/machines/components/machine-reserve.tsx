@@ -45,6 +45,7 @@ export function MachineReserve({
     <HostKeyReviewPanel machine={machine} onClose={onClose} />
   ) : (
     <AddMachinePanel
+      key={machine.machineId}
       teamKey={teamKey}
       machine={machine}
       initialMode={panel.mode === "setUp" && panel.privateAccount ? "private-account" : undefined}
