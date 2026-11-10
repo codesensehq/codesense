@@ -146,7 +146,7 @@ test("focusOut returns to the previous host control", async ({ page }) => {
   await doc(page).evaluate(() => (window as any).codesense.focusOut({ direction: "backward" }));
   await expect(page.locator("#terminal")).toBeFocused();
 });
-test("three unanswered pings use the Crashed strip; hidden frames are not pinged", async ({
+test("three unanswered pings reload the page once, then use the Crashed strip; hidden frames are not pinged", async ({
   page,
 }) => {
   await page.clock.install();
@@ -170,13 +170,24 @@ test("three unanswered pings use the Crashed strip; hidden frames are not pinged
       ),
     )
     .toBe(true);
-  await doc(page).evaluate(() => {
-    (window as any).silent = true;
-  });
-  for (let i = 0; i < 4; i++) {
-    await page.clock.fastForward(5000);
-    await page.waitForTimeout(20);
-  }
+  const silence = async () => {
+    const frame = doc(page);
+    await frame.evaluate(() => {
+      (window as any).silent = true;
+    });
+    for (let i = 0; i < 4; i++) {
+      await page.clock.fastForward(5000);
+      await page.waitForTimeout(20);
+    }
+    return frame;
+  };
+  const dead = await silence();
+  // The first time, the host reloads the page itself: a fresh document answers again.
+  await expect.poll(() => dead.isDetached(), { timeout: 5_000 }).toBe(true);
+  await page.frameLocator("iframe").locator("#first").waitFor();
+  await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
+  // The second time in the same reveal, it falls back.
+  await silence();
   await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
   await page.getByRole("button", { name: /details/i }).click();
   await expect(page.getByText("frame stopped responding", { exact: false })).toBeVisible();
