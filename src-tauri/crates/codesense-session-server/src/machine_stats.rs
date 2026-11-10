@@ -60,9 +60,10 @@ pub(crate) fn sample(workspace: &Path) -> Result<MachineStats, String> {
     if unsafe { libc::getloadavg(load.as_mut_ptr(), 1) } != 1 {
         return Err("machine load unavailable".into());
     }
-    let mut system = sysinfo::System::new();
+    let mut system = sysinfo::System::new()
+        .map_err(|error| format!("machine resources unavailable: {error}"))?;
     system.refresh_memory();
-    system.refresh_cpu_list(sysinfo::CpuRefreshKind::new());
+    system.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
     let file = File::open(workspace).map_err(|error| error.to_string())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: the open workspace descriptor and output pointer remain valid.

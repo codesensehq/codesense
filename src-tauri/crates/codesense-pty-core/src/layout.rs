@@ -391,7 +391,7 @@ impl ServerIdentity {
 
     /// The machine's host name, the default display name of a local host.
     pub fn local_host_name() -> String {
-        sysinfo::System::host_name().unwrap_or_else(|| "localhost".to_string())
+        sysinfo::System::host_name().unwrap_or_else(|_| "localhost".to_string())
     }
 }
 

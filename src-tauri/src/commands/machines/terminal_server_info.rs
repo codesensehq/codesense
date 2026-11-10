@@ -233,11 +233,13 @@ fn process_facts(pid: u32) -> (Option<PathBuf>, Option<u64>) {
         return (None, None);
     }
     let id = Pid::from_u32(pid);
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return (None, None);
+    };
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[id]),
         true,
-        ProcessRefreshKind::new().with_exe(UpdateKind::Always),
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
     );
     let Some(process) = system.process(id) else {
         return (None, None);

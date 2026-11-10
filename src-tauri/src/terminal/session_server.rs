@@ -5611,15 +5611,15 @@ fn runs_sidecar(exe: Option<&Path>, cmd: &[std::ffi::OsString]) -> bool {
 }
 
 /// The kernel's executable path and the argv of process `pid`, as `sysinfo`
-/// reads them; `None` when there is no such process.
+/// reads them; `None` when the process or its identity is unavailable.
 fn process_identity(pid: u32) -> Option<(Option<PathBuf>, Vec<std::ffi::OsString>)> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let id = Pid::from_u32(pid);
-    let mut system = System::new();
+    let mut system = Result::ok(System::new())?;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[id]),
         true,
-        ProcessRefreshKind::new()
+        ProcessRefreshKind::nothing()
             .with_exe(UpdateKind::Always)
             .with_cmd(UpdateKind::Always),
     );
