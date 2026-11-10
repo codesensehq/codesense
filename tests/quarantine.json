@@ -54,12 +54,6 @@
     "added": "2026-11-07"
   },
   {
-    "id": "vitest:src/features/shell/right-pane/panes/inbox-pane.seam.test.tsx#pages cross-team role history team by team until every team ends",
-    "reason": "times out under full-suite load",
-    "issue": "https://github.com/codesensehq/codesense/issues/4",
-    "added": "2026-11-07"
-  },
-  {
     "id": "playwright:tests/pane-harness/inbox-reactions.spec.ts#choosing a category moves the grid's keyboard entry to that category",
     "reason": "headless focus reports inactive on macOS",
     "issue": "https://github.com/codesensehq/codesense/issues/2",
