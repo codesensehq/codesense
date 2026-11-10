@@ -243,6 +243,32 @@ test("a merge-only addition remains blocked after a later removal", (t) => {
   );
 });
 
+test("a merge is blamed only for lines new against every parent", (t) => {
+  const f = fixture(t);
+  f.put("shared.txt", "one\n");
+  f.commit(["shared.txt"]);
+  f.git("checkout", "-b", "topic");
+  f.put("topic.txt", token());
+  const side = f.commit(["topic.txt"]);
+  f.put("shared.txt", "one\ntopic\n");
+  f.commit(["shared.txt"]);
+  f.git("checkout", "main");
+  f.put("shared.txt", "main\none\n");
+  f.commit(["shared.txt"]);
+  f.git("merge", "--no-ff", "--no-commit", "topic");
+  // The resolution keeps both sides' lines and adds one of its own.
+  f.put("shared.txt", `main\none\ntopic\n${token()}\n`);
+  const merge = f.commit(["shared.txt"], "Merge fixture");
+  const tokens = f.change().filter((x) => x.commit && x.rule === "token" && !x.allowed);
+  assert.deepEqual(
+    tokens.map((x) => [x.commit, x.file]).sort(),
+    [
+      [merge, "shared.txt"],
+      [side, "topic.txt"],
+    ].sort(),
+  );
+});
+
 test("zero before with the fetched default tip scans through the root commit", (t) => {
   const f = fixture(t, token());
   f.put("a.txt", "Clean now");

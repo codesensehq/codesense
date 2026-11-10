@@ -19,13 +19,23 @@
 /// Called on demand (tab close, eviction checks) — never in a hot loop — so the
 /// one-shot process enumeration cost is amortized away.
 pub(crate) fn has_live_descendant(pid: u32) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    // We only read parent PIDs, which `ProcessRefreshKind::new()` always
+    has_live_descendant_with_system(pid, sysinfo::System::new())
+}
+
+fn has_live_descendant_with_system(
+    pid: u32,
+    system: Result<sysinfo::System, sysinfo::Error>,
+) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
+    let Ok(mut sys) = system else {
+        // An unavailable census must never authorize idle eviction.
+        return true;
+    };
+    // We only read parent PIDs, which `ProcessRefreshKind::nothing()` always
     // retrieves — so skip the per-process cpu/memory/disk syscalls that
     // `System::new_all()` would do (this query runs on every tab-close /
     // eviction check).
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let root = Pid::from_u32(pid);
     sys.processes().values().any(|p| p.parent() == Some(root))
 }
@@ -94,10 +104,17 @@ type Proc = (u32, u32, String, Option<i32>);
 
 /// The jobs of each shell (see [`RunningJobs`]). One process-table scan answers
 /// the whole batch; a shell with no pid (gone, or not started) reads idle.
+/// A shell with a pid but unreadable jobs conservatively reads as busy.
 pub fn running_jobs(shell_pids: &[Option<u32>]) -> Vec<RunningJobs> {
     running_jobs_known(shell_pids)
         .into_iter()
-        .map(Option::unwrap_or_default)
+        .zip(shell_pids)
+        .map(|(jobs, pid)| {
+            jobs.unwrap_or_else(|| RunningJobs {
+                foreground: pid.map(|_| "a running job".to_string()),
+                background: Vec::new(),
+            })
+        })
         .collect()
 }
 
@@ -109,9 +126,18 @@ pub fn running_jobs_known(shell_pids: &[Option<u32>]) -> Vec<Option<RunningJobs>
     if shell_pids.iter().all(Option::is_none) {
         return vec![None; shell_pids.len()];
     }
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
+    running_jobs_known_with_system(shell_pids, sysinfo::System::new())
+}
+
+fn running_jobs_known_with_system(
+    shell_pids: &[Option<u32>],
+    system: Result<sysinfo::System, sysinfo::Error>,
+) -> Vec<Option<RunningJobs>> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+    let Ok(mut sys) = system else {
+        return vec![None; shell_pids.len()];
+    };
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let listed: std::collections::HashSet<u32> =
         sys.processes().keys().map(|pid| pid.as_u32()).collect();
     let table: Vec<(u32, u32, String)> = sys
@@ -265,6 +291,8 @@ pub fn agent_signature_matches(
 /// batched liveness command amortize a single enumeration across N sessions
 /// instead of paying one full scan per session.
 pub struct ProcessIndex {
+    /// A failed census cannot establish that a named agent has exited.
+    available: bool,
     /// Parent → children adjacency over every live process.
     children: std::collections::HashMap<u32, Vec<u32>>,
     /// pid → (process name, exe path, argv) — everything the matcher inspects.
@@ -292,7 +320,7 @@ impl ProcessIndex {
     /// refresh — byte-identical to the pre-RF-perf-5 descendant matcher, and the
     /// always-on agent-liveness callers never pay for RSS they don't read.
     pub fn build() -> Self {
-        Self::build_inner(false)
+        Self::build_inner(false, sysinfo::System::new())
     }
 
     /// RF-perf-5: like [`build`] but also captures per-process RSS. Callers:
@@ -302,20 +330,27 @@ impl ProcessIndex {
     /// heap is engine-gated to `unavailable` on WebKit). One snapshot feeds both,
     /// on the watchdog thread, off the UI/render thread.
     pub fn build_with_memory() -> Self {
-        Self::build_inner(true)
+        Self::build_inner(true, sysinfo::System::new())
     }
 
-    fn build_inner(refresh_memory: bool) -> Self {
+    fn build_inner(refresh_memory: bool, system: Result<sysinfo::System, sysinfo::Error>) -> Self {
         use std::collections::HashMap;
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
 
-        let mut refresh = ProcessRefreshKind::new()
+        let Ok(mut sys) = system else {
+            return ProcessIndex {
+                available: false,
+                children: HashMap::new(),
+                info: HashMap::new(),
+            };
+        };
+
+        let mut refresh = ProcessRefreshKind::nothing()
             .with_exe(UpdateKind::Always)
             .with_cmd(UpdateKind::Always);
         if refresh_memory {
             refresh = refresh.with_memory();
         }
-        let mut sys = System::new();
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
         let procs = sys.processes();
         let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -339,7 +374,11 @@ impl ProcessIndex {
                 },
             );
         }
-        ProcessIndex { children, info }
+        ProcessIndex {
+            available: true,
+            children,
+            info,
+        }
     }
 
     /// RF-perf-5: iterate `(pid, name, exe, memory_bytes)` over the snapshot for
@@ -361,6 +400,7 @@ impl ProcessIndex {
     /// otherwise a matching process anywhere under the root must belong to the
     /// terminal's foreground process group — a `claude &` in the background of
     /// an interactive shell is the shell's job, not an agent tab.
+    /// If the census is unavailable, conservatively keep a named agent alive.
     pub fn has_named_process(&self, root_pid: u32, agent_name: &str) -> bool {
         self.has_foreground_named_process(root_pid, agent_name, pgid_and_tpgid)
     }
@@ -379,6 +419,9 @@ impl ProcessIndex {
 
         if agent_name.is_empty() {
             return false;
+        }
+        if !self.available {
+            return true;
         }
         let needle = agent_name.to_lowercase();
         let matches = |pid: u32| {
@@ -420,6 +463,41 @@ impl ProcessIndex {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_unavailable_census_cannot_mark_sessions_idle_or_agents_dead() {
+        let own = std::process::id();
+        let unavailable = || {
+            Err(sysinfo::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            )))
+        };
+        assert!(has_live_descendant_with_system(own, unavailable()));
+        assert_eq!(
+            running_jobs_known_with_system(&[Some(own), None, Some(own)], unavailable()),
+            vec![None, None, None]
+        );
+        for memory in [false, true] {
+            let index = ProcessIndex::build_inner(memory, unavailable());
+            assert!(index.has_named_process(own, "claude"));
+            assert!(!index.has_named_process(own, ""));
+            assert!(!index.has_process(own));
+            assert_eq!(index.iter_procs().count(), 0, "no process data is invented");
+        }
+    }
+
+    #[test]
+    fn a_memory_snapshot_keeps_live_process_identity_and_rss() {
+        let own = std::process::id();
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_string_lossy();
+        let index = ProcessIndex::build_with_memory();
+        assert!(index.has_process(own));
+        assert!(index.has_named_process(own, &name));
+        let (_, _, path, bytes) = index.iter_procs().find(|(pid, ..)| *pid == own).unwrap();
+        assert_eq!(path.map(std::path::Path::new), Some(exe.as_path()));
+        assert!(bytes > 0, "a live process has resident memory");
+    }
+
     // A shell the process table does not hold is unknown, never
     // a bare prompt (which a wake would read as an agent that quit).
     #[test]
@@ -433,6 +511,12 @@ mod tests {
         );
         assert_eq!(known[1], None);
         assert_eq!(known[2], None);
+        let jobs = running_jobs(&[Some(gone), None]);
+        assert!(
+            jobs[0].foreground.is_some(),
+            "unknown jobs cannot read idle"
+        );
+        assert_eq!(jobs[1], RunningJobs::default(), "no shell is still idle");
         let index = ProcessIndex::build();
         assert!(index.has_process(own));
         assert!(!index.has_process(gone));
@@ -548,9 +632,14 @@ mod tests {
             info.insert(pid, p);
             groups.insert(pid, (pgid, tpgid));
         }
-        (ProcessIndex { children, info }, move |pid| {
-            groups.get(&pid).copied()
-        })
+        (
+            ProcessIndex {
+                available: true,
+                children,
+                info,
+            },
+            move |pid| groups.get(&pid).copied(),
+        )
     }
 
     fn zsh() -> ProcInfo {

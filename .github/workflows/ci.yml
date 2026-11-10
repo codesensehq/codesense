@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 permissions: {}
@@ -34,7 +35,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check workflow policy
@@ -42,7 +43,7 @@ jobs:
       - name: Restore scanner archives
         # Archives named by their sha256; install-scanners verifies each against the lock before use.
         id: scanner-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: scanner-archives-static-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
@@ -51,7 +52,7 @@ jobs:
         run: bash scripts/install-scanners.sh .cache/scanners --cache "$RUNNER_TEMP/scanner-archives" --workflows-only --tool cargo-deny
       - name: Save scanner archives
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: ${{ steps.scanner-cache.outputs.cache-primary-key }}
@@ -64,7 +65,7 @@ jobs:
         run: echo "version=$(rustc --version)" >> "$GITHUB_OUTPUT"
       - name: Restore Cargo cache
         id: cargo-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -88,7 +89,7 @@ jobs:
         run: pnpm gen:docs:check:pr
       - name: Save Cargo cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index

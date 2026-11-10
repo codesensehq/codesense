@@ -1506,7 +1506,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "List the machines an org/team sees, as the Machines panel lists them: This Mac first, then the team's shared machines, then your private ones. Required: `orgSlug`. Optional: `team` (include that team's shared machines; describe_setup lists orgs and teams). Returns `[{machineId, kind, label, scope, declaration, binding, canPublish, status, attention, capabilities, remoteMcpControl?, terminalServer?, load1?, cpuCount?, memUsedBytes?, memTotalBytes?, diskFreeBytes?, diskTotalBytes?, diskPath?, sampledAt?, machineStatsSupported?}]`. Its `machineId` (`local` = This Mac) goes to open_workspace {machine_id} and open_remote_tab {machineId}. `kind`: `local` | `ssh`. `scope`: null for This Mac, `{kind:\"personal\"}`, or `{kind:\"team\", orgSlug, team}`. `declaration` (null for This Mac): the shareable half — `{host, port, jumpHost, defaultBaseDir, pinnedHostKeyFp, pinnedServerId}`; `binding`: your own connection settings for it, null when you never connected. `status.state`: `connected` (with `workspaces`, the open workspace count), `idle`, `connecting`, `handshaking`, `reconnecting` (`attempt`), `disconnected`, `unreachable` (`lastReachedAtMs`, `retryInSecs`), `connectionFailed` (`lastError`), `needsCredential`, `authFailed` (`reason`), `hostKeyChanged`, `notInstalled` (its terminal server is not installed), `versionMismatch`, `terminalServerFrozen`. `attention`: how many agents there wait on you. `capabilities.agentCallbacks`: whether agents launched there can reach this app's MCP (inbox, roles, progress, hooks): true only for a set-up private-account machine with remote MCP control on (set_machine_remote_mcp_control); a team-shared machine has none. `terminalServer` (connected machines only; absent otherwise): the running terminal server next to this app — `{serverVersion?` (the app release it was built for; absent for an older build that predates build stamps), `appVersion`, `upToDate`, `relation` (`same` | `older` | `newer` | `otherBuild`: This Mac's server belongs to another CodeSense build sharing this Mac — `upToDate` is false, but only `older` servers are out of date and offered the update), `announcedVersion`, `buildCommit?`, `builtAtMs?`, `buildDigest?`, `devBuild`, and for This Mac `serverPath`, `appServerPath` (the server this app ships), `startedAtMs`, `pid}`. A remote machine whose server is `older` also has `status.terminalServerUpdate: true`, and after connect_machine or retry_machine `status.terminalServerSessions` (the sessions an update ends; a list leaves it out). Resources are optional self-reported terminal-server observations: `load1` is the 1-minute load average, `cpuCount` logical cores; memory and disk are bytes, memory used is total minus available, disk is the volume holding the server workspace directory labelled by `diskPath`, and `sampledAt` is Unix epoch milliseconds on the server. A call reuses a sample under 30 seconds old or takes one one-shot sample without subscribing. An older server has `machineStatsSupported: false` and no resource fields: unknown (update the terminal server). Disconnected rows omit these fields. Samples are local runtime state, never synced or a reservation; re-check before depending on free disk. The visible Machines tab receives a 30-second stream through the machineStats LiveHub topic; it stops watching when hidden. No secrets are returned. A dashboard's codesense.machines() returns the same list for the page's team."
+        description = "List the machines an org/team sees, as the Machines panel lists them: This Mac first, then the team's shared machines, then your private ones. Required: `orgSlug`. Optional: `team` (include that team's shared machines; describe_setup lists orgs and teams). Returns `[{machineId, kind, label, scope, declaration, binding, canPublish, status, attention, capabilities, remoteMcpControl?, terminalServer?, load1?, cpuCount?, memUsedBytes?, memTotalBytes?, diskFreeBytes?, diskTotalBytes?, diskPath?, sampledAt?, machineStatsSupported?}]`. Its `machineId` (`local` = This Mac) goes to open_workspace {machine_id} and open_remote_tab {machineId}. `kind`: `local` | `ssh`. `scope`: null for This Mac, `{kind:\"personal\"}`, or `{kind:\"team\", orgSlug, team}`. `declaration` (null for This Mac): the shareable half — `{host, port, jumpHost, defaultBaseDir, pinnedHostKeyFp, pinnedServerId, revision}` (`revision` is save_machine's `declarationRevision`); `binding`: your own connection settings for it, null when you never connected. `status.state`: `connected` (with `workspaces`, the open workspace count), `idle`, `connecting`, `handshaking`, `reconnecting` (`attempt`), `disconnected`, `unreachable` (`lastReachedAtMs`, `retryInSecs`), `connectionFailed` (`lastError`), `needsCredential`, `authFailed` (`reason`), `hostKeyChanged`, `notInstalled` (its terminal server is not installed), `versionMismatch`, `terminalServerFrozen`. `attention`: how many agents there wait on you. `capabilities.agentCallbacks`: whether agents launched there can reach this app's MCP (inbox, roles, progress, hooks): true only for a set-up private-account machine with remote MCP control on (set_machine_remote_mcp_control); a team-shared machine has none. `terminalServer` (connected machines only; absent otherwise): the running terminal server next to this app — `{serverVersion?` (the app release it was built for; absent for an older build that predates build stamps), `appVersion`, `upToDate`, `relation` (`same` | `older` | `newer` | `otherBuild`: This Mac's server belongs to another CodeSense build sharing this Mac — `upToDate` is false, but only `older` servers are out of date and offered the update), `announcedVersion`, `buildCommit?`, `builtAtMs?`, `buildDigest?`, `devBuild`, and for This Mac `serverPath`, `appServerPath` (the server this app ships), `startedAtMs`, `pid}`. A remote machine whose server is `older` also has `status.terminalServerUpdate: true`, and after connect_machine or retry_machine `status.terminalServerSessions` (the sessions an update ends; a list leaves it out). Resources are optional self-reported terminal-server observations: `load1` is the 1-minute load average, `cpuCount` logical cores; memory and disk are bytes, memory used is total minus available, disk is the volume holding the server workspace directory labelled by `diskPath`, and `sampledAt` is Unix epoch milliseconds on the server. A call reuses a sample under 30 seconds old or takes one one-shot sample without subscribing. An older server has `machineStatsSupported: false` and no resource fields: unknown (update the terminal server). Disconnected rows omit these fields. Samples are local runtime state, never synced or a reservation; re-check before depending on free disk. The visible Machines tab receives a 30-second stream through the machineStats LiveHub topic; it stops watching when hidden. No secrets are returned. A dashboard's codesense.machines() returns the same list for the page's team."
     )]
     async fn list_machines(
         &self,
@@ -1559,7 +1559,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service."
+        description = "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine or pin its host key, so call list_machines again before your next save_machine."
     )]
     async fn enroll_private_machine_account(
         &self,
@@ -1578,7 +1578,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner."
+        description = "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine, so call list_machines again before your next save_machine."
     )]
     async fn install_terminal_server(
         &self,
@@ -1796,7 +1796,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off."
+        description = "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). Changing a saved legacy machine you can publish needs declarationRevision, the declaration.revision from list_machines; a save based on an older revision is refused, so reread and retry, including after your own enroll_private_machine_account or install_terminal_server. A label change on a team private machine is refused. connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off."
     )]
     async fn save_machine(
         &self,
@@ -1804,12 +1804,13 @@ impl CodesenseHandler {
     ) -> Result<CallToolResult, ErrorData> {
         crate::commands::interactive_gate::InteractiveGate::admit("save_machine")
             .map_err(gate_err)?;
+        let (machine_id, input, share, connect) = params.into_parts();
         let result = commands::machines::save_machine_for_agent(
             self.app_handle.clone(),
-            params.machine_id,
-            params.input.into(),
-            params.share.into(),
-            params.connect,
+            machine_id,
+            input,
+            share,
+            connect,
         )
         .await
         .map_err(|error| invalid_err("save_machine", error))?;

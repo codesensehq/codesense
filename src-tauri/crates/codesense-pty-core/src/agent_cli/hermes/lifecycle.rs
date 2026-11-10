@@ -65,11 +65,11 @@ fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
     }
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let id = Pid::from_u32(pid);
-    let mut system = System::new();
+    let mut system = Result::ok(System::new())?;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[id]),
         true,
-        ProcessRefreshKind::new().with_cmd(UpdateKind::Always),
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
     );
     let process = system.process(id)?;
     let args: Vec<_> = process.cmd().iter().map(|s| s.to_string_lossy()).collect();

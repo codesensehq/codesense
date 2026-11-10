@@ -8180,6 +8180,9 @@ export interface MachineDeclaration {
   pinnedHostKeyFp: string | null;
   /** Publisher-verified terminal-server identity shared with teammates. */
   pinnedServerId: string | null;
+  /** What a save that changes this machine passes back as `declarationRevision`:
+   *  a save based on an older one is refused. */
+  revision: string;
 }
 
 /** A machine's personal half, never synced to a team. `hidden` is the local-only
@@ -8671,6 +8674,9 @@ export interface MachineDraftInput {
   jumpHost: string | null;
   signIn: MachineSignIn;
   trustedHostKeyFp: string | null;
+  /** The `declaration.revision` the machine was opened at. Changing a saved
+   *  legacy machine you can publish needs it; a stale one is refused. */
+  declarationRevision?: string | null;
 }
 
 export type MachineTestStepId =
@@ -8723,6 +8729,9 @@ export interface MachineTestReport {
   installPlan: InstallPlan | null;
   /** Unsupported OS: the machine can be saved but only for file view (later). */
   fileViewOnly: boolean;
+  /** After enrolling a saved machine: the declaration revision its own writes
+   *  left, the base for the next save. */
+  declarationRevision?: string;
 }
 
 /** Run the live checklist against a draft (nothing is saved). `machineId` names
@@ -8738,7 +8747,7 @@ export const enrollPrivateMachineAccount = (machineId: string | null, input: Mac
  *  a `failed` one needs its cause fixed first. `logoutWarning` says when the
  *  machine would end the terminal server at logout, and how to stop it. */
 export type InstallTerminalServerResult =
-  | { ok: true; version: string; logoutWarning: string | null }
+  | { ok: true; version: string; logoutWarning: string | null; declarationRevision?: string }
   | { ok: false; code: "interrupted" | "failed"; message: string };
 
 /** Upload the terminal server from the app over SSH (no `curl`, no sudo). */

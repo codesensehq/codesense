@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { ROOT, verifySources, modelSchemas, schemaFields } from "./generate-model-schemas.mjs";
 
-test("the full docs check rejects a stale standalone schema without repairing it", () => {
+test("the PR docs check rejects a stale standalone schema without repairing it", () => {
   const path = join(
     ROOT,
     "codesense-docs/getting-started/content/generated/schemas/routine-yml.schema.json",
@@ -15,7 +15,7 @@ test("the full docs check rejects a stale standalone schema without repairing it
   const stale = JSON.stringify({ ...JSON.parse(original), title: "Stale schema mutation" }) + "\n";
   try {
     writeFileSync(path, stale);
-    const result = spawnSync("pnpm", ["gen:docs:check"], {
+    const result = spawnSync("pnpm", ["gen:docs:check:pr"], {
       cwd: ROOT,
       encoding: "utf8",
     });

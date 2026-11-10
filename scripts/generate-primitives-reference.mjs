@@ -723,7 +723,7 @@ const KIT = [
     category: "ui",
     wraps: "codesense:focus-return listener",
     description:
-      "Replace default anchor focus after host UI closes. With no handler, the shim focuses anchorId or its first focusable control.",
+      "Replace default anchor focus after host UI closes. With no handler, the shim focuses anchorId without scrolling, or the document if it has gone.",
     example: "const off = codesense.onFocusReturn(({anchorId}) => restoreFocus(anchorId));",
   },
   {
@@ -1522,7 +1522,7 @@ const EVENT_META = {
     payload: "{id}",
     timing: "After synchronous page menu callbacks finish",
     description:
-      "Architecture: confirm that Mark as unread established its page hold before the host persists the unread state.",
+      "Architecture: confirm that Mark unread established its page hold before the host persists the unread state.",
     example: "// Applied by the shim, not page code.",
   },
   "codesense:menu-actions": {
@@ -1593,7 +1593,8 @@ const EVENT_META = {
     direction: "parent-to-doc",
     payload: "{}",
     timing: "When focus enters a frame",
-    description: "Focus the first available control unless an onFocusIn handler owns focus.",
+    description:
+      "With nothing focused, it focuses the first visible control, only if it is in view (without scrolling); otherwise the document. An onFocusIn handler owns focus instead.",
     example: 'codesense.onFocusIn(() => document.getElementById("search").focus());',
   },
   "codesense:focus-return": {
@@ -1601,7 +1602,7 @@ const EVENT_META = {
     payload: "{anchorId?}",
     timing: "After a host menu, popover or confirmation closes",
     description:
-      "Focus the opening anchor, or the first available control if it has gone. An onFocusReturn handler receives {anchorId} and replaces default focus.",
+      "Focus the opening anchor without scrolling, or the document if it has gone. An onFocusReturn handler receives {anchorId} and replaces default focus.",
     example: "codesense.onFocusReturn(({anchorId}) => restoreFocus(anchorId));",
   },
   "codesense:command": {
@@ -1639,15 +1640,15 @@ const EVENT_META = {
   },
   "codesense:ping": {
     direction: "parent-to-doc",
-    payload: "{}",
+    payload: "{render?: true}",
     timing: "Every 5 seconds while visible",
     description:
-      "The shim answers automatically. Three consecutive missed answers use the existing crashed fallback strip.",
+      "The shim answers automatically. A pane's first ping after its page is ready or shown again sets render, asking whether the page drew anything. Three consecutive missed answers, or a page that drew nothing, reload the pane once, then use the existing crashed fallback strip.",
     example: "// Answered automatically by the shim.",
   },
   "codesense:pong": {
     direction: "doc-to-parent",
-    payload: "{}",
+    payload: "{rendered?: boolean}",
     timing: "Immediately after a ping",
     description:
       "The heartbeat answer resets the host missed-pong count. Hidden frames are not pinged.",
