@@ -91,15 +91,15 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
       panelId: "pane:acme:a/people",
     };
   }
-  function builtinAgentList(): PaneEntry {
+  function builtinAgentList(org = "acme"): PaneEntry {
     return {
-      dashboardRef: { scope: "built-in", org: "acme", id: "agent-list" },
+      dashboardRef: { scope: "built-in", org, id: "agent-list" },
       id: "agent-list",
       title: "Agents",
       scope: "private",
       path: "/builtin/panes/agent-list.html",
       panesDir: "/builtin/panes",
-      panelId: "pane:private:acme/agent-list",
+      panelId: `pane:private:${org}/agent-list`,
       declaration: { slots: ["dock"], capabilities: [] },
       status: "ready",
     } as PaneEntry;
@@ -108,14 +108,14 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
     useDashboardCommandsSync();
     return null;
   }
-  function Root() {
+  function Root({ org = "acme" }: { org?: string }) {
     const team = useOrgStore((s) => s.activeTeamName);
     return (
       <TooltipProvider>
         <PanePanelsMount />
         <Commands />
         {slot === "dock" ? (
-          <DockSlotHost teamKey={`acme:${team}`} visible />
+          <DockSlotHost teamKey={`${org}:${team}`} visible />
         ) : (
           <>
             <FileNavSlotMount teamKey={`acme:${team}`}>
@@ -290,12 +290,12 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
       toJSON() {},
     });
     transport = new PaneSourceProjection(
-      (_org, team) => ({
+      (org, team) => ({
         contentRoot: `/ctx/${team}/content`,
         chain: [team],
         panes: [
           ...(team === "a" && present ? [entry()] : []),
-          ...(slot === "dock" ? [builtinAgentList()] : []),
+          ...(slot === "dock" ? [builtinAgentList(org)] : []),
         ],
       }),
       (event, payload) => {
@@ -367,7 +367,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         return {
           contentRoot: `/ctx/${team}/content`,
           chain: [team],
-          panes: [builtinAgentList()],
+          panes: [builtinAgentList(String(args?.org ?? "acme"))],
         };
       }
       if (cmd === "list_panes") return transport.read(args ?? {});
@@ -394,7 +394,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
       vi.fn(async () => ({ ok: true, status: 200 })),
     );
     useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "b" });
-    useDashboardProfileStore.setState({ org: "acme", profile });
+    useDashboardProfileStore.setState({ org: "acme", profile, warm: {} });
     collapse(false);
   });
   afterEach(() => {
@@ -912,6 +912,9 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         activeOrgSlug: "acme",
       });
       warmScopes.activate("acme:a");
+      useDashboardProfileStore.setState({
+        warm: { other: { ...profile, slots: { dock: "native" } } },
+      });
       const sourceId = dashboardRefKey(ref);
       usePaneStore.getState().setListing(
         "acme:a",
@@ -937,7 +940,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         await act(async () => {
           expect(switchContext({ teamKey: "other:c" }, "switcher")).toBe(true);
         });
-        // Org C has no dock choice: its own list shows, and A's page waits, hidden, still A's.
+        // Org C chose the classic list: it shows, and A's page waits, hidden, still A's.
         expect(screen.getByText("Built-in Agents")).toBeTruthy();
         expect(original.isConnected).toBe(true);
         expect(hidden()).toBe(true);
@@ -1083,6 +1086,9 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         activeOrgSlug: "acme",
       });
       warmScopes.activate("acme:a");
+      useDashboardProfileStore.setState({
+        warm: { other: { ...profile, slots: { dock: "native" } } },
+      });
       const sourceId = dashboardRefKey(ref);
       usePaneStore.getState().setListing(
         "acme:a",
@@ -1133,6 +1139,9 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         activeOrgSlug: "acme",
       });
       warmScopes.activate("acme:a");
+      useDashboardProfileStore.setState({
+        warm: { other: { ...profile, slots: { dock: "native" } } },
+      });
       const sourceId = dashboardRefKey(ref);
       usePaneStore.getState().setListing(
         "acme:a",
@@ -1187,6 +1196,17 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
       await act(async () => collapse(false));
       expect(document.querySelector('[data-slot-fallback-entry="agent-list"]')).toBeNull();
       await waitFor(() => expect(frame()?.src).toContain("people.html"));
+    });
+
+    it("shows the built-in HTML agent list when no dock choice is saved", async () => {
+      // Its own org, so it shares no listing or source rows with the other cases.
+      useOrgStore.setState({ activeOrgSlug: "solo", activeTeamName: "u" });
+      useDashboardProfileStore.setState({ org: "solo", profile: { ...profile, slots: {} } });
+      render(<Root org="solo" />);
+      await waitFor(() => expect(frame()?.src).toContain("agent-list.html"));
+      expect(frame()?.title).toBe("Agents");
+      expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+      expect(screen.queryByText("Built-in Agents")).toBeNull();
     });
   }
 

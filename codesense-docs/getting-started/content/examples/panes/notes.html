@@ -5,6 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="codesense:surface" content="notes" />
+    <meta name="codesense:icon" content="sticky-note" />
     <meta name="codesense:slots" content="right-pane" />
     <meta
       name="codesense:capabilities"
@@ -173,6 +174,32 @@
       }
       .nt-gap {
         flex: 1;
+      }
+      .nt-chrome > .nt-btn:not(.nt-find) {
+        flex: none;
+      }
+      .nt-hair-v {
+        width: 1px;
+        height: 16px;
+        flex: none;
+        margin: 0 4px;
+        background: var(--nt-hair);
+      }
+      .nt-btn-chev .nt-icon {
+        width: 12px;
+        height: 12px;
+        margin-left: -2px;
+        color: var(--nt-quiet);
+      }
+      @media (max-width: 400px) {
+        .nt-find kbd {
+          display: none;
+        }
+      }
+      @media (max-width: 340px) {
+        .nt-agent-label {
+          display: none;
+        }
       }
       .nt-body {
         flex: 1;
@@ -682,6 +709,15 @@
         background: none;
         cursor: default;
       }
+      .nt-row[aria-disabled="true"] .nt-kbd {
+        opacity: 0.5;
+      }
+      .nt-row-reason {
+        margin: -2px 0 2px;
+        padding: 0 8px;
+        font-size: 11.5px;
+        color: var(--nt-quiet);
+      }
       .nt-row .nt-icon {
         width: 14px;
         height: 14px;
@@ -817,8 +853,10 @@
           aria-label="Note history"
           data-icon="history"
         ></button>
+        <span class="nt-hair-v" aria-hidden="true"></span>
         <button class="nt-btn" id="agent-menu" aria-label="Agent actions">
-          <span data-icon="send"></span>Agent
+          <span data-icon="sparkles"></span><span class="nt-agent-label">Agent</span
+          ><span class="nt-btn-chev" data-icon="chevron"></span>
         </button>
         <button
           class="nt-btn icon"
@@ -865,9 +903,11 @@
               <div class="nt-meta">
                 <span data-icon="lock"></span
                 ><span title="Only you can see your notes">Private</span
-                ><span class="nt-meta-dot"></span><span id="org-name"></span
                 ><span class="nt-meta-dot"></span
-                ><span id="save-state" aria-live="polite">Saved</span>
+                ><span
+                  ><span id="save-state" aria-live="polite">Saved</span
+                  ><span id="save-age"></span
+                ></span>
               </div>
               <section id="overlap-groups" aria-label="Both edited this note" hidden></section>
               <div id="editor"></div>
@@ -980,6 +1020,9 @@
         quote: "M3 5h7v7H3zm11 0h7v7h-7M10 12l-4 7M21 12l-4 7",
         divider: "M4 12h16",
         list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+        sparkles:
+          "M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4M22 4h-4M2 20a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
+        chevron: "m6 9 6 6 6-6",
       };
       function icon(name) {
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1284,8 +1327,14 @@
             : dirty
               ? "Unsaved"
               : active?.fields?.updatedBy?.kind === "agent"
-                ? `${active.fields.updatedBy.name} edited ${formatAgo(active.fields.updatedAt)}`
+                ? `${active.fields.updatedBy.name} edited`
                 : "Saved";
+        renderSaveAge();
+      }
+      // The age sits outside the live region, so the clock's refresh is never announced.
+      function renderSaveAge() {
+        const settled = !failed && !saving && !dirty && active?.fields?.updatedAt;
+        $("save-age").textContent = settled ? ` ${formatAgo(active.fields.updatedAt)}` : "";
       }
       function budgetPrefs() {
         const output = {
@@ -2043,27 +2092,41 @@
       function renderHistory() {
         for (const container of [$("side-history"), $("sheet-history")]) {
           container.replaceChildren();
-          for (const revision of allHistory ? history : history.slice(0, 3)) {
+          for (const [index, revision] of (allHistory ? history : history.slice(0, 3)).entries()) {
             const entry = element("div", "nt-history-entry");
             const who = element("div", "nt-history-who");
             const face = agentFace(revision.actor);
             if (face) who.append(face);
-            who.append(document.createTextNode(revision.actor?.name || "You"));
+            const agent = revision.actor?.kind === "agent";
+            who.append(
+              element("b", "", agent ? revision.actor.name : "You"),
+              document.createTextNode(` ${revisionWhat(revision)}`),
+            );
             entry.append(
               who,
-              element("p", "", `${formatAgo(revision.at)} · ${revision.summary || "Edited note"}`),
-            );
-            entry.append(
-              button(
-                revision.actor?.kind === "agent" ? "Review" : "Restore",
-                () =>
-                  revision.actor?.kind === "agent"
-                    ? reviewChanges(true, revision.commit)
-                    : restoreRevision(revision.commit, false),
-                "nt-btn outline",
+              element(
+                "p",
+                "",
+                `${formatAgo(revision.at)} · +${revision.added ?? 0} −${revision.removed ?? 0}`,
               ),
             );
-            entry.append(button("Undo", () => restoreRevision(revision.commit, true), "nt-btn"));
+            if (agent)
+              entry.append(
+                button("Review", () => reviewChanges(true, revision.commit), "nt-btn outline"),
+              );
+            // The newest revision is the note as it stands, so it has nothing to restore.
+            else if (index > 0) {
+              const restore = button(
+                "Restore",
+                () => restoreRevision(revision.commit, false),
+                "nt-btn outline",
+              );
+              restore.title = "Make this version the note again";
+              entry.append(restore);
+            }
+            const undo = button("Undo", () => restoreRevision(revision.commit, true), "nt-btn");
+            undo.title = "Take back just this change";
+            entry.append(undo);
             container.append(entry);
           }
           if (history.length > 3 && !allHistory)
@@ -2075,6 +2138,19 @@
             );
           if (!history.length) container.append(element("p", "nt-group", "No history yet."));
         }
+      }
+      // What a revision did, as classic Notes says it: a restore by name, your own saves as
+      // "edited", an agent's summary without its leading name.
+      function revisionWhat(revision) {
+        if (revision.change === "restore") return "restored an earlier version";
+        if (revision.actor?.kind !== "agent") return "edited";
+        const summary = (revision.summary || "").trim();
+        const name = revision.actor.name || "";
+        const rest =
+          name && summary.toLowerCase().startsWith(`${name.toLowerCase()} `)
+            ? summary.slice(name.length + 1).trim()
+            : summary;
+        return rest || "edited";
       }
       async function restoreRevision(commit, undo) {
         const id = active?.id;
@@ -2288,9 +2364,11 @@
         paste.id = "send-paste";
         const shortcut = element("span", "nt-row-sub");
         shortcut.append(element("kbd", "nt-kbd", "⌥⌘↵"));
-        paste.append(element("span", "nt-row-label", "Paste into terminal"), shortcut);
+        paste.append(element("span", "nt-row-label", "Paste into focused terminal"), shortcut);
+        const reason = element("p", "nt-row-reason", PASTE_UNAVAILABLE);
+        reason.id = "send-paste-reason";
         // The context choice only applies to agents, so it sits below every action.
-        $("float").append(paste, label);
+        $("float").append(paste, reason, label);
         renderPaste();
         input.oninput = renderSendAgents;
         input.onkeydown = (e) => {
@@ -2304,7 +2382,7 @@
         positionFloat(anchor);
         input.focus();
       }
-      const PASTE_UNAVAILABLE = "Open a terminal to paste into it";
+      const PASTE_UNAVAILABLE = "Focus a terminal to paste into it";
       // The person's active terminal: the selected terminal tab of the focused workspace.
       async function refreshPaste() {
         const read = ++pasteRead;
@@ -2317,8 +2395,14 @@
         const paste = document.getElementById("send-paste");
         if (!paste) return;
         paste.setAttribute("aria-disabled", String(!canPaste));
-        if (canPaste) paste.removeAttribute("title");
-        else paste.title = PASTE_UNAVAILABLE;
+        $("send-paste-reason").hidden = canPaste;
+        if (canPaste) {
+          paste.removeAttribute("title");
+          paste.removeAttribute("aria-describedby");
+        } else {
+          paste.title = PASTE_UNAVAILABLE;
+          paste.setAttribute("aria-describedby", "send-paste-reason");
+        }
       }
       function pasteRequest() {
         const request = sendRequest;
@@ -2892,6 +2976,7 @@
       const clock = setInterval(() => {
         renderList();
         renderHistory();
+        renderSaveAge();
       }, 30000);
       function loadContextFiles() {
         if (contextLoading) return contextLoading;
@@ -2947,7 +3032,6 @@
           cs.onPasteTargetChanged?.(() => run(refreshPaste));
           run(refreshPaste);
         } else canPaste = canSend;
-        $("org-name").textContent = context.org || "";
         $("empty-title").textContent = `Notes for ${context.org || "you"}`;
         let snapshot = await cs.subscribe?.("records", { collection, onChange: recordsChanged });
         rows = snapshot.snapshot;
