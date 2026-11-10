@@ -443,6 +443,37 @@ function runScan(root, argv, npm, t) {
   return { code, calls, errors, logs };
 }
 
+test("missing pnpm inventory paths use a hoisted licence only for the same package and version", (t) => {
+  const name = "@example/parser";
+  const licence = "MIT License\n\nCopyright (c) 2020-2026 The parser contributors";
+  const { root, done } = fixtureRoot({
+    "node_modules/@example/parser/package.json": JSON.stringify({ name, version: "2.0.0" }),
+    "node_modules/@example/parser/LICENSE": licence,
+    "installed/LICENSE": "MIT inventory licence",
+  });
+  t.after(done);
+  const missing = join(root, "node_modules/.pnpm/@example+parser@2.0.0/node_modules", name);
+  assert.equal(existsSync(missing), false);
+  const entry = { name, versions: ["2.0.0"], paths: [missing] };
+  const scan = (pkg) => {
+    const result = runScan(root, [], { MIT: [pkg] }, t);
+    assert.equal(result.code, 0, result.errors.join("\n"));
+    return readFileSync(join(root, NOTICES), "utf8");
+  };
+  assert.ok(scan(entry).includes(`\n${licence}\n`));
+  assert.ok(!scan({ ...entry, versions: ["1.0.0"] }).includes(licence));
+  assert.ok(!scan({ ...entry, paths: [join(root, "installed")] }).includes(licence));
+  assert.ok(scan({ ...entry, paths: [join(root, "installed")] }).includes("MIT inventory licence"));
+
+  writeFileSync(
+    join(root, "node_modules/@example/parser/package.json"),
+    JSON.stringify({ name: "@example/other", version: "2.0.0" }),
+  );
+  assert.ok(!scan(entry).includes(licence));
+  rmSync(join(root, "node_modules/@example/parser/package.json"));
+  assert.ok(!scan(entry).includes(licence));
+});
+
 test("a GPL production dependency fails --check; dev and test dependencies are out of scope by design", (t) => {
   const { root, done } = fixtureRoot();
   t.after(done);
