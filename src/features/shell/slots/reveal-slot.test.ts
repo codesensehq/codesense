@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
+import type { DashboardRef } from "@/tauri/commands";
 import { beforeEach, expect, it, vi } from "vitest";
-import { declaresSlot, revealSlot, resolveSlot } from "./reveal-slot";
+import { dashboardSelected, declaresSlot, revealSlot, resolveSlot } from "./reveal-slot";
 import { paneDefinitions } from "../right-pane/panes/use-register-pane-panels";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { usePaneStore } from "../right-pane/panes/pane-store";
@@ -236,7 +237,15 @@ it("focuses the classic Agents list when the dock is set to it", () => {
   }
 });
 
-const choices = ["implicit", "native", "inbox", "notes", "both"] as const;
+const choices = [
+  "implicit",
+  "native",
+  "inbox",
+  "notes",
+  "both",
+  "classic-inbox",
+  "classic-notes",
+] as const;
 it.each(
   choices.flatMap((prior) =>
     ["inbox", "notes"].flatMap((surface) =>
@@ -244,7 +253,7 @@ it.each(
     ),
   ),
 )(
-  "keeps surfaces independent through $prior legacy $surface changes enabled=$enabled",
+  "keeps the other effective surface for $prior when $surface enabled=$enabled",
   async ({ prior, surface, enabled }) => {
     const notes = { ...ref, id: "journal" };
     const initial = usePaneStore.getState().listing!;
@@ -265,7 +274,7 @@ it.each(
       },
     });
     const choice =
-      prior === "implicit"
+      prior === "implicit" || prior.startsWith("classic-")
         ? undefined
         : prior === "native"
           ? "native"
@@ -278,10 +287,16 @@ it.each(
       profile: {
         ...useDashboardProfileStore.getState().profile!,
         slots: choice === undefined ? {} : { "right-pane": choice },
+        rightPaneSurfaces: prior.startsWith("classic-")
+          ? { [prior.slice("classic-".length)]: "native" }
+          : {},
       },
     });
     const other = surface === "inbox" ? "notes" : "inbox";
     const before = resolveSlot("right-pane", { surface: other }).panelId;
+    expect(!!resolveSlot("right-pane", { surface: other }).dashboard).toBe(
+      other === "inbox" || (prior !== "native" && prior !== `classic-${other}`),
+    );
     await setSurfaceDashboard("acme", surface, surface === "inbox" ? ref : notes, enabled);
     expect(resolveSlot("right-pane", { surface: other }).panelId).toBe(before);
     expect(!!resolveSlot("right-pane", { surface }).dashboard).toBe(surface === "inbox" || enabled);
@@ -293,31 +308,127 @@ it.each(
   },
 );
 
-it.each([undefined, "native" as const])("keeps Notes classic with choice %s in CP1", (choice) => {
+it.each(["implicit", "classic", "legacy-native"])(
+  "resolves the listed Notes with %s choice",
+  (choice) => {
+    const initial = usePaneStore.getState().listing!;
+    usePaneStore.setState({
+      listing: {
+        ...initial,
+        panes: [
+          ...initial.panes,
+          {
+            ...initial.panes[0],
+            id: "notes",
+            surface: "notes",
+            panelId: "pane:acme:dev/notes",
+            dashboardRef: { ...ref, id: "notes" },
+          },
+        ],
+      },
+    });
+    useDashboardProfileStore.setState({
+      profile: {
+        ...useDashboardProfileStore.getState().profile!,
+        slots: choice === "legacy-native" ? { "right-pane": "native" } : {},
+        rightPaneSurfaces: choice === "classic" ? { notes: "native" } : {},
+      },
+    });
+    expect(resolveSlot("right-pane", { surface: "notes" }).panelId).toBe(
+      choice === "implicit" ? "pane:acme:dev/notes" : SCRATCH_PANEL_ID,
+    );
+    if (choice === "implicit") {
+      revealSlot("right-pane", { surface: "notes", intent: { noteId: "first-note" } });
+      expect(usePaneStore.getState().pendingIntents["pane:acme:dev/notes"]).toMatchObject({
+        noteId: "first-note",
+      });
+      usePaneStore.setState({ teamKey: "acme:previous" });
+      expect(resolveSlot("right-pane", { surface: "notes" }).dashboard).toBeUndefined();
+    }
+  },
+);
+
+it("with no choice, Notes opens the first listed Notes pane: a team fork before the built-in", () => {
   const initial = usePaneStore.getState().listing!;
+  const fork = { ...ref, id: "notes" };
+  const builtin = { scope: "built-in" as const, org: ref.org, id: "notes" };
+  const notes = (dashboardRef: DashboardRef, panelId: string) => ({
+    ...initial.panes[0],
+    id: "notes",
+    surface: "notes",
+    status: "ready" as const,
+    panelId,
+    dashboardRef,
+    declaration: { slots: ["right-pane"], surface: "notes", capabilities: [] },
+  });
+  // The listing orders layers team, private, then built-in; both are right-pane eligible.
   usePaneStore.setState({
     listing: {
       ...initial,
-      panes: [
-        ...initial.panes,
-        {
-          ...initial.panes[0],
-          id: "notes",
-          surface: "notes",
-          panelId: "pane:acme:dev/notes",
-          dashboardRef: { ...ref, id: "notes" },
-        },
-      ],
+      panes: [notes(fork, "pane:acme:dev/notes"), notes(builtin, "pane:private:acme/notes")],
     },
   });
   useDashboardProfileStore.setState({
-    profile: {
-      ...useDashboardProfileStore.getState().profile!,
-      slots: choice ? { "right-pane": choice } : {},
-    },
+    profile: { ...useDashboardProfileStore.getState().profile!, slots: {} },
   });
-  expect(resolveSlot("right-pane", { surface: "notes" }).panelId).toBe(SCRATCH_PANEL_ID);
+  expect(dashboardSelected(fork)).toBe(true);
+  expect(dashboardSelected(builtin)).toBe(false);
+  expect(resolveSlot("right-pane", { surface: "notes" }).panelId).toBe("pane:acme:dev/notes");
 });
+
+it.each(["outside-team", "parent-team", "private", "installed", "built-in"])(
+  "resolves an unlisted %s Notes choice and recovers when listed",
+  (kind) => {
+    const initial = usePaneStore.getState().listing!;
+    const listed = {
+      ...initial.panes[0],
+      surface: "notes",
+      dashboardRef: { ...ref, id: "notes" },
+      panelId: "pane:acme:dev/notes",
+    };
+    const selected: DashboardRef =
+      kind === "outside-team" || kind === "parent-team"
+        ? { ...ref, team: kind === "outside-team" ? "other" : "parent", id: "notes" }
+        : {
+            scope: kind === "built-in" ? "built-in" : "private",
+            org: ref.org,
+            id: "chosen-notes",
+            ...(kind === "installed" ? { installedFrom: listed.dashboardRef } : {}),
+          };
+    usePaneStore.setState({ listing: { ...initial, chain: ["dev", "parent"], panes: [listed] } });
+    useDashboardProfileStore.setState({
+      profile: {
+        ...useDashboardProfileStore.getState().profile!,
+        slots: {},
+        rightPaneSurfaces: { notes: selected },
+      },
+    });
+    expect(resolveSlot("right-pane", { surface: "notes" }).dashboard?.dashboardRef).toEqual(
+      kind === "outside-team" ? listed.dashboardRef : undefined,
+    );
+    if (kind === "outside-team") return;
+    usePaneStore.setState({
+      listing: {
+        ...initial,
+        chain: ["dev", "parent"],
+        panes: [
+          listed,
+          {
+            ...listed,
+            id: selected.id,
+            dashboardRef: selected,
+            panelId: "chosen",
+            // A built-in goes only to the slots it declares.
+            declaration: { slots: ["right-pane"], surface: "notes", capabilities: [] },
+          },
+        ],
+      },
+    });
+    expect(resolveSlot("right-pane", { surface: "notes" }).dashboard?.dashboardRef).toEqual(
+      selected,
+    );
+  },
+);
 
 it("reveals file-nav through its own collapse state without opening the right pane", () => {
   useViewerStore.setState({ navCollapsed: { "acme:dev": true }, rightPaneOpen: false });

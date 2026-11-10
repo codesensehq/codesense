@@ -19,7 +19,19 @@ fn app_data_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf,
 pub(crate) fn app_state_path<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<PathBuf, String> {
-    Ok(app_data_dir(app)?.join("app-state.json"))
+    app_data_dir(app)?;
+    app_state_file(app)
+}
+
+/// Where `app_state_path` points, without creating the directory.
+pub(crate) fn app_state_file<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {}", e))?
+        .join("app-state.json"))
 }
 
 /// SW-MCP-11: synchronously read the configured summary-section headings from
@@ -185,6 +197,58 @@ pub async fn load_app_state<R: tauri::Runtime>(
             })
     })
     .await
+}
+
+/// The profile's saved `dashboardPolicy` (`{}` when unset) in the app-state file at `path`,
+/// as `load_app_state` reports it. It comes from the copy kept as the file is read and
+/// written, fenced by the published profile, so a dashboard verb neither waits on profile
+/// I/O nor parses the file. Only a file no read has kept yet, or one a load would first
+/// migrate, is loaded.
+pub(crate) async fn dashboard_policy<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    path: PathBuf,
+    principal: String,
+) -> Result<serde_json::Value, String> {
+    let profile = app.state::<super::local_profile::LocalProfileState>();
+    if let Some(policy) = kept_dashboard_policy(&profile, &path, &principal)? {
+        return Ok(policy);
+    }
+    await_blocking("dashboard_policy", move || {
+        load_dashboard_policy(
+            &app.state::<super::local_profile::LocalProfileState>(),
+            &path,
+            &principal,
+        )
+    })
+    .await
+}
+
+/// The kept policy, `None` when only a load can tell. Takes no profile I/O lock. Unlike
+/// `with_expected` it leaves a pending selection unpinned; the renderer's own boot
+/// `load_app_state` pins it.
+fn kept_dashboard_policy(
+    profile: &super::local_profile::LocalProfileState,
+    path: &std::path::Path,
+    principal: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    profile.with_expected_published(principal, || {
+        Ok(profile_workspace::cached_policy(path, principal))
+    })
+}
+
+fn load_dashboard_policy(
+    profile: &super::local_profile::LocalProfileState,
+    path: &std::path::Path,
+    principal: &str,
+) -> Result<serde_json::Value, String> {
+    let state = profile.with_expected(Some(principal), || {
+        profile_workspace::load(path, Some(principal))
+    })?;
+    let mut state: serde_json::Value = serde_json::from_str(&state).map_err(|e| e.to_string())?;
+    Ok(state
+        .get_mut("dashboardPolicy")
+        .map(serde_json::Value::take)
+        .unwrap_or_else(|| serde_json::json!({})))
 }
 
 /// Drop the workspace rows `matches` picks in `team_key` from the saved app
@@ -502,6 +566,184 @@ mod profile_write_tests {
         assert_eq!(a["org"]["activeOrgSlug"], "A");
         assert_eq!(b["org"]["activeOrgSlug"], "B");
         assert_eq!(a["viewer"]["settings"]["theme"], "light");
+    }
+}
+
+/// A mock app whose selected local profile is "41", beside an unselected "42".
+#[cfg(test)]
+pub(crate) fn profile_test_app(home: &std::path::Path) -> tauri::App<tauri::test::MockRuntime> {
+    for id in ["41", "42"] {
+        fs::create_dir_all(home.join("users").join(id)).unwrap();
+    }
+    let profile = super::local_profile::LocalProfileState::load(home).unwrap();
+    profile.select("41", None).unwrap();
+    tauri::test::mock_builder()
+        .manage(profile)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap()
+}
+
+#[cfg(test)]
+mod dashboard_policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn kept(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        path: &std::path::Path,
+    ) -> Option<serde_json::Value> {
+        kept_dashboard_policy(
+            &app.state::<super::super::local_profile::LocalProfileState>(),
+            path,
+            "41",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_kept_policy_matches_what_load_returns() {
+        let home = tempfile::tempdir().unwrap();
+        let app = profile_test_app(home.path());
+        let policy = |path: &std::path::Path, principal: &str| {
+            tauri::async_runtime::block_on(dashboard_policy(
+                app.handle().clone(),
+                path.to_path_buf(),
+                principal.into(),
+            ))
+        };
+        let strict = json!({"preset": "team-safe"});
+        for (case, file, claimable, expected) in [
+            (
+                "scoped",
+                json!({"localProfileWorkspacesV1": {"41": {"dashboardPolicy": strict}}, "dashboardPolicy": {"preset": "open"}}),
+                false,
+                strict.clone(),
+            ),
+            (
+                "scoped without a policy of its own",
+                json!({"localProfileWorkspacesV1": {"41": {"viewer": {}}}, "dashboardPolicy": strict}),
+                false,
+                strict.clone(),
+            ),
+            (
+                "unscoped",
+                json!({"localProfileWorkspacesV1": {"42": {"dashboardPolicy": strict}}}),
+                false,
+                json!({}),
+            ),
+            (
+                "unscoped beside a top-level policy",
+                json!({"localProfileWorkspacesV1": {"42": {"dashboardPolicy": {"preset": "open"}}}, "dashboardPolicy": strict}),
+                false,
+                strict.clone(),
+            ),
+            (
+                "unscoped beside an unattributed legacy workspace",
+                json!({"localProfileWorkspacesV1": {}, "unassignedLegacyWorkspaceV1": {"dashboardPolicy": strict}, "legacyWorkspaceUnattributedV1": true}),
+                false,
+                json!({}),
+            ),
+            (
+                "legacy claimable",
+                json!({"localProfileWorkspacesV1": {}, "unassignedLegacyWorkspaceV1": {"dashboardPolicy": strict}}),
+                true,
+                strict.clone(),
+            ),
+            (
+                "legacy claimable, before profiles",
+                json!({"dashboardPolicy": strict}),
+                true,
+                strict.clone(),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (kept_file, loaded) =
+                (dir.path().join("kept.json"), dir.path().join("loaded.json"));
+            for path in [&kept_file, &loaded] {
+                fs::write(path, file.to_string()).unwrap();
+            }
+            let by_load: serde_json::Value =
+                serde_json::from_str(&profile_workspace::load(&loaded, Some("41")).unwrap())
+                    .unwrap();
+            let by_load = by_load.get("dashboardPolicy").cloned().unwrap_or(json!({}));
+            assert_eq!(by_load, expected, "{case}: load");
+            profile_workspace::load(&kept_file, None).unwrap();
+            assert_eq!(
+                kept(&app, &kept_file).is_none(),
+                claimable,
+                "{case}: only a load may claim a legacy workspace"
+            );
+            assert_eq!(policy(&kept_file, "41").unwrap(), by_load, "{case}");
+            assert_eq!(
+                kept(&app, &kept_file),
+                Some(by_load),
+                "{case}: kept after the load"
+            );
+        }
+        let path = home.path().join("app-state.json");
+        fs::write(
+            &path,
+            json!({"localProfileWorkspacesV1": {"42": {"dashboardPolicy": {"preset": "open"}}}})
+                .to_string(),
+        )
+        .unwrap();
+        profile_workspace::load(&path, None).unwrap();
+        let mismatch = "Local profile changed; reload this window".to_string();
+        assert_eq!(policy(&path, "42"), Err(mismatch.clone()));
+        assert_eq!(
+            load_dashboard_policy(
+                &app.state::<super::super::local_profile::LocalProfileState>(),
+                &path,
+                "42"
+            ),
+            Err(mismatch)
+        );
+    }
+
+    fn saved_app_state(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        home: &std::path::Path,
+        policy: serde_json::Value,
+    ) -> PathBuf {
+        let path = home.join("app-data").join("app-state.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_app_state(
+            app.handle(),
+            &path,
+            Some("41"),
+            &json!({"dashboardPolicy": policy}).to_string(),
+            true,
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn an_outside_edit_through_the_watcher_event_replaces_the_kept_policy() {
+        let home = tempfile::tempdir().unwrap();
+        let app = profile_test_app(home.path());
+        let path = saved_app_state(&app, home.path(), json!({"preset": "open"}));
+        let mut edited: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        edited["localProfileWorkspacesV1"]["41"]["dashboardPolicy"] =
+            json!({"preset": "team-safe"});
+        fs::write(&path, edited.to_string()).unwrap();
+        assert_eq!(kept(&app, &path), Some(json!({"preset": "open"})));
+        crate::live_hub::configuration::path_changed(app.handle(), &path).unwrap();
+        assert_eq!(kept(&app, &path), Some(json!({"preset": "team-safe"})));
+    }
+
+    #[test]
+    fn the_watcher_echo_of_an_app_save_keeps_the_policy() {
+        let home = tempfile::tempdir().unwrap();
+        let app = profile_test_app(home.path());
+        let path = saved_app_state(&app, home.path(), json!({"preset": "team-safe"}));
+        crate::live_hub::configuration::path_changed(app.handle(), &path).unwrap();
+        assert_eq!(
+            kept(&app, &path),
+            Some(json!({"preset": "team-safe"})),
+            "the echo of the app's own save must not send verbs back to a load"
+        );
     }
 }
 

@@ -1522,7 +1522,7 @@ const EVENT_META = {
     payload: "{id}",
     timing: "After synchronous page menu callbacks finish",
     description:
-      "Architecture: confirm that Mark as unread established its page hold before the host persists the unread state.",
+      "Architecture: confirm that Mark unread established its page hold before the host persists the unread state.",
     example: "// Applied by the shim, not page code.",
   },
   "codesense:menu-actions": {
@@ -1640,15 +1640,15 @@ const EVENT_META = {
   },
   "codesense:ping": {
     direction: "parent-to-doc",
-    payload: "{}",
+    payload: "{render?: true}",
     timing: "Every 5 seconds while visible",
     description:
-      "The shim answers automatically. Three consecutive missed answers use the existing crashed fallback strip.",
+      "The shim answers automatically. A pane's first ping after its page is ready or shown again sets render, asking whether the page drew anything. Three consecutive missed answers, or a page that drew nothing, reload the pane once, then use the existing crashed fallback strip.",
     example: "// Answered automatically by the shim.",
   },
   "codesense:pong": {
     direction: "doc-to-parent",
-    payload: "{}",
+    payload: "{rendered?: boolean}",
     timing: "Immediately after a ping",
     description:
       "The heartbeat answer resets the host missed-pong count. Hidden frames are not pinged.",

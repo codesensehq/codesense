@@ -299,6 +299,7 @@ api.switchTeam = (team: string) => {
   useOrgStore.setState({ activeTeamName: team });
 };
 api.foldDock = () => useViewerStore.setState({ workspacePanelCollapsed: true });
+api.unfoldDock = () => useViewerStore.setState({ workspacePanelCollapsed: false });
 api.runDockCommand = (args: unknown) =>
   runDashboardCommand(dashboardCommandActionId(dashboardRefKey(ref), "inspect"), args);
 

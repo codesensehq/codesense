@@ -480,7 +480,7 @@ export function GeneralSection({ query }: { query: string }) {
             <ClassicSurfaceRow
               surface="notes"
               label={GENERAL_ROW_SPECS.notesPanePreview.label}
-              footer="Turn off to use the new Notes."
+              footer="Shows the earlier Notes panel instead of the Notes pane."
             />
           )}
           {visibleSet.has("dockDashboard") && <AgentsListRow />}
