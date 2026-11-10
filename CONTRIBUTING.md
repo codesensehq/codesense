@@ -19,8 +19,11 @@ open issues first.
 ## Pull requests
 
 - Keep a change focused on one thing, and say what it does and why.
-- If users would notice the change, add a line under `## [Unreleased]` in
-  `CHANGELOG.md`. Write it for the people who use CodeSense.
+- If users would notice the change, add a changelog entry as a new file,
+  `changes/<slug>.md`, as [changes/README.md](changes/README.md) describes.
+  Don't edit `CHANGELOG.md`: entries are folded into it at release time, so
+  pull requests merged together never conflict. Write the entry for the people
+  who use CodeSense.
 - Sign off every commit (`git commit -s`) to certify the
   [Developer Certificate of Origin](https://developercertificate.org/). See
   [Sign-off](#sign-off-dco) below.
@@ -42,7 +45,14 @@ open issues first.
   commit you've since fixed, start a fresh branch from current `main` and
   reapply only the clean changes. Don't paste private values while explaining
   a failure.
+- **Changelog** checks the format of every file in `changes/`. If the pull
+  request changes the app (`src/`, `src-tauri/` or `src-emulator/`, apart from
+  tests), it also needs a new `changes/<slug>.md`. When users won't notice the
+  change, a maintainer adds the `no-changelog` label instead.
 - The other jobs lint, build and test the change.
+- **Rust (macOS arm64)** runs in the merge queue, not on the pull request.
+  For a macOS-specific change, a maintainer adds the `ci:macos` label to run
+  it on the pull request too.
 
 ### Sign-off (DCO)
 
@@ -75,9 +85,12 @@ come if the project were ever relicensed.
 
 ### How a pull request lands
 
-The maintainer reviews your pull request and merges it here. Your commits keep
-your authorship and sign-off, so the history credits you. The change ships in
-the next release; releases are not on a fixed schedule.
+The maintainer reviews your pull request and adds it to the merge queue, which
+runs the required checks on your change combined with the others ahead of it
+and merges it once they pass. You don't need to keep your branch up to date
+with `main`. Your commits keep your authorship and sign-off, so the history
+credits you. The change ships in the next release; releases are not on a fixed
+schedule.
 
 ## Local checks
 
@@ -129,7 +142,14 @@ What you can expect:
 ## AI assistance
 
 AI agents help the maintainer triage issues, review changes and write code.
-The maintainer reviews and is responsible for what is released.
+The maintainer reviews and is responsible for what is released. Maintainer
+commits use the maintainer's own GitHub identity (their GitHub noreply address)
+as author, committer and sign-off, are signed, and carry no AI co-author
+trailer. A maintainer clone sets `git config codesense.requireSigned true`;
+then a push to the public repository is refused if any commit it publishes is
+unsigned or has an Anthropic (Claude) co-author trailer. After this check was
+added, a maintainer clone must rerun `scripts/git-hooks/install.sh` once.
+GitHub's Verified badge shows whose key signed a commit.
 
 You're welcome to use AI tools for your own contributions. You remain
 responsible for what you submit, and your sign-off certifies the DCO for it as

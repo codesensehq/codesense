@@ -1619,6 +1619,9 @@ describe("launch sheet: context worktrees", () => {
     expect(document.activeElement).toBe(input);
     fireEvent.change(sheet.getByTestId("launch-name"), { target: { value: "New agent" } });
     expect(input).toHaveValue("New agent");
+    expect(sheet.getByText(/^Creates branch /)).toHaveTextContent(
+      "Creates branch cs/default/new-agent from your clone's main",
+    );
     fireEvent.change(input, { target: { value: "cLaUdE" } });
     fireEvent.change(sheet.getByTestId("launch-name"), { target: { value: "Other agent" } });
     expect(input).toHaveValue("cLaUdE");

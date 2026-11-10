@@ -1506,7 +1506,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6946"
+      "sourceRef": "handler.rs:6947"
     },
     {
       "name": "ack_role_message",
@@ -1580,7 +1580,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7020"
+      "sourceRef": "handler.rs:7021"
     },
     {
       "name": "add_source_repo",
@@ -1635,7 +1635,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9765"
+      "sourceRef": "handler.rs:9766"
     },
     {
       "name": "agent_create",
@@ -1964,7 +1964,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5334"
+      "sourceRef": "handler.rs:5335"
     },
     {
       "name": "agent_delete",
@@ -2016,7 +2016,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5392"
+      "sourceRef": "handler.rs:5393"
     },
     {
       "name": "agent_get",
@@ -2050,7 +2050,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5282"
+      "sourceRef": "handler.rs:5283"
     },
     {
       "name": "agent_list",
@@ -2095,7 +2095,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5267"
+      "sourceRef": "handler.rs:5268"
     },
     {
       "name": "agent_preview",
@@ -2445,7 +2445,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5298"
+      "sourceRef": "handler.rs:5299"
     },
     {
       "name": "agent_restore",
@@ -2501,7 +2501,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5423"
+      "sourceRef": "handler.rs:5424"
     },
     {
       "name": "agent_unarchive",
@@ -2555,7 +2555,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5447"
+      "sourceRef": "handler.rs:5448"
     },
     {
       "name": "agent_update",
@@ -2858,7 +2858,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5367"
+      "sourceRef": "handler.rs:5368"
     },
     {
       "name": "apply_canvas",
@@ -3006,7 +3006,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3305"
+      "sourceRef": "handler.rs:3306"
     },
     {
       "name": "archive_team",
@@ -3050,7 +3050,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9680"
+      "sourceRef": "handler.rs:9681"
     },
     {
       "name": "ask_user",
@@ -3119,7 +3119,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3977"
+      "sourceRef": "handler.rs:3978"
     },
     {
       "name": "attach_context_repository",
@@ -3201,7 +3201,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9790"
+      "sourceRef": "handler.rs:9791"
     },
     {
       "name": "avatar_add",
@@ -3269,7 +3269,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5525"
+      "sourceRef": "handler.rs:5526"
     },
     {
       "name": "avatar_list",
@@ -3304,7 +3304,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5509"
+      "sourceRef": "handler.rs:5510"
     },
     {
       "name": "avatar_share",
@@ -3338,7 +3338,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5556"
+      "sourceRef": "handler.rs:5557"
     },
     {
       "name": "cancel_context_operation",
@@ -3376,7 +3376,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3281"
+      "sourceRef": "handler.rs:3282"
     },
     {
       "name": "cancel_remote_agent_task",
@@ -3410,7 +3410,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2155"
+      "sourceRef": "handler.rs:2156"
     },
     {
       "name": "cancel_wakeup",
@@ -3452,7 +3452,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5247"
+      "sourceRef": "handler.rs:5248"
     },
     {
       "name": "capture_machine_passphrase",
@@ -3489,7 +3489,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1962"
+      "sourceRef": "handler.rs:1963"
     },
     {
       "name": "claim_role_messages",
@@ -3561,7 +3561,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6882"
+      "sourceRef": "handler.rs:6883"
     },
     {
       "name": "close_terminal_tab",
@@ -3596,7 +3596,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8323"
+      "sourceRef": "handler.rs:8324"
     },
     {
       "name": "close_workspace",
@@ -3656,7 +3656,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8437"
+      "sourceRef": "handler.rs:8438"
     },
     {
       "name": "codesense_call_tool",
@@ -3701,7 +3701,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9932"
+      "sourceRef": "handler.rs:9933"
     },
     {
       "name": "codesense_get_tool_schema",
@@ -3737,7 +3737,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9911"
+      "sourceRef": "handler.rs:9912"
     },
     {
       "name": "codesense_overview",
@@ -3769,7 +3769,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2180"
+      "sourceRef": "handler.rs:2181"
     },
     {
       "name": "codesense_search_tools",
@@ -3815,7 +3815,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9874"
+      "sourceRef": "handler.rs:9875"
     },
     {
       "name": "command_list",
@@ -3840,7 +3840,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2580"
+      "sourceRef": "handler.rs:2581"
     },
     {
       "name": "command_run",
@@ -3877,7 +3877,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2593"
+      "sourceRef": "handler.rs:2594"
     },
     {
       "name": "commit_registry_edit_local",
@@ -4310,7 +4310,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1908"
+      "sourceRef": "handler.rs:1909"
     },
     {
       "name": "context_operation_status",
@@ -4396,7 +4396,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3247"
+      "sourceRef": "handler.rs:3248"
     },
     {
       "name": "context_repo_history",
@@ -4494,7 +4494,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6502"
+      "sourceRef": "handler.rs:6503"
     },
     {
       "name": "context_repo_status",
@@ -4544,7 +4544,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6461"
+      "sourceRef": "handler.rs:6462"
     },
     {
       "name": "copy_between_contexts",
@@ -4640,7 +4640,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9520"
+      "sourceRef": "handler.rs:9521"
     },
     {
       "name": "create_content_file",
@@ -4687,7 +4687,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6310"
+      "sourceRef": "handler.rs:6311"
     },
     {
       "name": "create_dashboard",
@@ -4774,7 +4774,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11747"
+      "sourceRef": "handler.rs:11748"
     },
     {
       "name": "create_local_organization",
@@ -4866,7 +4866,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9642"
+      "sourceRef": "handler.rs:9643"
     },
     {
       "name": "delete_content_file",
@@ -4906,7 +4906,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6321"
+      "sourceRef": "handler.rs:6322"
     },
     {
       "name": "delete_team",
@@ -4945,7 +4945,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9691"
+      "sourceRef": "handler.rs:9692"
     },
     {
       "name": "describe_setup",
@@ -4970,7 +4970,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9634"
+      "sourceRef": "handler.rs:9635"
     },
     {
       "name": "detach_context_repository",
@@ -5041,7 +5041,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1926"
+      "sourceRef": "handler.rs:1927"
     },
     {
       "name": "dismiss_agent_mark",
@@ -5084,7 +5084,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9971"
+      "sourceRef": "handler.rs:9972"
     },
     {
       "name": "end_unowned_terminal_session",
@@ -5129,7 +5129,7 @@
     {
       "name": "enroll_private_machine_account",
       "arc": "B",
-      "description": "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service.\nDocs: arc-e-agents/spend-caps.html",
+      "description": "Explicitly enroll the signed-in profile on a trusted SSH private-account machine using the shipped setup service. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine or pin its host key, so call list_machines again before your next save_machine.\nDocs: arc-e-agents/spend-caps.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -5344,7 +5344,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6724"
+      "sourceRef": "handler.rs:6725"
     },
     {
       "name": "forget_missing_workspace",
@@ -5385,7 +5385,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3022"
+      "sourceRef": "handler.rs:3023"
     },
     {
       "name": "get_active_agent_account",
@@ -5419,7 +5419,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2286"
+      "sourceRef": "handler.rs:2287"
     },
     {
       "name": "get_human_status",
@@ -5472,7 +5472,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7101"
+      "sourceRef": "handler.rs:7102"
     },
     {
       "name": "get_live_data_contract",
@@ -5500,7 +5500,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2381"
+      "sourceRef": "handler.rs:2382"
     },
     {
       "name": "get_publish_set",
@@ -5542,7 +5542,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6428"
+      "sourceRef": "handler.rs:6429"
     },
     {
       "name": "get_story_format",
@@ -5567,7 +5567,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2620"
+      "sourceRef": "handler.rs:2621"
     },
     {
       "name": "get_sync_status",
@@ -5709,7 +5709,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3037"
+      "sourceRef": "handler.rs:3038"
     },
     {
       "name": "get_viewer_state",
@@ -5747,7 +5747,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2400"
+      "sourceRef": "handler.rs:2401"
     },
     {
       "name": "health_ping",
@@ -5772,7 +5772,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2230"
+      "sourceRef": "handler.rs:2231"
     },
     {
       "name": "hydrate_story",
@@ -5966,7 +5966,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2793"
+      "sourceRef": "handler.rs:2794"
     },
     {
       "name": "hydrate_worktree",
@@ -6165,7 +6165,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3207"
+      "sourceRef": "handler.rs:3208"
     },
     {
       "name": "inbox_list",
@@ -6316,7 +6316,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7122"
+      "sourceRef": "handler.rs:7123"
     },
     {
       "name": "inbox_post",
@@ -6376,12 +6376,12 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6013"
+      "sourceRef": "handler.rs:6014"
     },
     {
       "name": "install_terminal_server",
       "arc": "D",
-      "description": "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner.\nDocs: arc-d-terminals-and-machines/terminal-servers.html",
+      "description": "Explicitly install the bundled terminal server on the trusted machine. No sudo or arbitrary provisioner. On a saved team machine, `label` must stay its published label. It takes no declarationRevision, so it can't tell whether the machine changed since you read it; it may convert a legacy machine, so call list_machines again before your next save_machine.\nDocs: arc-d-terminals-and-machines/terminal-servers.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -6570,7 +6570,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2256"
+      "sourceRef": "handler.rs:2257"
     },
     {
       "name": "list_agent_updates",
@@ -6631,7 +6631,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7200"
+      "sourceRef": "handler.rs:7201"
     },
     {
       "name": "list_context_attachments",
@@ -6723,7 +6723,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9459"
+      "sourceRef": "handler.rs:9460"
     },
     {
       "name": "list_hydrated",
@@ -6806,12 +6806,12 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2817"
+      "sourceRef": "handler.rs:2818"
     },
     {
       "name": "list_machines",
       "arc": "D",
-      "description": "List the machines an org/team sees, as the Machines panel lists them: This Mac first, then the team's shared machines, then your private ones. Required: `orgSlug`. Optional: `team` (include that team's shared machines; describe_setup lists orgs and teams). Returns `[{machineId, kind, label, scope, declaration, binding, canPublish, status, attention, capabilities, remoteMcpControl?, terminalServer?, load1?, cpuCount?, memUsedBytes?, memTotalBytes?, diskFreeBytes?, diskTotalBytes?, diskPath?, sampledAt?, machineStatsSupported?}]`. Its `machineId` (`local` = This Mac) goes to open_workspace {machine_id} and open_remote_tab {machineId}. `kind`: `local` | `ssh`. `scope`: null for This Mac, `{kind:\"personal\"}`, or `{kind:\"team\", orgSlug, team}`. `declaration` (null for This Mac): the shareable half — `{host, port, jumpHost, defaultBaseDir, pinnedHostKeyFp, pinnedServerId}`; `binding`: your own connection settings for it, null when you never connected. `status.state`: `connected` (with `workspaces`, the open workspace count), `idle`, `connecting`, `handshaking`, `reconnecting` (`attempt`), `disconnected`, `unreachable` (`lastReachedAtMs`, `retryInSecs`), `connectionFailed` (`lastError`), `needsCredential`, `authFailed` (`reason`), `hostKeyChanged`, `notInstalled` (its terminal server is not installed), `versionMismatch`, `terminalServerFrozen`. `attention`: how many agents there wait on you. `capabilities.agentCallbacks`: whether agents launched there can reach this app's MCP (inbox, roles, progress, hooks): true only for a set-up private-account machine with remote MCP control on (set_machine_remote_mcp_control); a team-shared machine has none. `terminalServer` (connected machines only; absent otherwise): the running terminal server next to this app — `{serverVersion?` (the app release it was built for; absent for an older build that predates build stamps), `appVersion`, `upToDate`, `relation` (`same` | `older` | `newer` | `otherBuild`: This Mac's server belongs to another CodeSense build sharing this Mac — `upToDate` is false, but only `older` servers are out of date and offered the update), `announcedVersion`, `buildCommit?`, `builtAtMs?`, `buildDigest?`, `devBuild`, and for This Mac `serverPath`, `appServerPath` (the server this app ships), `startedAtMs`, `pid}`. A remote machine whose server is `older` also has `status.terminalServerUpdate: true`, and after connect_machine or retry_machine `status.terminalServerSessions` (the sessions an update ends; a list leaves it out). Resources are optional self-reported terminal-server observations: `load1` is the 1-minute load average, `cpuCount` logical cores; memory and disk are bytes, memory used is total minus available, disk is the volume holding the server workspace directory labelled by `diskPath`, and `sampledAt` is Unix epoch milliseconds on the server. A call reuses a sample under 30 seconds old or takes one one-shot sample without subscribing. An older server has `machineStatsSupported: false` and no resource fields: unknown (update the terminal server). Disconnected rows omit these fields. Samples are local runtime state, never synced or a reservation; re-check before depending on free disk. The visible Machines tab receives a 30-second stream through the machineStats LiveHub topic; it stops watching when hidden. No secrets are returned. A dashboard's codesense.machines() returns the same list for the page's team.\nDocs: arc-d-terminals-and-machines/index.html",
+      "description": "List the machines an org/team sees, as the Machines panel lists them: This Mac first, then the team's shared machines, then your private ones. Required: `orgSlug`. Optional: `team` (include that team's shared machines; describe_setup lists orgs and teams). Returns `[{machineId, kind, label, scope, declaration, binding, canPublish, status, attention, capabilities, remoteMcpControl?, terminalServer?, load1?, cpuCount?, memUsedBytes?, memTotalBytes?, diskFreeBytes?, diskTotalBytes?, diskPath?, sampledAt?, machineStatsSupported?}]`. Its `machineId` (`local` = This Mac) goes to open_workspace {machine_id} and open_remote_tab {machineId}. `kind`: `local` | `ssh`. `scope`: null for This Mac, `{kind:\"personal\"}`, or `{kind:\"team\", orgSlug, team}`. `declaration` (null for This Mac): the shareable half — `{host, port, jumpHost, defaultBaseDir, pinnedHostKeyFp, pinnedServerId, revision}` (`revision` is save_machine's `declarationRevision`); `binding`: your own connection settings for it, null when you never connected. `status.state`: `connected` (with `workspaces`, the open workspace count), `idle`, `connecting`, `handshaking`, `reconnecting` (`attempt`), `disconnected`, `unreachable` (`lastReachedAtMs`, `retryInSecs`), `connectionFailed` (`lastError`), `needsCredential`, `authFailed` (`reason`), `hostKeyChanged`, `notInstalled` (its terminal server is not installed), `versionMismatch`, `terminalServerFrozen`. `attention`: how many agents there wait on you. `capabilities.agentCallbacks`: whether agents launched there can reach this app's MCP (inbox, roles, progress, hooks): true only for a set-up private-account machine with remote MCP control on (set_machine_remote_mcp_control); a team-shared machine has none. `terminalServer` (connected machines only; absent otherwise): the running terminal server next to this app — `{serverVersion?` (the app release it was built for; absent for an older build that predates build stamps), `appVersion`, `upToDate`, `relation` (`same` | `older` | `newer` | `otherBuild`: This Mac's server belongs to another CodeSense build sharing this Mac — `upToDate` is false, but only `older` servers are out of date and offered the update), `announcedVersion`, `buildCommit?`, `builtAtMs?`, `buildDigest?`, `devBuild`, and for This Mac `serverPath`, `appServerPath` (the server this app ships), `startedAtMs`, `pid}`. A remote machine whose server is `older` also has `status.terminalServerUpdate: true`, and after connect_machine or retry_machine `status.terminalServerSessions` (the sessions an update ends; a list leaves it out). Resources are optional self-reported terminal-server observations: `load1` is the 1-minute load average, `cpuCount` logical cores; memory and disk are bytes, memory used is total minus available, disk is the volume holding the server workspace directory labelled by `diskPath`, and `sampledAt` is Unix epoch milliseconds on the server. A call reuses a sample under 30 seconds old or takes one one-shot sample without subscribing. An older server has `machineStatsSupported: false` and no resource fields: unknown (update the terminal server). Disconnected rows omit these fields. Samples are local runtime state, never synced or a reservation; re-check before depending on free disk. The visible Machines tab receives a 30-second stream through the machineStats LiveHub topic; it stops watching when hidden. No secrets are returned. A dashboard's codesense.machines() returns the same list for the page's team.\nDocs: arc-d-terminals-and-machines/index.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -6873,7 +6873,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2074"
+      "sourceRef": "handler.rs:2075"
     },
     {
       "name": "list_orgs_teams",
@@ -6898,7 +6898,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8867"
+      "sourceRef": "handler.rs:8868"
     },
     {
       "name": "list_out_of_date_terminal_servers",
@@ -7016,7 +7016,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4781"
+      "sourceRef": "handler.rs:4782"
     },
     {
       "name": "list_runs",
@@ -7053,7 +7053,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4768"
+      "sourceRef": "handler.rs:4769"
     },
     {
       "name": "list_sessions",
@@ -7088,7 +7088,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6640"
+      "sourceRef": "handler.rs:6641"
     },
     {
       "name": "list_source_repos",
@@ -7113,7 +7113,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2632"
+      "sourceRef": "handler.rs:2633"
     },
     {
       "name": "list_ssh_sources",
@@ -7179,7 +7179,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5229"
+      "sourceRef": "handler.rs:5230"
     },
     {
       "name": "list_worktrees",
@@ -7224,7 +7224,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5010"
+      "sourceRef": "handler.rs:5011"
     },
     {
       "name": "mark_unread",
@@ -7275,7 +7275,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7151"
+      "sourceRef": "handler.rs:7152"
     },
     {
       "name": "model_rates",
@@ -7300,7 +7300,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4980"
+      "sourceRef": "handler.rs:4981"
     },
     {
       "name": "move_between_contexts",
@@ -7396,7 +7396,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9509"
+      "sourceRef": "handler.rs:9510"
     },
     {
       "name": "move_content_file",
@@ -7441,7 +7441,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6343"
+      "sourceRef": "handler.rs:6344"
     },
     {
       "name": "move_workspace",
@@ -7522,7 +7522,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2044"
+      "sourceRef": "handler.rs:2045"
     },
     {
       "name": "notes_create",
@@ -7593,7 +7593,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3597"
+      "sourceRef": "handler.rs:3598"
     },
     {
       "name": "notes_history",
@@ -7643,7 +7643,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3640"
+      "sourceRef": "handler.rs:3641"
     },
     {
       "name": "notes_list",
@@ -7678,7 +7678,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3571"
+      "sourceRef": "handler.rs:3572"
     },
     {
       "name": "notes_read",
@@ -7719,7 +7719,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3584"
+      "sourceRef": "handler.rs:3585"
     },
     {
       "name": "notes_read_at",
@@ -7764,7 +7764,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3653"
+      "sourceRef": "handler.rs:3654"
     },
     {
       "name": "notes_restore",
@@ -7831,7 +7831,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3666"
+      "sourceRef": "handler.rs:3667"
     },
     {
       "name": "notes_search",
@@ -7882,7 +7882,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3627"
+      "sourceRef": "handler.rs:3628"
     },
     {
       "name": "notes_write",
@@ -7998,7 +7998,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3612"
+      "sourceRef": "handler.rs:3613"
     },
     {
       "name": "open_remote_tab",
@@ -8137,7 +8137,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1981"
+      "sourceRef": "handler.rs:1982"
     },
     {
       "name": "open_terminal_tab",
@@ -8189,7 +8189,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7973"
+      "sourceRef": "handler.rs:7974"
     },
     {
       "name": "open_workspace",
@@ -8363,7 +8363,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6566"
+      "sourceRef": "handler.rs:6567"
     },
     {
       "name": "pane_list",
@@ -8409,7 +8409,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3346"
+      "sourceRef": "handler.rs:3347"
     },
     {
       "name": "pane_open",
@@ -8477,7 +8477,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3411"
+      "sourceRef": "handler.rs:3412"
     },
     {
       "name": "pane_write",
@@ -8542,7 +8542,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3378"
+      "sourceRef": "handler.rs:3379"
     },
     {
       "name": "post_agent_message",
@@ -8616,7 +8616,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3750"
+      "sourceRef": "handler.rs:3751"
     },
     {
       "name": "prepare_machine_terminal_server_replacement",
@@ -8751,7 +8751,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2001"
+      "sourceRef": "handler.rs:2002"
     },
     {
       "name": "preview_reverse_sync_worktree",
@@ -8953,7 +8953,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3168"
+      "sourceRef": "handler.rs:3169"
     },
     {
       "name": "publish_dashboard",
@@ -8996,7 +8996,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11802"
+      "sourceRef": "handler.rs:11803"
     },
     {
       "name": "query_context",
@@ -9094,7 +9094,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8851"
+      "sourceRef": "handler.rs:8852"
     },
     {
       "name": "react",
@@ -9150,7 +9150,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6706"
+      "sourceRef": "handler.rs:6707"
     },
     {
       "name": "read_content_file",
@@ -9193,7 +9193,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6289"
+      "sourceRef": "handler.rs:6290"
     },
     {
       "name": "read_epic_repos",
@@ -9227,7 +9227,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6245"
+      "sourceRef": "handler.rs:6246"
     },
     {
       "name": "read_messages",
@@ -9262,7 +9262,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6674"
+      "sourceRef": "handler.rs:6675"
     },
     {
       "name": "read_remote_agent_task",
@@ -9302,7 +9302,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2129"
+      "sourceRef": "handler.rs:2130"
     },
     {
       "name": "read_rendered_document",
@@ -9345,7 +9345,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3689"
+      "sourceRef": "handler.rs:3690"
     },
     {
       "name": "read_run",
@@ -9389,7 +9389,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4794"
+      "sourceRef": "handler.rs:4795"
     },
     {
       "name": "read_run_evidence",
@@ -9431,7 +9431,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4807"
+      "sourceRef": "handler.rs:4808"
     },
     {
       "name": "read_run_work_product",
@@ -9465,7 +9465,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4820"
+      "sourceRef": "handler.rs:4821"
     },
     {
       "name": "read_terminal_tab",
@@ -9542,7 +9542,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8138"
+      "sourceRef": "handler.rs:8139"
     },
     {
       "name": "read_worktree_config",
@@ -9578,7 +9578,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2993"
+      "sourceRef": "handler.rs:2994"
     },
     {
       "name": "records_collections",
@@ -9712,7 +9712,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3461"
+      "sourceRef": "handler.rs:3462"
     },
     {
       "name": "records_create",
@@ -9846,7 +9846,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3521"
+      "sourceRef": "handler.rs:3522"
     },
     {
       "name": "records_delete",
@@ -9980,7 +9980,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3551"
+      "sourceRef": "handler.rs:3552"
     },
     {
       "name": "records_history",
@@ -10114,7 +10114,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3501"
+      "sourceRef": "handler.rs:3502"
     },
     {
       "name": "records_list",
@@ -10248,7 +10248,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3471"
+      "sourceRef": "handler.rs:3472"
     },
     {
       "name": "records_read",
@@ -10382,7 +10382,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3481"
+      "sourceRef": "handler.rs:3482"
     },
     {
       "name": "records_read_at",
@@ -10516,7 +10516,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3511"
+      "sourceRef": "handler.rs:3512"
     },
     {
       "name": "records_restore",
@@ -10650,7 +10650,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3561"
+      "sourceRef": "handler.rs:3562"
     },
     {
       "name": "records_search",
@@ -10784,7 +10784,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3491"
+      "sourceRef": "handler.rs:3492"
     },
     {
       "name": "records_set_fields",
@@ -10918,7 +10918,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3541"
+      "sourceRef": "handler.rs:3542"
     },
     {
       "name": "records_write",
@@ -11052,7 +11052,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3531"
+      "sourceRef": "handler.rs:3532"
     },
     {
       "name": "refresh_frontmatter_cache",
@@ -11088,7 +11088,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6365"
+      "sourceRef": "handler.rs:6366"
     },
     {
       "name": "refresh_history",
@@ -11154,7 +11154,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4865"
+      "sourceRef": "handler.rs:4866"
     },
     {
       "name": "register_role",
@@ -11235,7 +11235,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6784"
+      "sourceRef": "handler.rs:6785"
     },
     {
       "name": "release_role",
@@ -11296,7 +11296,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7074"
+      "sourceRef": "handler.rs:7075"
     },
     {
       "name": "remote_workspace_fetch",
@@ -11377,7 +11377,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2025"
+      "sourceRef": "handler.rs:2026"
     },
     {
       "name": "remove_from_context",
@@ -11424,7 +11424,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9531"
+      "sourceRef": "handler.rs:9532"
     },
     {
       "name": "remove_machine",
@@ -11461,7 +11461,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1893"
+      "sourceRef": "handler.rs:1894"
     },
     {
       "name": "remove_source_repo",
@@ -11506,7 +11506,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9815"
+      "sourceRef": "handler.rs:9816"
     },
     {
       "name": "rename_team",
@@ -11550,7 +11550,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9669"
+      "sourceRef": "handler.rs:9670"
     },
     {
       "name": "rename_terminal_tab",
@@ -11617,7 +11617,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8236"
+      "sourceRef": "handler.rs:8237"
     },
     {
       "name": "rename_workspace",
@@ -11656,7 +11656,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9754"
+      "sourceRef": "handler.rs:9755"
     },
     {
       "name": "render_canvas",
@@ -11692,7 +11692,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3734"
+      "sourceRef": "handler.rs:3735"
     },
     {
       "name": "reorder_workspace",
@@ -11741,7 +11741,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2564"
+      "sourceRef": "handler.rs:2565"
     },
     {
       "name": "reply",
@@ -11863,7 +11863,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6691"
+      "sourceRef": "handler.rs:6692"
     },
     {
       "name": "report_artifact",
@@ -11923,7 +11923,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4394"
+      "sourceRef": "handler.rs:4395"
     },
     {
       "name": "report_context_sync",
@@ -12023,7 +12023,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6540"
+      "sourceRef": "handler.rs:6541"
     },
     {
       "name": "report_step_result",
@@ -12121,7 +12121,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4335"
+      "sourceRef": "handler.rs:4336"
     },
     {
       "name": "resolve_agent_account",
@@ -12171,7 +12171,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2309"
+      "sourceRef": "handler.rs:2310"
     },
     {
       "name": "resolve_machine_identity",
@@ -12216,7 +12216,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1822"
+      "sourceRef": "handler.rs:1823"
     },
     {
       "name": "restart_machine_terminal_server",
@@ -12416,7 +12416,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1944"
+      "sourceRef": "handler.rs:1945"
     },
     {
       "name": "reverse_sync_worktree",
@@ -12669,7 +12669,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3124"
+      "sourceRef": "handler.rs:3125"
     },
     {
       "name": "role_save",
@@ -12734,7 +12734,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5489"
+      "sourceRef": "handler.rs:5490"
     },
     {
       "name": "role_state",
@@ -12805,7 +12805,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7178"
+      "sourceRef": "handler.rs:7179"
     },
     {
       "name": "roles_list",
@@ -12840,7 +12840,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5471"
+      "sourceRef": "handler.rs:5472"
     },
     {
       "name": "route_file_to_context",
@@ -12930,7 +12930,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2763"
+      "sourceRef": "handler.rs:2764"
     },
     {
       "name": "routine_arm_on",
@@ -12978,7 +12978,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4572"
+      "sourceRef": "handler.rs:4573"
     },
     {
       "name": "routine_cancel",
@@ -13026,7 +13026,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4752"
+      "sourceRef": "handler.rs:4753"
     },
     {
       "name": "routine_context",
@@ -13070,7 +13070,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5106"
+      "sourceRef": "handler.rs:5107"
     },
     {
       "name": "routine_create",
@@ -13427,7 +13427,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4426"
+      "sourceRef": "handler.rs:4427"
     },
     {
       "name": "routine_delete",
@@ -13471,7 +13471,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5023"
+      "sourceRef": "handler.rs:5024"
     },
     {
       "name": "routine_done",
@@ -13526,7 +13526,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5128"
+      "sourceRef": "handler.rs:5129"
     },
     {
       "name": "routine_get",
@@ -13570,7 +13570,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4482"
+      "sourceRef": "handler.rs:4483"
     },
     {
       "name": "routine_handover_release",
@@ -13623,7 +13623,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4648"
+      "sourceRef": "handler.rs:4649"
     },
     {
       "name": "routine_list",
@@ -13664,7 +13664,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4461"
+      "sourceRef": "handler.rs:4462"
     },
     {
       "name": "routine_publish_result",
@@ -13706,7 +13706,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5048"
+      "sourceRef": "handler.rs:5049"
     },
     {
       "name": "routine_refresh_on_machine",
@@ -13749,7 +13749,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4609"
+      "sourceRef": "handler.rs:4610"
     },
     {
       "name": "routine_result",
@@ -13793,7 +13793,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5083"
+      "sourceRef": "handler.rs:5084"
     },
     {
       "name": "routine_run",
@@ -13831,7 +13831,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4737"
+      "sourceRef": "handler.rs:4738"
     },
     {
       "name": "routine_run_now",
@@ -13886,7 +13886,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4682"
+      "sourceRef": "handler.rs:4683"
     },
     {
       "name": "routine_runs",
@@ -13943,7 +13943,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4722"
+      "sourceRef": "handler.rs:4723"
     },
     {
       "name": "routine_set_enabled",
@@ -13995,7 +13995,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4539"
+      "sourceRef": "handler.rs:4540"
     },
     {
       "name": "routine_update",
@@ -14320,7 +14320,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4503"
+      "sourceRef": "handler.rs:4504"
     },
     {
       "name": "run_in_terminal_tab",
@@ -14414,12 +14414,12 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7833"
+      "sourceRef": "handler.rs:7834"
     },
     {
       "name": "save_machine",
       "arc": "D",
-      "description": "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off.\nDocs: arc-d-terminals-and-machines/machine-tools.html",
+      "description": "Save a personal or team machine declaration using existing authorization. mode defaults to private-account, the only mode that opens terminal tabs; saving a legacy machine with mode private-account converts it in place (same id, host key and settings). Changing a saved legacy machine you can publish needs declarationRevision, the declaration.revision from list_machines; a save based on an older revision is refused, so reread and retry, including after your own enroll_private_machine_account or install_terminal_server. A label change on a team private machine is refused. connect validates setup; use connect_machine for actual runtime admission. Auto-connect remains default off.\nDocs: arc-d-terminals-and-machines/machine-tools.html",
       "write": true,
       "starter": false,
       "core": false,
@@ -14433,6 +14433,14 @@
         "properties": {
           "connect": {
             "type": "boolean"
+          },
+          "declarationRevision": {
+            "default": null,
+            "description": "The `declaration.revision` list_machines returned for this machine.\nRequired to change a saved legacy machine you can publish; a stale one\nis refused.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "input": {
             "additionalProperties": false,
@@ -14817,7 +14825,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5199"
+      "sourceRef": "handler.rs:5200"
     },
     {
       "name": "send_message",
@@ -15034,7 +15042,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6659"
+      "sourceRef": "handler.rs:6660"
     },
     {
       "name": "send_role_message",
@@ -15212,7 +15220,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7221"
+      "sourceRef": "handler.rs:7222"
     },
     {
       "name": "send_to_session",
@@ -15253,7 +15261,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7740"
+      "sourceRef": "handler.rs:7741"
     },
     {
       "name": "sense_sync_adopt",
@@ -15340,7 +15348,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2747"
+      "sourceRef": "handler.rs:2748"
     },
     {
       "name": "sense_sync_list_layers",
@@ -15404,7 +15412,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2858"
+      "sourceRef": "handler.rs:2859"
     },
     {
       "name": "sense_sync_move_layer",
@@ -15490,7 +15498,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2927"
+      "sourceRef": "handler.rs:2928"
     },
     {
       "name": "sense_sync_read_layer_file",
@@ -15567,7 +15575,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2885"
+      "sourceRef": "handler.rs:2886"
     },
     {
       "name": "sense_sync_read_lockfile",
@@ -15626,7 +15634,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2905"
+      "sourceRef": "handler.rs:2906"
     },
     {
       "name": "session_read",
@@ -15706,7 +15714,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4847"
+      "sourceRef": "handler.rs:4848"
     },
     {
       "name": "session_usage",
@@ -15787,7 +15795,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4877"
+      "sourceRef": "handler.rs:4878"
     },
     {
       "name": "set_active_agent_account",
@@ -15842,7 +15850,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2336"
+      "sourceRef": "handler.rs:2337"
     },
     {
       "name": "set_active_team",
@@ -15881,7 +15889,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9586"
+      "sourceRef": "handler.rs:9587"
     },
     {
       "name": "set_epic_repos",
@@ -15923,7 +15931,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6262"
+      "sourceRef": "handler.rs:6263"
     },
     {
       "name": "set_machine_auto_connect",
@@ -15964,7 +15972,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1862"
+      "sourceRef": "handler.rs:1863"
     },
     {
       "name": "set_machine_hidden",
@@ -16005,7 +16013,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1843"
+      "sourceRef": "handler.rs:1844"
     },
     {
       "name": "set_machine_remote_mcp_control",
@@ -16152,7 +16160,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4991"
+      "sourceRef": "handler.rs:4992"
     },
     {
       "name": "set_private_items_use",
@@ -16193,7 +16201,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9596"
+      "sourceRef": "handler.rs:9597"
     },
     {
       "name": "set_team_parent",
@@ -16240,7 +16248,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9702"
+      "sourceRef": "handler.rs:9703"
     },
     {
       "name": "set_team_starter_page",
@@ -16291,7 +16299,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9724"
+      "sourceRef": "handler.rs:9725"
     },
     {
       "name": "set_viewer_state",
@@ -16325,7 +16333,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2463"
+      "sourceRef": "handler.rs:2464"
     },
     {
       "name": "share_dashboard",
@@ -16379,7 +16387,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11843"
+      "sourceRef": "handler.rs:11844"
     },
     {
       "name": "signal_done",
@@ -16477,7 +16485,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4081"
+      "sourceRef": "handler.rs:4082"
     },
     {
       "name": "signal_progress",
@@ -16547,7 +16555,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4257"
+      "sourceRef": "handler.rs:4258"
     },
     {
       "name": "start_remote_agent_task",
@@ -16607,7 +16615,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2103"
+      "sourceRef": "handler.rs:2104"
     },
     {
       "name": "start_terminal_server",
@@ -16860,7 +16868,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4831"
+      "sourceRef": "handler.rs:4832"
     },
     {
       "name": "story_totals",
@@ -16913,7 +16921,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4839"
+      "sourceRef": "handler.rs:4840"
     },
     {
       "name": "task_list",
@@ -17007,7 +17015,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4946"
+      "sourceRef": "handler.rs:4947"
     },
     {
       "name": "task_read",
@@ -17056,7 +17064,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4963"
+      "sourceRef": "handler.rs:4964"
     },
     {
       "name": "task_start",
@@ -17177,7 +17185,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4894"
+      "sourceRef": "handler.rs:4895"
     },
     {
       "name": "task_update",
@@ -17340,7 +17348,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4929"
+      "sourceRef": "handler.rs:4930"
     },
     {
       "name": "terminal_server_status",
@@ -17569,7 +17577,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11825"
+      "sourceRef": "handler.rs:11826"
     },
     {
       "name": "unroute_file_from_context",
@@ -17639,7 +17647,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2838"
+      "sourceRef": "handler.rs:2839"
     },
     {
       "name": "unshare_machine",
@@ -17676,7 +17684,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1879"
+      "sourceRef": "handler.rs:1880"
     },
     {
       "name": "update_codesense_docs",
@@ -17701,7 +17709,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2196"
+      "sourceRef": "handler.rs:2197"
     },
     {
       "name": "update_terminal_servers",
@@ -17888,7 +17896,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2084"
+      "sourceRef": "handler.rs:2085"
     },
     {
       "name": "validate_live_data_doc",
@@ -17934,7 +17942,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2389"
+      "sourceRef": "handler.rs:2390"
     },
     {
       "name": "validate_story",
@@ -17977,7 +17985,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2717"
+      "sourceRef": "handler.rs:2718"
     },
     {
       "name": "who_am_i",
@@ -18012,7 +18020,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6770"
+      "sourceRef": "handler.rs:6771"
     },
     {
       "name": "why_line",
@@ -18095,7 +18103,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4855"
+      "sourceRef": "handler.rs:4856"
     },
     {
       "name": "workspace_chat_read",
@@ -18153,7 +18161,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9861"
+      "sourceRef": "handler.rs:9862"
     },
     {
       "name": "workspace_chat_send",
@@ -18284,7 +18292,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9848"
+      "sourceRef": "handler.rs:9849"
     },
     {
       "name": "workspace_group_add",
@@ -18359,7 +18367,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8676"
+      "sourceRef": "handler.rs:8677"
     },
     {
       "name": "workspace_group_create",
@@ -18434,7 +18442,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8640"
+      "sourceRef": "handler.rs:8641"
     },
     {
       "name": "workspace_group_delete",
@@ -18509,7 +18517,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8698"
+      "sourceRef": "handler.rs:8699"
     },
     {
       "name": "workspace_group_list",
@@ -18584,7 +18592,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8628"
+      "sourceRef": "handler.rs:8629"
     },
     {
       "name": "workspace_group_remove",
@@ -18659,7 +18667,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8687"
+      "sourceRef": "handler.rs:8688"
     },
     {
       "name": "workspace_group_rename",
@@ -18734,7 +18742,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8652"
+      "sourceRef": "handler.rs:8653"
     },
     {
       "name": "workspace_group_set_members",
@@ -18809,7 +18817,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8664"
+      "sourceRef": "handler.rs:8665"
     },
     {
       "name": "write_worktree_config",
@@ -18850,7 +18858,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2965"
+      "sourceRef": "handler.rs:2966"
     },
     {
       "name": "wv_audit_prune",
@@ -18890,7 +18898,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9399"
+      "sourceRef": "handler.rs:9400"
     },
     {
       "name": "wv_audit_query",
@@ -18975,7 +18983,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9372"
+      "sourceRef": "handler.rs:9373"
     },
     {
       "name": "wv_check_t2_window",
@@ -19020,7 +19028,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5798"
+      "sourceRef": "handler.rs:5799"
     },
     {
       "name": "wv_claim_queue",
@@ -19120,7 +19128,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8918"
+      "sourceRef": "handler.rs:8919"
     },
     {
       "name": "wv_classify_action",
@@ -19189,7 +19197,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5710"
+      "sourceRef": "handler.rs:5711"
     },
     {
       "name": "wv_close_t2_window",
@@ -19234,7 +19242,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5819"
+      "sourceRef": "handler.rs:5820"
     },
     {
       "name": "wv_close_task",
@@ -19287,7 +19295,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9125"
+      "sourceRef": "handler.rs:9126"
     },
     {
       "name": "wv_coord_read",
@@ -19331,7 +19339,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9252"
+      "sourceRef": "handler.rs:9253"
     },
     {
       "name": "wv_dispatch_state",
@@ -19370,7 +19378,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7502"
+      "sourceRef": "handler.rs:7503"
     },
     {
       "name": "wv_enqueue",
@@ -19441,7 +19449,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8886"
+      "sourceRef": "handler.rs:8887"
     },
     {
       "name": "wv_escalate",
@@ -19493,7 +19501,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9320"
+      "sourceRef": "handler.rs:9321"
     },
     {
       "name": "wv_handoff_state",
@@ -19532,7 +19540,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7619"
+      "sourceRef": "handler.rs:7620"
     },
     {
       "name": "wv_list_overdue_harvests",
@@ -19572,7 +19580,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9419"
+      "sourceRef": "handler.rs:9420"
     },
     {
       "name": "wv_mark_dispatched",
@@ -19630,7 +19638,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9061"
+      "sourceRef": "handler.rs:9062"
     },
     {
       "name": "wv_open_t2_window",
@@ -19681,7 +19689,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5765"
+      "sourceRef": "handler.rs:5766"
     },
     {
       "name": "wv_pause_t2_windows",
@@ -19711,7 +19719,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5840"
+      "sourceRef": "handler.rs:5841"
     },
     {
       "name": "wv_peer_read_file",
@@ -19760,7 +19768,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9287"
+      "sourceRef": "handler.rs:9288"
     },
     {
       "name": "wv_post_assertion",
@@ -19817,7 +19825,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6103"
+      "sourceRef": "handler.rs:6104"
     },
     {
       "name": "wv_queue_list",
@@ -19857,7 +19865,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9173"
+      "sourceRef": "handler.rs:9174"
     },
     {
       "name": "wv_read_posture",
@@ -19887,7 +19895,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5876"
+      "sourceRef": "handler.rs:5877"
     },
     {
       "name": "wv_read_recent",
@@ -19926,7 +19934,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7638"
+      "sourceRef": "handler.rs:7639"
     },
     {
       "name": "wv_report_cycle",
@@ -19961,7 +19969,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9204"
+      "sourceRef": "handler.rs:9205"
     },
     {
       "name": "wv_report_handoff",
@@ -20022,7 +20030,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7578"
+      "sourceRef": "handler.rs:7579"
     },
     {
       "name": "wv_resolve_queue",
@@ -20078,7 +20086,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8990"
+      "sourceRef": "handler.rs:8991"
     },
     {
       "name": "wv_resume_t2_windows",
@@ -20108,7 +20116,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5858"
+      "sourceRef": "handler.rs:5859"
     },
     {
       "name": "wv_retire_decision",
@@ -20148,7 +20156,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5618"
+      "sourceRef": "handler.rs:5619"
     },
     {
       "name": "wv_scope_state",
@@ -20187,7 +20195,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6200"
+      "sourceRef": "handler.rs:6201"
     },
     {
       "name": "wv_set_posture",
@@ -20259,7 +20267,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5897"
+      "sourceRef": "handler.rs:5898"
     },
     {
       "name": "wv_settle_approval",
@@ -20304,7 +20312,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5747"
+      "sourceRef": "handler.rs:5748"
     },
     {
       "name": "wv_spawn_worker",
@@ -20367,7 +20375,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7318"
+      "sourceRef": "handler.rs:7319"
     },
     {
       "name": "wv_upsert_attention",
@@ -20456,7 +20464,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5969"
+      "sourceRef": "handler.rs:5970"
     },
     {
       "name": "wv_upsert_watermark",
@@ -20505,7 +20513,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5946"
+      "sourceRef": "handler.rs:5947"
     },
     {
       "name": "wv_verify_done",
@@ -20544,7 +20552,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7529"
+      "sourceRef": "handler.rs:7530"
     },
     {
       "name": "wv_wait",
@@ -20598,7 +20606,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7669"
+      "sourceRef": "handler.rs:7670"
     },
     {
       "name": "wv_watch_list",
@@ -20645,7 +20653,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6224"
+      "sourceRef": "handler.rs:6225"
     },
     {
       "name": "wv_write_approval",
@@ -20738,7 +20746,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5636"
+      "sourceRef": "handler.rs:5637"
     },
     {
       "name": "wv_write_decision",
@@ -20805,7 +20813,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5591"
+      "sourceRef": "handler.rs:5592"
     },
     {
       "name": "wv_write_dispatch",
@@ -20878,7 +20886,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7439"
+      "sourceRef": "handler.rs:7440"
     }
   ]
 }

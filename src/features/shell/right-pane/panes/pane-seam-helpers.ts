@@ -27,6 +27,10 @@ export function bootPaneDoc(
     settings: {
       enableJavaScriptEvaluation: true,
       suppressInsecureJavaScriptEnvironmentWarning: true,
+      // No server answers the pane's stylesheet links (the kit's editor.css); a failed link
+      // would post codesense:doc-error and can beat codesense.ready() to the host.
+      disableCSSFileLoading: true,
+      handleDisabledFileLoadingAsSuccess: true,
     } as never,
   });
   const clone = (data: unknown) => JSON.parse(JSON.stringify(data)) as unknown;
@@ -94,7 +98,8 @@ export function listing(options: {
             title,
             dashboardRef: { scope, org, ...(privateCopy ? {} : { team }), id },
             scope,
-            ...(privateCopy ? { surface } : { team }),
+            ...(privateCopy ? {} : { team }),
+            ...(surface ? { surface } : {}),
             path: `${panesDir}/${id}.html`,
             panesDir,
             panelId: privateCopy ? `pane:private:${org}/${id}` : `pane:${org}:${team}/${id}`,

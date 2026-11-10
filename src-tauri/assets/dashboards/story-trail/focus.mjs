@@ -98,5 +98,16 @@ export function createFocusIntents({root,doc=root.ownerDocument,context=()=>({})
   const observer=new view.MutationObserver(()=>{if(lastIntent&&(!root.contains(lastIntent.element)||!available(lastIntent.element))&&doc.hasFocus()&&(doc.activeElement===doc.body||!root.contains(doc.activeElement)))guard();});
   observer.observe(root,{childList:true,subtree:true});
   function stop(){observer.disconnect();root.removeEventListener('pointerdown',pointed,true);root.removeEventListener('focusin',entered,true);root.removeEventListener('focusout',guard,true);if(guardianFrame!=null)view.cancelAnimationFrame(guardianFrame);lastIntent=null;}
-  return {capture,completion,restore,reconcile,captureReading,restoreReading,stop};
+  // Focus entering the page with nothing focused returns to the user's last control if it is still
+  // shown, else the first control in view; neither scrolls.
+  function resume(){
+    if(doc.activeElement&&doc.activeElement!==doc.body&&root.contains(doc.activeElement))return;
+    const focusQuietly=el=>{restoring=true;try{el.focus({preventScroll:true});}finally{restoring=false;}return doc.activeElement===el;};
+    const last=lastIntent?.element;
+    if(last?.isConnected&&root.contains(last)&&available(last)&&last.getClientRects().length&&focusQuietly(last))return;
+    const inView=el=>{const r=el.getBoundingClientRect();return el.getClientRects().length>0&&r.bottom>0&&r.right>0&&r.top<view.innerHeight&&r.left<view.innerWidth;};
+    const first=controls(root).find(inView);
+    if(first)focusQuietly(first);
+  }
+  return {capture,completion,restore,reconcile,resume,captureReading,restoreReading,stop};
 }

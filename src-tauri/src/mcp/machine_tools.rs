@@ -163,6 +163,7 @@ impl From<DraftParams> for MachineDraftInput {
             username: p.username,
             jump_host: p.jump_host,
             trusted_host_key_fp: p.trusted_host_key_fp,
+            declaration_revision: None,
             sign_in: match p.sign_in {
                 SignInParams::Agent => MachineSignIn::Agent,
                 SignInParams::KeyFile { key_path } => MachineSignIn::KeyFile { key_path },
@@ -214,6 +215,22 @@ pub struct SaveMachineParams {
     pub input: DraftParams,
     pub share: ScopeParams,
     pub connect: bool,
+    /// The `declaration.revision` list_machines returned for this machine.
+    /// Required to change a saved legacy machine you can publish; a stale one
+    /// is refused.
+    #[serde(default)]
+    pub declaration_revision: Option<String>,
+}
+impl SaveMachineParams {
+    /// The machine id, the draft (based on the revision the caller read), the
+    /// share and whether to connect.
+    pub fn into_parts(self) -> (Option<String>, MachineDraftInput, Scope, bool) {
+        let input = MachineDraftInput {
+            declaration_revision: self.declaration_revision,
+            ..MachineDraftInput::from(self.input)
+        };
+        (self.machine_id, input, self.share.into(), self.connect)
+    }
 }
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1104,5 +1121,51 @@ mod identity_tests {
         let mut forged = valid;
         forged["actor"] = "human".into();
         assert!(serde_json::from_value::<ResolveMachineIdentityParams>(forged).is_err());
+    }
+}
+
+#[cfg(test)]
+mod save_machine_tests {
+    use super::*;
+
+    /// `save_machine` carries the revision the caller read into
+    /// the draft. It is top-level only: test, enroll and install share
+    /// `DraftParams`, which still refuses it.
+    #[test]
+    fn save_machine_params_carry_the_declaration_revision_into_the_draft() {
+        let params = |revision: Option<&str>| {
+            let mut json = serde_json::json!({
+                "machineId": "gpu-box-1a2b3c",
+                "input": {
+                    "label": "gpu-box", "host": "gpu.int", "port": 22,
+                    "username": null, "jumpHost": null,
+                    "signIn": { "method": "agent" }, "trustedHostKeyFp": null,
+                },
+                "share": { "kind": "personal" },
+                "connect": false,
+            });
+            if let Some(revision) = revision {
+                json["declarationRevision"] = revision.into();
+            }
+            json
+        };
+        let (machine_id, input, share, connect) =
+            serde_json::from_value::<SaveMachineParams>(params(Some("base")))
+                .unwrap()
+                .into_parts();
+        assert_eq!(machine_id.as_deref(), Some("gpu-box-1a2b3c"));
+        assert_eq!(input.declaration_revision.as_deref(), Some("base"));
+        assert_eq!(input.label, "gpu-box");
+        assert_eq!(share, Scope::Personal);
+        assert!(!connect);
+
+        let (_, absent, _, _) = serde_json::from_value::<SaveMachineParams>(params(None))
+            .unwrap()
+            .into_parts();
+        assert_eq!(absent.declaration_revision, None);
+
+        let mut nested = params(None);
+        nested["input"]["declarationRevision"] = "base".into();
+        assert!(serde_json::from_value::<SaveMachineParams>(nested).is_err());
     }
 }

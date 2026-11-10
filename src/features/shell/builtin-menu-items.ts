@@ -50,6 +50,8 @@ export function builtinMenuId(id: string): BuiltinMenuId | null {
 export function validateMenuItems(items: Array<HostMenuItem | string>, grouped = false): void {
   for (const item of items) {
     const value = typeof item === "string" ? { id: item } : item;
+    // Policy: shortcut text is host-built only, so a page can't spoof host-menu keys.
+    if (value.shortcut !== undefined) throw new Error("menu shortcuts are host-only");
     const builtin = builtinMenuId(value.id);
     if (builtin && (grouped || value.radioGroup))
       throw new Error(`built-in "${value.id}" cannot be used in grouped choices`);
