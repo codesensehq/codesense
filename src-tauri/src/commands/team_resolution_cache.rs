@@ -77,17 +77,20 @@ fn stamp(home: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
     let registry = REGISTRY_FILES
         .iter()
         .map(|name| {
-            let meta = std::fs::metadata(org_root.join(name)).ok()?;
+            let Ok(meta) = std::fs::metadata(org_root.join(name)) else {
+                return None;
+            };
+            // A path call: the explicit-sync guard can't tell `.ok()` on an
+            // inferred value from the crate's own `ok` methods.
             Some(FileStamp {
                 len: meta.len(),
-                modified: meta.modified().ok(),
+                modified: Result::ok(meta.modified()),
             })
         })
         .collect();
     // `team` is the caller's: it names a folder only as one plain path segment. Any
     // other name matches no registry team, so its folder can't change the answer.
-    let one_segment =
-        !team.is_empty() && team != "." && team != ".." && !team.contains(['/', '\\']);
+    let one_segment = !matches!(team, "" | "." | "..") && !team.contains(['/', '\\']);
     let content_dir =
         one_segment && crate::context_repo::path_to_team_content_dir(&org_root, team).is_dir();
     Stamp {
@@ -245,7 +248,8 @@ impl TeamResolutionCache {
             return None;
         }
         inner.claims += 1;
-        if inner.entries.is_empty() {
+        // A path call, so the explicit-sync guard resolves it (see `stamp`).
+        if HashMap::is_empty(&inner.entries) {
             inner.window = now;
             return None;
         }
