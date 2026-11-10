@@ -41,6 +41,15 @@ const JOB_PERMISSIONS = new Map([
 // its cache in a post step, so on a merge_group workflow it may cache only off merge groups.
 const SETUP_NODE_CACHE = "${{ github.event_name != 'merge_group' && 'pnpm' || '' }}";
 const PUSH_ONLY = "github.event_name == 'push'";
+const SCHEDULED = "github.event_name == 'schedule'";
+const ON_MAIN = "github.ref == 'refs/heads/main'";
+// The nightly Rust run on main saves its caches and tracks flaky tests, since main moves
+// only through the merge queue.
+const NIGHTLY_FILE = "rust.yml";
+// A cache save, or the flaky-issues job, runs only for a push or a scheduled run on main.
+const onMainOutsideRequests = (terms) =>
+  (terms.includes(PUSH_ONLY) || terms.includes(SCHEDULED)) && terms.includes(ON_MAIN);
+const MAIN_ONLY = `${PUSH_ONLY} or ${SCHEDULED}, and ${ON_MAIN},`;
 // A job in a workflow that runs on merge_group, push or schedule may be conditional only on
 // pull requests: a merge group must report every required check, and main and the nightly runs
 // must test everything. A pull request may skip a job (rust.yml's macOS job runs there only with
@@ -106,7 +115,9 @@ export function workflowPolicy(text, file = "") {
   const scorecardWorkflow = file === SCORECARD.file;
   const allowedTriggers = scorecardWorkflow
     ? ["push", "schedule", "branch_protection_rule", "workflow_dispatch"]
-    : ["pull_request", "merge_group", "push", "workflow_dispatch"];
+    : ["pull_request", "merge_group", "push", "workflow_dispatch"].concat(
+        file === NIGHTLY_FILE ? ["schedule"] : [],
+      );
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
   // Kept apart from allowedTriggers, so each file's exception reads (and merges) on its own.
@@ -188,15 +199,15 @@ export function workflowPolicy(text, file = "") {
         const label = `${name}: step "${step.name ?? action}"`;
         if (action === "actions/cache")
           errors.push(
-            `${label} saves on merge groups; use actions/cache/restore and a push-only save`,
+            `${label} saves on merge groups; use actions/cache/restore and a main-only save`,
           );
-        if (action === "actions/cache/save" && !topLevelConjuncts(condition).includes(PUSH_ONLY))
-          errors.push(`${label}: if must require ${PUSH_ONLY} at the top level`);
+        if (action === "actions/cache/save" && !onMainOutsideRequests(topLevelConjuncts(condition)))
+          errors.push(`${label}: if must require ${MAIN_ONLY} at the top level`);
         if (
           action === "Swatinem/rust-cache" &&
-          !topLevelConjuncts(String(inputs["save-if"] ?? "")).includes(PUSH_ONLY)
+          !onMainOutsideRequests(topLevelConjuncts(String(inputs["save-if"] ?? "")))
         )
-          errors.push(`${label}: save-if must require ${PUSH_ONLY} at the top level`);
+          errors.push(`${label}: save-if must require ${MAIN_ONLY} at the top level`);
         if (
           action === "actions/setup-node" &&
           Object.hasOwn(inputs, "cache") &&
@@ -221,14 +232,13 @@ export function workflowPolicy(text, file = "") {
           `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge_group, push and schedule always run it`,
         );
     }
-    // Issue writes run only for pushes to main in the base repository, never pull requests or forks.
+    // Issue writes run only for pushes or scheduled runs on main in the base repository, never
+    // pull requests, merge groups or forks.
     if (flakyIssues) {
       const terms = topLevelConjuncts(String(job.if ?? ""));
-      for (const required of [
-        "github.event_name == 'push'",
-        "github.ref == 'refs/heads/main'",
-        "!github.event.repository.fork",
-      ])
+      if (!terms.includes(PUSH_ONLY) && !terms.includes(SCHEDULED))
+        errors.push(`${name}: if must require ${PUSH_ONLY} or ${SCHEDULED} at the top level`);
+      for (const required of [ON_MAIN, "!github.event.repository.fork"])
         if (!terms.includes(required))
           errors.push(`${name}: if must require ${required} at the top level`);
     }
