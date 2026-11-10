@@ -71,6 +71,7 @@ import {
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
 import { closeActiveFileTab } from "@/shared/lib/close-active-file-tab";
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
+import { frameDeclarationPaths } from "@/shared/lib/file-change-affects";
 import { useInstanceCount } from "@/shared/hooks/use-instance-count";
 import { useActionGate } from "./use-action-gate";
 import { mcpAppsReply } from "./mcp-apps-binding";
@@ -125,8 +126,8 @@ const BASELINE_SANDBOX = "allow-scripts";
 // SW-FX-5: `changedPaths` mirrors the markdown viewer's reload gate
 // (`markdown-viewer.tsx`). `refreshKey` is a per-repo key bumped on any
 // watcher tick, so without a gate every open HTML iframe would full-reload
-// on unrelated changes. We only advance the iframe's effective refresh key
-// when this file is in the changed set.
+// on unrelated changes. The filtered key includes the document and, for a
+// centre frame, its ancestor host declarations.
 type HtmlViewerProps = CommonViewerProps & {
   viewStateKey?: string;
   pendingHash?: string | null;
@@ -294,8 +295,8 @@ export const NETWORK_PROBLEM_GRACE_MS = 5000;
 
 /** A problem a live doc hit, for its host to show. */
 export interface DocProblem {
-  /** `csp`: the frame's content policy blocked a load; never a reason to fail the doc. */
-  kind: "load" | "script" | "bridge" | "csp";
+  /** CSP and resource diagnostics are visible without failing a starting pane. */
+  kind: "load" | "script" | "bridge" | "csp" | "resource";
   message: string;
   /** Why a frame failed, when the host may recover it; `message` is display text only. */
   cause?: "crashed" | "unresponsive" | "blank";
@@ -494,6 +495,18 @@ export function HtmlViewer({
       : pane
         ? (pane.slotId ?? "right-pane")
         : "centre";
+  const policyPaths = useMemo(
+    () => (slotId === "centre" ? frameDeclarationPaths(filePath, teamContentPath) : []),
+    [slotId, filePath, teamContentPath],
+  );
+  // A centre document's policy is resolved before each approved reload. Use the same filtered
+  // change stream for the document and every possible ancestor declaration.
+  const effectiveRefreshKey = useEffectiveRefreshKey(
+    refreshKey,
+    changedPaths,
+    filePath,
+    policyPaths,
+  );
   const minted = useFrameRecord(
     port,
     !hostedFrame && filePath && frameDocumentPath
@@ -512,8 +525,11 @@ export function HtmlViewer({
       retiring,
       unsaved,
     },
+    slotId === "centre" ? effectiveRefreshKey : undefined,
   );
   const frameRecord = hostedFrame ?? minted.frameRecord;
+  const approvedRefreshKey =
+    slotId === "centre" && !hostedFrame ? minted.approvedRevision : effectiveRefreshKey;
   // Architecture: minting chooses a usable root for bundled readers independently of checkout availability.
   const paneContentRoot =
     frameRecord?.kind === "builtin" ? frameRecord.contentRoot : pane?.contentRoot;
@@ -718,12 +734,6 @@ export function HtmlViewer({
       .catch(() => toast.error("Couldn't save snapshot.", { id: `snapshot-error:${filePath}` }));
   }, [captureDocument, archiveSnapshot, filePath]);
 
-  // SW-FX-5 (AC-7): gate the per-repo `refreshKey` down to a per-file key so
-  // a watcher tick only reloads the iframe whose file actually changed —
-  // unrelated/hidden tabs hold their prior key and never reload. Mirrors
-  // `markdown-viewer.tsx`'s changedPaths skip.
-  const effectiveRefreshKey = useEffectiveRefreshKey(refreshKey, changedPaths, filePath);
-
   // Every doc renders first-class with the bridge, except a baseline/diff render
   // (`baselineSource`): a read-only "before"/redline blob from a historical or
   // other tree, shown for comparison, never a running dashboard.
@@ -759,7 +769,7 @@ export function HtmlViewer({
   // `contextRepoRoot` divergence was the root cause of SF-1 Bug A.
   //
   const firstPaint = usePaneFirstPaint(
-    `${frameRecord?.frameId}:${frameDocumentPath}:${effectiveRefreshKey}`,
+    `${frameRecord?.frameId}:${frameDocumentPath}:${approvedRefreshKey}`,
     live,
     docVisible,
     hostTheme,
@@ -779,12 +789,12 @@ export function HtmlViewer({
             baselineSource.relPath,
             {
               tree: baselineSource.tree,
-              v: effectiveRefreshKey,
+              v: approvedRefreshKey,
             },
           )
         : pane
           ? buildPaneViewerUrl(port, paneContentRoot!, pane.panesDir, pane.fileName, {
-              v: effectiveRefreshKey,
+              v: approvedRefreshKey,
               origin: frameRecord.origin,
               theme: firstPaint.initialTheme,
             })
@@ -794,7 +804,7 @@ export function HtmlViewer({
                 theme: firstPaint.initialTheme,
               })
             : buildViewerUrl(port, teamContentPath, filePath, {
-                v: effectiveRefreshKey,
+                v: approvedRefreshKey,
                 origin: frameRecord.origin,
                 theme: firstPaint.initialTheme,
               });
@@ -1949,7 +1959,7 @@ export function HtmlViewer({
             data.kind === "csp"
               ? { kind: "csp", message: data.message }
               : {
-                  kind: "script",
+                  kind: data.kind === "resource" ? "resource" : "script",
                   message: data.source
                     ? `${data.message} (${data.source}:${data.line ?? 0})`
                     : data.message,

@@ -3,12 +3,98 @@ import { registerFrame, acknowledgeFlush } from "../lib/frame-lifecycle";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useFrameRecord } from "./use-frame-record";
-import { mintFrame, releaseFrame } from "@/tauri/commands";
+import { mintFrame, releaseFrame, revalidateFrame } from "@/tauri/commands";
 import { frameFixture } from "../../../../tests/support/fixtures/frame";
-vi.mock("@/tauri/commands", () => ({ mintFrame: vi.fn(), releaseFrame: vi.fn(async () => {}) }));
+vi.mock("@/tauri/commands", () => ({
+  mintFrame: vi.fn(),
+  revalidateFrame: vi.fn(),
+  releaseFrame: vi.fn(async () => {}),
+}));
 const first = { documentPath: "/ctx/a.html", contentRoot: "/ctx", slot: "centre" };
 const second = { ...first, documentPath: "/ctx/b.html" };
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(revalidateFrame).mockReset().mockResolvedValue("unchanged");
+});
+it("approves an ordinary save without reminting or releasing the retained identity", async () => {
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  const retained = result.current.frameRecord;
+  let finish!: (value: "unchanged") => void;
+  vi.mocked(revalidateFrame).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  rerender({ revision: 2 });
+  expect(result.current.frameRecord).toBe(retained);
+  expect(result.current.approvedRevision).toBe(1);
+  await act(async () => finish("unchanged"));
+  expect(result.current.approvedRevision).toBe(2);
+  expect(result.current.frameRecord).toBe(retained);
+  expect(revalidateFrame).toHaveBeenCalledWith(retained!.frameId, retained!.token);
+  expect(mintFrame).toHaveBeenCalledTimes(1);
+  expect(releaseFrame).not.toHaveBeenCalled();
+  unmount();
+  expect(releaseFrame).toHaveBeenCalledExactlyOnceWith("test");
+});
+it("remints changed authority, retires invalid authority and retries its correction", async () => {
+  vi.mocked(mintFrame)
+    .mockResolvedValueOnce(frameFixture(first))
+    .mockResolvedValueOnce({ ...frameFixture(first), frameId: "changed" })
+    .mockResolvedValueOnce({ ...frameFixture(first), frameId: "corrected" });
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  vi.mocked(revalidateFrame).mockResolvedValueOnce("remint-required");
+  rerender({ revision: 2 });
+  await waitFor(() => expect(result.current.frameRecord?.frameId).toBe("changed"));
+  expect(result.current.approvedRevision).toBe(2);
+  expect(releaseFrame).toHaveBeenCalledWith("test");
+  vi.mocked(revalidateFrame).mockRejectedValueOnce(new Error("invalid declaration"));
+  rerender({ revision: 3 });
+  await waitFor(() => expect(result.current.frameError).toContain("invalid declaration"));
+  expect(result.current.frameRecord).toBeNull();
+  expect(releaseFrame).toHaveBeenCalledWith("changed");
+  rerender({ revision: 4 });
+  await waitFor(() => expect(result.current.frameRecord?.frameId).toBe("corrected"));
+  expect(result.current.approvedRevision).toBe(4);
+  expect(mintFrame).toHaveBeenCalledTimes(3);
+  unmount();
+});
+it("ignores stale comparisons without releasing a reused frame", async () => {
+  vi.mocked(mintFrame).mockResolvedValueOnce(frameFixture(first));
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }) => useFrameRecord(9123, first, undefined, revision),
+    { initialProps: { revision: 1 } },
+  );
+  await waitFor(() => expect(result.current.approvedRevision).toBe(1));
+  const finish: ((value: "unchanged" | "remint-required") => void)[] = [];
+  vi.mocked(revalidateFrame).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish.push(resolve);
+      }),
+  );
+  rerender({ revision: 2 });
+  rerender({ revision: 3 });
+  await act(async () => finish[1]("unchanged"));
+  await act(async () => finish[0]("remint-required"));
+  expect(result.current.approvedRevision).toBe(3);
+  expect(mintFrame).toHaveBeenCalledTimes(1);
+  expect(releaseFrame).not.toHaveBeenCalled();
+  rerender({ revision: 4 });
+  unmount();
+  await act(async () => finish[2]("unchanged"));
+  expect(releaseFrame).toHaveBeenCalledExactlyOnceWith("test");
+});
 it("revokes a follows-context frame and mints a fresh grant when its team changes", async () => {
   const initial = { ...first, slot: "dock", contentRoot: "/ctx/team-a/content" };
   const next = { ...initial, contentRoot: "/ctx/team-b/content" };

@@ -135,9 +135,8 @@ fn exact_https_origin(value: &str) -> Option<String> {
                 && Iterator::all(&mut domain.chars(), |c| {
                     c.is_ascii_alphanumeric() || c == '-' || c == '.'
                 })
-                // Policy: local names (`localhost`, `*.localhost`, single-label intranet
-                // names) are never declarable, so a page cannot reach services on this
-                // Mac or its network by name.
+                // Reject single-label names and *.localhost by spelling. These checks
+                // do not resolve DNS: an accepted name may resolve to a private address.
                 && (!is_local_name(domain) || fixture_loopback(domain))
         }
         // Policy: IP literals (loopback, private, link-local or public) are never declarable.
@@ -158,7 +157,7 @@ fn is_local_name(domain: &str) -> bool {
     !domain.contains('.') || domain.ends_with(".localhost")
 }
 
-/// Shipped builds never declare a local name.
+/// Shipped builds never bypass the single-label and *.localhost spelling checks.
 #[cfg(not(test))]
 fn fixture_loopback(_: &str) -> bool {
     false

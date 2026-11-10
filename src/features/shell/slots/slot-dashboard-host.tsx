@@ -696,10 +696,11 @@ export function SlotDashboardHost({
   const onDocProblem = useCallback(
     (problem: DocProblem) => {
       if (!isCurrentAttempt(attempts)) return;
-      // A blocked load is one problem row, before or after ready; it never fails the pane.
+      // Resource/CSP observations remain visible before and after live; startup keeps its deadline.
       if (
         problem.kind === "bridge" ||
         problem.kind === "csp" ||
+        problem.kind === "resource" ||
         (problem.kind === "script" && live.current)
       ) {
         setProblems((previous) =>

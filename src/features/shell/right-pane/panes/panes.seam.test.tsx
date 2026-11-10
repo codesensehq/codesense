@@ -802,16 +802,24 @@ describe("a pane is an HTML file (seam)", () => {
       message: "blocked by the frame content policy: https://fonts.example/a.woff2 (font-src)",
     };
     const image = "blocked by the frame content policy: https://x.example/p.png (img-src)";
+    post({
+      type: "codesense:doc-error",
+      kind: "resource",
+      message: "failed to load https://fonts.example/missing.js",
+    });
+    expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
     // Before ready: a head stylesheet's font is blocked, twice.
     post(font);
     post(font);
     expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
     expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent(`Blocked: ${font.message}`);
+    expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent("missing.js");
     post({ type: "codesense:live" });
     post({ ...font, message: image });
     expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
     const rows = screen.getByTestId("pane-dev-banner").querySelectorAll("p.font-mono");
     expect([...rows].map((row) => row.textContent)).toEqual([
+      `Resource failed: failed to load https://fonts.example/missing.js`,
       `Blocked: ${font.message}`,
       `Blocked: ${image}`,
     ]);

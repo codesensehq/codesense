@@ -250,9 +250,12 @@ What you or your agents write can load what it references when you open it:
   pictures, fonts, media, fetches or frames unless they name the host:
   `allowed_hosts` in the nearest `dashboard.yml`, or in a pane's
   `pane-manifest.yaml` or `codesense:allowed-hosts` tag, lists exact `https://`
-  origins with a public host name (never an IP address, `localhost` or another
-  local name). Only those hosts are allowed, and they see your IP address and
-  what the page asks for. An HTML message to you in the inbox, which shows as a
+  origins with a dotted host name (never an IP address, a single-label name such
+  as `localhost`, or a name ending in `.localhost`). These are spelling checks;
+  an allowed name may resolve to a private address, so this does not isolate
+  pages from services on your Mac or network. Only those hosts are allowed,
+  and they see your IP address and what the page asks for. An HTML message to
+  you in the inbox, which shows as a
   dashboard, can't name any host. A page's markup or script can still navigate
   its own frame to another site (`<meta http-equiv="refresh">` needs no script)
   and hint a DNS lookup or connection; its script can open a WebRTC connection

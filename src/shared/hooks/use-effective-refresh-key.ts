@@ -7,7 +7,7 @@ import { useState } from "react";
  *
  * A single `refreshKey` is bumped on any watcher tick across the whole repo,
  * so a consumer keyed on it (e.g. an iframe `src`) would react to unrelated
- * changes. This hook advances the returned key ONLY when `filePath` is in
+ * changes. This hook advances the returned key ONLY when `filePath` or a related path is in
  * `changedPaths` — or when `changedPaths` is null/absent, in which case it
  * falls back to advancing so a coarse invalidation can't strand stale
  * content. Otherwise it holds the prior value, keeping downstream output
@@ -28,6 +28,7 @@ export function useEffectiveRefreshKey(
   refreshKey: number | undefined,
   changedPaths: Set<string> | null | undefined,
   filePath: string | null,
+  relatedPaths?: readonly string[],
 ): number | undefined {
   const [effectiveRefreshKey, setEffectiveRefreshKey] = useState(refreshKey);
   const [seenRefreshKey, setSeenRefreshKey] = useState(refreshKey);
@@ -40,7 +41,9 @@ export function useEffectiveRefreshKey(
     setEffectiveRefreshKey(refreshKey);
   } else if (refreshKey != null && refreshKey !== seenRefreshKey) {
     setSeenRefreshKey(refreshKey);
-    const fileChanged = fileChangeAffects(changedPaths, filePath);
+    const fileChanged =
+      fileChangeAffects(changedPaths, filePath) ||
+      relatedPaths?.some((path) => fileChangeAffects(changedPaths, path));
     if (fileChanged) {
       setEffectiveRefreshKey(refreshKey);
     }

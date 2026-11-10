@@ -31,9 +31,11 @@ export function ProblemBanner({
                 ? "Couldn't load"
                 : p.kind === "bridge"
                   ? "Call failed"
-                  : p.kind === "csp"
-                    ? "Blocked"
-                    : "Error"}
+                  : p.kind === "resource"
+                    ? "Resource failed"
+                    : p.kind === "csp"
+                      ? "Blocked"
+                      : "Error"}
               :
             </span>{" "}
             {p.message}
