@@ -184,7 +184,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "4.1.12",
     "@wdio/cli": "9.31.5",
     "@wdio/globals": "9.31.3",
