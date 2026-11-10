@@ -5,7 +5,7 @@
     "dashboard-publish"
   ],
   "inputs": {
-    "Cargo.lock": "277250b960f407aa883c761dc8cb4b5a4bb80572b1111f6c250cff38a022ec99",
+    "Cargo.lock": "b2de81ec55b4bd9a039e4bb3df6d55497cbd86e4657d45be6453c36e52c83adb",
     "codesense-docs/getting-started/content/_shared/examples.yml": "eb8e5a0bc870b0ebdbcf4edc22ce1877eee9b4825c4ccd48df323d48cdf529f0",
     "src-tauri/Cargo.toml": "76fc35d76b7f8c5ed4fbe3a45d2dd4b837dec40ca6284a9f28e4fa39f21e6786",
     "src-tauri/build.rs": "d7aecf7ba29681bbdcb3f225b641642d022d0c19d6757ace748fdf9df2e43239",
