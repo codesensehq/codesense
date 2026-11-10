@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { NoteMeta } from "@/tauri/commands";
 const hub = vi.hoisted(() => ({
   callback: null as ((value: any) => void) | null,
   write: vi.fn(async () => ({})),
@@ -8,7 +9,7 @@ const hub = vi.hoisted(() => ({
 const noteApi = vi.hoisted(() => ({
   list: vi.fn(),
   read: vi.fn(),
-  update: vi.fn(async () => null),
+  update: vi.fn(async (): Promise<NoteMeta | null> => null),
 }));
 vi.mock("@/tauri/commands", async (original) => ({
   ...(await original<typeof import("@/tauri/commands")>()),
@@ -40,6 +41,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 const realSelect = useViewerStore.getState().setActiveNote;
 const realLoad = useViewerStore.getState().loadNotes;
+const realRename = useViewerStore.getState().renameNote;
 const metas = (...ids: string[]) =>
   ids.map((id) => ({ id, title: id, pinned: false, lastOpenedAt: 1 }));
 beforeEach(() => {
@@ -236,4 +238,178 @@ it.each([
   expect(renameNote.mock.invocationCallOrder[0]).toBeLessThan(
     createNote.mock.invocationCallOrder[0],
   );
+});
+
+it.each([
+  ["⌘N", (title: HTMLElement) => fireEvent.keyDown(title, { key: "n", metaKey: true })],
+  [
+    "New note menu",
+    () => {
+      fireEvent.click(screen.getByRole("button", { name: "Note actions" }));
+      fireEvent.click(screen.getByRole("button", { name: /New note/ }));
+    },
+  ],
+])("a padded title saved on blur follows an agent rename before %s", async (_how, newNote) => {
+  const { ScratchNotePanel } = await vi.importActual<
+    typeof import("@/features/viewer/components/scratch-note-panel")
+  >("@/features/viewer/components/scratch-note-panel");
+  let resolve!: (meta: NoteMeta) => void;
+  const pending = new Promise<NoteMeta>((done) => (resolve = done));
+  noteApi.update.mockImplementationOnce(() => pending);
+  const createNote = vi.fn(async () => "new-note");
+  useViewerStore.setState({
+    notes: [{ id: "n1", title: "Plan", pinned: false, lastOpenedAt: 1 }],
+    activeNoteId: "n1",
+    scratchNoteContent: "body",
+    loadNotes: async () => {},
+    renameNote: realRename,
+    createNote,
+  });
+  const { container } = render(<ScratchNotePanel />);
+  const title = screen.getByRole("textbox", { name: "Note title" }) as HTMLInputElement;
+  act(() => title.focus());
+  fireEvent.change(title, { target: { value: " Plans " } });
+  act(() => container.querySelector<HTMLElement>('[contenteditable="true"]')!.focus());
+  expect(noteApi.update).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ orgSlug: "acme" }),
+    "n1",
+    { title: "Plans" },
+  );
+  await act(async () => {
+    resolve({ id: "n1", title: "Plans", pinned: false, lastOpenedAt: 1 });
+    await pending;
+  });
+  expect(title.value).toBe("Plans");
+  act(() =>
+    useViewerStore
+      .getState()
+      .applyNotesProjection(
+        useViewerStore.getState().notesLoadedScope!,
+        [{ id: "n1", title: "Agent plan", fields: { title: "Agent plan", pinned: false } }],
+        { upserts: [], kind: "write" },
+      ),
+  );
+  expect(title.value).toBe("Agent plan");
+  newNote(title);
+  await waitFor(() => expect(createNote).toHaveBeenCalledTimes(1));
+  expect(noteApi.update).toHaveBeenCalledTimes(1);
+  expect(useViewerStore.getState().notes[0].title).toBe("Agent plan");
+});
+
+it("preserves input typed after a padded title commit while its save succeeds", async () => {
+  const { ScratchNotePanel } = await vi.importActual<
+    typeof import("@/features/viewer/components/scratch-note-panel")
+  >("@/features/viewer/components/scratch-note-panel");
+  let resolve!: (meta: NoteMeta) => void;
+  const pending = new Promise<NoteMeta>((done) => (resolve = done));
+  noteApi.update.mockImplementationOnce(() => pending);
+  useViewerStore.setState({
+    notes: [{ id: "n1", title: "Plan", pinned: false, lastOpenedAt: 1 }],
+    activeNoteId: "n1",
+    scratchNoteContent: "body",
+    loadNotes: async () => {},
+    renameNote: realRename,
+  });
+  const { container } = render(<ScratchNotePanel />);
+  const title = screen.getByRole("textbox", { name: "Note title" }) as HTMLInputElement;
+  act(() => title.focus());
+  fireEvent.change(title, { target: { value: " Plans " } });
+  act(() => container.querySelector<HTMLElement>('[contenteditable="true"]')!.focus());
+  act(() => title.focus());
+  fireEvent.change(title, { target: { value: "Plans for tomorrow" } });
+  await act(async () => {
+    resolve({ id: "n1", title: "Plans", pinned: false, lastOpenedAt: 1 });
+    await pending;
+  });
+  expect(useViewerStore.getState().notes[0].title).toBe("Plans");
+  expect(title.value).toBe("Plans for tomorrow");
+  expect(noteApi.update).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])(
+  "a failed real rename rolls back saved metadata and preserves a newer draft (%s)",
+  async (newerDraft) => {
+    const { ScratchNotePanel } = await vi.importActual<
+      typeof import("@/features/viewer/components/scratch-note-panel")
+    >("@/features/viewer/components/scratch-note-panel");
+    let reject!: (error: Error) => void;
+    const pending = new Promise<never>((_resolve, fail) => (reject = fail));
+    noteApi.update.mockImplementationOnce(() => pending);
+    useViewerStore.setState({
+      notes: [{ id: "n1", title: "Plan", pinned: false, lastOpenedAt: 1 }],
+      activeNoteId: "n1",
+      scratchNoteContent: "body",
+      loadNotes: async () => {},
+      renameNote: realRename,
+    });
+    render(<ScratchNotePanel />);
+    const title = screen.getByRole("textbox", { name: "Note title" });
+    fireEvent.change(title, { target: { value: "Plans" } });
+    fireEvent.keyDown(title, { key: "Enter" });
+    expect(useViewerStore.getState().notes[0].title).toBe("Plans");
+    if (newerDraft) {
+      fireEvent.focus(title);
+      fireEvent.change(title, { target: { value: "Plans for tomorrow" } });
+    }
+    await act(async () => {
+      reject(new Error("disk full"));
+      await pending.catch(() => {});
+    });
+    await waitFor(() => expect(useViewerStore.getState().notes[0].title).toBe("Plan"));
+    expect((title as HTMLInputElement).value).toBe(newerDraft ? "Plans for tomorrow" : "Plan");
+    if (newerDraft) {
+      noteApi.update.mockImplementationOnce(async () => ({
+        id: "n1",
+        title: "Plans for tomorrow",
+        pinned: false,
+        lastOpenedAt: 1,
+      }));
+      await act(async () => {
+        fireEvent.keyDown(title, { key: "Enter" });
+      });
+      expect(useViewerStore.getState().notes[0].title).toBe("Plans for tomorrow");
+      expect(noteApi.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ orgSlug: "acme" }),
+        "n1",
+        { title: "Plans for tomorrow" },
+      );
+    }
+  },
+);
+
+it("follows agent titles without a draft, preserves a draft, and resets it on navigation", async () => {
+  const { ScratchNotePanel } = await vi.importActual<
+    typeof import("@/features/viewer/components/scratch-note-panel")
+  >("@/features/viewer/components/scratch-note-panel");
+  useViewerStore.setState({
+    notes: [
+      { id: "n1", title: "Plan", pinned: false, lastOpenedAt: 1 },
+      { id: "n2", title: "Other", pinned: false, lastOpenedAt: 1 },
+    ],
+    activeNoteId: "n1",
+    scratchNoteContent: "body",
+    loadNotes: async () => {},
+    renameNote: realRename,
+  });
+  render(<ScratchNotePanel />);
+  const title = screen.getByRole("textbox", { name: "Note title" });
+  const agentTitle = (next: string) =>
+    act(() =>
+      useViewerStore.getState().applyNotesProjection(
+        useViewerStore.getState().notesLoadedScope!,
+        [
+          { id: "n1", title: next, fields: { title: next, pinned: false } },
+          { id: "n2", title: "Other", fields: { title: "Other", pinned: false } },
+        ],
+        { upserts: [], kind: "write" },
+      ),
+    );
+  agentTitle("Agent title");
+  expect((title as HTMLInputElement).value).toBe("Agent title");
+  fireEvent.change(title, { target: { value: "My draft" } });
+  agentTitle("Agent revised title");
+  expect(useViewerStore.getState().notes[0].title).toBe("Agent revised title");
+  expect((title as HTMLInputElement).value).toBe("My draft");
+  act(() => useViewerStore.setState({ activeNoteId: "n2" }));
+  expect((title as HTMLInputElement).value).toBe("Other");
 });

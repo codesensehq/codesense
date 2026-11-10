@@ -78,15 +78,16 @@ retries once everywhere, local runs included.
   tests in the job summary with a warning annotation, and nextest records the failed attempt
   as `flakyFailure` (or `flakyError`) in the uploaded JUnit report. A test that fails both
   attempts fails the job as before.
-- **Tracked:** on pushes to `main` only, the `flaky-issues` job in `rust.yml` reads the JUnit
-  reports and runs `node scripts/flaky-tests.mjs track`. It keeps one public issue per test,
+- **Tracked:** on the nightly run on `main` only, the `flaky-issues` job in `rust.yml` reads
+  the JUnit reports and runs `node scripts/flaky-tests.mjs track`. It keeps one public issue per test,
   labelled `flaky-test` and found by the marker `<!-- flaky:<key> -->` in its body. A first
   flake opens the issue, a repeat comments with the run link and date, and a repeat after the
-  issue was closed reopens it. Keep the label and the marker line. Pull requests and forks
-  never write issues; that job alone has `issues: write`, and the test jobs stay read-only.
-  One tracking run goes at a time. GitHub keeps one more waiting and cancels any older
-  waiting run, so in a burst of pushes a cancelled run's flakes go untracked; a test that
-  keeps flaking is tracked on its next flake.
+  issue was closed reopens it. Keep the label and the marker line. Pull requests, merge
+  queue runs and forks never write issues; that job alone has `issues: write`, and the test
+  jobs stay read-only. A flake seen only on a pull request or in the merge queue shows in
+  that job's summary, but is tracked only if it recurs on a nightly run. One tracking run
+  goes at a time. GitHub keeps one more waiting and cancels any older waiting run, whose
+  flakes then go untracked; a test that keeps flaking is tracked on its next flake.
 - **Key:** `<key>` is `cargo:<binary-id>#<test>`: nextest's binary id, `#`, then the test's
   module path and name. The `#` keeps a library test and an integration-test target with
   the same path apart (`pkg#foo::bar` against `pkg::foo#bar`). The ledger id names the same

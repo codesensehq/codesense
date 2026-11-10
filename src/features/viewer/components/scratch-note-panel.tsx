@@ -675,14 +675,18 @@ function NotesPane() {
   });
   if (titleFor.id !== activeNoteId || titleFor.title !== activeNote?.title) {
     setTitleFor({ id: activeNoteId, title: activeNote?.title });
-    setTitleDraft(activeNote?.title ?? "");
+    if (titleFor.id !== activeNoteId || titleDraft === (titleFor.title ?? ""))
+      setTitleDraft(activeNote?.title ?? "");
   }
   const commitTitle = useCallback(
     (text = titleDraft) => {
       if (!activeNote) return;
       const next = text.trim();
-      if (next && next !== activeNote.title) void renameNote(activeNote.id, next);
-      else setTitleDraft(activeNote.title);
+      if (next && next !== activeNote.title) {
+        // Submitted text follows saved metadata; only later input remains a draft.
+        setTitleDraft((draft) => (draft === text ? next : draft));
+        void renameNote(activeNote.id, next);
+      } else setTitleDraft(activeNote.title);
     },
     [activeNote, titleDraft, renameNote],
   );

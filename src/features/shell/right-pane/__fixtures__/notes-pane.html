@@ -1386,7 +1386,7 @@
               showActive();
               return;
             }
-            active = { ...active, ...result };
+            active = { ...active, body: result.body };
             if (result.overlaps?.length) {
               overlaps.push(
                 ...result.overlaps.map((overlap) => ({
@@ -1475,24 +1475,31 @@
           );
       }
       async function openNote(id, heading, publish = true) {
-        clearHover();
         const ticket = ++navigation;
-        closeFloat(false);
-        hideSelection();
-        await commitTitle();
-        await flush();
-        if (dirty || ticket !== navigation) return;
+        try {
+          clearHover();
+          closeFloat(false);
+          hideSelection();
+          await commitTitle();
+          await flush();
+          if (dirty || failed || ticket !== navigation || disposed) return;
+          if (await activateNote(id, ticket)) completeNavigation(ticket, { heading, publish });
+        } finally {
+          if (ticket === navigation && !disposed) editor.setEditable(true);
+        }
+      }
+      async function activateNote(id, ticket) {
         ++readEpoch;
         editor.setEditable(false);
         const unlock = setTimeout(() => {
-          if (ticket === navigation) editor.setEditable(true);
+          if (ticket === navigation && !disposed) editor.setEditable(true);
         }, 3000);
         try {
           const note = await record("read", { id });
           if (ticket !== navigation || disposed) return;
           if (dirty) {
             await flush();
-            if (dirty || ticket !== navigation) return;
+            if (dirty || failed || ticket !== navigation || disposed) return;
           }
           active = note;
           overlaps = [];
@@ -1510,17 +1517,32 @@
           showActive(true);
           updateRecovery();
           renderList();
-          setDrawer(false);
-          await loadHistory();
-          if (heading) jumpHeading(heading);
-          if (publish && ticket === navigation) await shareNote(id);
+          return true;
         } finally {
           clearTimeout(unlock);
-          if (ticket === navigation) editor.setEditable(true);
         }
+      }
+      function completeNavigation(ticket, { heading, publish = true, newNote = false } = {}) {
+        if (ticket !== navigation || disposed) return;
+        editor.setEditable(true);
+        setDrawer(false);
+        if (newNote) {
+          query = "";
+          $("list-search").value = "";
+          renderList();
+          $("note-title").focus();
+          $("note-title").select();
+        }
+        if (heading) jumpHeading(heading);
+        void loadHistory().catch((error) => {
+          if (ticket === navigation && !disposed) notice(error.message || String(error));
+        });
+        if (publish) void shareNote(active.id);
       }
       async function refreshActive() {
         if (!active) return;
+        // Invalidate older reads now, with this request providing their replacement.
+        ++readEpoch;
         const id = active.id,
           ticket = navigation;
         // Read after any local write response so a later agent edit cannot be replaced by it.
@@ -1537,36 +1559,84 @@
         showActive();
         await loadHistory();
       }
-      async function createNote(title = "", linkTo) {
-        await commitTitle();
-        await flush();
-        if (dirty) return;
-        const result = await record("create", {
-          fields: { title },
-          body: linkTo ? `[${title || "Link"}](${linkTo})\n\n` : "",
-          requestId: requestId(),
-        });
-        await openNote(result.id);
-        $("note-title").focus();
-        $("note-title").select();
-        query = "";
-        $("list-search").value = "";
-        renderList();
+      const blankTitles = new Set(["", "Note", "Untitled"]);
+      const fieldWrites = new Set();
+      let blankCreate = null;
+      function createNote(title = "", linkTo) {
+        const blank = !linkTo && blankTitles.has(title);
+        if (blank && blankCreate?.ticket === navigation) return blankCreate.note;
+        const ticket = ++navigation;
+        const note = createNoteNow(title, linkTo, blank, ticket);
+        if (blank) {
+          const entry = { ticket, note };
+          blankCreate = entry;
+          const clear = () => {
+            if (blankCreate === entry) blankCreate = null;
+          };
+          note.then(clear, clear);
+        }
+        return note;
       }
-      async function setFields(id, fields) {
+      async function createNoteNow(title, linkTo, blank, ticket) {
+        try {
+          clearHover();
+          closeFloat(false);
+          hideSelection();
+          await commitTitle();
+          if (renamingId) await commitRename();
+          await flush();
+          // Include metadata edits made while the body save was pending.
+          await Promise.all(fieldWrites);
+          if (dirty || failed || disposed || ticket !== navigation) return;
+          const reuse =
+            blank &&
+            fieldWrites.size === 0 &&
+            active &&
+            !active.fields?.pinned &&
+            blankTitles.has(active.fields?.title || "") &&
+            blankTitles.has($("note-title").value) &&
+            body.trim() === "";
+          if (!reuse) {
+            const result = await record("create", {
+              fields: { title },
+              body: linkTo ? `[${title || "Link"}](${linkTo})\n\n` : "",
+              requestId: requestId(),
+            });
+            if (disposed || ticket !== navigation) return;
+            if (!(await activateNote(result.id, ticket))) return;
+          }
+          completeNavigation(ticket, { newNote: true });
+          if (reuse) void refreshActive().catch((error) => notice(error.message || String(error)));
+        } finally {
+          if (ticket === navigation && !disposed) editor.setEditable(true);
+        }
+      }
+      function setFields(id, fields) {
+        const write = writeFields(id, fields);
+        fieldWrites.add(write);
+        const clear = () => fieldWrites.delete(write);
+        write.then(clear, clear);
+        return write;
+      }
+      async function writeFields(id, fields) {
         const submittedTitle = fields.title ?? savedTitle;
         const result = await record("setFields", { id, fields, requestId: requestId() });
+        const adopted = Object.fromEntries(
+          Object.keys(fields).map((key) => [key, result.fields[key]]),
+        );
         rows = rows.map((row) =>
           row.id === id
-            ? { ...row, fields: { ...row.fields, ...fields }, title: fields.title ?? row.title }
+            ? { ...row, fields: { ...row.fields, ...adopted }, title: adopted.title ?? row.title }
             : row,
         );
         if (active?.id === id) {
-          active.fields = { ...active.fields, ...result.fields };
+          active.fields = { ...active.fields, ...adopted };
           savedTitle = active.fields.title || "";
           if ($("note-title").value === submittedTitle) $("note-title").value = savedTitle;
         }
         renderList();
+        if (active?.id === id)
+          void refreshActive().catch((error) => notice(error.message || String(error)));
       }
       async function commitTitle() {
         if (active && $("note-title").value !== savedTitle)
