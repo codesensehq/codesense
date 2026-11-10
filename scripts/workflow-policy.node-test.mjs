@@ -764,7 +764,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
     assert.ok(steps.some((step) => step.run?.includes("--tool cargo-nextest")));
     const junit = steps.find((step) => step.with?.path === "target/nextest/ci/junit.xml");
     assert.equal(junit.if, "always()");
-    assert.equal(junit.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+    assert.equal(junit.uses, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
   }
 });
 
