@@ -181,7 +181,7 @@ tokio = { version = "1", features = ["test-util"] }
 wiremock = "0.6"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 # SR-18: the `test` feature exposes `tauri::test::{mock_builder, mock_context,
 # noop_assets}` so route/MCP seam tests can build a real `AppHandle` with
 # managed state (e.g. a warm `SharedFrontmatterCache`). Dev-only.
