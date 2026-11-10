@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
+import { DOCK_FRAME_PANEL_ID } from "@/features/shell/slots/slot-registry";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 /**
@@ -33,11 +35,8 @@ export function agentsListId(teamKey: string): string {
   return `agents-list-${teamKey.replace(/[^\w-]/g, "_")}`;
 }
 
-/** Focus into a team's built-in Agents list: its first agent row, else its first control. */
-export function focusAgentsList(teamKey: string): void {
-  const list = document.getElementById(agentsListId(teamKey));
-  const target =
-    list?.querySelector<HTMLElement>(".ag-scroll button") ??
-    list?.querySelector<HTMLElement>("input, button");
-  target?.focus();
+/** Focus into the dock's page (the built-in HTML agent list unless another is chosen), now or
+ *  as soon as it is ready. */
+export function focusDockPage(): void {
+  requestFrameFocus(DOCK_FRAME_PANEL_ID);
 }

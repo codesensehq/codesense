@@ -51,9 +51,9 @@ for (const slotId of ["right-pane", "dock"] as const) {
       );
       await expectThrowOnLoadFallback(page, {
         name: "Broken pane",
-        builtIn: dock ? "Agents list" : "Notes",
+        builtIn: dock ? null : "Notes",
         message: "chart failed",
-        selection: dock ? "s1" : "#qa",
+        selection: dock ? undefined : "#qa",
       });
     });
 

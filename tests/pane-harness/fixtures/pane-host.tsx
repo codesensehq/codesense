@@ -137,7 +137,6 @@ function Host() {
             <div style={{ height: "100%", display: visible ? "block" : "none" }}>
               <SlotDashboardHost
                 slotId={fixtures.slotId ?? "right-pane"}
-                renderNative={fixtures.slotId === "dock" ? () => <NativeSelection /> : undefined}
                 headerless={fixtures.slotId === "dock" || fixtures.slotId === "file-nav"}
                 refreshKey={refreshKey}
                 contentRoot="/fixture"

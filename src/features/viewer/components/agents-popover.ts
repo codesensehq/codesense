@@ -88,7 +88,7 @@ const samePlace = (a: PopoverPlace | null, b: PopoverPlace): boolean =>
 
 /** The first row still in view in the list, to take focus when the popup's row scrolls away (or
  *  closes with its row no longer drawn). */
-export function rowInView(scroller: Element): HTMLElement | null {
+function rowInView(scroller: Element): HTMLElement | null {
   const box = scroller.getBoundingClientRect();
   for (const row of Array.from(scroller.querySelectorAll(".ag-row"))) {
     const r = row.getBoundingClientRect();

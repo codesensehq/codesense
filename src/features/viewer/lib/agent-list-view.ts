@@ -6,12 +6,7 @@ import { agentCliLabel } from "@/shared/lib/agent-clis";
 import { registeredCliOfBinary } from "@/shared/lib/agent-runtimes";
 import { AGENT_ROLE_CHOICES, type AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 import { agentPinId, agentRowKey, sessionPinId, type AgentPin } from "@/shared/lib/agent-pins";
-import {
-  IDLE_STATUSES,
-  isNeedsYouStatus,
-  WORKING_STATUSES,
-  type AgentStatus,
-} from "@/shared/lib/agent-status-config";
+import { isNeedsYouStatus, type AgentStatus } from "@/shared/lib/agent-status-config";
 import { BUILTIN_FACE_SOURCE, parseFaceRef, type FaceSource } from "@/shared/lib/avatar-packs";
 import {
   countMarks,
@@ -20,7 +15,6 @@ import {
   type MarkCounts,
   type StatusMarkKind,
 } from "@/shared/lib/status-mark";
-import { parseTeamKey } from "@/shared/lib/team-key";
 import type { AgentSessionRow } from "@/tauri/commands";
 
 /** One agent in the launch tree: the agents it launched nest under it, wherever they work. */
@@ -84,31 +78,6 @@ export interface OtherTeamGroup {
   nodes: AgentTreeNode[];
 }
 
-/**
- * A team as the pane names it: its name, or `org › team` (the org's display name) when another
- * team of `among` (team keys) has the same name in another org. A key with no team reads as its
- * org.
- */
-export function paneTeamLabel(
-  teamKey: string,
-  among: Iterable<string>,
-  orgName: (orgSlug: string) => string | undefined,
-): string {
-  const { orgSlug, teamName } = parseTeamKey(teamKey);
-  const org = orgName(orgSlug) || orgSlug;
-  if (!teamName) return org;
-  for (const other of among) {
-    const o = parseTeamKey(other);
-    if (o.teamName === teamName && o.orgSlug !== orgSlug) return `${org} › ${teamName}`;
-  }
-  return teamName;
-}
-
-/** Every node of every other team's group. */
-export function otherTeamNodes(groups: readonly OtherTeamGroup[]): AgentTreeNode[] {
-  return groups.flatMap((group) => group.nodes);
-}
-
 export function countNodes(nodes: readonly AgentTreeNode[]): number {
   return nodes.reduce((n, node) => n + 1 + countNodes(node.children), 0);
 }
@@ -128,73 +97,6 @@ export function needsYouHandles(
       .filter((row) => isNeedsYouStatus(statusOf(row)))
       .map((row) => row.handle),
   );
-}
-
-/** The agents of the teams' trees whose status waits on a person, by {@link agentRowKey}: one
- *  handle can run in two teams, and only the one that waits is counted. */
-export function needsYouKeys(
-  teams: readonly TeamTrees[],
-  statusOf: (row: AgentSessionRow) => AgentStatus,
-): Set<string> {
-  const keys = new Set<string>();
-  for (const team of teams) {
-    for (const node of flatNodes(team.nodes)) {
-      if (isNeedsYouStatus(statusOf(node.row))) {
-        keys.add(agentRowKey(node.teamKey ?? team.teamKey, node.row.handle));
-      }
-    }
-  }
-  return keys;
-}
-
-/** The status filters over the tree: everyone, those at work, those waiting on a
- *  person, and those neither. Working, Needs you and Idle split every status between
- *  them, so their counts always add up to All. */
-export type AgentStatusFilter = "all" | "working" | "needs" | "idle";
-
-/** Whether an agent's status passes a status filter. */
-export function passesStatusFilter(status: AgentStatus, filter: AgentStatusFilter): boolean {
-  if (filter === "needs") return isNeedsYouStatus(status);
-  if (filter === "working") return WORKING_STATUSES.includes(status);
-  if (filter === "idle") return IDLE_STATUSES.includes(status);
-  return true;
-}
-
-/** Whether every word of a search query appears in an agent's searchable text. */
-export function matchesAgentSearch(text: string, query: string): boolean {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return true;
-  const hay = text.toLowerCase();
-  return words.every((w) => hay.includes(w));
-}
-
-/**
- * The agents of one team's trees a search and a status filter keep, by {@link agentRowKey} (a
- * node of another team's group names its own team; any other is `teamKey`'s). `textOf` gives an
- * agent's searchable text (name, task, role, workspace, machine, model). Each agent matches on
- * its own.
- */
-export function filteredRowKeys(
-  nodes: readonly AgentTreeNode[],
-  teamKey: string,
-  filter: { query: string; status: AgentStatusFilter },
-  statusOf: (row: AgentSessionRow) => AgentStatus,
-  textOf: (node: AgentTreeNode) => string,
-): Set<string> {
-  const keep = new Set<string>();
-  const walk = (list: readonly AgentTreeNode[]) => {
-    for (const node of list) {
-      if (
-        passesStatusFilter(statusOf(node.row), filter.status) &&
-        matchesAgentSearch(textOf(node), filter.query)
-      ) {
-        keep.add(agentRowKey(node.teamKey ?? teamKey, node.row.handle));
-      }
-      walk(node.children);
-    }
-  };
-  walk(nodes);
-  return keep;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +119,7 @@ export function pinIdOfRow(teamKey: string, row: Pick<AgentSessionRow, "handle">
 }
 
 /** One pin as the Pinned group shows it, with its running session. */
-export interface PinnedEntry {
+interface PinnedEntry {
   pin: AgentPin;
   /** The team the pin belongs to: pins are kept per team, and the Pinned group shows them all. */
   teamKey: string;
@@ -259,7 +161,7 @@ export function listedAgentsOf(teams: readonly TeamTrees[]): ListedAgents {
 }
 
 /** A pin, with the team it is kept in. */
-export interface TeamPin {
+interface TeamPin {
   teamKey: string;
   pin: AgentPin;
 }
@@ -337,34 +239,6 @@ export function endedSessionPins(
   });
 }
 
-/** How many Pinned rows show before "+n more pinned". */
-export const PINNED_VISIBLE_MAX = 5;
-
-/** The trailing markers a row can show. */
-export type RowMarker = "due" | "hidden" | "headless" | "pin";
-
-/** A row's trailing markers, most urgent first (due > hidden > pin; `due`: a routine's
- *  wake waits for this session to be idle); a narrow
- *  pane keeps only the first. Hidden and headless are one slot: the first that applies.
- *  An offline agent gets its Offline tag on line one, not a trailing marker. */
-export function rowMarkers(
-  state: {
-    hidden: boolean;
-    headless: boolean;
-    pinned: boolean;
-    due?: boolean;
-  },
-  narrow: boolean,
-): RowMarker[] {
-  const place: RowMarker | null = state.hidden ? "hidden" : state.headless ? "headless" : null;
-  const all: RowMarker[] = [
-    ...(state.due ? (["due"] as const) : []),
-    ...(place ? [place] : []),
-    ...(state.pinned ? (["pin"] as const) : []),
-  ];
-  return narrow ? all.slice(0, 1) : all;
-}
-
 /** The machine an agent runs on, as a row says it when its tab runs here. */
 export const THIS_MAC = "This Mac";
 
@@ -401,19 +275,6 @@ export function agentModelLabel(launch: {
   const cli = launch.cli?.trim();
   if (!cli) return null;
   return agentCliLabel(cli);
-}
-
-/** A row's quiet second line: role, workspace, machine and model, leaving out what is unknown. */
-export function agentDetailLine(parts: {
-  role: string;
-  workspace: string | null;
-  machine: string | null;
-  model: string | null;
-}): string {
-  return [parts.role, parts.workspace, parts.machine, parts.model]
-    .map((p) => p?.trim())
-    .filter((p): p is string => Boolean(p))
-    .join(" · ");
 }
 
 /**

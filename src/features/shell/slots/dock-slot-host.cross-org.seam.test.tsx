@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // org store and warm-scope owner. The page host and the built-in list are probes that count their
 // own mounts, so the test sees exactly what the dock builds, keeps hidden and shows. The profile
 // topic's answer is applied the way the configuration connection does.
-const counts = vi.hoisted(() => ({ pageMounts: 0, pageUnmounts: 0, nativeRenders: 0 }));
+const counts = vi.hoisted(() => ({ pageMounts: 0, pageUnmounts: 0 }));
 vi.mock("./slot-dashboard-host", () => ({
   SlotDashboardHost: function PageProbe({
     entry,
@@ -21,12 +21,6 @@ vi.mock("./slot-dashboard-host", () => ({
       return () => void (counts.pageUnmounts += 1);
     }, []);
     return <div data-testid="dock-page" data-page={entry.id} data-visible={String(visible)} />;
-  },
-}));
-vi.mock("@/features/viewer/components/agents-list", () => ({
-  AgentsList: function NativeProbe() {
-    counts.nativeRenders += 1;
-    return <div data-testid="native-agents" />;
   },
 }));
 vi.mock("@/features/viewer/lib/agents-list-focus", async (original) => ({
@@ -95,7 +89,7 @@ const answerProfile = (org: string) =>
   useDashboardProfileStore.setState({ profile: profileFor(org) });
 
 beforeEach(() => {
-  Object.assign(counts, { pageMounts: 0, pageUnmounts: 0, nativeRenders: 0 });
+  Object.assign(counts, { pageMounts: 0, pageUnmounts: 0 });
   resetProfiles();
   for (const key of [A, C]) warmScopes.forget(key);
   useOrgStore.setState({
@@ -153,9 +147,7 @@ describe("the dock across orgs (AC8)", () => {
     await act(async () => {});
     expect(dockPages()).toEqual([{ id: `people-${ORG_A}`, visible: true }]);
     await act(async () => switchOrg(ORG_C, "c"));
-    // A first visit to a cold org shows the list until its profile topic answers, as on main.
     await act(async () => answerProfile(ORG_C));
-    const nativeAfterColdVisit = counts.nativeRenders;
     expect(dockPages()).toEqual([
       { id: `people-${ORG_A}`, visible: false },
       { id: `people-${ORG_C}`, visible: true },
@@ -166,7 +158,6 @@ describe("the dock across orgs (AC8)", () => {
       { id: `people-${ORG_A}`, visible: true },
       { id: `people-${ORG_C}`, visible: false },
     ]);
-    expect(counts.nativeRenders).toBe(nativeAfterColdVisit);
     expect(counts.pageMounts).toBe(2);
     expect(counts.pageUnmounts).toBe(0);
   });
@@ -191,7 +182,6 @@ describe("the dock across orgs (AC8)", () => {
       { id: `people-${ORG_A}`, visible: true },
       { id: `people-${ORG_C}`, visible: false },
     ]);
-    expect(document.querySelector("[data-testid='native-agents']")).toBeNull();
   });
 
   it("A<->C across orgs builds and shows the list zero times once both orgs have been shown", async () => {

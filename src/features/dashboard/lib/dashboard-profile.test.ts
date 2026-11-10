@@ -13,6 +13,7 @@ vi.mock("@/tauri/commands", async (original) => ({
   writeDashboardProfile: api.write,
 }));
 import {
+  builtinAgentListRef,
   setSurfaceDashboard,
   setSlotDashboard,
   useDashboardProfileStore,
@@ -64,7 +65,7 @@ it("does not let a late local write response replace a newer org view", async ()
         finish = resolve;
       }),
   );
-  const saving = setSlotDashboard(org, "dock", "native");
+  const saving = setSlotDashboard(org, "file-nav", "native");
   await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
   useDashboardProfileStore.setState({ org: "other/repo", profile: null });
   finish(null);
@@ -175,13 +176,64 @@ it("publishes a saved surface choice even if the optional pane refresh rejects",
   }
 });
 
-it("keeps the Inbox assignment while switching the dock to its generic native default", async () => {
+it("keeps the Inbox assignment while switching the file nav to its native default", async () => {
   await setSlotDashboard(org, "right-pane", inbox);
-  await setSlotDashboard(org, "dock", "native");
+  await setSlotDashboard(org, "file-nav", "native");
   expect(useDashboardProfileStore.getState().profile?.slots).toEqual({
     "right-pane": inbox,
-    dock: "native",
+    "file-nav": "native",
   });
+});
+
+it("saves a dock choice of the classic list as the built-in HTML list", async () => {
+  await setSlotDashboard(org, "dock", "native");
+  expect(api.write).toHaveBeenCalledWith(org, { slots: { dock: builtinAgentListRef(org) } }, "42");
+  expect(useDashboardProfileStore.getState().profile?.slots.dock).toEqual(builtinAgentListRef(org));
+});
+
+it("moves a stored classic dock to the built-in HTML list with the next edit", async () => {
+  useDashboardProfileStore.setState({
+    org,
+    profile: {
+      id: "default",
+      name: "Default",
+      posture: "",
+      slots: { dock: "native", "file-nav": "native" },
+      rightPaneSurfaces: { notes: "native" },
+      cliLayout: "default",
+      chrome: {},
+    },
+  });
+  await setSlotDashboard(org, "right-pane", inbox);
+  expect(api.write).toHaveBeenCalledWith(
+    org,
+    { slots: { "right-pane": inbox, dock: builtinAgentListRef(org) } },
+    "42",
+  );
+  const saved = useDashboardProfileStore.getState().profile!;
+  expect(saved.slots).toEqual({
+    "right-pane": inbox,
+    dock: builtinAgentListRef(org),
+    "file-nav": "native",
+  });
+  expect(saved.rightPaneSurfaces).toEqual({ notes: "native" });
+});
+
+it("keeps a chosen dock dashboard over a stored classic dock", async () => {
+  useDashboardProfileStore.setState({
+    org,
+    profile: {
+      id: "default",
+      name: "Default",
+      posture: "",
+      slots: { dock: "native" },
+      cliLayout: "default",
+      chrome: {},
+    },
+  });
+  const board = { scope: "team" as const, org, team: "dev", id: "board" };
+  await setSlotDashboard(org, "dock", board);
+  expect(api.write).toHaveBeenCalledWith(org, { slots: { dock: board } }, "42");
 });
 
 it.each(["org", "principal"])(
@@ -195,7 +247,7 @@ it.each(["org", "principal"])(
         }),
     );
     await Promise.resolve();
-    const saving = setSlotDashboard(org, "dock", "native");
+    const saving = setSlotDashboard(org, "file-nav", "native");
     useOrgStore.setState({ activeOrgSlug: "other/repo" });
     useDashboardProfileStore.setState({ org: "other/repo", profile: null });
     if (boundary === "principal") identity.principal = "99";
@@ -203,7 +255,7 @@ it.each(["org", "principal"])(
     await blocking;
     await saving;
     if (boundary === "org")
-      expect(api.write).toHaveBeenCalledWith(org, { slots: { dock: "native" } }, "42");
+      expect(api.write).toHaveBeenCalledWith(org, { slots: { "file-nav": "native" } }, "42");
     else expect(api.write).not.toHaveBeenCalled();
     expect(useDashboardProfileStore.getState()).toEqual({
       org: "other/repo",

@@ -15,7 +15,7 @@ import type { AgentSessionRow } from "@/tauri/commands";
 /**
  * Each listed agent's status ({@link useAgentStatusOf}) and which of them wait on a person.
  */
-export function useNeedsYou(nodes: readonly AgentTreeNode[]): {
+function useNeedsYou(nodes: readonly AgentTreeNode[]): {
   needs: ReadonlySet<string>;
   statusOf: (row: AgentSessionRow) => AgentStatus;
 } {

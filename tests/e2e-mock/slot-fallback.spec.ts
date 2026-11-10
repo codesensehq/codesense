@@ -120,7 +120,7 @@ test("one strip in both slots; Reload re-mints, preserves the built-in, then res
   await page.clock.fastForward(30000);
   await expectStandardFallback(page, {
     name: "Triage inbox",
-    builtIn: "Agents list",
+    builtIn: null,
     detail: "What happened",
   });
   await mount("right-pane");

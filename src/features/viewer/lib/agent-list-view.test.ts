@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   pinIdOfRow,
-  agentDetailLine,
   agentMachineLabel,
   agentRowLine,
   agentModelLabel,
@@ -19,17 +18,11 @@ import {
   endedSessionPins,
   faceKey,
   listedAgentsOf,
-  filteredRowKeys,
   flattenRows,
-  matchesAgentSearch,
   needsYouHandles,
-  needsYouKeys,
-  paneTeamLabel,
   pinForRow,
   pinnedEntries,
   pinOfRow,
-  rowMarkers,
-  passesStatusFilter,
   THIS_MAC,
   type AgentFace,
   type AgentTreeNode,
@@ -39,7 +32,7 @@ import {
   workspaceCrew,
 } from "@/features/viewer/lib/agent-list-view";
 import { BUILTIN_AVATAR_PACKS, BUILTIN_FUNNY_PACK, faceSource } from "@/shared/lib/avatar-packs";
-import { AGENT_STATUSES, type AgentStatus } from "@/shared/lib/agent-status-config";
+import type { AgentStatus } from "@/shared/lib/agent-status-config";
 import type { AgentSessionRow } from "@/tauri/commands";
 
 function row(handle: string, over: Partial<AgentSessionRow> = {}): AgentSessionRow {
@@ -89,82 +82,9 @@ describe("Needs you and filters", () => {
   it("collects the handles whose status waits on a person", () => {
     expect([...needsYouHandles(tree(), statusOf)].sort()).toEqual(["solo", "worker-a"]);
   });
-
-  it("puts every status in exactly one of Working, Needs you and Idle", () => {
-    const buckets = ["working", "needs", "idle"] as const;
-    for (const st of AGENT_STATUSES) {
-      const hits = buckets.filter((f) => passesStatusFilter(st, f));
-      expect({ st, hits: hits.length }).toEqual({ st, hits: 1 });
-    }
-  });
-
-  it("files errors and crashes under Needs you; parked, finished and unknown under Idle", () => {
-    for (const st of ["failed", "crashed", "errored", "paused", "awaiting-answer"] as const) {
-      expect(passesStatusFilter(st, "needs")).toBe(true);
-    }
-    for (const st of ["idle", "unknown", "done", "completed"] as const) {
-      expect(passesStatusFilter(st, "idle")).toBe(true);
-    }
-  });
-
-  it("matches every word of a search, in any order and case", () => {
-    expect(matchesAgentSearch("Verify on staging · Fix login timeout", "LOGIN verify")).toBe(true);
-    expect(matchesAgentSearch("Verify on staging", "verify prod")).toBe(false);
-    expect(matchesAgentSearch("anything", "  ")).toBe(true);
-  });
-
-  it("keeps the agents a search and a status filter both pass", () => {
-    const text = (n: AgentTreeNode) =>
-      n.row.handle === "worker-a" ? "staging check" : n.row.handle;
-    const keep = (query: string, s: "all" | "working" | "needs" | "idle") =>
-      [...filteredRowKeys(tree(), "t", { query, status: s }, statusOf, text)].sort();
-    expect(keep("staging", "all")).toEqual([agentRowKey("t", "worker-a")]);
-    expect(keep("", "needs")).toEqual([agentRowKey("t", "solo"), agentRowKey("t", "worker-a")]);
-    expect(keep("", "working")).toEqual([
-      agentRowKey("t", "controller"),
-      agentRowKey("t", "worker-b"),
-    ]);
-    expect(keep("staging", "working")).toEqual([]);
-    expect(keep("", "idle")).toEqual([agentRowKey("t", "manager")]);
-  });
-
-  it("keys what it keeps by team and handle, so a twin in another team is its own agent", () => {
-    const twin = (teamKey?: string): AgentTreeNode => ({
-      row: row("twin"),
-      story: null,
-      workspace: null,
-      children: [],
-      ...(teamKey ? { teamKey } : {}),
-    });
-    const kept = filteredRowKeys(
-      [twin(), twin("acme:ops")],
-      "team-1",
-      { query: "", status: "all" },
-      statusOf,
-      (n) => n.row.handle,
-    );
-    expect([...kept].sort()).toEqual([
-      agentRowKey("acme:ops", "twin"),
-      agentRowKey("team-1", "twin"),
-    ]);
-  });
 });
 
 describe("row detail line", () => {
-  it("joins role, workspace, machine and model, leaving out what is unknown", () => {
-    expect(
-      agentDetailLine({
-        role: "Worker",
-        workspace: "Missing notifications",
-        machine: "This Mac",
-        model: "Claude",
-      }),
-    ).toBe("Worker · Missing notifications · This Mac · Claude");
-    expect(
-      agentDetailLine({ role: "Manager", workspace: null, machine: "This Mac", model: null }),
-    ).toBe("Manager · This Mac");
-  });
-
   it("a list row's line leaves the role to its piece and says what runs it and for how long", () => {
     const base = {
       team: null,
@@ -612,73 +532,5 @@ describe("pins", () => {
     expect(agentMachineLabel("m-7f3a", undefined)).toBe("a remote machine");
     expect(agentMachineLabel("local", machines)).toBe(THIS_MAC);
     expect(agentMachineLabel(null, machines)).toBe(THIS_MAC);
-  });
-
-  it("keeps one trailing marker in a narrow pane, most urgent first", () => {
-    const base = {
-      hidden: false,
-      headless: false,
-      pinned: false,
-    };
-    expect(rowMarkers({ ...base, hidden: true, pinned: true }, false)).toEqual(["hidden", "pin"]);
-    expect(rowMarkers({ ...base, hidden: true, pinned: true }, true)).toEqual(["hidden"]);
-    expect(rowMarkers({ ...base, pinned: true }, true)).toEqual(["pin"]);
-    expect(rowMarkers(base, true)).toEqual([]);
-  });
-
-  it("marks the session a routine's wake is queued for: due, before the rest", () => {
-    const base = {
-      hidden: false,
-      headless: false,
-      pinned: false,
-    };
-    expect(rowMarkers({ ...base, due: true, headless: true, pinned: true }, false)).toEqual([
-      "due",
-      "headless",
-      "pin",
-    ]);
-    expect(rowMarkers({ ...base, due: true, pinned: true }, true)).toEqual(["due"]);
-    expect(rowMarkers({ ...base, due: true, hidden: true }, true)).toEqual(["due"]);
-  });
-});
-
-describe("paneTeamLabel", () => {
-  const orgName = (slug: string) => ({ acme: "Acme Inc" })[slug];
-  it("names a team by its name alone when no other team shares it", () => {
-    expect(paneTeamLabel("acme:ops", ["acme:ops", "acme:dev", "beta:qa"], orgName)).toBe("ops");
-  });
-  it("names it org › team (the org's display name, else its slug) when another org shares it", () => {
-    const among = ["acme:ops", "beta:ops"];
-    expect(paneTeamLabel("acme:ops", among, orgName)).toBe("Acme Inc › ops");
-    expect(paneTeamLabel("beta:ops", among, orgName)).toBe("beta › ops");
-  });
-  it("names a key with no team by its org", () => {
-    expect(paneTeamLabel("acme", ["acme:ops"], orgName)).toBe("Acme Inc");
-  });
-});
-
-describe("needsYouKeys", () => {
-  it("keys each waiting agent by its own team and handle, in every team and depth", () => {
-    const node = (r: AgentSessionRow, over: Partial<AgentTreeNode> = {}): AgentTreeNode => ({
-      row: r,
-      story: null,
-      workspace: null,
-      children: [],
-      ...over,
-    });
-    const lead = node(row("lead"), { children: [node(row("child"))] });
-    const twin = node(row("lead", { sessionId: "sid-twin" }), { teamKey: "acme:ops" });
-    const waits = new Set(["sid-child", "sid-twin"]);
-    const keys = needsYouKeys(
-      [
-        { teamKey: "org:team", nodes: [lead] },
-        { teamKey: "acme:dev", nodes: [twin] },
-      ],
-      (r) => (waits.has(r.sessionId ?? "") ? "awaiting-answer" : "running"),
-    );
-    // The twin names its own team, over the group it is listed in; the lead itself does not wait.
-    expect([...keys].sort()).toEqual(
-      [agentRowKey("org:team", "child"), agentRowKey("acme:ops", "lead")].sort(),
-    );
   });
 });

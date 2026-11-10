@@ -37,7 +37,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
 
 import { toast } from "sonner";
 
-import { resolveAgentShow, setRunHistoryOpener, showAgent, type ShowInputs } from "./show-agent";
+import { resolveAgentShow, showAgent, type ShowInputs } from "./show-agent";
 import { registerMachineLookup } from "@/features/machines/lib/machine-offline";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -302,25 +302,6 @@ describe("the one Show", () => {
     expect(toast).toHaveBeenCalledWith(reason, undefined);
   });
 
-  it("an ended agent with no run of its own offers Run history while a surface shows it", async () => {
-    const openHistory = vi.fn();
-    setRunHistoryOpener(openHistory);
-    try {
-      const ended = row({ sessionId: "s-gone", alive: false });
-      await showAgent(ended, { teamKey: TEAM });
-      const [message, options] = vi.mocked(toast).mock.calls[0] as [
-        string,
-        { action: { label: string; onClick: () => void } },
-      ];
-      expect(message).toBe("Reviewer has ended. There's no saved output for this run.");
-      expect(options.action.label).toBe("Run history");
-      options.action.onClick();
-      expect(openHistory).toHaveBeenCalled();
-    } finally {
-      setRunHistoryOpener(null);
-    }
-  });
-
   it("adopts a session into the workspace in its tab's directory before its story's, as the agents pane lists it", async () => {
     useViewerStore.setState({
       workspaces: {
@@ -415,19 +396,10 @@ describe("Show of an agent on a remote machine", () => {
         row({ sessionId: "s-unplaced", handle: "usage-claude", machineId: null, alive: false }),
       ];
       const adopt = vi.spyOn(s(), "adoptTerminalSession");
-      const openHistory = vi.fn();
-      setRunHistoryOpener(openHistory);
-      try {
-        const outcome = await act(() => showAgent(unplaced(), { teamKey: TEAM }));
-        const reason = "usage-claude has ended. There's no saved output for this run.";
-        expect(outcome).toEqual({ notShown: reason });
-        // As any ended agent with no run of its own: the toast offers Run history.
-        expect(toast).toHaveBeenCalledWith(reason, {
-          action: { label: "Run history", onClick: openHistory },
-        });
-      } finally {
-        setRunHistoryOpener(null);
-      }
+      const outcome = await act(() => showAgent(unplaced(), { teamKey: TEAM }));
+      const reason = "usage-claude has ended. There's no saved output for this run.";
+      expect(outcome).toEqual({ notShown: reason });
+      expect(toast).toHaveBeenCalledWith(reason, undefined);
       expect(adopt).not.toHaveBeenCalled();
     });
 

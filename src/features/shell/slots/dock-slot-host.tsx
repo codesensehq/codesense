@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { OwningScopeProvider } from "@/shared/lib/warm-scopes";
 import { useDocumentVisible } from "@/features/inbox/hooks/use-document-visible";
 import { requestFrameFocus, type LiveFrame } from "@/features/dashboard/lib/frame-lifecycle";
 import { useRetiringFrames } from "@/features/dashboard/components/use-retiring-frames";
-import { AgentsList } from "@/features/viewer/components/agents-list";
 import {
   PaneCollapseDivider,
   type PaneSize,
@@ -59,8 +58,8 @@ export const dockChoice = () => singleSlotChoice("dock");
 
 /**
  * The dock beside the CLI (`SLOT_REGISTRY.dock`): one region, mounted once per window. It owns
- * the chrome (width, fold and the resize border) and picks the body: the org's chosen dock
- * dashboard through the shared slot host, or the built-in Agents list.
+ * the chrome (width, fold and the resize border); the body is the org's dock dashboard (the
+ * built-in HTML agent list unless another is chosen) through the shared slot host.
  */
 export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: boolean }) {
   const collapsed = useViewerStore((s) => s.workspacePanelCollapsed);
@@ -163,16 +162,10 @@ export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: b
   for (const org of [...heldFallbacks.keys()]) if (!orgDocks.has(org)) heldFallbacks.delete(org);
   const fallbackConfig = lookedUpFallback ?? (activeOrg ? heldFallbacks.get(activeOrg) : undefined);
 
-  // Unfolded from the tray: focus moves into the dashboard's first control. The built-in list
-  // takes the same request itself.
+  // Unfolded from the tray: focus moves into the dashboard's first control.
   useEffect(() => {
     if (open && panelId && takeAgentsFocus(teamKey, "list")) requestFrameFocus(DOCK_FRAME_PANEL_ID);
   }, [open, panelId, teamKey]);
-
-  const renderNative = useCallback(
-    () => <AgentsList teamKey={teamKey} visible={visible} narrow={narrow} />,
-    [teamKey, visible, narrow],
-  );
 
   // With the CLI column closed there is nothing here at all; a dashboard's frame stays
   // mounted (hidden) so a team switch or a fold never reloads it.
@@ -214,7 +207,6 @@ export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: b
         // Folding hides the body but never moves or unmounts it (moving an iframe reloads it).
         style={{ width: shownWidth, display: open ? undefined : "none" }}
       >
-        {!shownDock && renderNative()}
         {hosts.map((host) => {
           const owner = dockOwners.get(host.key);
           const pinnedTeam = !!owner && owner.org !== activeOrg;
@@ -255,7 +247,7 @@ export function DockSlotHost({ teamKey, visible }: { teamKey: string; visible: b
                 refreshKey={host.refreshKey}
                 onReload={host.reload}
                 // A failed page falls back to the built-in HTML list when its pane is listed;
-                // otherwise the strip stands alone with Reload (no native list beneath it).
+                // otherwise the strip stands alone with Reload.
                 fallback={hostFallback}
               />
             </div>

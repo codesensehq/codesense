@@ -3,14 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentTreeNode } from "@/features/viewer/lib/agent-list-view";
 import type { AgentSessionRow } from "@/tauri/commands";
-import {
-  activityLine,
-  askLeadsWithWord,
-  searchTextOf,
-  type SearchIdentity,
-} from "./agents-tree-view";
+import { activityLine, searchTextOf, type SearchIdentity } from "./agent-list-search";
 
-describe("SW-AA-1 (Phase 1): activityLine", () => {
+describe("activityLine", () => {
   it("renders a trimmed progress note", () => {
     expect(activityLine({ phase: "dev", note: "  writing src/auth/login.tsx  " })).toBe(
       "writing src/auth/login.tsx",
@@ -47,57 +42,6 @@ describe("SW-AA-1 (Phase 1): activityLine", () => {
     expect(activityLine({ phase: "done", note: "Shipped the fix.", settled: true })).toBe(
       "Shipped the fix.",
     );
-  });
-});
-
-describe("askLeadsWithWord", () => {
-  it("matches an ask that leads with the word, alone or before a colon, in any case", () => {
-    expect(askLeadsWithWord("Blocked: disk full", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("blocked", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("BLOCKED: waiting on CI", "blocked")).toBe(true);
-  });
-
-  it("does not match the word inside the ask, or another word that starts the same", () => {
-    expect(askLeadsWithWord("Which ticket needs answer first?", "Needs answer")).toBe(false);
-    expect(askLeadsWithWord("Blockedness: none", "Blocked")).toBe(false);
-    // A hyphen that joins a word is not a separator.
-    expect(askLeadsWithWord("Blocked-by-review", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Blocked-waiting", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Blocked/waiting", "Blocked")).toBe(false);
-  });
-
-  it("matches the word followed by a space, a spaced hyphen, a dash, or a stop or comma", () => {
-    expect(askLeadsWithWord("Blocked on the migration", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked\tby CI", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("blocked — waiting on review", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked—waiting", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked - waiting", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked– waiting", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked; need a key", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked! Need a key", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked? On what", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked-", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked. Need a key", "Blocked")).toBe(true);
-    expect(askLeadsWithWord("Blocked, need a key", "Blocked")).toBe(true);
-    // Leading space in the ask, and around the word, is ignored.
-    expect(askLeadsWithWord("   Blocked: x", " blocked ")).toBe(true);
-    expect(askLeadsWithWord("Needs answer: which DB?", "Needs answer")).toBe(true);
-  });
-
-  it("does not match the word followed by other punctuation or letters", () => {
-    expect(askLeadsWithWord("Blockers: none", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Blocked_maybe", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Blocked(maybe)", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Blocked/unblocked", "Blocked")).toBe(false);
-    expect(askLeadsWithWord("Block", "Blocked")).toBe(false);
-  });
-
-  it("matches nothing for an empty or missing word", () => {
-    expect(askLeadsWithWord("Blocked: disk full", "")).toBe(false);
-    expect(askLeadsWithWord(": anything", "  ")).toBe(false);
-    expect(askLeadsWithWord("Blocked", undefined)).toBe(false);
-    expect(askLeadsWithWord("Blocked", null)).toBe(false);
-    expect(askLeadsWithWord("", "Blocked")).toBe(false);
   });
 });
 

@@ -235,8 +235,8 @@ declare namespace CodesenseSdk {
     | { type: "codesense:rebind"; token: string };
 
   /**
-   * The `ui:dock` topic: the dock's view state, one for every team, shared by the built-in
-   * Agents list and a dock dashboard. Fold keys are the built-in list's node keys
+   * The `ui:dock` topic: the dock's view state, one for every team, shared by the built-in HTML
+   * agent list and any other dock dashboard. Fold keys are the built-in list's node keys
    * (`#team-fold:<teamKey>`, `#ws-fold:<teamKey>|<workspace>`, `#manager-fold:<teamKey>|<handle>`).
    * A tree's guide colour is `--cs-tree-accent-${hash(teamKey|treeHandle) % n + 1}`.
    */

@@ -116,7 +116,7 @@ function subagentParts(mark: StatusMarkKind, subagents: number | undefined): str
 }
 
 /** The status word an agent reads as while its subagents run: theirs is work too. */
-export const SUBAGENTS_WORKING_WORD = "Working";
+const SUBAGENTS_WORKING_WORD = "Working";
 
 /** A count of subagents in words: "1 subagent", "3 subagents". */
 export function subagentCountWords(subagents: number): string {

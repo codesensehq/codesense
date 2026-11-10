@@ -56,7 +56,7 @@ export function offlineMachineName(machineId: string | null | undefined): string
 }
 
 /** What a remote tab's origin says about where it runs, as the offline reads take it. */
-export interface TabOrigin {
+interface TabOrigin {
   machineId: string;
   offlineSince?: number;
 }

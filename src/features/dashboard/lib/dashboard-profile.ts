@@ -59,6 +59,18 @@ export function resetProfiles(): void {
   useDashboardProfileStore.setState({ org: null, profile: null, warm: {} });
 }
 
+/** A dock saved as `"native"` (the retired classic list) saves as the built-in HTML list: in this
+ *  edit, or with the next edit to the profile when the stored dock still says `"native"`. */
+function withoutClassicDock(
+  org: string,
+  base: DashboardProfile,
+  patch: Partial<DashboardProfile>,
+): Partial<DashboardProfile> {
+  const dock = patch.slots && "dock" in patch.slots ? patch.slots.dock : base.slots.dock;
+  if (dock !== "native") return patch;
+  return { ...patch, slots: { ...patch.slots, dock: builtinAgentListRef(org) } };
+}
+
 /** Persist only the edited fields. The local draft is replaced by the hub's committed view. */
 async function updateProfile(
   org: string,
@@ -79,11 +91,12 @@ async function updateProfile(
       cliLayout: "default",
       chrome: {},
     };
+    const edit = withoutClassicDock(org, base, patch);
     const draft: DashboardProfile = {
       ...base,
-      ...patch,
-      slots: { ...base.slots, ...patch.slots },
-      rightPaneSurfaces: { ...base.rightPaneSurfaces, ...patch.rightPaneSurfaces },
+      ...edit,
+      slots: { ...base.slots, ...edit.slots },
+      rightPaneSurfaces: { ...base.rightPaneSurfaces, ...edit.rightPaneSurfaces },
     };
     const showingOwner = useOrgStore.getState().activeOrgSlug === org;
     if (showingOwner) {
@@ -91,7 +104,7 @@ async function updateProfile(
       useDashboardProfileStore.setState({ profile: draft });
     }
     try {
-      await writeDashboardProfile(org, patch, principal);
+      await writeDashboardProfile(org, edit, principal);
     } catch (error) {
       if (showingOwner && useDashboardProfileStore.getState().profile === draft)
         useDashboardProfileStore.setState({ profile: previous });
@@ -112,7 +125,7 @@ async function updateProfile(
   });
 }
 
-/** Chooses the dashboard a one-body slot shows, or its built-in. */
+/** Chooses the dashboard a one-body slot shows, or its built-in (`"native"`; the dock has none). */
 export function setSlotDashboard(
   org: string,
   slot: SlotId,

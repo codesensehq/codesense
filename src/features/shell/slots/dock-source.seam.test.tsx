@@ -25,9 +25,6 @@ vi.mock("@/features/dashboard/lib/verb-dispatch", async () =>
   (await import("@/test/verb-dispatch-mock")).openVerbDispatchMock(),
 );
 vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async () => "42" }));
-vi.mock("@/features/viewer/components/agents-list", () => ({
-  AgentsList: () => <div>Built-in Agents</div>,
-}));
 
 import { PaneSourceProjection } from "@/app/mock/pane-source-projection";
 import { DockSlotHost } from "./dock-slot-host";
@@ -65,6 +62,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
   let projectedRevisionByTeam = new Map<string, number>();
   let transport: PaneSourceProjection;
   let activeFrame: FrameRecord | null = null;
+  let peopleFrame: FrameRecord | null = null;
   let activeToken = "";
   let tokenSerial = 0;
   let revokedTokens: string[] = [];
@@ -262,6 +260,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
     readerScopedRevision = false;
     projectedRevisionByTeam = new Map();
     activeFrame = null;
+    peopleFrame = null;
     activeToken = "";
     tokenSerial = 0;
     revokedTokens = [];
@@ -317,6 +316,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
             token: activeToken,
             grant: { ...record.grant, team: team ? { org: "acme", team } : null },
           };
+          if (mintArgs.documentPath?.endsWith("people.html")) peopleFrame = activeFrame;
           return activeFrame;
         });
       }
@@ -940,8 +940,7 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         await act(async () => {
           expect(switchContext({ teamKey: "other:c" }, "switcher")).toBe(true);
         });
-        // Org C chose the classic list: it shows, and A's page waits, hidden, still A's.
-        expect(screen.getByText("Built-in Agents")).toBeTruthy();
+        // Org C shows its own HTML list, and A's page waits, hidden, still A's.
         expect(original.isConnected).toBe(true);
         expect(hidden()).toBe(true);
         await act(async () => {
@@ -949,11 +948,14 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
         });
         await waitFor(() => expect(hidden()).toBe(false));
         expect(frame()).toBe(original);
-        expect(screen.queryByText("Built-in Agents")).toBeNull();
       }
       expect(rebindOrganizations).toEqual([]);
-      expect(activeFrame?.grant.team).toEqual({ org: "acme", team: "a" });
-      expect(invoke.mock.calls.filter(([cmd]) => cmd === "mint_frame")).toHaveLength(1);
+      expect(peopleFrame?.grant.team).toEqual({ org: "acme", team: "a" });
+      expect(
+        invoke.mock.calls.filter(
+          ([cmd, payload]) => cmd === "mint_frame" && payload.args.documentPath === entry().path,
+        ),
+      ).toHaveLength(1);
       expect(identityDenials).toBe(0);
     });
 
@@ -1165,21 +1167,22 @@ describe.each(["dock", "file-nav"] as const)("%s source revisions", (slot) => {
       // The frame is remounted once its mint resolves; capture the minted one.
       await waitFor(() => expect(fallbackFrame()?.src).toContain("agent-list.html"));
       const original = fallbackFrame()!;
-      const fallbackMints = () =>
+      const listMints = (org: string) =>
         invoke.mock.calls.filter(
           ([cmd, payload]) =>
-            cmd === "mint_frame" && payload.args.documentPath?.endsWith("agent-list.html"),
+            cmd === "mint_frame" &&
+            payload.args.documentPath?.endsWith("agent-list.html") &&
+            payload.args.builtinTeam?.org === org,
         );
-      const before = fallbackMints().length;
+      const before = listMints("acme").length;
       // Org A's fallback has not reported live yet when the other org comes on screen.
       await act(async () => {
         expect(switchContext({ teamKey: "other:c" }, "switcher")).toBe(true);
       });
+      // A's fallback stays A's; org C gets its own built-in list, minted for C.
       expect(original.isConnected).toBe(true);
-      expect(fallbackMints().length).toBe(before);
-      expect(
-        fallbackMints().every(([, payload]) => payload.args.builtinTeam?.org !== "other"),
-      ).toBe(true);
+      expect(listMints("acme").length).toBe(before);
+      await waitFor(() => expect(listMints("other").length).toBe(1));
     });
 
     it("does not report a valid selected pane missing on a folded cold launch", async () => {

@@ -235,7 +235,6 @@ for (const fixture of ["dock-never", "dock-throw"])
     await expect(strip).toContainText("Fixture agents pane didn't load.");
     await expect(strip).not.toContainText("showing the built-in");
     await expect(cards).toHaveCount(0);
-    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
     // The strip sits in a box capped at about 60% of the column.
     const box = (await strip.locator("..").boundingBox())!;
     const column = (await page.getByRole("region", { name: "Agents" }).boundingBox())!;
@@ -263,12 +262,11 @@ test("a failed dock page falls back to the listed built-in agent-list page", asy
     "fixture-agent",
   );
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await expect(fallback.getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
 // A ready dock page that stops answering, or draws nothing, is reloaded once, then the strip
-// stands alone with Reload (no native list beneath it). A healthy page is never reloaded.
+// stands alone with Reload. A healthy page is never reloaded.
 async function runPings(page: Page, until: () => Promise<boolean>) {
   for (let i = 0; i < 30 && !(await until()); i++) await page.clock.runFor(1000);
 }
@@ -285,7 +283,6 @@ for (const fixture of ["dock-silent", "dock-blank"])
     await runPings(page, async () => (await strip.count()) > 0);
     await expect(strip).toBeVisible();
     expect(loads.get(`${fixture}.html`)).toBe(2);
-    await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
     await expect(page.locator("[data-slot-id=dock] iframe")).toHaveCount(0);
     await strip.getByRole("button", { name: "Details" }).click();
     await expect(strip).toContainText(
@@ -491,7 +488,7 @@ test("editing the dock page reloads it", async ({ page }) => {
 test("choosing Built-in after editing preserves the outgoing page until its save finishes", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "page=dock-ok&builtin");
   await ready(page);
   const originalFrame = doc(page);
   await page.evaluate(() => (window as any).bumpReload());
@@ -501,9 +498,9 @@ test("choosing Built-in after editing preserves the outgoing page until its save
   expect(editedLoads).toBeGreaterThan(1);
   await page.evaluate(() => {
     (window as any).calls = [];
-    (window as any).choose("native");
+    (window as any).choose("builtin");
   });
-  await expect(page.locator("[data-testid=agents-dock] .cs-agents")).toBeVisible();
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("release_frame");
@@ -516,7 +513,9 @@ test("choosing Built-in after editing preserves the outgoing page until its save
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("fixture:teardown");
-  await expect(page.locator("iframe")).toHaveCount(0);
+  // Only the built-in list's page is left.
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
 });
 
 test("a successful Reload moves focus into the dock page", async ({ page, browserName }) => {
@@ -549,7 +548,6 @@ test("a page still loading stays neutral past three seconds and falls back at th
   await page.clock.runFor(1);
   await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
   await expect(page.locator("[data-slot-id=dock]")).not.toHaveAttribute("aria-busy");
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
 });
 
 test("a dashboard missing at launch loads after its file is restored and Reload", async ({
@@ -558,7 +556,6 @@ test("a dashboard missing at launch loads after its file is restored and Reload"
   await open(page, "page=dock-ok&missing");
   const strip = page.getByTestId("slot-fallback-strip");
   await expect(strip).toBeVisible();
-  await expect(page.locator("[data-slot-id=dock] .cs-agents")).toHaveCount(0);
   await page.evaluate(() => (window as any).restore());
   await strip.getByRole("button", { name: "Reload" }).click();
   await ready(page);
@@ -576,14 +573,15 @@ test("a dashboard missing at launch loads after its file is restored and Reload"
 test("missing at launch, then Built-in, restored, and chosen again loads the page", async ({
   page,
 }) => {
-  await open(page, "page=dock-ok&missing");
-  await expect(page.getByTestId("slot-fallback-strip")).toBeVisible();
-  await page.evaluate(() => (window as any).choose("native"));
+  await open(page, "page=dock-ok&missing&builtin");
+  await expect(page.getByRole("region", { name: "Agents" })).toBeVisible();
+  await page.evaluate(() => (window as any).choose("builtin"));
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
-  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.locator("[data-slot-fallback-entry=agent-list]")).toHaveCount(0);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await page.evaluate(() => (window as any).restore());
   await page.evaluate(() => (window as any).choose("dashboard"));
-  await ready(page);
+  await page.frameLocator('iframe[title="Fixture agents"]').locator("#row").waitFor();
   await expect(page.getByTestId("slot-fallback-strip")).toHaveCount(0);
   expect(
     await page.evaluate(
@@ -593,15 +591,14 @@ test("missing at launch, then Built-in, restored, and chosen again loads the pag
     ),
   ).toBe("/fixture");
 });
-
 test("choosing Built-in retires the dock page through flush, then teardown, then release", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "page=dock-ok&builtin");
   await ready(page);
-  await page.evaluate(() => (window as any).choose("native"));
-  // The built-in list shows at once, while the outgoing page finishes its save.
-  await expect(page.locator("[data-testid=agents-dock] .cs-agents")).toBeVisible({ timeout: 80 });
+  await page.evaluate(() => (window as any).choose("builtin"));
+  // The built-in list's page mounts while the outgoing page finishes its save.
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("release_frame");
@@ -617,5 +614,7 @@ test("choosing Built-in retires the dock page through flush, then teardown, then
   await expect
     .poll(() => page.evaluate(() => (window as any).calls.map(([c]: [string]) => c)))
     .toContain("fixture:teardown");
-  await expect(page.locator("iframe")).toHaveCount(0);
+  // Only the built-in list's page is left.
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(page.locator('iframe[src*="agent-list.html"]')).toHaveCount(1);
 });

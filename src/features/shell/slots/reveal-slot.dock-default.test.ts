@@ -34,11 +34,14 @@ describe("the dock's default dashboard", () => {
     expect(dashboardSelected(builtin, false, "dock")).toBe(true);
   });
 
-  it("gives way to a saved choice", () => {
+  it("is the built-in HTML agent list for a saved classic choice", () => {
     useDashboardProfileStore.setState({ profile: profile({ dock: "native" }) });
-    expect(selectedRefs("dock", "acme")).toEqual([]);
-    expect(singleSlotChoice("dock")).toBeNull();
-    expect(dashboardSelected(builtin, false, "dock")).toBe(false);
+    expect(selectedRefs("dock", "acme")).toEqual([builtin]);
+    expect(singleSlotChoice("dock")).toEqual(builtin);
+    expect(dashboardSelected(builtin, false, "dock")).toBe(true);
+  });
+
+  it("gives way to a saved dashboard", () => {
     useDashboardProfileStore.setState({ profile: profile({ dock: ref }) });
     expect(selectedRefs("dock", "acme")).toEqual([ref]);
     expect(dashboardSelected(builtin, false, "dock")).toBe(false);

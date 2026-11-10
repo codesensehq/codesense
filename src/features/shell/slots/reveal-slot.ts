@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
-import { DOCK_DEFAULT_HTML_AGENT_LIST } from "@/features/dashboard/lib/dock-default";
 import {
   builtinAgentListRef,
   isInboxDashboard,
@@ -10,12 +9,7 @@ import {
 } from "@/features/dashboard/lib/dashboard-profile";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { revealCollapsedTerminal } from "@/features/viewer/lib/focus-cascade";
-import {
-  focusAgentsList,
-  requestAgentsFocus,
-  takeAgentsFocus,
-} from "@/features/viewer/lib/agents-list-focus";
-import { isTerminalColumnShown } from "@/features/viewer/lib/terminal-column";
+import { takeAgentsFocus } from "@/features/viewer/lib/agents-list-focus";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import type { DashboardRef, DashboardSlotChoice, PaneEntry } from "@/tauri/commands";
@@ -60,7 +54,9 @@ function matchesRef(selected: DashboardRef, target: DashboardRef, includeSource 
 export function selectedRefs(slot: SlotId, org: string): DashboardRef[] {
   const profile = profileOf(org);
   const choice = profile?.slots[slot];
-  if (slot === "dock" && choice === undefined && DOCK_DEFAULT_HTML_AGENT_LIST)
+  // The dock shows the built-in HTML list unless a dashboard is chosen. A saved `"native"` is the
+  // retired classic list, so it reads as the built-in list too.
+  if (slot === "dock" && (choice === undefined || choice === "native"))
     return [builtinAgentListRef(org)];
   const refs = choiceRefs(choice);
   return slot === "right-pane"
@@ -300,23 +296,19 @@ export function refPanelId(ref: DashboardRef): string {
   return ref.scope === "built-in" ? ref.id : panePanelId(ref.scope, ref.org, ref.team, ref.id);
 }
 /** Shows the dock as the tray's Agents control does: the CLI column comes back and the dock
- *  unfolds. With `focus`, focus moves into the chosen dashboard's page or the built-in list. */
+ *  unfolds. With `focus`, focus moves into the dock's page (the built-in HTML list unless another
+ *  dashboard is chosen) once it is ready. */
 function revealDock(options: RevealSlotOptions): void {
   const { activeOrgSlug: org, activeTeamName: team } = useOrgStore.getState();
   if (!org || !team) return;
   const teamKey = buildTeamKey(org, team);
   const viewer = useViewerStore.getState();
-  const shown = !viewer.workspacePanelCollapsed && isTerminalColumnShown(viewer);
-  const dashboard = selectedRefs("dock", org)[0];
-  // The built-in list takes this request as it opens (the dock host takes it for a page).
-  if (options.focus && !shown) requestAgentsFocus(teamKey, "list");
   revealCollapsedTerminal();
   if (viewer.workspacePanelCollapsed) viewer.setWorkspacePanelCollapsed(false);
   if (!options.focus) return;
-  if (dashboard) {
-    takeAgentsFocus(teamKey, "list");
-    requestFrameFocus(DOCK_FRAME_PANEL_ID);
-  } else if (shown) focusAgentsList(teamKey);
+  // The page takes focus here, so no request is left for the dock host to take as it opens.
+  takeAgentsFocus(teamKey, "list");
+  requestFrameFocus(DOCK_FRAME_PANEL_ID);
 }
 export function revealSlot(slot: SlotId, options: RevealSlotOptions = {}): void {
   if (slot === "file-nav") {

@@ -219,20 +219,19 @@ it("focuses the built-in HTML agent list when no dock dashboard is chosen", asyn
     list.remove();
   }
 });
-it("focuses the classic Agents list when the dock is set to it", () => {
+it("focuses the built-in HTML agent list when the dock was saved as the classic list", async () => {
   useDashboardProfileStore.setState({
     profile: { ...useDashboardProfileStore.getState().profile!, slots: { dock: "native" } },
   });
-  expect(resolveSlot("dock", { surface: "agent-list" })).toMatchObject({
-    dashboard: undefined,
-    panelId: null,
-    native: { entry: "component", label: "Agents list" },
-  });
   const list = showDock();
+  const frame = await dockFrame("agent-list");
   try {
     revealSlot("dock", { focus: true });
-    expect(document.activeElement).toBe(list.querySelector("button"));
+    frame.ready();
+    expect(frame.focus).toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(list.querySelector("button"));
   } finally {
+    frame.unregister();
     list.remove();
   }
 });

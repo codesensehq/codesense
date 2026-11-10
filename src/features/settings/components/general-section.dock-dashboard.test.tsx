@@ -108,25 +108,22 @@ describe("Agents list row", () => {
   });
 });
 
-it("offers the HTML list and the classic list, and the unset choice is the HTML one", async () => {
+it.each([
+  ["unset", {}],
+  ["saved as the classic list", { dock: "native" as const }],
+])("offers the HTML list and no classic list; %s, the HTML one is chosen", async (_, slots) => {
   useDashboardProfileStore.setState({
-    profile: { ...useDashboardProfileStore.getState().profile!, slots: {} },
+    profile: { ...useDashboardProfileStore.getState().profile!, slots },
   });
   render(<GeneralSection query="agents list" />);
   const html = screen.getByRole("radio", { name: "Agent list (HTML)" });
-  const classic = screen.getByRole("radio", { name: "Built-in list (classic)" });
   expect(html).toHaveAttribute("aria-checked", "true");
-  expect(classic).toHaveAttribute("aria-checked", "false");
-  fireEvent.click(classic);
-  await waitFor(() =>
-    expect(writeDashboardProfile).toHaveBeenLastCalledWith(
-      "acme",
-      expect.objectContaining({ slots: { dock: "native" } }),
-      undefined,
-    ),
-  );
-  await waitFor(() => expect(classic).toHaveAttribute("aria-checked", "true"));
-  fireEvent.click(html);
+  expect(screen.queryByRole("radio", { name: /classic/i })).toBeNull();
+});
+
+it("switches the dock from a chosen dashboard back to the HTML list", async () => {
+  render(<GeneralSection query="agents list" />);
+  fireEvent.click(screen.getByRole("radio", { name: "Agent list (HTML)" }));
   await waitFor(() =>
     expect(writeDashboardProfile).toHaveBeenLastCalledWith(
       "acme",
@@ -134,5 +131,4 @@ it("offers the HTML list and the classic list, and the unset choice is the HTML 
       undefined,
     ),
   );
-  await waitFor(() => expect(html).toHaveAttribute("aria-checked", "true"));
 });

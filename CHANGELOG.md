@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **The HTML agent list is now the only built-in list beside the CLI.** The classic agent list and its setting have been removed. Choose **Agent list (HTML)** in **Settings → General → Agents list** to use the default, or choose a custom dashboard.
 - Lower idle CPU while agents work: the inbox re-reads only when mail, a team or the sessions it shows change, and agent activity alone no longer tells inbox views to refresh.
 - **Machine saves never overwrite a newer edit.** Saving a machine is refused if it changed since you opened it; reopen it and save again. Over MCP, `save_machine` now needs `declarationRevision` (the `declaration.revision` from `list_machines`) to change a legacy machine you can publish, personal or shared.
 - **A refused switch to a private account keeps your connection.** CodeSense makes every check it can before ending the machine's current connection.

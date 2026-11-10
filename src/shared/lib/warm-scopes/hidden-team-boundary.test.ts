@@ -91,11 +91,6 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "an agents popover, anchored to the control the user opened; closes on its own outside press and acts on its own DOM, never by id.",
   },
-  "src/features/viewer/components/agents-tree-view.tsx": {
-    count: 1,
-    reason:
-      "closes this view's own filter menu on an outside press; only while that menu is open, on its own field ref.",
-  },
   "src/features/viewer/components/fullscreen-overlay-shell.tsx": {
     count: 4,
     reason:
@@ -142,19 +137,10 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "pointer tracking and drag-session listeners for the user's own tray drag; the tile-zone lookup goes through queryAllShown.",
   },
-  "src/features/viewer/hooks/use-workspace-card-drag.ts": {
-    count: 7,
-    reason: "listeners installed only for the duration of the user's own card drag.",
-  },
   "src/features/viewer/hooks/use-workspace-cycle-intercept.ts": {
     count: 1,
     reason:
       "one listener, mounted once by the single CLI host; it compares the host's repo path to the active team and does not exist per team.",
-  },
-  "src/features/viewer/lib/agents-list-focus.ts": {
-    count: 1,
-    reason:
-      "the list id embeds the normalized teamKey, which is not guaranteed unique across orgs; the only mount is the single dock, so the lookup finds one list.",
   },
   "src/features/viewer/lib/attention-alerts-controller.ts": {
     count: 3,

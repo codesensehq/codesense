@@ -27,9 +27,6 @@ export interface NativeDefault {
 const SURFACES = {
   notes: { panelId: SCRATCH_PANEL_ID, label: "Notes", entry: "panel" as const },
 };
-const DOCK_SURFACES = {
-  "agent-list": { label: "Agents list", entry: "component" as const },
-};
 const chrome = [
   "section chrome",
   "tab strip",
@@ -67,7 +64,8 @@ export const SLOT_REGISTRY: Readonly<Record<SlotId, SlotDescriptor>> = {
     multiplicity: "one",
     presentations: ["docked", "overlay"],
     grantCeiling: SLOT_GRANT_CEILINGS.dock,
-    nativeDefault: DOCK_SURFACES,
+    // No native body: the dock always shows a dashboard (the built-in HTML list by default).
+    nativeDefault: {},
     hostOwned: [
       "mount",
       "width",
@@ -79,7 +77,7 @@ export const SLOT_REGISTRY: Readonly<Record<SlotId, SlotDescriptor>> = {
       "stop dialog",
     ],
     teamBinding: "follows-context",
-    // The built-in Agents list goes narrow here; a dock dashboard switches with it.
+    // A dock dashboard goes narrow here.
     narrowBelowPx: 260,
   },
 };
