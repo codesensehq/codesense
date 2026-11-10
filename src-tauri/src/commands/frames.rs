@@ -30,8 +30,17 @@ pub async fn mint_frame<R: tauri::Runtime>(
         .try_state::<crate::http::HttpApiPort>()
         .ok_or("HTTP server unavailable")?
         .0;
-    let PreparedFrame { args, policy, principal, dashboard, caller_scope, team, declared,
-        records_home, local_principal } = prepare_frame(&app, args).await?;
+    let PreparedFrame {
+        args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        records_home,
+        local_principal,
+    } = prepare_frame(&app, args).await?;
     let parent = args.parent_frame.clone();
     let frames = app.state::<std::sync::Arc<FrameStore>>();
     let mut record = mint_record(
@@ -217,18 +226,32 @@ async fn prepare_frame<R: tauri::Runtime>(
         .unwrap_or_else(|| args.document_path.clone());
     let declared =
         declared_capabilities(pane.as_ref(), message_html.as_deref(), &args.document_path);
-    Ok(PreparedFrame { args, policy, principal, dashboard, caller_scope, team, declared,
-        records_home, local_principal: local_principal.to_string() })
+    Ok(PreparedFrame {
+        args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        records_home,
+        local_principal: local_principal.to_string(),
+    })
 }
 
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum FrameRevalidation { Unchanged, RemintRequired }
+pub enum FrameRevalidation {
+    Unchanged,
+    RemintRequired,
+}
 
 /// No renderer-selected paths or permissions, and no allocation or mutation on comparison.
 #[tauri::command]
 pub async fn revalidate_frame<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>, frame_id: String, token: String,
+    app: tauri::AppHandle<R>,
+    frame_id: String,
+    token: String,
 ) -> Result<FrameRevalidation, String> {
     let frames = app.state::<std::sync::Arc<FrameStore>>();
     let record = frames.by_id(&frame_id).ok_or("denied: frame identity")?;
@@ -239,13 +262,25 @@ pub async fn revalidate_frame<R: tauri::Runtime>(
     if record.grant.slot != "centre" || record.parent_frame.is_some() || record.message.is_some() {
         return Err("denied: this frame is not a centre document".into());
     }
-    let prepared = prepare_frame(&app, MintFrameArgs {
-        document_path: record.document_path.clone(), content_root: record.content_root.clone(),
-        asset_folder: Some(record.asset_folder.clone()), slot: record.grant.slot.clone(),
-        message: None, parent_frame: None, builtin_team: None, policy: record.policy.clone(),
-    }).await?;
+    let prepared = prepare_frame(
+        &app,
+        MintFrameArgs {
+            document_path: record.document_path.clone(),
+            content_root: record.content_root.clone(),
+            asset_folder: Some(record.asset_folder.clone()),
+            slot: record.grant.slot.clone(),
+            message: None,
+            parent_frame: None,
+            builtin_team: None,
+            policy: record.policy.clone(),
+        },
+    )
+    .await?;
     // A released/rebound record must not be approved after an asynchronous preparation.
-    if frames.by_id(&frame_id).is_none_or(|current| current.token != token) {
+    if frames
+        .by_id(&frame_id)
+        .is_none_or(|current| current.token != token)
+    {
         return Err("denied: frame identity".into());
     }
     Ok(compare_authority(&record, prepared))
@@ -256,22 +291,53 @@ fn same_set(a: &[String], b: &[String]) -> bool {
 }
 
 fn compare_authority(record: &FrameRecord, prepared: PreparedFrame) -> FrameRevalidation {
-    if record.records_binding.as_ref().is_some_and(|binding| binding.profile != prepared.local_principal) {
+    if record
+        .records_binding
+        .as_ref()
+        .is_some_and(|binding| binding.profile != prepared.local_principal)
+    {
         return FrameRevalidation::RemintRequired;
     }
-    let PreparedFrame { mut args, policy, principal, dashboard, caller_scope, team, declared, .. } = prepared;
-    let (mut grant, effective, kind) = prepare_grant(&policy, &mut args, principal, dashboard, caller_scope, team, &declared);
+    let PreparedFrame {
+        mut args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        ..
+    } = prepared;
+    let (mut grant, effective, kind) = prepare_grant(
+        &policy,
+        &mut args,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        &declared,
+    );
     grant.frame_id = record.frame_id.clone();
     let a = &record.policy;
     let b = &args.policy;
-    if grant == record.grant && kind == record.kind
-        && args.content_root == record.content_root && args.document_path == record.document_path
+    if grant == record.grant
+        && kind == record.kind
+        && args.content_root == record.content_root
+        && args.document_path == record.document_path
         && args.asset_folder.as_deref().unwrap_or_default() == record.asset_folder
-        && a.own_folder_only == b.own_folder_only && a.block_service_workers == b.block_service_workers
-        && a.no_outside_network == b.no_outside_network && a.inbox_media == b.inbox_media
-        && a.team_safe == b.team_safe && same_set(&a.allowed_hosts, &b.allowed_hosts)
-        && same_set(&declared, &record.declared) && same_set(&effective, &record.effective_grant)
-    { FrameRevalidation::Unchanged } else { FrameRevalidation::RemintRequired }
+        && a.own_folder_only == b.own_folder_only
+        && a.block_service_workers == b.block_service_workers
+        && a.no_outside_network == b.no_outside_network
+        && a.inbox_media == b.inbox_media
+        && a.team_safe == b.team_safe
+        && same_set(&a.allowed_hosts, &b.allowed_hosts)
+        && same_set(&declared, &record.declared)
+        && same_set(&effective, &record.effective_grant)
+    {
+        FrameRevalidation::Unchanged
+    } else {
+        FrameRevalidation::RemintRequired
+    }
 }
 
 /// Bind only the authenticated principal's bundled file; caller paths cannot supply its identity.
@@ -376,7 +442,15 @@ fn mint_record(
     team: Option<FrameTeam>,
     declared: &[String],
 ) -> FrameRecord {
-    let (grant, effective_grant, kind) = prepare_grant(policy, &mut args, principal, dashboard, source_scope, team, declared);
+    let (grant, effective_grant, kind) = prepare_grant(
+        policy,
+        &mut args,
+        principal,
+        dashboard,
+        source_scope,
+        team,
+        declared,
+    );
     let record = FrameStore::mint_with_grant(
         frames,
         port,
@@ -397,8 +471,13 @@ fn mint_record(
 }
 
 fn prepare_grant(
-    policy: &crate::verbs::Policy, args: &mut MintFrameArgs, principal: String, dashboard: String,
-    source_scope: &str, team: Option<FrameTeam>, declared: &[String],
+    policy: &crate::verbs::Policy,
+    args: &mut MintFrameArgs,
+    principal: String,
+    dashboard: String,
+    source_scope: &str,
+    team: Option<FrameTeam>,
+    declared: &[String],
 ) -> (FrameGrant, Vec<String>, FrameCallerKind) {
     let effective_grant = mint_grant(
         policy,
@@ -732,18 +811,39 @@ mod tests {
     async fn tab_only_builtin_is_refused_by_mint_frame_but_slot_builtins_still_mint() {
         let fixture = crate::context_repo::caller_scope::tests::AppFixture::new();
         fixture.app.manage(crate::http::HttpApiPort(9400));
-        let listing = crate::panes::list_builtin_panes(&fixture.fixture.home, &crate::domain::Principal::from(1u64), "acme/ctx", "child").unwrap();
-        let args = |id: &str, slot: &str| serde_json::from_value(serde_json::json!({
-            "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
-            "contentRoot": listing.content_root, "slot": slot,
-            "builtinTeam": {"org":"acme/ctx", "team":"child"},
-        })).unwrap();
+        let listing = crate::panes::list_builtin_panes(
+            &fixture.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            "acme/ctx",
+            "child",
+        )
+        .unwrap();
+        let args = |id: &str, slot: &str| {
+            serde_json::from_value(serde_json::json!({
+                "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
+                "contentRoot": listing.content_root, "slot": slot,
+                "builtinTeam": {"org":"acme/ctx", "team":"child"},
+            }))
+            .unwrap()
+        };
         for slot in ["right-pane", "dock", "file-nav"] {
-            let error = mint_frame(fixture.app.handle().clone(), args("story-trail", slot)).await.unwrap_err();
-            assert!(error.contains("Built-in pane does not belong to this principal or slot"), "{error}");
+            let error = mint_frame(fixture.app.handle().clone(), args("story-trail", slot))
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("Built-in pane does not belong to this principal or slot"),
+                "{error}"
+            );
         }
-        for (id, slot) in [("inbox", "right-pane"), ("agent-list", "dock"), ("files-tree", "file-nav"), ("files-tree", "right-pane")] {
-            let frame = mint_frame(fixture.app.handle().clone(), args(id, slot)).await.unwrap();
+        for (id, slot) in [
+            ("inbox", "right-pane"),
+            ("agent-list", "dock"),
+            ("files-tree", "file-nav"),
+            ("files-tree", "right-pane"),
+        ] {
+            let frame = mint_frame(fixture.app.handle().clone(), args(id, slot))
+                .await
+                .unwrap();
             assert_eq!(frame.kind, FrameCallerKind::Builtin);
             assert_eq!(frame.grant.slot, slot);
         }
@@ -834,38 +934,80 @@ mod tests {
         let f = crate::context_repo::caller_scope::tests::AppFixture::new();
         f.app.manage(crate::http::HttpApiPort(9400));
         f.app.manage(f.fixture.service());
-        let page = f.fixture.write("child", "content/board/index.html", "<p>first</p>");
+        let page = f
+            .fixture
+            .write("child", "content/board/index.html", "<p>first</p>");
         let manifest = "content/board/dashboard.yml";
-        f.fixture.write("child", manifest, "allowed_hosts: [https://a.example.com, https://b.example.com]\n");
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://a.example.com, https://b.example.com]\n",
+        );
         let args = serde_json::from_value(serde_json::json!({
             "documentPath": page, "contentRoot": f.fixture.path("child", "content"), "slot": "centre"
         })).unwrap();
         let record = mint_frame(f.app.handle().clone(), args).await.unwrap();
-        let check = || revalidate_frame(f.app.handle().clone(), record.frame_id.clone(), record.token.clone());
-        f.fixture.write("child", "content/board/index.html", "<title>Changed title</title><p>second</p>");
+        let check = || {
+            revalidate_frame(
+                f.app.handle().clone(),
+                record.frame_id.clone(),
+                record.token.clone(),
+            )
+        };
+        f.fixture.write(
+            "child",
+            "content/board/index.html",
+            "<title>Changed title</title><p>second</p>",
+        );
         f.fixture.write("child", manifest, "title: New title\nallowed_hosts: [https://b.example.com, https://a.example.com, https://a.example.com]\n");
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
         let frames = f.app.state::<std::sync::Arc<FrameStore>>();
         let retained = frames.by_id(&record.frame_id).unwrap();
         assert_eq!(retained.token, record.token);
         assert_eq!(retained.origin, record.origin);
-        f.fixture.write("child", manifest, "allowed_hosts: [https://c.example.com]\n");
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://c.example.com]\n",
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
-        f.fixture.write("child", manifest, "allowed_hosts: [https://*.example.com]\n");
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://*.example.com]\n",
+        );
         assert!(check().await.unwrap_err().contains("allowed_hosts"));
         std::fs::remove_file(f.fixture.path("child", manifest)).unwrap();
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
-        f.fixture.write("child", "content/dashboard.yml", "allowed_hosts: [https://b.example.com, https://a.example.com]\n");
+        f.fixture.write(
+            "child",
+            "content/dashboard.yml",
+            "allowed_hosts: [https://b.example.com, https://a.example.com]\n",
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
-        f.fixture.write("child", manifest, "allowed_hosts: [https://c.example.com]\n");
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://c.example.com]\n",
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
         std::fs::remove_file(f.fixture.path("child", manifest)).unwrap();
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
         std::fs::remove_file(f.fixture.path("child", "content/dashboard.yml")).unwrap();
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
-        f.fixture.write("child", manifest, "allowed_hosts: [https://a.example.com, https://b.example.com]\n");
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://a.example.com, https://b.example.com]\n",
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
-        assert!(revalidate_frame(f.app.handle().clone(), record.frame_id.clone(), "wrong".into()).await.is_err());
+        assert!(revalidate_frame(
+            f.app.handle().clone(),
+            record.frame_id.clone(),
+            "wrong".into()
+        )
+        .await
+        .is_err());
         frames.release(&record.frame_id);
         assert!(check().await.is_err());
     }
@@ -881,13 +1023,28 @@ mod tests {
             "documentPath": page, "contentRoot": f.fixture.path("child", "content"), "slot": "centre"
         })).unwrap();
         let record = mint_frame(f.app.handle().clone(), args).await.unwrap();
-        let check = || revalidate_frame(f.app.handle().clone(), record.frame_id.clone(), record.token.clone());
+        let check = || {
+            revalidate_frame(
+                f.app.handle().clone(),
+                record.frame_id.clone(),
+                record.token.clone(),
+            )
+        };
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
-        f.fixture.write("child", "panes/status.html", &format!("{html}<meta name=\"codesense:capabilities\" content=\"records:read:own\">"));
+        f.fixture.write(
+            "child",
+            "panes/status.html",
+            &format!("{html}<meta name=\"codesense:capabilities\" content=\"records:read:own\">"),
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
-        f.fixture.write("child", "panes/status.html", &html.replace("a.example", "b.example"));
+        f.fixture.write(
+            "child",
+            "panes/status.html",
+            &html.replace("a.example", "b.example"),
+        );
         assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
-        f.fixture.write("child", "panes/status.html", "<title>Manifest only</title>");
+        f.fixture
+            .write("child", "panes/status.html", "<title>Manifest only</title>");
         let manifest = "panes/pane-manifest.yaml";
         f.fixture.write("child", manifest, "version: 1\npanes:\n- id: status\n  html: status.html\n  slots: [right-pane]\n  allowed_hosts: [https://a.example.com]\n");
         assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
