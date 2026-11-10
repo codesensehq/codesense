@@ -6,6 +6,7 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
+  merge_group:
 
 permissions: {}
 
@@ -34,11 +35,16 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.event.after }}
+          SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.event.after }}
           SCAN_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_METADATA_FILE: ${{ runner.temp }}/privacy-request.txt
+        # A merge group has no title or body of its own; the pull request scan covered them.
         run: |
-          printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" > "$PR_METADATA_FILE"
+          if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
+            unset PR_METADATA_FILE
+          else
+            printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" > "$PR_METADATA_FILE"
+          fi
           node scripts/privacy-ci.mjs

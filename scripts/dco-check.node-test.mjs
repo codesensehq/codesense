@@ -5,9 +5,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { unsignedCommits } from "./dco-check.mjs";
+import http from "node:http";
+import { dependabotCommits, pullAuthor, unsignedCommits } from "./dco-check.mjs";
 
 const script = fileURLToPath(new URL("./dco-check.mjs", import.meta.url));
 const env = { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" };
@@ -147,6 +148,140 @@ test("a Dependabot pull request still needs sign-off from human authors", (t) =>
   assert.deepEqual(f.check(undefined, f.base, "dependabot[bot]"), [
     { sha, author: "ada@example.com" },
   ]);
+});
+
+// A merge group as the queue builds it: one merge commit per queued pull request on
+// main's first-parent chain, the second parent being that pull request's head.
+function queue(t) {
+  const f = fixture(t);
+  const entry = (branch, ...commits) => {
+    f.git("checkout", "-q", "-b", branch, f.base);
+    const shas = commits.map(([message, ...flags]) => f.commit(message, ...flags));
+    f.git("checkout", "-q", "main");
+    f.git("merge", "--no-ff", "-q", "-m", `Merge ${branch}`, branch);
+    return shas;
+  };
+  return { ...f, entry };
+}
+const unsignedBots = (f, head) =>
+  new Set(
+    f
+      .check(head)
+      .filter(({ author }) => author.includes("dependabot"))
+      .map(({ sha }) => sha),
+  );
+
+test("on a merge group, bot commits are exempt only under a Dependabot pull request", async (t) => {
+  const f = queue(t);
+  const [human] = f.entry("human", ["Human", "-s"]);
+  const [bump] = f.entry("bump", ["Bump", `--author=${BOT}`]);
+  const [forged] = f.entry("forged", ["Forged", `--author=${BOT}`]);
+  const head = f.git("rev-parse", "HEAD");
+  const heads = { [bump]: "dependabot[bot]", [forged]: "ada", [human]: "ada" };
+  const asked = [];
+  const authorOf = async (sha) => (asked.push(sha), heads[sha] ?? "");
+  const candidates = unsignedBots(f, head);
+  assert.deepEqual(candidates, new Set([bump, forged]));
+  const exempt = await dependabotCommits({ cwd: f.dir, base: f.base, head, candidates, authorOf });
+  assert.deepEqual(exempt, new Set([bump]));
+  // Only entries holding an unsigned bot commit are looked up.
+  assert.deepEqual(asked.sort(), [bump, forged].sort());
+});
+
+test("on a merge group with no unsigned bot commits nothing is looked up", async (t) => {
+  const f = queue(t);
+  f.entry("human", ["Human", "-s"]);
+  const head = f.git("rev-parse", "HEAD");
+  const authorOf = async () => assert.fail("no lookup expected");
+  const candidates = unsignedBots(f, head);
+  assert.deepEqual(
+    await dependabotCommits({ cwd: f.dir, base: f.base, head, candidates, authorOf }),
+    new Set(),
+  );
+});
+
+test("on a merge group, a bot commit outside any queued merge stays unsigned", async (t) => {
+  const f = queue(t);
+  const bump = f.commit("Bump", `--author=${BOT}`);
+  const head = f.git("rev-parse", "HEAD");
+  const authorOf = async () => "dependabot[bot]";
+  const candidates = unsignedBots(f, head);
+  assert.deepEqual(candidates, new Set([bump]));
+  assert.deepEqual(
+    await dependabotCommits({ cwd: f.dir, base: f.base, head, candidates, authorOf }),
+    new Set(),
+  );
+});
+
+// A stand-in for the GitHub API: commits/<sha>/pulls answers from `pulls`, by head sha.
+async function api(t, pulls, status = 200) {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push({ url: req.url, authorization: req.headers.authorization });
+    const sha = /^\/repos\/example\/project\/commits\/([0-9a-f]+)\/pulls$/.exec(req.url)?.[1];
+    res.writeHead(sha ? status : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(sha ? (pulls[sha] ?? []) : {}));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const env = {
+    GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
+    GITHUB_REPOSITORY: "example/project",
+    GITHUB_TOKEN: "token-for-test",
+  };
+  return { env, seen };
+}
+const pull = (sha, login) => ({ head: { sha }, user: { login } });
+
+test("pullAuthor names the single author of the pull requests with that head", async (t) => {
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  const c = "c".repeat(40);
+  const { env, seen } = await api(t, {
+    [a]: [pull(a, "dependabot[bot]"), pull("d".repeat(40), "ada")],
+    [b]: [pull(b, "dependabot[bot]"), pull(b, "ada")],
+  });
+  assert.equal(await pullAuthor(a, env), "dependabot[bot]");
+  assert.equal(await pullAuthor(b, env), "");
+  assert.equal(await pullAuthor(c, env), "");
+  assert.equal(seen[0].authorization, "Bearer token-for-test");
+});
+
+test("pullAuthor fails closed when the lookup fails", async (t) => {
+  const { env } = await api(t, {}, 500);
+  await assert.rejects(pullAuthor("a".repeat(40), env), /^Error: dco: cannot look up .*HTTP 500/);
+});
+
+test("the CLI derives the merge group exemption from the GitHub API", async (t) => {
+  const f = queue(t);
+  const [bump] = f.entry("bump", ["Bump", `--author=${BOT}`]);
+  const [forged] = f.entry("forged", ["Forged", `--author=${BOT}`]);
+  const head = f.git("rev-parse", "HEAD");
+  const { env: apiEnv } = await api(t, {
+    [bump]: [pull(bump, "dependabot[bot]")],
+    [forged]: [pull(forged, "ada")],
+  });
+  const cli = (event) =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [script], {
+        cwd: f.dir,
+        env: { ...env, ...apiEnv, DCO_BASE: f.base, DCO_HEAD: head, DCO_EVENT: event },
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("close", (status) => resolve({ status, stderr }));
+    });
+  for (const event of ["merge_group", "pull_request"]) {
+    const run = await cli(event);
+    assert.equal(run.status, 1, event);
+    assert.match(run.stderr, new RegExp(forged.slice(0, 12)), event);
+    // The pull request path keeps its own author rule; only the merge group asks the API.
+    assert[event === "merge_group" ? "doesNotMatch" : "match"](
+      run.stderr,
+      new RegExp(bump.slice(0, 12)),
+      event,
+    );
+  }
 });
 
 test("a missing, short or zero revision fails closed", (t) => {

@@ -19,6 +19,7 @@ import {
   acknowledgeFlush,
   markFrameLive,
   markFrameReady,
+  retryFrameFocus,
 } from "../lib/frame-lifecycle";
 import { focusActiveWorkspaceTerminal } from "@/features/viewer/lib/focus-cascade";
 import { buildTeamKey, parseTeamKey } from "@/shared/lib/team-key";
@@ -294,6 +295,8 @@ export const NETWORK_PROBLEM_GRACE_MS = 5000;
 export interface DocProblem {
   kind: "load" | "script" | "bridge";
   message: string;
+  /** Why a frame failed, when the host may recover it; `message` is display text only. */
+  cause?: "crashed" | "unresponsive" | "blank";
 }
 
 /**
@@ -909,6 +912,59 @@ export function HtmlViewer({
   // Whether the doc now loaded has announced itself; pushes wait for it, and a
   // new load announces again.
   const docReadyRef = useRef(false);
+  // One focus-in per focus hand-off: an engine may or may not also report the frame's own
+  // focus, so a host post marks the hand-off and the frame's own report then only clears it.
+  const focusInSent = useRef(false);
+  const presentedRef = useRef(presented);
+  presentedRef.current = presented;
+  useLayoutEffect(() => {
+    if (!presented) focusInSent.current = false;
+  }, [presented]);
+  const postFocusIn = useCallback(
+    (target: HTMLIFrameElement) => {
+      if (!presentedRef.current || !docReadyRef.current || retiringRef.current) return;
+      recordFocusOwner(target);
+      focusInSent.current = true;
+      postToFrame(endpoint(), { type: "codesense:focus-in" });
+    },
+    [endpoint, postToFrame],
+  );
+  const focusFrame = useCallback(() => {
+    if (!frame || !presentedRef.current || retiringRef.current) return false;
+    const entering = document.activeElement !== frame;
+    frame.focus();
+    if (document.activeElement !== frame) return false;
+    if (entering) postFocusIn(frame);
+    return true;
+  }, [frame, postFocusIn]);
+  // Focus can leave without the frame's blur (WebKit), so the app window losing focus ends it too.
+  useEffect(() => {
+    if (!frame) return;
+    const handOffEnded = () => {
+      focusInSent.current = false;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The host window also blurs when focus moves into a frame; only leaving the app counts.
+    const windowBlurred = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!document.hasFocus()) handOffEnded();
+      }, 0);
+    };
+    frame.addEventListener("blur", handOffEnded);
+    window.addEventListener("blur", windowBlurred);
+    return () => {
+      clearTimeout(timer);
+      frame.removeEventListener("blur", handOffEnded);
+      window.removeEventListener("blur", windowBlurred);
+    };
+  }, [frame]);
+  /** The page is live: it called `codesense.ready()` or made its first subscribe. */
+  const pageLiveRef = useRef(false);
+  /** The next ping asks whether the page drew anything. Set on each reveal, and when a page
+   *  calls `codesense.ready()` (it has drawn what it means to show). A page live only through
+   *  its subscribe may still be waiting for data on load, so it is checked from its next reveal. */
+  const renderCheckDue = useRef(false);
   const loadedDocumentKey = useRef<string | null>(null);
   const documentLoads = useRef(0);
 
@@ -1040,6 +1096,7 @@ export function HtmlViewer({
   // Every page call enters the native admission gate before a host handler runs.
   // The page's own readiness: its host hears it and queued commands are delivered.
   const docLive = useCallback(() => {
+    pageLiveRef.current = true;
     if (frameRecord) markFrameLive(frameRecord.frameId);
     onDocLiveRef.current?.();
   }, [frameRecord]);
@@ -1106,6 +1163,12 @@ export function HtmlViewer({
   // The document whose page has applied its theme: until then the frame is transparent over the
   // themed surface behind it, so neither an unpainted (white) document nor an unthemed one shows.
   const [readyUrl, setReadyUrl] = useState<string | null>(null);
+  const awaitingReady = live && embedded && readyUrl !== viewerUrl;
+  // A focus request queued for a frame that takes no input yet (see `inputBlocked`) waits for it.
+  const takesInput = presented && !retiring && !awaitingReady;
+  useLayoutEffect(() => {
+    if (takesInput && frameRecord) retryFrameFocus(frameRecord.frameId);
+  }, [takesInput, frameRecord]);
   // Reveals a frame whose theme ack never arrives (a hidden frame runs no animation frames).
   const revealTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(revealTimer.current), []);
@@ -1444,6 +1507,7 @@ export function HtmlViewer({
         return frameOwnerRef.current;
       },
       element: hostedFrame ? undefined : (frame ?? undefined),
+      focus: hostedFrame || !frame ? undefined : focusFrame,
       post: (message) =>
         postToFrame(hostedFrame ? endpoint() : frame, { ...message, token: frameRecord.token }),
       beforeReload: () => reloadCapture.capture(),
@@ -1471,23 +1535,34 @@ export function HtmlViewer({
     hostedFrame,
     endpoint,
     postToFrame,
+    focusFrame,
   ]);
   const missedPongs = useRef(0);
+  const slotPane = !!pane;
   useEffect(() => {
     missedPongs.current = 0;
     if (!live || !docVisible || retiring || !frameRecord) return;
+    // A slot pane's first ping after it is revealed (or its page calls ready) also asks whether
+    // the page drew anything, so a frame that answers but shows nothing is caught too.
+    renderCheckDue.current = true;
     const timer = setInterval(() => {
       if (!docReadyRef.current || retiringRef.current) return;
       if (missedPongs.current >= 3) {
         clearInterval(timer);
-        onDocProblemRef.current?.({ kind: "load", message: "frame stopped responding" });
+        onDocProblemRef.current?.({
+          kind: "load",
+          message: "frame stopped responding",
+          cause: "unresponsive",
+        });
         return;
       }
       missedPongs.current += 1;
-      postToFrame(endpoint(), { type: "codesense:ping" });
+      const render = slotPane && renderCheckDue.current && pageLiveRef.current;
+      if (render) renderCheckDue.current = false;
+      postToFrame(endpoint(), { type: "codesense:ping", render: render || undefined });
     }, 5000);
     return () => clearInterval(timer);
-  }, [live, docVisible, retiring, frameRecord, endpoint, postToFrame]);
+  }, [live, docVisible, retiring, frameRecord, endpoint, postToFrame, slotPane]);
   useEffect(() => {
     if (!hostedFrame && !docVisible && frame && document.activeElement === frame) {
       const previous = focusOwner.previous.get(frame);
@@ -1526,6 +1601,7 @@ export function HtmlViewer({
   }, [endpoint, focusElement, postToFrame, presented, prepareIntent]);
   useLayoutEffect(() => {
     docReadyRef.current = false;
+    pageLiveRef.current = false;
     loadedDocumentKey.current = null;
     menuActionsEnabled.current = false;
     menuLifetime.current.abort();
@@ -1654,7 +1730,9 @@ export function HtmlViewer({
         return;
       }
       if (type === "codesense:live") {
-        if (live) docLive();
+        if (!live) return;
+        renderCheckDue.current = true;
+        docLive();
         return;
       }
       // The page has applied the theme the host posted: now the frame may show.
@@ -1673,6 +1751,13 @@ export function HtmlViewer({
           () =>
             `ready doc=${documentKey} t=${nowMs()} sinceDocStart=${nowMs() - docStartedAt.current} again=${docReadyRef.current} visible=${visibleRef.current}${lagField(data.sentAt)}`,
         );
+        // A new load (an in-frame reload included) starts not live and unchecked: a check armed
+        // as its frame mounted would otherwise run before a subscribe-only page paints. A
+        // repeated ready (a lost first one) may come after the page already went live.
+        if (data.retry !== true) {
+          pageLiveRef.current = false;
+          renderCheckDue.current = false;
+        }
         if (docReadyRef.current) {
           outbox.begin(`${documentKey}:load:${++documentLoads.current}`);
           onPageStartRef.current?.(`${documentKey}:load:${documentLoads.current}`);
@@ -1680,6 +1765,7 @@ export function HtmlViewer({
           menuLifetime.current = new AbortController();
         }
         docReadyRef.current = true;
+        focusInSent.current = false;
         outbox.ready(endpoint());
         setShimReadyCount((n) => n + 1);
         // Every load, a reload included, stays transparent until its theme ack or the fallback.
@@ -1721,10 +1807,8 @@ export function HtmlViewer({
               sendState(state);
           });
         if (frameRecord) markFrameReady(frameRecord.frameId);
-        if (presented && !hostedFrame && frame && document.activeElement === frame) {
-          recordFocusOwner(frame);
-          postToFrame(endpoint(), { type: "codesense:focus-in" });
-        }
+        if (!hostedFrame && frame && document.activeElement === frame && !focusInSent.current)
+          postFocusIn(frame);
         return;
       }
 
@@ -1741,6 +1825,11 @@ export function HtmlViewer({
         if (focusElement) {
           recordFocusOwner(focusElement);
           if (focusOwner.returning.delete(focusElement)) return;
+        }
+        // The host already told the page about this hand-off.
+        if (focusInSent.current) {
+          focusInSent.current = false;
+          return;
         }
         if (docReadyRef.current && !retiringRef.current)
           postToFrame(endpoint(), { type: "codesense:focus-in" });
@@ -1809,6 +1898,12 @@ export function HtmlViewer({
       }
       if (type === "codesense:pong") {
         missedPongs.current = 0;
+        if (data.rendered === false)
+          onDocProblemRef.current?.({
+            kind: "load",
+            message: "frame rendered nothing",
+            cause: "blank",
+          });
         return;
       }
       if (type === "codesense:key-escape") {
@@ -2286,8 +2381,7 @@ export function HtmlViewer({
   // for sight and input: a frame the user cannot see (not presented, retiring, or still starting)
   // takes no Tab, Enter or click. `retiring` keeps a readiness update from revealing a retired
   // frame, whose `inert` and `visibility` the retire path sets directly.
-  const awaitingReady = live && embedded && readyUrl !== viewerUrl;
-  const inputBlocked = !presented || retiring || awaitingReady;
+  const inputBlocked = !takesInput;
 
   return (
     <div
@@ -2354,7 +2448,9 @@ export function HtmlViewer({
         allow={HTML_FRAME_ALLOW}
         src={initialFrameSrc}
         onLoad={handleIframeLoad}
-        onError={() => onDocProblemRef.current?.({ kind: "load", message: "frame crashed" })}
+        onError={() =>
+          onDocProblemRef.current?.({ kind: "load", message: "frame crashed", cause: "crashed" })
+        }
         // Matching the doc's own `color-scheme` keeps the frame transparent over
         // the surface it sits on.
         style={{

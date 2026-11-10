@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 const PRIVATE_DIR: &str = "machines-private-v1.d";
 const PRIVATE_FILE: &str = "machine-private-bindings-v1.json";
 const SCHEMA: &str = "codesense.machine.private-account/v1";
+/// A private declaration whose bytes no longer match what this Mac recorded.
+pub(crate) const PRIVATE_DECLARATION_CHANGED: &str = "This private machine's configuration changed outside this Mac. Remove it and set it up again, or restore the previous configuration.";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -588,13 +590,18 @@ impl PrivateRegistry {
     }
 
     /// First verified host key for an unconfigured draft. Refuse any re-pin.
-    pub(crate) fn pin_draft(&self, id: &str, host_key: &str) -> Result<(), String> {
+    /// Answers with the declaration it wrote, if it wrote one.
+    pub(crate) fn pin_draft(
+        &self,
+        id: &str,
+        host_key: &str,
+    ) -> Result<Option<(Scope, PrivateDeclaration)>, String> {
         let _lock = self.lock()?;
         let (scope, mut declaration, revision) =
             self.capture(id)?.ok_or("private machine not found")?;
         if let Some(key) = &declaration.machine.pinned_host_key {
             return if key == host_key {
-                Ok(())
+                Ok(None)
             } else {
                 Err("private host key changed".into())
             };
@@ -620,7 +627,7 @@ impl PrivateRegistry {
             .get_mut(id)
             .ok_or("private reservation missing")?;
         if refusal.declaration_revision != revision {
-            return Err("private declaration changed".into());
+            return Err(PRIVATE_DECLARATION_CHANGED.into());
         }
         refusal.declaration_revision = next.clone();
         refusal.published = false;
@@ -635,6 +642,62 @@ impl PrivateRegistry {
             .get_mut(id)
             .ok_or("private reservation missing")?
             .published = true;
+        self.save_state(&state)?;
+        Ok(Some((scope, declaration)))
+    }
+
+    /// A new label for a personal private machine. The ledger and this
+    /// person's binding move to the new bytes with it, so the edit never reads
+    /// as one made outside this Mac. A team machine's declaration is every
+    /// teammate's: their bindings would refuse the new bytes, so it is refused.
+    pub(crate) fn relabel(&self, id: &str, label: &str) -> Result<(), String> {
+        let _lock = self.lock()?;
+        let (scope, mut declaration, revision) =
+            self.capture(id)?.ok_or("private machine not found")?;
+        if declaration.machine.label == label {
+            return Ok(());
+        }
+        if !matches!(scope, Scope::Personal) {
+            return Err(team_label_refusal(&declaration.machine.label));
+        }
+        let mut state = self.state()?;
+        if let Some(binding) = state.bindings.get(id) {
+            validate_private_binding_declaration(binding, &declaration, &revision)?;
+        }
+        declaration.machine.label = label.into();
+        let bytes = serde_yaml::to_string(&declaration)
+            .map_err(|e| e.to_string())?
+            .into_bytes();
+        let next = digest(&bytes);
+        let refusal = state
+            .migrated_mode_refusals
+            .get_mut(id)
+            .ok_or("private reservation missing")?;
+        if refusal.declaration_revision != revision {
+            return Err(PRIVATE_DECLARATION_CHANGED.into());
+        }
+        refusal.declaration_revision = next.clone();
+        refusal.published = false;
+        self.save_state(&state)?;
+        let written = self
+            .dir(&scope)
+            .and_then(|dir| self.write(&dir.join(format!("{id}.yaml")), &bytes, false));
+        let refusal = state
+            .migrated_mode_refusals
+            .get_mut(id)
+            .ok_or("private reservation missing")?;
+        refusal.published = true;
+        if let Err(error) = written {
+            // The file still holds the old bytes: put the ledger back with
+            // them, so the machine keeps its old label instead of reading as
+            // changed outside this Mac.
+            refusal.declaration_revision = revision;
+            self.save_state(&state)?;
+            return Err(error);
+        }
+        if let Some(binding) = state.bindings.get_mut(id) {
+            binding.declaration_revision = next;
+        }
         self.save_state(&state)
     }
 
@@ -667,7 +730,7 @@ impl PrivateRegistry {
         let old = self.dir(&scope)?.join(format!("{id}.yaml"));
         let bytes = std::fs::read(&old).map_err(|e| e.to_string())?;
         if digest(&bytes) != revision {
-            return Err("private declaration changed".into());
+            return Err(PRIVATE_DECLARATION_CHANGED.into());
         }
         self.write(
             &self.dir(&Scope::Personal)?.join(format!("{id}.yaml")),
@@ -781,7 +844,8 @@ impl PrivateRegistry {
     /// completion leaves the id refused with its backup intact, and asking
     /// again finishes the conversion. A legacy writer that recreates the old
     /// file afterwards meets the duplicate-id refusal, never a fallback.
-    pub fn convert_legacy(&self, scope: &Scope, id: &str) -> Result<(), String> {
+    /// Answers with the private declaration it published.
+    pub fn convert_legacy(&self, scope: &Scope, id: &str) -> Result<PrivateDeclaration, String> {
         let migration = if self.migration_reserved(id)? {
             None
         } else {
@@ -796,7 +860,7 @@ impl PrivateRegistry {
                 .user_file("machine-private-migrations-v1")
                 .join(format!("{id}.{transaction}.json"))
         };
-        let transaction = match migration {
+        let (transaction, converted) = match migration {
             Some(migration) => {
                 if self.migration_reserved(id)? {
                     return Err("private migration requires explicit reconciliation".into());
@@ -824,7 +888,7 @@ impl PrivateRegistry {
                 );
                 self.save_state(&state)?;
                 self.write(&private_path, &bytes, true)?;
-                migration.transaction_id
+                (migration.transaction_id, migration.declaration)
             }
             None => {
                 // Resume only this conversion's own interrupted transaction.
@@ -850,7 +914,9 @@ impl PrivateRegistry {
                 {
                     return Err("private migration requires explicit reconciliation".into());
                 }
-                refusal.transaction_id.clone()
+                let declaration: PrivateDeclaration =
+                    serde_yaml::from_slice(&published).map_err(|e| e.to_string())?;
+                (refusal.transaction_id.clone(), declaration)
             }
         };
         self.legacy.delete(scope, id)?;
@@ -863,7 +929,8 @@ impl PrivateRegistry {
         self.save_state(&state)?;
         self.find(id)?
             .ok_or("private migration requires reconciliation")?;
-        self.lease.validate()
+        self.lease.validate()?;
+        Ok(converted)
     }
 
     pub fn binding(&self, id: &str) -> Result<Option<PrivateBinding>, String> {
@@ -936,6 +1003,13 @@ impl PrivateRegistry {
         state.bindings.remove(id);
         self.save_state(&state)
     }
+}
+
+/// Why a team private machine's label can't change from one Mac.
+pub(crate) fn team_label_refusal(label: &str) -> String {
+    format!(
+        "A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name “{label}”."
+    )
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -1024,15 +1098,17 @@ fn validate_private_binding_declaration(
     declaration: &PrivateDeclaration,
     revision: &str,
 ) -> Result<(), String> {
+    // Any edit made outside this Mac changes the revision, so it reads as
+    // that first, whatever else it changed.
+    validate_binding_declaration(
+        revision,
+        binding.declaration_revision.as_str(),
+        PRIVATE_DECLARATION_CHANGED,
+    )?;
     validate_binding_declaration(
         &binding.host_key,
         &declaration.machine.pinned_host_key,
         "private host pin does not match declaration",
-    )?;
-    validate_binding_declaration(
-        revision,
-        binding.declaration_revision.as_str(),
-        "private declaration changed",
     )
 }
 
