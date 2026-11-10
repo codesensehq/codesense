@@ -161,8 +161,8 @@ export function declarationOutputs(app) {
       ["Field", "HTML meta tag (content)", "YAML entry", "Default"],
       declarations.map((f) => [
         f.name,
-        htmlTags.has(`codesense:${f.name}`)
-          ? `codesense:${f.name} (${f.name === "commands" ? "JSON array" : f.type.startsWith("Vec<") ? "comma or whitespace separated" : "string"})`
+        htmlTags.has(`codesense:${f.name.replaceAll("_", "-")}`)
+          ? `codesense:${f.name.replaceAll("_", "-")} (${f.name === "commands" ? "JSON array" : f.type.startsWith("Vec<") ? "comma or whitespace separated" : "string"})`
           : "YAML only",
         f.name,
         JSON.stringify(defs.DashboardDeclaration.properties[f.name].default ?? null),

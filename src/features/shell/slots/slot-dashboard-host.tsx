@@ -696,12 +696,20 @@ export function SlotDashboardHost({
   const onDocProblem = useCallback(
     (problem: DocProblem) => {
       if (!isCurrentAttempt(attempts)) return;
-      if (problem.kind === "bridge" || (problem.kind === "script" && live.current)) {
+      // Resource/CSP observations remain visible before and after live; startup keeps its deadline.
+      if (
+        problem.kind === "bridge" ||
+        problem.kind === "csp" ||
+        problem.kind === "resource" ||
+        (problem.kind === "script" && live.current)
+      ) {
         setProblems((previous) =>
-          problem.kind === "script" &&
-          previous
-            .slice(-3)
-            .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))
+          (problem.kind === "script" &&
+            previous
+              .slice(-3)
+              .some((p) => p.kind === "bridge" && p.message.endsWith(`: ${problem.message}`))) ||
+          (problem.kind === "csp" &&
+            previous.some((p) => p.kind === "csp" && p.message === problem.message))
             ? previous
             : [...previous.slice(-49), problem],
         );

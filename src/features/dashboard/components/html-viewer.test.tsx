@@ -17,8 +17,9 @@ import { FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode } from "react";
-import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { HtmlViewer, NETWORK_PROBLEM_GRACE_MS } from "./html-viewer";
+import { mintFrame, revalidateFrame } from "@/tauri/commands";
 
 // All mocks referenced inside `vi.mock` factories are created via `vi.hoisted`
 // so they're initialized before the (hoisted) factories run.
@@ -121,20 +122,25 @@ vi.mock("@/shared/stores/shortcuts-store", () => ({
 }));
 let shortcutOverrides: Record<string, string> = {};
 
-vi.mock("@/tauri/commands", async () => ({
-  ...(await import("../../../../tests/support/fixtures/frame")).frameCommands(),
-  bridgeDocContext: async () => null,
-  admitRenderedDocument: vi.fn().mockResolvedValue(undefined),
-  getHttpApiPort: () => mockGetHttpApiPort(),
-  // SW-LD-1: html-bridge maps `getDependencyStatus` — a real allowlist entry.
-  getDependencyStatus: () => mockGetDependencyStatus(),
-  // SW-SD-1: reuse the existing context writer as the snapshot sink.
-  writeContentFile: (path: string, content: string) => mockWriteContentFile(path, content),
-  readFile: (path: string) => mockReadFile(path),
-  applyMetadataEdit: (path: string, edits: unknown) => mockApplyMetadataEdit(path, edits),
-  routeFileToContext: (...args: unknown[]) => mockRouteFileToContext(...args),
-  createFile: (path: string, content: string) => mockCreateFile(path, content),
-}));
+vi.mock("@/tauri/commands", async () => {
+  const frames = (await import("../../../../tests/support/fixtures/frame")).frameCommands();
+  return {
+    ...frames,
+    mintFrame: vi.fn(frames.mintFrame),
+    revalidateFrame: vi.fn(frames.revalidateFrame),
+    bridgeDocContext: async () => null,
+    admitRenderedDocument: vi.fn().mockResolvedValue(undefined),
+    getHttpApiPort: () => mockGetHttpApiPort(),
+    // html-bridge maps `getDependencyStatus` — a real allowlist entry.
+    getDependencyStatus: () => mockGetDependencyStatus(),
+    // Reuse the existing context writer as the snapshot sink.
+    writeContentFile: (path: string, content: string) => mockWriteContentFile(path, content),
+    readFile: (path: string) => mockReadFile(path),
+    applyMetadataEdit: (path: string, edits: unknown) => mockApplyMetadataEdit(path, edits),
+    routeFileToContext: (...args: unknown[]) => mockRouteFileToContext(...args),
+    createFile: (path: string, content: string) => mockCreateFile(path, content),
+  };
+});
 
 // SW-DX-6: mock the app logger so the audit line is assertable + quiet.
 vi.mock("@/shared/lib/logger", () => ({
@@ -204,6 +210,7 @@ const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
 beforeEach(() => {
+  vi.mocked(revalidateFrame).mockReset().mockResolvedValue("unchanged");
   vi.clearAllMocks();
   mockFetch.mockResolvedValue({ status: 200 });
   mockGetDependencyStatus.mockResolvedValue({ ok: true });
@@ -932,12 +939,28 @@ describe("HtmlViewer load pre-check", () => {
     if (iframe) {
       Object.defineProperty(iframe, "contentWindow", { value: fakeWindow, configurable: true });
     }
-    const announce = () =>
-      window.dispatchEvent(
-        new FrameMessageEvent("message", { data: { type: "codesense:ready" }, source: fakeWindow }),
-      );
+    const announce = (data: Record<string, unknown> = { type: "codesense:ready" }) =>
+      window.dispatchEvent(new FrameMessageEvent("message", { data, source: fakeWindow }));
     return { onDocProblem, onDocLoaded, onDocLive, announce, fakeWindow };
   }
+
+  it("forwards authenticated resource observations separately from runtime errors", async () => {
+    const { onDocProblem, announce } = await renderPane();
+    announce({
+      type: "codesense:doc-error",
+      kind: "resource",
+      message: "failed to load missing.js",
+    });
+    expect(onDocProblem).toHaveBeenLastCalledWith({
+      kind: "resource",
+      message: "failed to load missing.js",
+    });
+    announce({ type: "codesense:doc-error", kind: "rejection", message: "initialization failed" });
+    expect(onDocProblem).toHaveBeenLastCalledWith({
+      kind: "script",
+      message: "initialization failed",
+    });
+  });
 
   it("counts explicit page ready as live, independently of the automatic transport handshake", async () => {
     const { announce, fakeWindow, onDocLive, onDocLoaded } = await renderPane();
@@ -1337,6 +1360,113 @@ describe("HtmlViewer action bridge", () => {
 
 describe("HtmlViewer changedPaths reload gate", () => {
   const filePath = "/repo/docs/page.html";
+
+  it("revalidates declarations and ordinary saves while unrelated changes stay stable", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    const props = { filePath, teamContentPath: "/repo" };
+    const { rerender } = render(<HtmlViewer {...props} refreshKey={1} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    const initialMints = vi.mocked(mintFrame).mock.calls.length;
+    const initialSrc = document.querySelector("iframe")!.getAttribute("src");
+    rerender(
+      <HtmlViewer
+        {...props}
+        refreshKey={2}
+        changedPaths={new Set(["/repo/other/dashboard.yml"])}
+      />,
+    );
+    expect(mintFrame).toHaveBeenCalledTimes(initialMints);
+    expect(document.querySelector("iframe")!.getAttribute("src")).toBe(initialSrc);
+
+    let revision = 2;
+    let expectedChecks = vi.mocked(revalidateFrame).mock.calls.length;
+    // The path remains the dependency when the nearest file appears or disappears.
+    for (const path of [
+      "/repo/dashboard.yml",
+      "/repo/docs/dashboard.yml",
+      "/repo/docs/dashboard.yml",
+      filePath,
+    ]) {
+      expectedChecks++;
+      rerender(<HtmlViewer {...props} refreshKey={++revision} changedPaths={new Set([path])} />);
+      await waitFor(() => expect(revalidateFrame).toHaveBeenCalledTimes(expectedChecks));
+      await waitFor(() =>
+        expect(document.querySelector("iframe")?.getAttribute("src")).toContain(`v=${revision}`),
+      );
+      expect(mintFrame).toHaveBeenCalledTimes(initialMints);
+    }
+  });
+
+  it("keeps the approved URL while native validation is pending", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    const props = { filePath: "/repo/panes/status.html", teamContentPath: "/repo/content" };
+    const { rerender } = render(<HtmlViewer {...props} refreshKey={1} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    const previous = document.querySelector("iframe")!.getAttribute("src");
+    let finish!: (result: "unchanged") => void;
+    vi.mocked(revalidateFrame).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    rerender(
+      <HtmlViewer
+        {...props}
+        refreshKey={2}
+        changedPaths={new Set(["/repo/panes/pane-manifest.yaml"])}
+      />,
+    );
+    expect(document.querySelector("iframe")!.getAttribute("src")).toBe(previous);
+    await act(async () => finish("unchanged"));
+    await waitFor(() =>
+      expect(document.querySelector("iframe")?.getAttribute("src")).toContain("v=2"),
+    );
+  });
+
+  it("shows the missing-file placeholder when an open document is deleted", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    const props = { filePath, teamContentPath: "/repo" };
+    const { rerender } = render(<HtmlViewer {...props} refreshKey={1} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    const initialMints = vi.mocked(mintFrame).mock.calls.length;
+    vi.mocked(revalidateFrame).mockResolvedValueOnce("missing");
+    rerender(<HtmlViewer {...props} refreshKey={2} changedPaths={new Set([filePath])} />);
+    await waitFor(() =>
+      expect(screen.getByText("This file was removed from disk")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Close Tab")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to create document frame/)).toBeNull();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(mintFrame).toHaveBeenCalledTimes(initialMints);
+    // A later ancestor declaration refresh remints; native refuses the absent document.
+    vi.mocked(mintFrame).mockRejectedValueOnce("missing: the document no longer exists");
+    rerender(
+      <HtmlViewer {...props} refreshKey={3} changedPaths={new Set(["/repo/docs/dashboard.yml"])} />,
+    );
+    await waitFor(() => expect(mintFrame).toHaveBeenCalledTimes(initialMints + 1));
+    await act(async () => {});
+    expect(screen.getByText("This file was removed from disk")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to create document frame/)).toBeNull();
+    // Recreating the file mints a fresh frame.
+    rerender(<HtmlViewer {...props} refreshKey={4} changedPaths={new Set([filePath])} />);
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    expect(screen.queryByText("This file was removed from disk")).toBeNull();
+  });
+
+  it("retries a failed centre mint when an ancestor declaration is corrected", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    vi.mocked(mintFrame).mockRejectedValueOnce(new Error("invalid allowed_hosts"));
+    const props = { filePath, teamContentPath: "/repo" };
+    const { rerender } = render(<HtmlViewer {...props} refreshKey={1} />);
+    await waitFor(() => expect(screen.getByText(/invalid allowed_hosts/)).toBeInTheDocument());
+    const initialMints = vi.mocked(mintFrame).mock.calls.length;
+    rerender(
+      <HtmlViewer {...props} refreshKey={2} changedPaths={new Set(["/repo/docs/dashboard.yml"])} />,
+    );
+    await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+    expect(mintFrame).toHaveBeenCalledTimes(initialMints + 1);
+  });
 
   it("does not change iframe src when a refreshKey bump excludes this file", async () => {
     mockGetHttpApiPort.mockResolvedValue(9123);

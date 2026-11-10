@@ -328,6 +328,43 @@ codesense.ready(); // now the host knows the page is up</code></pre>
         </p>
       </section>
 
+      <section id="outside-network" data-search="dashboard.yml network allowed_hosts remote API outside host blocked CSP">
+        <h2>Reach a remote API</h2>
+        <p>
+          Dashboards in the app block outside loads by default. A remote script, image, font or
+          <code>fetch</code> is blocked and shows in the dashboard's problems. Some outside traffic
+          isn't blocked yet: a page can navigate its own frame (a
+          <code>&lt;meta http-equiv="refresh"&gt;</code> needs no script), hint DNS lookups with
+          <code>dns-prefetch</code> or <code>preconnect</code>, open WebRTC connections, and hand a
+          web link to your browser with <code>window.open</code>. If your page needs a remote API,
+          add its exact HTTPS origin to the nearest <code>dashboard.yml</code> at or above the page:
+        </p>
+        <pre><code>allowed_hosts:
+  - https://api.example.com</code></pre>
+        <p>
+          An origin needs a public host name and may carry a port
+          (<code>https://api.example.com:8443</code>). Wildcards, IP addresses,
+          <code>localhost</code> and other local names (<code>*.localhost</code>, or a single-label
+          name such as <code>https://intranet</code>), <code>http:</code>, paths and other schemes
+          stop the page from opening, with a message that names the bad entry; so does a
+          <code>dashboard.yml</code> that isn't valid YAML. A declared host is trusted with scripts
+          and frames, not only with data, so name only services you trust.
+        </p>
+        <p>
+          Only the nearest <code>dashboard.yml</code> counts, and only inside the team's content
+          folder: one higher up is never read. A nearer <code>dashboard.yml</code> without
+          <code>allowed_hosts</code> declares nothing, even when an outer one lists hosts. A
+          <code>dashboard.yml</code> at the top of the content folder opens its hosts to every HTML
+          page in it.
+        </p>
+        <p>
+          <code>eval</code> and <code>new Function</code> stay off; workers, WebAssembly and
+          <code>blob:</code> and <code>data:</code> images, fonts and media keep working, but a
+          <code>fetch</code> of a <code>data:</code> URL is blocked. This only applies inside the CodeSense app: hosted share pages never reach
+          the network.
+        </p>
+      </section>
+
       <!-- =============== What next =============== -->
       <section data-search="What to try next after first dashboard session usage cost per story" id="next">
         <h2>What to try next</h2>

@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
+  revalidateFrame,
   terminalLayoutAdmission,
   terminalLayoutMemberSnapshots,
   terminalCloseTab,
@@ -617,5 +618,14 @@ describe("weft dispatch bridge", () => {
     mockInvoke.mockResolvedValueOnce(undefined);
     await wvWorkerForceClose("wh1");
     expect(mockInvoke).toHaveBeenCalledWith("wv_worker_force_close", { handle: "wh1" });
+  });
+});
+
+it("revalidates a stored frame using only id and token", async () => {
+  mockInvoke.mockResolvedValueOnce("unchanged");
+  await expect(revalidateFrame("frame", "token")).resolves.toBe("unchanged");
+  expect(mockInvoke).toHaveBeenLastCalledWith("revalidate_frame", {
+    frameId: "frame",
+    token: "token",
   });
 });

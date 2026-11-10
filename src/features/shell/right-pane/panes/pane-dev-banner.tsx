@@ -27,7 +27,16 @@ export function ProblemBanner({
         {shown.map((p, i) => (
           <p key={`${i}-${p.message}`} className="break-words font-mono">
             <span className="font-sans font-medium">
-              {p.kind === "load" ? "Couldn't load" : p.kind === "bridge" ? "Call failed" : "Error"}:
+              {p.kind === "load"
+                ? "Couldn't load"
+                : p.kind === "bridge"
+                  ? "Call failed"
+                  : p.kind === "resource"
+                    ? "Resource failed"
+                    : p.kind === "csp"
+                      ? "Blocked"
+                      : "Error"}
+              :
             </span>{" "}
             {p.message}
           </p>

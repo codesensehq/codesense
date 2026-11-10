@@ -1307,8 +1307,9 @@ describe("Tauri IPC Contract", () => {
     // SV-PBF-328: -2 on both sides for feedbackContext/feedback_context and
     // feedbackSend/feedback_send (the dead feedback form), so 521/540.
     // SV-LUC-17: +1 on both sides for unarchiveInboxMessages/unarchive_inbox_messages, so 522/541.
-    const EXPECTED_TS_COMMAND_COUNT = 522;
-    const EXPECTED_RUST_COMMAND_COUNT = 541;
+    // Centre frame read-only authority revalidation adds one command on both sides.
+    const EXPECTED_TS_COMMAND_COUNT = 523;
+    const EXPECTED_RUST_COMMAND_COUNT = 542;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

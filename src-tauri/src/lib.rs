@@ -1663,6 +1663,7 @@ pub fn run() {
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,
+            commands::frames::revalidate_frame,
             commands::frames::release_frame,
             commands::frames::rebind_frame_team,
             commands::frames::resolve_frame_grant,

@@ -773,6 +773,57 @@ describe("a pane is an HTML file (seam)", () => {
       await waitFor(() => expect(terminal).toHaveFocus());
     },
   );
+  it("a blocked load before or after ready is one problem row and never fails the pane", async () => {
+    const panel = `pane:private:${ORG}/fonts`;
+    disk.set(
+      "-/fonts",
+      '<title>Fonts</title><meta name="codesense:surface" content="human-inbox">',
+    );
+    render(
+      <>
+        <PanePanelsMount />
+        <RightPaneLayout repoPath="/repo" onClose={() => {}} />
+      </>,
+    );
+    await waitFor(() => expect(getPanel(panel)).toBeDefined());
+    act(() => useViewerStore.getState().revealPanelById(panel));
+    await waitFor(() => expect(document.querySelector("iframe")?.src).toContain("fonts.html"));
+    const frame = document.querySelector<HTMLIFrameElement>("[data-pane-current] iframe")!;
+    fireEvent.load(frame);
+    const post = (data: object) =>
+      act(() =>
+        window.dispatchEvent(
+          new PaneMessageEvent("message", { source: frame.contentWindow, data }),
+        ),
+      );
+    const font = {
+      type: "codesense:doc-error",
+      kind: "csp",
+      message: "blocked by the frame content policy: https://fonts.example/a.woff2 (font-src)",
+    };
+    const image = "blocked by the frame content policy: https://x.example/p.png (img-src)";
+    post({
+      type: "codesense:doc-error",
+      kind: "resource",
+      message: "failed to load https://fonts.example/missing.js",
+    });
+    expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+    // Before ready: a head stylesheet's font is blocked, twice.
+    post(font);
+    post(font);
+    expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+    expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent(`Blocked: ${font.message}`);
+    expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent("missing.js");
+    post({ type: "codesense:live" });
+    post({ ...font, message: image });
+    expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+    const rows = screen.getByTestId("pane-dev-banner").querySelectorAll("p.font-mono");
+    expect([...rows].map((row) => row.textContent)).toEqual([
+      `Resource failed: failed to load https://fonts.example/missing.js`,
+      `Blocked: ${font.message}`,
+      `Blocked: ${image}`,
+    ]);
+  });
   it("shows the approved mismatch copy from the parser's actual rejected reason", async () => {
     disk.set(`${TEAM}/mismatch`, "<title>Mismatch</title>");
     const base = tauriInvoke.getMockImplementation()!;

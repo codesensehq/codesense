@@ -1907,3 +1907,31 @@ it.each([
   if (moveOut) expect(document.activeElement).toBe(terminal);
   else expect(document.activeElement?.textContent).toBe("Reload");
 });
+
+it("keeps resource failures visible while cold and live, retaining the existing never-live deadline", async () => {
+  vi.useFakeTimers();
+  render(<SlotDashboardHost slotId="right-pane" entry={entry} contentRoot="/ctx" visible />);
+  act(() => props.current.onDocProblem({ kind: "resource", message: "failed to load missing.js" }));
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent("missing.js");
+  await act(async () => vi.advanceTimersByTimeAsync(29_000));
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  await act(async () => vi.advanceTimersByTimeAsync(1_100));
+  expect(screen.getByTestId("slot-fallback-strip")).toBeTruthy();
+});
+it("retains live resource diagnostics but still fails cold runtime errors immediately", async () => {
+  vi.useFakeTimers();
+  const view = render(
+    <SlotDashboardHost slotId="right-pane" entry={entry} contentRoot="/ctx" visible />,
+  );
+  await settle();
+  act(() =>
+    props.current.onDocProblem({ kind: "resource", message: "failed to load optional.js" }),
+  );
+  expect(screen.queryByTestId("slot-fallback-strip")).toBeNull();
+  expect(screen.getByTestId("pane-dev-banner")).toHaveTextContent("optional.js");
+  view.unmount();
+  render(<SlotDashboardHost slotId="right-pane" entry={entry} contentRoot="/ctx" visible />);
+  act(() => props.current.onDocProblem({ kind: "script", message: "initialization failed" }));
+  expect(screen.getByTestId("slot-fallback-strip")).toBeTruthy();
+});

@@ -281,6 +281,7 @@ export function paneHandlers(
       });
       return response.json() as Promise<FrameRecord>;
     },
+    revalidate_frame: () => "remint-required",
     rebind_frame_team: async ({ frameId, token, org, team }) => {
       const response = await fetch(`/__mock-frames/${frameId}/rebind-team`, {
         method: "POST",

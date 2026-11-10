@@ -147,10 +147,26 @@ describe("html message to the human", () => {
     );
     expect(src.searchParams.get("theme")).toBeTruthy();
     expect(iframe.getAttribute("sandbox")).toBe(
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads",
+      "allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
     );
     expect(body.innerHTML).not.toContain("codesense.sessions()");
     expect(mockListPanes).toHaveBeenCalledWith("acme", "web");
+  });
+
+  it("a load the message's content policy blocked shows once under the message", async () => {
+    renderHtmlMessage('<img src="https://tracker.example/pixel.gif">');
+    const { fakeWindow } = await frameWithWindow();
+    const message =
+      "blocked by the frame content policy: https://tracker.example/pixel.gif (img-src)";
+    expect(screen.queryByTestId("pane-dev-banner")).toBeNull();
+    fromFrame(fakeWindow, { type: "codesense:doc-error", kind: "csp", message });
+    fromFrame(fakeWindow, { type: "codesense:doc-error", kind: "csp", message });
+    // A script error is not a blocked load; the message view lists only blocks.
+    fromFrame(fakeWindow, { type: "codesense:doc-error", kind: "error", message: "boom" });
+    const banner = await screen.findByTestId("pane-dev-banner");
+    expect([...banner.querySelectorAll("p.font-mono")].map((p) => p.textContent)).toEqual([
+      `Blocked: ${message}`,
+    ]);
   });
 
   it("a bridge call from the frame resolves through the message's team", async () => {

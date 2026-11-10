@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 
 import { HtmlViewer } from "@/features/dashboard/components/html-viewer";
+import { useBlockedLoads } from "@/features/dashboard/components/use-blocked-loads";
+import { ProblemBanner } from "@/features/shell/right-pane/panes/pane-dev-banner";
 import {
   messageDocKey,
   INITIAL_MESSAGE_HEIGHT,
@@ -87,6 +89,7 @@ export function InboxMessageDashboard({
   }, []);
   const inline = variant === "inline";
   const message = { org: team.org, team: team.team, messageId, sender };
+  const { blocked, total, onDocProblem, dismiss } = useBlockedLoads();
   return (
     <div
       data-testid="inbox-message-body"
@@ -109,6 +112,7 @@ export function InboxMessageDashboard({
             teamContentPath={contentRoot}
             message={message}
             onContentSize={inline ? onContentSize : undefined}
+            onDocProblem={onDocProblem}
             renderMissing={() => (
               <p className="p-2 text-xs text-muted-foreground">
                 This message is no longer available.
@@ -117,6 +121,7 @@ export function InboxMessageDashboard({
           />
         )}
       </div>
+      {blocked.length > 0 && <ProblemBanner problems={blocked} total={total} onDismiss={dismiss} />}
       {inline && (
         <button
           type="button"

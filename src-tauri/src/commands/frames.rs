@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::dashboard_stream::frame::{
-    FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameRecord, FrameStore, FrameTeam,
+    AllowedHosts, FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameRecord, FrameStore,
+    FrameTeam,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -23,12 +24,86 @@ pub struct MintFrameArgs {
 #[tauri::command]
 pub async fn mint_frame<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    mut args: MintFrameArgs,
+    args: MintFrameArgs,
 ) -> Result<FrameRecord, String> {
     let port = app
         .try_state::<crate::http::HttpApiPort>()
         .ok_or("HTTP server unavailable")?
         .0;
+    let PreparedFrame {
+        args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        records_home,
+        local_principal,
+    } = prepare_frame(&app, args).await?;
+    let parent = args.parent_frame.clone();
+    let frames = app.state::<std::sync::Arc<FrameStore>>();
+    let mut record = mint_record(
+        &app.state::<std::sync::Arc<FrameStore>>(),
+        port,
+        &policy,
+        args,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        &declared,
+    );
+    let roots = crate::context_query::known_roots(&app);
+    let location = super::pane_bridge::doc_context(&roots, &record.content_root);
+    let org = record
+        .grant
+        .team
+        .as_ref()
+        .map(|t| t.org.clone())
+        .or_else(|| location.and_then(|l| l.org));
+    if let Some(org) = org {
+        let binding = frame_records_binding(
+            &records_home,
+            &local_principal.into(),
+            &org,
+            record.grant.team.as_ref().map(|t| t.team.as_str()),
+            caller_scope == "built-in",
+        )?;
+        let read_scope =
+            crate::context_repo::caller_scope::for_page(&app, None, Some(&record.frame_id))?;
+        record = frames.bind_records(&record.frame_id, binding.for_caller(read_scope))?;
+    }
+    if let Some(parent) = parent {
+        match frames.link_child(&record.frame_id, &parent) {
+            Ok(child) => Ok(child),
+            Err(error) => {
+                frames.release(&record.frame_id);
+                Err(error)
+            }
+        }
+    } else {
+        Ok(record)
+    }
+}
+
+struct PreparedFrame {
+    args: MintFrameArgs,
+    policy: crate::verbs::Policy,
+    principal: String,
+    dashboard: String,
+    caller_scope: &'static str,
+    team: Option<FrameTeam>,
+    declared: Vec<String>,
+    records_home: PathBuf,
+    local_principal: String,
+}
+
+/// Resolve exactly the same native document inputs for mint and read-only comparison.
+async fn prepare_frame<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    mut args: MintFrameArgs,
+) -> Result<PreparedFrame, String> {
     let (records_home, local_principal) =
         crate::commands::route_to_context::resolve_ambient(&app).await?;
     let mut principal = "human".to_string();
@@ -135,11 +210,14 @@ pub async fn mint_frame<R: tauri::Runtime>(
                 .into_owned(),
         );
     }
-    inbox_network_policy(
+    resolve_frame_network_policy(
         &mut args.policy,
         &args.slot,
-        pane.as_ref().and_then(|p| p.surface.as_deref()),
-    );
+        args.message.is_some(),
+        pane.as_ref(),
+        &args.document_path,
+        &args.content_root,
+    )?;
     let policy =
         crate::verbs::commands::read_policy(app.clone(), &local_principal.to_string()).await?;
     let dashboard = pane
@@ -148,49 +226,122 @@ pub async fn mint_frame<R: tauri::Runtime>(
         .unwrap_or_else(|| args.document_path.clone());
     let declared =
         declared_capabilities(pane.as_ref(), message_html.as_deref(), &args.document_path);
-    let parent = args.parent_frame.clone();
-    let frames = app.state::<std::sync::Arc<FrameStore>>();
-    let mut record = mint_record(
-        &app.state::<std::sync::Arc<FrameStore>>(),
-        port,
-        &policy,
+    Ok(PreparedFrame {
         args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        records_home,
+        local_principal: local_principal.to_string(),
+    })
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameRevalidation {
+    Unchanged,
+    RemintRequired,
+    /// The document was deleted: the viewer shows its missing-file state, not a frame error.
+    Missing,
+}
+
+/// No renderer-selected paths or permissions, and no allocation or mutation on comparison.
+#[tauri::command]
+pub async fn revalidate_frame<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    frame_id: String,
+    token: String,
+) -> Result<FrameRevalidation, String> {
+    let frames = app.state::<std::sync::Arc<FrameStore>>();
+    let record = frames.by_id(&frame_id).ok_or("denied: frame identity")?;
+    if record.token != token || frames.resolve(&record.origin, &token).is_none() {
+        return Err("denied: frame identity".into());
+    }
+    // Refresh validation belongs to centre documents. Slot/child lifetimes keep their host policy.
+    if record.grant.slot != "centre" || record.parent_frame.is_some() || record.message.is_some() {
+        return Err("denied: this frame is not a centre document".into());
+    }
+    if !std::path::Path::new(&record.document_path).exists() {
+        return Ok(FrameRevalidation::Missing);
+    }
+    let prepared = prepare_frame(
+        &app,
+        MintFrameArgs {
+            document_path: record.document_path.clone(),
+            content_root: record.content_root.clone(),
+            asset_folder: Some(record.asset_folder.clone()),
+            slot: record.grant.slot.clone(),
+            message: None,
+            parent_frame: None,
+            builtin_team: None,
+            policy: record.policy.clone(),
+        },
+    )
+    .await?;
+    // A released/rebound record must not be approved after an asynchronous preparation.
+    if frames
+        .by_id(&frame_id)
+        .is_none_or(|current| current.token != token)
+    {
+        return Err("denied: frame identity".into());
+    }
+    Ok(compare_authority(&record, prepared))
+}
+
+fn same_set(a: &[String], b: &[String]) -> bool {
+    a.iter().collect::<std::collections::BTreeSet<_>>() == b.iter().collect()
+}
+
+fn compare_authority(record: &FrameRecord, prepared: PreparedFrame) -> FrameRevalidation {
+    if record
+        .records_binding
+        .as_ref()
+        .is_some_and(|binding| binding.profile != prepared.local_principal)
+    {
+        return FrameRevalidation::RemintRequired;
+    }
+    let PreparedFrame {
+        mut args,
+        policy,
+        principal,
+        dashboard,
+        caller_scope,
+        team,
+        declared,
+        ..
+    } = prepared;
+    let (mut grant, effective, kind) = prepare_grant(
+        &policy,
+        &mut args,
         principal,
         dashboard,
         caller_scope,
         team,
         &declared,
     );
-    let roots = crate::context_query::known_roots(&app);
-    let location = super::pane_bridge::doc_context(&roots, &record.content_root);
-    let org = record
-        .grant
-        .team
-        .as_ref()
-        .map(|t| t.org.clone())
-        .or_else(|| location.and_then(|l| l.org));
-    if let Some(org) = org {
-        let binding = frame_records_binding(
-            &records_home,
-            &local_principal.into(),
-            &org,
-            record.grant.team.as_ref().map(|t| t.team.as_str()),
-            caller_scope == "built-in",
-        )?;
-        let read_scope =
-            crate::context_repo::caller_scope::for_page(&app, None, Some(&record.frame_id))?;
-        record = frames.bind_records(&record.frame_id, binding.for_caller(read_scope))?;
-    }
-    if let Some(parent) = parent {
-        match frames.link_child(&record.frame_id, &parent) {
-            Ok(child) => Ok(child),
-            Err(error) => {
-                frames.release(&record.frame_id);
-                Err(error)
-            }
-        }
+    grant.frame_id = record.frame_id.clone();
+    let a = &record.policy;
+    let b = &args.policy;
+    if grant == record.grant
+        && kind == record.kind
+        && args.content_root == record.content_root
+        && args.document_path == record.document_path
+        && args.asset_folder.as_deref().unwrap_or_default() == record.asset_folder
+        && a.own_folder_only == b.own_folder_only
+        && a.block_service_workers == b.block_service_workers
+        && a.no_outside_network == b.no_outside_network
+        && a.inbox_media == b.inbox_media
+        && a.team_safe == b.team_safe
+        && same_set(&a.allowed_hosts, &b.allowed_hosts)
+        && same_set(&declared, &record.declared)
+        && same_set(&effective, &record.effective_grant)
+    {
+        FrameRevalidation::Unchanged
     } else {
-        Ok(record)
+        FrameRevalidation::RemintRequired
     }
 }
 
@@ -296,6 +447,43 @@ fn mint_record(
     team: Option<FrameTeam>,
     declared: &[String],
 ) -> FrameRecord {
+    let (grant, effective_grant, kind) = prepare_grant(
+        policy,
+        &mut args,
+        principal,
+        dashboard,
+        source_scope,
+        team,
+        declared,
+    );
+    let record = FrameStore::mint_with_grant(
+        frames,
+        port,
+        grant,
+        args.content_root,
+        args.document_path,
+        args.asset_folder.unwrap_or_default(),
+        args.policy,
+        args.message,
+        effective_grant,
+        kind,
+    );
+    frames.declare(&record.frame_id, declared);
+    FrameRecord {
+        declared: declared.to_vec(),
+        ..record
+    }
+}
+
+fn prepare_grant(
+    policy: &crate::verbs::Policy,
+    args: &mut MintFrameArgs,
+    principal: String,
+    dashboard: String,
+    source_scope: &str,
+    team: Option<FrameTeam>,
+    declared: &[String],
+) -> (FrameGrant, Vec<String>, FrameCallerKind) {
     let effective_grant = mint_grant(
         policy,
         &mut args.policy,
@@ -318,27 +506,11 @@ fn mint_record(
         frame_id: String::new(),
         principal,
         dashboard,
-        slot: args.slot,
+        slot: args.slot.clone(),
         team,
         scope: scope.into(),
     };
-    let record = FrameStore::mint_with_grant(
-        frames,
-        port,
-        grant,
-        args.content_root,
-        args.document_path,
-        args.asset_folder.unwrap_or_default(),
-        args.policy,
-        args.message,
-        effective_grant,
-        kind,
-    );
-    frames.declare(&record.frame_id, declared);
-    FrameRecord {
-        declared: declared.to_vec(),
-        ..record
-    }
+    (grant, effective_grant, kind)
 }
 
 /// The grant's scope: `open` unless the saved policy is team-safe.
@@ -457,6 +629,9 @@ fn mint_grant(
     )
 }
 
+/// The viewer shows its missing-file state for this mint error.
+const MISSING_DOCUMENT: &str = "missing: the document no longer exists";
+
 fn frame_document_target(path: &std::path::Path, baseline: bool) -> Result<PathBuf, String> {
     if baseline && !path.exists() {
         return path
@@ -465,6 +640,10 @@ fn frame_document_target(path: &std::path::Path, baseline: bool) -> Result<PathB
             .ok_or("Document has no existing ancestor")?
             .canonicalize()
             .map_err(|e| e.to_string());
+    }
+    // Every mint reports a deleted document as missing, not as invalid authority.
+    if !path.exists() {
+        return Err(MISSING_DOCUMENT.into());
     }
     let real = path.canonicalize().map_err(|e| e.to_string())?;
     if !real.is_file() {
@@ -644,21 +823,251 @@ mod tests {
     async fn tab_only_builtin_is_refused_by_mint_frame_but_slot_builtins_still_mint() {
         let fixture = crate::context_repo::caller_scope::tests::AppFixture::new();
         fixture.app.manage(crate::http::HttpApiPort(9400));
-        let listing = crate::panes::list_builtin_panes(&fixture.fixture.home, &crate::domain::Principal::from(1u64), "acme/ctx", "child").unwrap();
-        let args = |id: &str, slot: &str| serde_json::from_value(serde_json::json!({
-            "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
-            "contentRoot": listing.content_root, "slot": slot,
-            "builtinTeam": {"org":"acme/ctx", "team":"child"},
-        })).unwrap();
+        let listing = crate::panes::list_builtin_panes(
+            &fixture.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            "acme/ctx",
+            "child",
+        )
+        .unwrap();
+        let args = |id: &str, slot: &str| {
+            serde_json::from_value(serde_json::json!({
+                "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
+                "contentRoot": listing.content_root, "slot": slot,
+                "builtinTeam": {"org":"acme/ctx", "team":"child"},
+            }))
+            .unwrap()
+        };
         for slot in ["right-pane", "dock", "file-nav"] {
-            let error = mint_frame(fixture.app.handle().clone(), args("story-trail", slot)).await.unwrap_err();
-            assert!(error.contains("Built-in pane does not belong to this principal or slot"), "{error}");
+            let error = mint_frame(fixture.app.handle().clone(), args("story-trail", slot))
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("Built-in pane does not belong to this principal or slot"),
+                "{error}"
+            );
         }
-        for (id, slot) in [("inbox", "right-pane"), ("agent-list", "dock"), ("files-tree", "file-nav"), ("files-tree", "right-pane")] {
-            let frame = mint_frame(fixture.app.handle().clone(), args(id, slot)).await.unwrap();
+        for (id, slot) in [
+            ("inbox", "right-pane"),
+            ("agent-list", "dock"),
+            ("files-tree", "file-nav"),
+            ("files-tree", "right-pane"),
+        ] {
+            let frame = mint_frame(fixture.app.handle().clone(), args(id, slot))
+                .await
+                .unwrap();
             assert_eq!(frame.kind, FrameCallerKind::Builtin);
             assert_eq!(frame.grant.slot, slot);
         }
+    }
+
+    #[tokio::test]
+    async fn mint_frame_ignores_a_renderer_supplied_network_policy() {
+        let fixture = crate::context_repo::caller_scope::tests::AppFixture::new();
+        fixture.app.manage(crate::http::HttpApiPort(9400));
+        let listing = crate::panes::list_builtin_panes(
+            &fixture.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            "acme/ctx",
+            "child",
+        )
+        .unwrap();
+        for (id, slot, inbox_media) in [
+            ("inbox", "right-pane", true),
+            ("agent-list", "dock", false),
+            ("files-tree", "file-nav", false),
+        ] {
+            let args = serde_json::from_value(serde_json::json!({
+                "documentPath": listing.panes.iter().find(|pane| pane.id == id).unwrap().path,
+                "contentRoot": listing.content_root, "slot": slot,
+                "builtinTeam": {"org":"acme/ctx", "team":"child"},
+                "policy": {"noOutsideNetwork": false, "allowedHosts": ["https://attacker.example"]},
+            }))
+            .unwrap();
+            let frame = mint_frame(fixture.app.handle().clone(), args)
+                .await
+                .unwrap();
+            assert!(frame.policy.no_outside_network, "{id}");
+            assert!(frame.policy.allowed_hosts.is_empty(), "{id}");
+            assert_eq!(frame.policy.inbox_media, inbox_media, "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_dashboard_host_survives_mint_frame_and_a_bad_one_fails_it() {
+        let f = crate::context_repo::caller_scope::tests::AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9400));
+        f.app.manage(f.fixture.service());
+        let page = f
+            .fixture
+            .write("child", "content/board/index.html", "<p>board</p>");
+        let mint = || {
+            mint_frame(
+                f.app.handle().clone(),
+                MintFrameArgs {
+                    document_path: page.display().to_string(),
+                    content_root: f.fixture.path("child", "content").display().to_string(),
+                    asset_folder: None,
+                    slot: "centre".into(),
+                    message: None,
+                    parent_frame: None,
+                    builtin_team: None,
+                    // A hostile renderer: ignored either way.
+                    policy: FramePolicy {
+                        no_outside_network: false,
+                        allowed_hosts: vec!["https://attacker.example".into()],
+                        ..Default::default()
+                    },
+                },
+            )
+        };
+        let undeclared = mint().await.unwrap();
+        assert!(undeclared.policy.no_outside_network);
+        assert!(undeclared.policy.allowed_hosts.is_empty());
+        f.fixture.write(
+            "child",
+            "content/board/dashboard.yml",
+            "slug: board\ntitle: Board\nallowed_hosts: [https://api.example.com]\n",
+        );
+        let declared = mint().await.unwrap();
+        assert!(declared.policy.no_outside_network);
+        assert_eq!(declared.policy.allowed_hosts, ["https://api.example.com"]);
+        f.fixture.write(
+            "child",
+            "content/board/dashboard.yml",
+            "allowed_hosts: [https://*.example.com]\n",
+        );
+        let error = mint().await.unwrap_err();
+        assert!(error.contains("dashboard.yml: allowed_hosts:"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn centre_revalidation_retains_identity_for_body_and_equivalent_declarations() {
+        let f = crate::context_repo::caller_scope::tests::AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9400));
+        f.app.manage(f.fixture.service());
+        let page = f
+            .fixture
+            .write("child", "content/board/index.html", "<p>first</p>");
+        let manifest = "content/board/dashboard.yml";
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://a.example.com, https://b.example.com]\n",
+        );
+        let args = serde_json::from_value(serde_json::json!({
+            "documentPath": page, "contentRoot": f.fixture.path("child", "content"), "slot": "centre"
+        })).unwrap();
+        let record = mint_frame(f.app.handle().clone(), args).await.unwrap();
+        let check = || {
+            revalidate_frame(
+                f.app.handle().clone(),
+                record.frame_id.clone(),
+                record.token.clone(),
+            )
+        };
+        f.fixture.write(
+            "child",
+            "content/board/index.html",
+            "<title>Changed title</title><p>second</p>",
+        );
+        f.fixture.write("child", manifest, "title: New title\nallowed_hosts: [https://b.example.com, https://a.example.com, https://a.example.com]\n");
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        let frames = f.app.state::<std::sync::Arc<FrameStore>>();
+        let retained = frames.by_id(&record.frame_id).unwrap();
+        assert_eq!(retained.token, record.token);
+        assert_eq!(retained.origin, record.origin);
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://c.example.com]\n",
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://*.example.com]\n",
+        );
+        assert!(check().await.unwrap_err().contains("allowed_hosts"));
+        std::fs::remove_file(f.fixture.path("child", manifest)).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture.write(
+            "child",
+            "content/dashboard.yml",
+            "allowed_hosts: [https://b.example.com, https://a.example.com]\n",
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://c.example.com]\n",
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        std::fs::remove_file(f.fixture.path("child", manifest)).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        std::fs::remove_file(f.fixture.path("child", "content/dashboard.yml")).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture.write(
+            "child",
+            manifest,
+            "allowed_hosts: [https://a.example.com, https://b.example.com]\n",
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        assert!(revalidate_frame(
+            f.app.handle().clone(),
+            record.frame_id.clone(),
+            "wrong".into()
+        )
+        .await
+        .is_err());
+        std::fs::remove_file(&page).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Missing);
+        frames.release(&record.frame_id);
+        assert!(check().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn centre_revalidation_uses_pane_inline_and_sibling_manifest_resolution() {
+        let f = crate::context_repo::caller_scope::tests::AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9400));
+        f.app.manage(f.fixture.service());
+        let html = r#"<meta name="codesense:slots" content="right-pane"><meta name="codesense:allowed-hosts" content="https://a.example.com">"#;
+        let page = f.fixture.write("child", "panes/status.html", html);
+        let args = serde_json::from_value(serde_json::json!({
+            "documentPath": page, "contentRoot": f.fixture.path("child", "content"), "slot": "centre"
+        })).unwrap();
+        let record = mint_frame(f.app.handle().clone(), args).await.unwrap();
+        let check = || {
+            revalidate_frame(
+                f.app.handle().clone(),
+                record.frame_id.clone(),
+                record.token.clone(),
+            )
+        };
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        f.fixture.write(
+            "child",
+            "panes/status.html",
+            &format!("{html}<meta name=\"codesense:capabilities\" content=\"records:read:own\">"),
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture.write(
+            "child",
+            "panes/status.html",
+            &html.replace("a.example", "b.example"),
+        );
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture
+            .write("child", "panes/status.html", "<title>Manifest only</title>");
+        let manifest = "panes/pane-manifest.yaml";
+        f.fixture.write("child", manifest, "version: 1\npanes:\n- id: status\n  html: status.html\n  slots: [right-pane]\n  allowed_hosts: [https://a.example.com]\n");
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
+        f.fixture.write("child", manifest, "version: [invalid\n");
+        assert!(check().await.unwrap_err().contains("invalid manifest"));
+        std::fs::remove_file(f.fixture.path("child", manifest)).unwrap();
+        assert_eq!(check().await.unwrap(), FrameRevalidation::RemintRequired);
+        f.fixture.write("child", "panes/status.html", html);
+        assert_eq!(check().await.unwrap(), FrameRevalidation::Unchanged);
     }
 
     #[test]
@@ -1213,7 +1622,10 @@ mod tests {
             frame_document_target(&path, true).unwrap(),
             dir.path().canonicalize().unwrap()
         );
-        assert!(frame_document_target(&path, false).is_err());
+        assert_eq!(
+            frame_document_target(&path, false).unwrap_err(),
+            MISSING_DOCUMENT
+        );
         assert!(frame_document_target(dir.path(), true).is_err());
     }
     #[tokio::test]
@@ -1351,25 +1763,185 @@ mod records_ceiling_tests {
     }
 }
 
-fn inbox_network_policy(policy: &mut FramePolicy, slot: &str, surface: Option<&str>) {
-    policy.inbox_media = slot == "right-pane" && surface == Some("human-inbox");
-    if policy.inbox_media {
-        policy.no_outside_network = true;
-        policy.allowed_hosts.clear();
-    }
+/// Policy: the server decides every frame's outside network from its document, whatever the
+/// renderer sent. Each frame denies outside network; only a pane's own declaration, or else
+/// the nearest `dashboard.yml` at or above the document, opens exact HTTPS origins. Messages
+/// and the Inbox pane never get hosts: their images use the host media route.
+pub(crate) fn resolve_frame_network_policy(
+    policy: &mut FramePolicy,
+    slot: &str,
+    message: bool,
+    pane: Option<&crate::panes::PaneEntry>,
+    document_path: &str,
+    content_root: &str,
+) -> Result<(), String> {
+    policy.inbox_media =
+        slot == "right-pane" && pane.and_then(|p| p.surface.as_deref()) == Some("human-inbox");
+    policy.no_outside_network = true;
+    policy.allowed_hosts = if message || slot == "message" || policy.inbox_media {
+        Vec::new()
+    } else if let Some(pane) = pane {
+        AllowedHosts::parse(&pane.declaration.allowed_hosts)
+            .map_err(|error| format!("invalid allowed_hosts: {error}"))?
+            .0
+    } else {
+        AllowedHosts::for_document(
+            std::path::Path::new(document_path),
+            std::path::Path::new(content_root),
+        )?
+        .0
+    };
+    Ok(())
 }
 #[cfg(test)]
-#[test]
-fn only_inbox_pane_mints_without_outside_network() {
-    let mut policy = FramePolicy {
-        allowed_hosts: vec!["https://example.com".into()],
-        ..Default::default()
-    };
-    inbox_network_policy(&mut policy, "message", Some("human-inbox"));
-    assert!(!policy.no_outside_network);
-    inbox_network_policy(&mut policy, "right-pane", Some("notes"));
-    assert!(!policy.no_outside_network);
-    inbox_network_policy(&mut policy, "right-pane", Some("human-inbox"));
-    assert!(policy.no_outside_network);
-    assert!(policy.allowed_hosts.is_empty());
+mod network_policy_tests {
+    use super::*;
+
+    /// One team pane, discovered the production way from `panes/<id>.html`.
+    fn pane(dir: &std::path::Path, id: &str, meta: &str) -> crate::panes::PaneEntry {
+        let panes = dir.join(crate::context_repo::PANES_DIR);
+        std::fs::create_dir_all(&panes).unwrap();
+        std::fs::write(panes.join(format!("{id}.html")), meta).unwrap();
+        crate::panes::list_layer(
+            &panes,
+            crate::panes::PaneScope::Team,
+            "acme/repo",
+            Some("dev"),
+        )
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .unwrap()
+    }
+
+    #[test]
+    fn every_slot_resolves_its_network_from_the_document_never_the_renderer() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("team/content");
+        let board = root.join("board");
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::write(
+            board.join("dashboard.yml"),
+            "slug: board\ntitle: Board\nallowed_hosts: [https://api.example.com]\n",
+        )
+        .unwrap();
+        let declared = board.join("index.html");
+        let undeclared = root.join("notes.html");
+        let hosts_pane = pane(
+            &root,
+            "status",
+            r#"<meta name="codesense:slots" content="right-pane,dock"><meta name="codesense:allowed-hosts" content="https://status.example.com">"#,
+        );
+        let inbox = pane(
+            &root,
+            "mail",
+            r#"<meta name="codesense:slots" content="right-pane"><meta name="codesense:surface" content="human-inbox"><meta name="codesense:allowed-hosts" content="https://status.example.com">"#,
+        );
+        let api = ["https://api.example.com"];
+        let status = ["https://status.example.com"];
+        let none: [&str; 0] = [];
+        for (slot, message, pane, document, expected, inbox_media) in [
+            ("centre", false, None, &undeclared, &none[..], false),
+            ("centre", false, None, &declared, &api[..], false),
+            ("baseline", false, None, &declared, &api[..], false),
+            ("export", false, None, &declared, &api[..], false),
+            ("dock", false, None, &declared, &api[..], false),
+            ("file-nav", false, None, &declared, &api[..], false),
+            (
+                "right-pane",
+                false,
+                Some(&hosts_pane),
+                &declared,
+                &status[..],
+                false,
+            ),
+            (
+                "dock",
+                false,
+                Some(&hosts_pane),
+                &undeclared,
+                &status[..],
+                false,
+            ),
+            // Agent HTML messages cannot declare hosts, wherever they render.
+            ("message", true, None, &declared, &none[..], false),
+            ("message", false, None, &declared, &none[..], false),
+            ("centre", true, None, &declared, &none[..], false),
+            // The Inbox stays locked down even if its file declares hosts.
+            (
+                "right-pane",
+                false,
+                Some(&inbox),
+                &declared,
+                &none[..],
+                true,
+            ),
+        ] {
+            // A hostile renderer asks for an open network and its own host.
+            let mut policy = FramePolicy {
+                no_outside_network: false,
+                inbox_media: !inbox_media,
+                allowed_hosts: vec!["https://attacker.example".into()],
+                ..Default::default()
+            };
+            resolve_frame_network_policy(
+                &mut policy,
+                slot,
+                message,
+                pane,
+                &document.to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap();
+            assert!(policy.no_outside_network, "{slot} {document:?}");
+            assert_eq!(policy.allowed_hosts, expected, "{slot} {document:?}");
+            assert_eq!(policy.inbox_media, inbox_media, "{slot} {document:?}");
+        }
+    }
+
+    #[test]
+    fn a_bad_declaration_fails_the_mint_with_a_diagnostic() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("content");
+        std::fs::create_dir_all(&root).unwrap();
+        for bad in [
+            "https://*.example.com",
+            "http://api.example.com",
+            "https://api.example.com/v1",
+        ] {
+            std::fs::write(
+                root.join("dashboard.yml"),
+                format!("allowed_hosts: [{bad}]\n"),
+            )
+            .unwrap();
+            let error = resolve_frame_network_policy(
+                &mut FramePolicy::default(),
+                "centre",
+                false,
+                None,
+                &root.join("index.html").to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("dashboard.yml: allowed_hosts:"),
+                "{bad}: {error}"
+            );
+            // A pane's declaration is checked again at mint, not only at discovery.
+            let mut entry = pane(&root, "status", "");
+            entry.declaration.allowed_hosts = vec![bad.into()];
+            let error = resolve_frame_network_policy(
+                &mut FramePolicy::default(),
+                "right-pane",
+                false,
+                Some(&entry),
+                &entry.path.clone(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err();
+            assert!(
+                error.starts_with("invalid allowed_hosts:"),
+                "{bad}: {error}"
+            );
+        }
+    }
 }

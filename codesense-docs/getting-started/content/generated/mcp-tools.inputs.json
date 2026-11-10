@@ -5,7 +5,7 @@
     "dashboard-publish"
   ],
   "inputs": {
-    "Cargo.lock": "277250b960f407aa883c761dc8cb4b5a4bb80572b1111f6c250cff38a022ec99",
+    "Cargo.lock": "b2de81ec55b4bd9a039e4bb3df6d55497cbd86e4657d45be6453c36e52c83adb",
     "codesense-docs/getting-started/content/_shared/examples.yml": "eb8e5a0bc870b0ebdbcf4edc22ce1877eee9b4825c4ccd48df323d48cdf529f0",
     "src-tauri/Cargo.toml": "76fc35d76b7f8c5ed4fbe3a45d2dd4b837dec40ca6284a9f28e4fa39f21e6786",
     "src-tauri/build.rs": "d7aecf7ba29681bbdcb3f225b641642d022d0c19d6757ace748fdf9df2e43239",
@@ -63,7 +63,7 @@
     "src-tauri/src/mcp/identity_guard.rs": "8d020daa401493f58ff9674b41373d7436929988dd678a156130aab5b24b40bd",
     "src-tauri/src/mcp/identity_tools.rs": "dcb11a8e3374c33d462c2f4506e4f8af5813680221ef1545eb62b1a472437c9b",
     "src-tauri/src/mcp/identity_tools/tests/engine_identity_tests.rs": "2a0c8b3f12478bd17c6d5c4d725c1d6d6b6031bf60e83970d44da020796e615a",
-    "src-tauri/src/mcp/live_data_authoring.rs": "f7a710d88121d1c4fd6f703898208c66bfaa6ffdc9348db2e09d6ad3ea27f173",
+    "src-tauri/src/mcp/live_data_authoring.rs": "cf01262256edabb1eda1bc1c9372c30e4119a8103d210121ffda92e91c281a8c",
     "src-tauri/src/mcp/local_identity.rs": "9bd9f4a5aa0bb5a1b9d15799ad83d8204700f290767b6991393122ee70e9e435",
     "src-tauri/src/mcp/local_mcp_relay/config.rs": "345b3c98cdb456b4789e96c1395ffa18620c7fc01a0193bd5da6ece6476cc43f",
     "src-tauri/src/mcp/local_mcp_relay/http.rs": "707fa73c6967054e82cbc919b1fcbdc3e821109dc5008a16e445dbc15649c251",
@@ -136,7 +136,7 @@
     "src-tauri/src/mcp/workspace_chat_tools.rs": "7eb7f5e3c95003650c649d2f023a4bceb24e3f526600e286f30fa7d4eefd7d0f",
     "src-tauri/src/mcp/workspace_groups.rs": "0ff57fedd047f5217bf04e447e793f48f1471233bad175fc6f3442bbc7ce7e4b",
     "src-tauri/src/mcp/worktree_tools.rs": "bd0c7e30a9e2638371b3ff2afb52cc7bc67e84b3ab2107418b8f47c5a614be8a",
-    "src-tauri/src/media/mod.rs": "6ea8fa332747639e13d694845694ba7ad759324308b468d7ac254168c979ab7b",
+    "src-tauri/src/media/mod.rs": "9be3f9d649e3a48a6f926a101f9d1b09a750692fb5738098598a07ad368d1517",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
     "src-tauri/src/records/edit.rs": "a6034d1d460e20a01d3d9c7a2641cf50f02809d0e5ec8922d7c8085eeabb4590",
     "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",

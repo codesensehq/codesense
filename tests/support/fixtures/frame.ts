@@ -43,6 +43,7 @@ export function frameCommands(port = 9123) {
       grant = frame.grant;
       return frame;
     },
+    revalidateFrame: async () => "unchanged" as const,
     releaseFrame: async () => {},
     liveHubViewKey: async () => "all",
     resolveFrameGrant: async () => grant,
@@ -66,6 +67,7 @@ export function frameIpc(
 ): unknown {
   if (command === "mint_frame")
     return Promise.resolve(frameFixture(args?.args as MintFrameArgs, port));
+  if (command === "revalidate_frame") return Promise.resolve("unchanged");
   if (command === "release_frame") return Promise.resolve();
   if (command === "live_hub_view_key") return Promise.resolve("all");
   if (command === "resolve_frame_grant")

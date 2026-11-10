@@ -10033,9 +10033,12 @@ export interface MintFrameArgs {
   assetFolder?: string;
   slot: string;
   message?: { org: string; team: string; messageId: number };
-  policy?: FramePolicy;
 }
 export const mintFrame = (args: MintFrameArgs) => invoke<FrameRecord>("mint_frame", { args });
+export type FrameRevalidation = "unchanged" | "remint-required" | "missing";
+/** Re-read the stored centre document's authority without allocating a frame. */
+export const revalidateFrame = (frameId: string, token: string) =>
+  invoke<FrameRevalidation>("revalidate_frame", { frameId, token });
 export const releaseFrame = (frameId: string) => invoke<void>("release_frame", { frameId });
 /** Re-binds a follows-context frame to a team: same origin, a new token, the old one revoked. */
 export const rebindFrameTeam = (frameId: string, token: string, org: string, team: string) =>

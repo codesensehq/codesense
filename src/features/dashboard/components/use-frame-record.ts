@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   mintFrame,
   rebindFrameTeam,
+  revalidateFrame,
   releaseFrame,
   type FrameRecord,
   type MintFrameArgs,
@@ -23,12 +24,22 @@ interface FrameActivity {
   retiring?: boolean;
 }
 
+const release = (record: FrameRecord) => {
+  void releaseFrame(record.frameId).catch(console.error);
+};
+const retire = (record: FrameRecord) => {
+  if (hasLiveFrames((f) => f.frameId === record.frameId))
+    void flushFrame(record).then(() => release(record));
+  else release(record);
+};
+
 /** One host mount owns one revocable frame, including a mint that finishes
  * after unmount. A changed document never renders with the previous grant. */
 export function useFrameRecord(
   port: number | null | undefined,
   args: MintFrameArgs | null,
   activity?: FrameActivity,
+  sourceRevision?: number,
 ) {
   const mount = useRef(Symbol("bridged-frame"));
   const latestActivity = useRef(activity);
@@ -52,7 +63,6 @@ export function useFrameRecord(
   const messageId = args?.message?.messageId;
   const builtinOrg = args?.builtinTeam?.org;
   const builtinTeam = args?.builtinTeam?.team;
-  const policy = JSON.stringify(args?.policy ?? {});
   const request = useMemo<MintFrameArgs | null>(() => {
     if (!documentPath || !contentRoot || !slot) return null;
     return {
@@ -60,91 +70,115 @@ export function useFrameRecord(
       contentRoot,
       assetFolder,
       slot,
-      policy: JSON.parse(policy),
       ...(builtinOrg && builtinTeam ? { builtinTeam: { org: builtinOrg, team: builtinTeam } } : {}),
       ...(org !== undefined && team !== undefined && messageId !== undefined
         ? { message: { org, team, messageId } }
         : {}),
     };
-  }, [
-    documentPath,
-    contentRoot,
-    assetFolder,
-    slot,
-    org,
-    team,
-    messageId,
-    policy,
-    builtinOrg,
-    builtinTeam,
-  ]);
-  const key = JSON.stringify([port, request]);
+  }, [documentPath, contentRoot, assetFolder, slot, org, team, messageId, builtinOrg, builtinTeam]);
+  const key = JSON.stringify([port, request, generation]);
   const [state, setState] = useState<{
     key: string;
     frame: FrameRecord | null;
     error: string | null;
     evicted?: boolean;
+    missing?: boolean;
+    approvedRevision?: number;
+  } | null>(null);
+  // The lifetime owns allocation/budget/release. A refresh only cancels its comparison.
+  const owner = useRef<{
+    frame: FrameRecord | null;
+    unregister?: () => void;
   } | null>(null);
   useEffect(() => {
+    const lifetime = {
+      frame: null as FrameRecord | null,
+      unregister: undefined as (() => void) | undefined,
+    };
+    owner.current = lifetime;
+    return () => {
+      owner.current = null;
+      lifetime.unregister?.();
+      if (lifetime.frame) retire(lifetime.frame);
+      lifetime.frame = null;
+    };
+  }, [key]);
+  useEffect(() => {
     if (!request || typeof port !== "number") {
-      // A disabled viewer must not revive its released frame if enabled again.
       setState(null);
       return;
     }
     let active = true;
-    let minted: FrameRecord | null = null;
-    let unregister: (() => void) | undefined;
-    const release = (record: FrameRecord) => {
-      void releaseFrame(record.frameId).catch(console.error);
-    };
-    mintFrame(request)
-      .then((frame) => {
-        minted = frame;
-        if (!active) {
-          release(frame);
+    const lifetime = owner.current!;
+    const current = lifetime.frame;
+    let validating = !!current;
+    const run = async () => {
+      if (current) {
+        const result = await revalidateFrame(current.frameId, current.token);
+        if (!active || lifetime.frame !== current) return;
+        if (result === "unchanged") {
+          setState({ key, frame: current, error: null, approvedRevision: sourceRevision });
           return;
         }
-        setState({ key, frame, error: null });
-        if (request.slot !== "baseline")
-          unregister = budget.register(mount.current, {
-            visible: latestActivity.current?.visible ?? true,
-            unsaved: latestActivity.current?.unsaved ?? false,
-            privateSpace: frame.kind === "private",
-            flush: () =>
-              retireAfterFlush(
-                (f) => f.frameId === frame.frameId,
-                () => {},
-              ),
-            evict: () => {
-              bridgeTiming(
-                () =>
-                  `frame-evict frame=${frame.frameId} path=${documentPath} t=${nowMs()} maxBridgedFrames=${VIEWER_PERF.maxBridgedFrames}`,
-              );
-              minted = null;
-              release(frame);
-              setState({ key, frame: null, error: null, evicted: true });
-            },
-          });
-      })
-      .catch((error: unknown) => {
-        if (active)
-          setState({
-            key,
-            frame: null,
-            error: `Failed to create document frame: ${String(error)}`,
-          });
-      });
+        validating = false;
+        // The next render hides the old document before the replacement is adopted.
+        setState(null);
+        lifetime.unregister?.();
+        lifetime.unregister = undefined;
+        lifetime.frame = null;
+        retire(current);
+        // A deleted document keeps no authority; the viewer shows its missing-file state.
+        if (result === "missing") {
+          setState({ key, frame: null, error: null, missing: true });
+          return;
+        }
+      }
+      const frame = await mintFrame(request);
+      if (!active) {
+        release(frame);
+        return;
+      }
+      lifetime.frame = frame;
+      setState({ key, frame, error: null, approvedRevision: sourceRevision });
+      if (request.slot !== "baseline")
+        lifetime.unregister = budget.register(mount.current, {
+          visible: latestActivity.current?.visible ?? true,
+          unsaved: latestActivity.current?.unsaved ?? false,
+          privateSpace: frame.kind === "private",
+          flush: () =>
+            retireAfterFlush(
+              (f) => f.frameId === frame.frameId,
+              () => {},
+            ),
+          evict: () => {
+            if (owner.current !== lifetime || lifetime.frame !== frame) return;
+            bridgeTiming(
+              () =>
+                `frame-evict frame=${frame.frameId} path=${documentPath} t=${nowMs()} maxBridgedFrames=${VIEWER_PERF.maxBridgedFrames}`,
+            );
+            lifetime.frame = null;
+            release(frame);
+            setState({ key, frame: null, error: null, evicted: true });
+          },
+        });
+    };
+    void run().catch((error: unknown) => {
+      if (!active || (validating && lifetime.frame !== current)) return;
+      lifetime.unregister?.();
+      lifetime.unregister = undefined;
+      if (lifetime.frame) retire(lifetime.frame);
+      lifetime.frame = null;
+      // Native mint reports a deleted document as missing on every refresh, retry or remint.
+      if (String(error).startsWith("missing:")) {
+        setState({ key, frame: null, error: null, missing: true });
+        return;
+      }
+      setState({ key, frame: null, error: `Failed to create document frame: ${String(error)}` });
+    });
     return () => {
       active = false;
-      unregister?.();
-      if (minted) {
-        const record = minted;
-        if (hasLiveFrames((f) => f.frameId === record.frameId))
-          void flushFrame(record).then(() => release(record));
-        else release(record);
-      }
     };
-  }, [port, request, key, generation]);
+  }, [port, request, key, sourceRevision, documentPath]);
   useEffect(() => {
     budget.update(mount.current, { visible: visible && !retiring, unsaved });
   }, [visible, unsaved, retiring]);
@@ -173,7 +207,9 @@ export function useFrameRecord(
   return {
     remintFrame,
     rebindTeam,
+    approvedRevision: state?.key === key ? state.approvedRevision : undefined,
     frameRecord: frame,
     frameError: state?.key === key ? state.error : null,
+    documentMissing: state?.key === key && !!state.missing,
   };
 }

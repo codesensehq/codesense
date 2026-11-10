@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { dashboardPublishingFallback } from "@/features/dashboard-publishing/dashboards-virtual-tab";
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 
 import { HtmlViewer } from "@/features/dashboard/components/html-viewer";
+import { useBlockedLoads } from "@/features/dashboard/components/use-blocked-loads";
+import { ProblemBanner } from "@/features/shell/right-pane/panes/pane-dev-banner";
 import { ExcalidrawViewer } from "@/features/dashboard/components/excalidraw-viewer";
 import { ImageViewer } from "@/features/dashboard/components/image-viewer";
 import { CodeFileViewer } from "@/features/viewer/components/code-file-viewer";
@@ -65,7 +67,7 @@ export function renderViewer(
       // SW-FX-5: HTML viewer reuses markdown's `changedPaths` reload gate so
       // a per-repo refreshKey bump only reloads the iframe whose file changed.
       return (
-        <HtmlViewer
+        <CentreHtmlViewer
           {...common}
           changedPaths={md.changedPaths}
           viewStateKey={md.viewStateKey}
@@ -136,4 +138,22 @@ export function renderViewer(
       return <MarkdownViewer {...common} {...md} />;
     }
   }
+}
+
+/** A centre HTML tab lists the loads its content policy blocked over the page. */
+function CentreHtmlViewer(props: ComponentProps<typeof HtmlViewer>): ReactElement {
+  // Another document, in this tab or another team's, starts with no rows.
+  const { blocked, total, onDocProblem, dismiss } = useBlockedLoads(
+    `${props.teamContentPath ?? ""}\n${props.filePath ?? ""}`,
+  );
+  return (
+    <div className="relative h-full">
+      <HtmlViewer {...props} onDocProblem={onDocProblem} />
+      {blocked.length > 0 && (
+        <div className="absolute inset-x-0 top-0 z-10">
+          <ProblemBanner problems={blocked} total={total} onDismiss={dismiss} />
+        </div>
+      )}
+    </div>
+  );
 }

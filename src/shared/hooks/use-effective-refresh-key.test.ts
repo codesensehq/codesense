@@ -2,8 +2,61 @@
 import { describe, it, expect } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useEffectiveRefreshKey } from "./use-effective-refresh-key";
+import { frameDeclarationPaths } from "@/shared/lib/file-change-affects";
 
 type Cp = Set<string> | null;
+
+it("refreshes for ancestor declarations and directory events but keeps unrelated changes stable", () => {
+  const file = "/ctx/boards/demo/index.html";
+  const manifests = frameDeclarationPaths(file, "/ctx/");
+  expect(manifests).toEqual([
+    "/ctx/boards/demo/dashboard.yml",
+    "/ctx/boards/dashboard.yml",
+    "/ctx/dashboard.yml",
+  ]);
+  expect(frameDeclarationPaths("/ctx-other/index.html", "/ctx")).toEqual([]);
+  const { result, rerender } = renderHook(
+    ({ k, changed }) => useEffectiveRefreshKey(k, new Set([changed]), file, manifests),
+    { initialProps: { k: 1, changed: file } },
+  );
+  let k = 1;
+  // Edits, creation and deletion use the same path notification, without reading the file.
+  for (const changed of [...manifests, "/ctx/boards/demo"]) {
+    rerender({ k: ++k, changed });
+    expect(result.current).toBe(k);
+  }
+  for (const changed of [
+    "/dashboard.yml",
+    "/ctx/boards/other/dashboard.yml",
+    "/ctx/boards/demo/data.json",
+  ]) {
+    const previous = result.current;
+    rerender({ k: ++k, changed });
+    expect(result.current).toBe(previous);
+  }
+});
+
+it("tracks only native-discoverable pane siblings, including absent and invalid manifests", () => {
+  const file = "/ctx/panes/status.html";
+  const related = frameDeclarationPaths(file, "/ctx");
+  expect(related).toContain("/ctx/panes/pane-manifest.yaml");
+  expect(frameDeclarationPaths(file, "/ctx/content")).toEqual(["/ctx/panes/pane-manifest.yaml"]);
+  for (const other of [
+    "/ctx/panes/nested/status.html",
+    "/ctx/panes/Status.html",
+    `/ctx/panes/${"a".repeat(65)}.html`,
+  ])
+    expect(frameDeclarationPaths(other, "/ctx")).not.toContain("/ctx/panes/pane-manifest.yaml");
+  const { result, rerender } = renderHook(
+    ({ revision }) =>
+      useEffectiveRefreshKey(revision, new Set(["/ctx/panes/pane-manifest.yaml"]), file, related),
+    { initialProps: { revision: 1 } },
+  );
+  for (const revision of [2, 3, 4, 5]) {
+    rerender({ revision });
+    expect(result.current).toBe(revision);
+  }
+});
 
 describe("useEffectiveRefreshKey", () => {
   it("returns the initial key on first render", () => {

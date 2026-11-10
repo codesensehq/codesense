@@ -9,6 +9,7 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
+use url::{Host, Url};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameTeam {
@@ -27,7 +28,7 @@ pub struct FrameGrant {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FramePolicy {
     pub own_folder_only: bool,
@@ -37,6 +38,140 @@ pub struct FramePolicy {
     pub inbox_media: bool,
     pub allowed_hosts: Vec<String>,
     pub team_safe: bool,
+}
+
+/// Policy: a frame denies outside network unless its document declares exact hosts.
+impl Default for FramePolicy {
+    fn default() -> Self {
+        Self {
+            own_folder_only: false,
+            block_service_workers: false,
+            no_outside_network: true,
+            inbox_media: false,
+            allowed_hosts: Vec::new(),
+            team_safe: false,
+        }
+    }
+}
+
+/// The dashboard folder manifest whose `allowed_hosts` opens a frame's outside network.
+pub const DASHBOARD_MANIFEST: &str = "dashboard.yml";
+
+/// Outside-network origins a document declares: exact `https://host[:port]` origins only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AllowedHosts(pub Vec<String>);
+
+impl AllowedHosts {
+    /// Normalized origins, or why one entry is not an exact HTTPS origin.
+    pub fn parse(values: &[String]) -> Result<Self, String> {
+        let mut origins: Vec<String> = Vec::new();
+        for value in values {
+            let origin = exact_https_origin(value).ok_or_else(|| {
+                format!("{value:?} is not an exact https://host[:port] origin with a public host name (no wildcards, IP addresses, localhost or single-label names, http, paths or other schemes)")
+            })?;
+            if !origins.contains(&origin) {
+                origins.push(origin);
+            }
+        }
+        Ok(Self(origins))
+    }
+
+    /// `allowed_hosts` of the nearest `dashboard.yml` at or above `document`, inside `root`.
+    /// No manifest declares nothing; an unreadable or invalid manifest, or a bad
+    /// `allowed_hosts`, is an error naming the manifest.
+    pub fn for_document(document: &Path, root: &Path) -> Result<Self, String> {
+        // Real paths: `..` and symlinked folders cannot carry the walk outside the root.
+        let Some(root) = Result::ok(std::fs::canonicalize(root)) else {
+            return Ok(Self::default());
+        };
+        let Some(folder) = Iterator::find(&mut document.ancestors().skip(1), |dir| dir.is_dir())
+            .and_then(|dir| Result::ok(std::fs::canonicalize(dir)))
+            .filter(|folder| folder.starts_with(&root))
+        else {
+            return Ok(Self::default());
+        };
+        let mut manifests = folder
+            .ancestors()
+            .take_while(|dir| dir.starts_with(&root))
+            .map(|dir| dir.join(DASHBOARD_MANIFEST));
+        let Some(manifest) = Iterator::find(&mut manifests, |manifest| manifest.is_file()) else {
+            return Ok(Self::default());
+        };
+        let diagnostic = |why: String| {
+            format!(
+                "{}: allowed_hosts: {why}",
+                std::path::Path::display(&manifest)
+            )
+        };
+        // A manifest that links outside the root is refused, never followed.
+        if !Result::ok(std::fs::canonicalize(&manifest)).is_some_and(|real| real.starts_with(&root))
+        {
+            return Err(diagnostic(
+                "the manifest resolves outside the content root".into(),
+            ));
+        }
+        let text = std::fs::read_to_string(&manifest)
+            .map_err(|_| diagnostic("the manifest cannot be read".into()))?;
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>(&text)
+            .map_err(|_| diagnostic("the manifest is not valid YAML".into()))?;
+        let Some(hosts) = yaml.get("allowed_hosts").cloned() else {
+            return Ok(Self::default());
+        };
+        let hosts: Option<Vec<String>> = serde_yaml::from_value(hosts)
+            .map_err(|_| diagnostic("must be a list of https://host[:port] origins".into()))?;
+        Self::parse(&hosts.unwrap_or_default()).map_err(diagnostic)
+    }
+}
+
+/// The origin `value` names when it is exactly `https://host[:port]` with a named host;
+/// CSP-safe by construction.
+fn exact_https_origin(value: &str) -> Option<String> {
+    let url = Result::ok(Url::parse(value))?;
+    let named = match Url::host(&url)? {
+        Host::Domain(domain) => {
+            !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !domain.contains("..")
+                && Iterator::all(&mut domain.chars(), |c| {
+                    c.is_ascii_alphanumeric() || c == '-' || c == '.'
+                })
+                // Reject single-label names and *.localhost by spelling. These checks
+                // do not resolve DNS: an accepted name may resolve to a private address.
+                && (!is_local_name(domain) || fixture_loopback(domain))
+        }
+        // Policy: IP literals (loopback, private, link-local or public) are never declarable.
+        Host::Ipv4(_) | Host::Ipv6(_) => false,
+    };
+    (named
+        && url.scheme() == "https"
+        && Url::port(&url) != Some(0)
+        && str::is_empty(url.username())
+        && url.password().is_none()
+        && Url::path(&url) == "/"
+        && Url::query(&url).is_none()
+        && url.fragment().is_none())
+    .then(|| url.origin().ascii_serialization())
+}
+
+fn is_local_name(domain: &str) -> bool {
+    !domain.contains('.') || domain.ends_with(".localhost")
+}
+
+/// Shipped builds never bypass the single-label and *.localhost spelling checks.
+#[cfg(not(test))]
+fn fixture_loopback(_: &str) -> bool {
+    false
+}
+
+/// The browser frame-security fixture serves its declared host on `https://localhost`;
+/// only that fixture sets this, and only test builds compile it.
+#[cfg(test)]
+pub(crate) static FIXTURE_LOOPBACK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn fixture_loopback(domain: &str) -> bool {
+    domain == "localhost" && FIXTURE_LOOPBACK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl FramePolicy {
@@ -232,11 +367,20 @@ impl FrameStore {
         {
             return Err("denied: parent frame".into());
         }
+        let parent_network = (
+            pane.policy.no_outside_network,
+            pane.policy.allowed_hosts.clone(),
+        );
         let child = records.get_mut(id).ok_or("denied: child frame")?;
         if child.message.is_none() {
             return Err("denied: child frame".into());
         }
         child.parent_frame = Some(parent.into());
+        // Policy: a child inherits its parent's network denial and may only narrow its hosts.
+        child.policy.no_outside_network |= parent_network.0;
+        Vec::retain(&mut child.policy.allowed_hosts, |host| {
+            parent_network.1.contains(host)
+        });
         Ok(child.clone())
     }
     pub fn release(&self, id: &str) {
@@ -317,6 +461,7 @@ impl FrameRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
     fn mint(store: &FrameStore) -> FrameRecord {
         store.mint(
             9321,
@@ -402,14 +547,224 @@ mod tests {
         assert!(!record.allows_path(&private.join("mail.txt")));
     }
     #[test]
-    fn open_keeps_all_switches_off_and_paths_open() {
+    fn default_policy_denies_outside_network_and_keeps_paths_open() {
         let record = mint(&FrameStore::default());
         assert!(
             !record.policy.own_folder_only
                 && !record.policy.block_service_workers
-                && !record.policy.no_outside_network
+                && record.policy.no_outside_network
+                && record.policy.allowed_hosts.is_empty()
         );
+        assert!(record.policy.blocks_service_workers());
         assert!(record.allows_path(Path::new("/another-team/content/file")));
+        // A renderer that sends `{}` gets the same closed default.
+        let supplied: FramePolicy = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(supplied.no_outside_network);
+    }
+    #[test]
+    fn allowed_hosts_accept_only_exact_https_origins() {
+        let hosts = |values: &[&str]| {
+            AllowedHosts::parse(&values.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            hosts(&[
+                "https://api.example.com",
+                "https://API.example.com/",
+                "https://cdn.example.com:8443",
+                "https://api.example.com:443",
+            ])
+            .unwrap()
+            .0,
+            ["https://api.example.com", "https://cdn.example.com:8443"]
+        );
+        // Private ranges are built from their octets.
+        let private = [Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(192, 168, 1, 10)]
+            .map(|ip| format!("https://{ip}"));
+        for bad in [
+            "http://api.example.com",
+            "https://*.example.com",
+            "*",
+            "https://api.example.com/path",
+            "https://api.example.com/?q=1",
+            "https://api.example.com/#x",
+            "https://user@api.example.com",
+            "https://a.example.com;script-src",
+            "wss://api.example.com",
+            "file:///etc/passwd",
+            "data:text/plain,x",
+            "api.example.com",
+            "https://example.com.",
+            "https://.example.com",
+            "https://a..example.com",
+            "https://api.example.com:0",
+            "https://127.0.0.1",
+            "https://169.254.0.1",
+            "https://203.0.113.10",
+            "https://[::1]",
+            "https://[fe80::1]",
+            "https://localhost",
+            "https://LOCALHOST:8443",
+            "https://app.localhost",
+            "https://intranet",
+            "https://printer:443",
+        ]
+        .into_iter()
+        .chain(private.iter().map(String::as_str))
+        {
+            let error = hosts(&[bad]).unwrap_err();
+            assert!(
+                error.contains("exact https://host[:port] origin"),
+                "{bad}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn the_local_name_hatch_is_test_only_and_set_only_by_the_browser_fixture() {
+        let source = include_str!("frame.rs");
+        assert!(source
+            .contains("#[cfg(not(test))]\nfn fixture_loopback(_: &str) -> bool {\n    false\n}"));
+        assert!(source.contains("#[cfg(test)]\npub(crate) static FIXTURE_LOOPBACK:"));
+        assert!(source.contains("#[cfg(test)]\nfn fixture_loopback(domain: &str) -> bool {"));
+        let viewer = include_str!("../http/routes/viewer.rs");
+        assert_eq!(viewer.matches("FIXTURE_LOOPBACK").count(), 1);
+        let fixture = &viewer[viewer.find("async fn hostile_fixture_server()").unwrap()..];
+        assert!(
+            fixture.find("FIXTURE_LOOPBACK").unwrap()
+                > fixture.find("CODESENSE_FRAME_FIXTURE").unwrap()
+        );
+        // With the hatch off, as in every other test and every shipped build.
+        assert!(!FIXTURE_LOOPBACK.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(AllowedHosts::parse(&["https://localhost".into()]).is_err());
+    }
+    #[test]
+    fn document_hosts_come_from_the_nearest_dashboard_manifest_inside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("team/content");
+        let board = root.join("board");
+        let page = board.join("pages/index.html");
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let hosts = || AllowedHosts::for_document(&page, &root);
+        assert!(hosts().unwrap().0.is_empty());
+        // Above the content root is outside the document's dashboard.
+        std::fs::write(
+            tmp.path().join("team/dashboard.yml"),
+            "allowed_hosts: [https://outer.example.com]\n",
+        )
+        .unwrap();
+        assert!(hosts().unwrap().0.is_empty());
+        std::fs::write(
+            root.join(DASHBOARD_MANIFEST),
+            "allowed_hosts: [https://root.example.com]\n",
+        )
+        .unwrap();
+        assert_eq!(hosts().unwrap().0, ["https://root.example.com"]);
+        std::fs::write(
+            board.join(DASHBOARD_MANIFEST),
+            "slug: board\ntitle: Board\nallowed_hosts: [https://api.example.com]\n",
+        )
+        .unwrap();
+        assert_eq!(hosts().unwrap().0, ["https://api.example.com"]);
+        std::fs::write(board.join(DASHBOARD_MANIFEST), "slug: board\n").unwrap();
+        assert!(hosts().unwrap().0.is_empty());
+        // `..` and symlinked folders that lead outside the root declare nothing.
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            outside.join(DASHBOARD_MANIFEST),
+            "allowed_hosts: [https://outside.example.com]\n",
+        )
+        .unwrap();
+        let dotted = root.join("../../outside/page.html");
+        assert!(AllowedHosts::for_document(&dotted, &root)
+            .unwrap()
+            .0
+            .is_empty());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+            let linked = root.join("linked/page.html");
+            assert!(AllowedHosts::for_document(&linked, &root)
+                .unwrap()
+                .0
+                .is_empty());
+            // A manifest inside the root that links outside it is refused.
+            std::fs::remove_file(board.join(DASHBOARD_MANIFEST)).unwrap();
+            std::os::unix::fs::symlink(
+                outside.join(DASHBOARD_MANIFEST),
+                board.join(DASHBOARD_MANIFEST),
+            )
+            .unwrap();
+            let error = hosts().unwrap_err();
+            assert!(
+                error.contains("resolves outside the content root"),
+                "{error}"
+            );
+            std::fs::remove_file(board.join(DASHBOARD_MANIFEST)).unwrap();
+        }
+        for bad in [
+            "allowed_hosts: [http://api.example.com]\n",
+            "allowed_hosts: [https://*.example.com]\n",
+            "allowed_hosts: [https://api.example.com/v1]\n",
+            "allowed_hosts: https://api.example.com\n",
+            "allowed_hosts: [https://api.example.com\n",
+        ] {
+            std::fs::write(board.join(DASHBOARD_MANIFEST), bad).unwrap();
+            let error = hosts().unwrap_err();
+            assert!(
+                error.contains("dashboard.yml: allowed_hosts:"),
+                "{bad}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn child_frames_inherit_network_denial_and_only_narrow_hosts() {
+        let frames = FrameStore::default();
+        let make = |slot: &str, policy: FramePolicy, message: Option<i64>| {
+            let mut grant = mint(&frames).grant;
+            grant.slot = slot.into();
+            frames.mint(
+                9321,
+                grant,
+                "/ctx".into(),
+                "/ctx/panes/pane.html".into(),
+                "/ctx".into(),
+                policy,
+                message.map(|message_id| FrameMessage {
+                    org: "acme".into(),
+                    team: "mail".into(),
+                    message_id,
+                }),
+            )
+        };
+        let hosts = |values: &[&str]| values.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let pane = make(
+            "right-pane",
+            FramePolicy {
+                allowed_hosts: hosts(&["https://one.example", "https://two.example"]),
+                ..Default::default()
+            },
+            None,
+        );
+        let wider = make(
+            "message",
+            FramePolicy {
+                no_outside_network: false,
+                allowed_hosts: hosts(&["https://two.example", "https://three.example"]),
+                ..Default::default()
+            },
+            Some(1),
+        );
+        let linked = frames.link_child(&wider.frame_id, &pane.frame_id).unwrap();
+        assert!(linked.policy.no_outside_network);
+        assert_eq!(linked.policy.allowed_hosts, ["https://two.example"]);
+        // A child with no hosts of its own gains none from the parent.
+        let closed = make("message", FramePolicy::default(), Some(2));
+        let linked = frames.link_child(&closed.frame_id, &pane.frame_id).unwrap();
+        assert!(linked.policy.no_outside_network && linked.policy.allowed_hosts.is_empty());
+        assert_eq!(
+            frames.by_id(&closed.frame_id).unwrap().policy.allowed_hosts,
+            Vec::<String>::new()
+        );
     }
     #[test]
     fn caller_kind_comes_from_mint_facts_even_when_capabilities_are_open() {

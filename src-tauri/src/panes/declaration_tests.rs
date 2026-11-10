@@ -207,3 +207,60 @@ fn live_badge_is_static_opt_in_and_travels_with_the_pane_declaration() {
         discover("", Some(&format!("{YAML}    badge: live\n")))["declaration"]
     );
 }
+
+#[test]
+fn allowed_hosts_declare_from_meta_or_manifest_and_reject_non_origins() {
+    let html = format!(
+        r#"{META}<meta name="codesense:allowed-hosts" content="https://api.example.com https://cdn.example.com:8443">"#
+    );
+    let meta = discover(&html, None);
+    let yaml = discover(
+        "",
+        Some(&format!(
+            "{YAML}    allowed_hosts: [https://api.example.com, https://cdn.example.com:8443]\n"
+        )),
+    );
+    assert_eq!(meta["status"], "ready", "{meta}");
+    assert_eq!(yaml["status"], "ready", "{yaml}");
+    assert_eq!(
+        meta["declaration"]["allowed_hosts"],
+        json!(["https://api.example.com", "https://cdn.example.com:8443"])
+    );
+    assert_eq!(meta["declaration"], yaml["declaration"]);
+    assert!(discover(META, None)["declaration"]["allowed_hosts"].is_null());
+    // The same origins written differently still agree.
+    let spelled = discover(
+        &html,
+        Some(&format!(
+            "{YAML}    allowed_hosts: [\"https://API.example.com/\", \"https://cdn.example.com:8443\"]\n"
+        )),
+    );
+    assert_eq!(spelled["status"], "ready", "{spelled}");
+    assert_eq!(
+        discover(&html, Some(YAML))["rejectedReason"],
+        "manifest/meta mismatch"
+    );
+    for host in [
+        "http://api.example.com",
+        "https://*.example.com",
+        "https://api.example.com/path",
+        "wss://api.example.com",
+    ] {
+        for entry in [
+            discover(
+                &format!(r#"<meta name="codesense:allowed-hosts" content="{host}">"#),
+                None,
+            ),
+            discover("", Some(&format!("{YAML}    allowed_hosts: [{host}]\n"))),
+        ] {
+            assert_eq!(entry["status"], "rejected", "{host}: {entry}");
+            assert!(
+                entry["rejectedReason"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("invalid allowed_hosts:"),
+                "{host}: {entry}"
+            );
+        }
+    }
+}
