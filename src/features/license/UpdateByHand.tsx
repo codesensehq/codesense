@@ -2,7 +2,7 @@
 import { LicenseLink } from "./LicenseLink";
 
 import type { LicenseView } from "./api";
-import { PUBLIC_DOWNLOAD_URL } from "./channel";
+import { downloadUrl } from "./channel";
 import { COPY } from "./copy";
 
 const ATTENTION_TEXT = {
@@ -34,7 +34,7 @@ export function UpdateByHand({ view, testIdPrefix }: { view: LicenseView; testId
     <p className="text-sm text-muted-foreground" data-testid={`${testIdPrefix}-${reason.id}`}>
       {reason.text}{" "}
       <LicenseLink
-        href={PUBLIC_DOWNLOAD_URL}
+        href={downloadUrl()}
         label={COPY.downloadLatest}
         testId={`${testIdPrefix}-update-download`}
       />
