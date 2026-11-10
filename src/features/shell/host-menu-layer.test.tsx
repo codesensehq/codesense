@@ -372,3 +372,39 @@ it("keeps an enabled radio sibling selectable when the first choice is disabled"
   fireEvent.click(team);
   await expect(answer).resolves.toEqual({ itemId: "team", row: request.row });
 });
+
+it("shows a host inbox menu's list keys beside its items, outside their names", async () => {
+  const { request, run } = setup();
+  run.mockImplementation(async (verb: string) =>
+    verb === "inbox"
+      ? {
+          messages: [{ messageId: 1, from: "Mia", to: "human", toHuman: true, unread: false }],
+          hasMore: false,
+        }
+      : [],
+  );
+  act(() => {
+    void show({ ...request, type: "inbox", row: { kind: "conversation", key: "Mia" } });
+  });
+  const shortcut = (name: string) =>
+    screen.getByRole("menuitem", { name }).querySelector('[data-slot="dropdown-menu-shortcut"]');
+  await screen.findByRole("menuitem", { name: "Archive" });
+  expect(shortcut("Archive")).toHaveTextContent("E");
+  expect(shortcut("Archive")).toHaveAttribute("aria-hidden", "true");
+  expect(shortcut("Mark unread")).toHaveTextContent("U");
+});
+
+it.each(["E", "U", "⌘Q", "Enter", 1, { toString: () => "E" }])(
+  "a page cannot add host-menu shortcut text, not even an allowed key: %s",
+  async (shortcut) => {
+    const { request } = setup();
+    const items = [{ id: "inspect", label: "Inspect", shortcut }] as HostMenuRequest["items"];
+    await expect(show({ ...request, items })).rejects.toThrow(/shortcuts are host-only/);
+    const nested = [
+      { id: "more", label: "More", submenu: [{ id: "x", label: "X", shortcut }] },
+    ] as HostMenuRequest["items"];
+    await expect(show({ ...request, items: nested })).rejects.toThrow(/shortcuts are host-only/);
+    expect(screen.queryByRole("menuitem", { name: "Inspect" })).toBeNull();
+    expect(document.querySelector('[data-slot="dropdown-menu-shortcut"]')).toBeNull();
+  },
+);

@@ -9,6 +9,8 @@
 # - unscanned: blocks when the clone requires the private rules; otherwise
 #   allows with a notice, since CI scans the change.
 # - require_inventory: the dispatcher's check before any checkout code runs.
+# - require_signed_check: a push from a clone that sets codesense.requireSigned
+#   (a git boolean) is refused, since only privacy-ci.mjs checks signatures.
 is_public() {
   for extra in ${CODESENSE_PRIVACY_PUBLIC_REMOTES:-}; do
     [ "$extra" = "$1" ] && return 0
@@ -51,6 +53,13 @@ unscanned() {
     exit 1
   fi
   echo "privacy hook: skipped the local scan of $1 (no privacy hooks here, or no node); CI scans this" >&2
+}
+
+require_signed_check() {
+  value=$(git config --bool --get codesense.requireSigned 2>/dev/null)
+  [ $? -ne 1 ] && [ "$value" != false ] || return 0
+  echo "privacy-scan: cannot check commit signatures for $1 (no privacy hooks here, or no node)" >&2
+  exit 1
 }
 
 # A clone that requires the private rules needs an inventory from outside the

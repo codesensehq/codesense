@@ -3,13 +3,16 @@
 # Installs the privacy hooks into this clone's hooks directory (core.hooksPath
 # is respected when it is set in this repository's own config). A hook already
 # there moves to chained/<name> and still runs first, under its own name.
-# Safe to run again.
+# Safe to run again. Rerun it after the hooks change: a dispatcher installed
+# before the signed-commit check (no version marker) misses it without node,
+# and the pre-push hook says so.
 # Usage: scripts/git-hooks/install.sh [--quiet]
 set -eu
 
 quiet=
 [ "${1:-}" = --quiet ] && quiet=1
 MARKER="codesense-privacy-hook-dispatcher"
+VERSION="codesense-privacy-hook-version: 2"
 
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 hooks=$(git rev-parse --path-format=absolute --git-path hooks)
@@ -73,6 +76,7 @@ for hook in pre-push commit-msg; do
     cat >"$tmp" <<HOOK
 #!/bin/sh
 # $MARKER (scripts/git-hooks/install.sh)
+# $VERSION
 $FALLBACK
 dir=\$(CDPATH='' cd -- "\$(dirname -- "\$0")" && pwd) || exit 1
 top=\$(git rev-parse --show-toplevel 2>/dev/null) || top=
@@ -92,6 +96,7 @@ if [ -n "\$top" ] && [ -x "\$top/scripts/git-hooks/pre-push" ] && command -v nod
   exit \$?
 fi
 if [ -n "\$public" ]; then
+  require_signed_check "a push to \$1"
   unscanned "a push to \$1"
 fi
 HOOK
@@ -99,6 +104,7 @@ HOOK
     cat >"$tmp" <<HOOK
 #!/bin/sh
 # $MARKER (scripts/git-hooks/install.sh)
+# $VERSION
 $FALLBACK
 dir=\$(CDPATH='' cd -- "\$(dirname -- "\$0")" && pwd) || exit 1
 if [ -x "\$dir/chained/$hook" ]; then

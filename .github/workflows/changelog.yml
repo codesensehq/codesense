@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: tree:0
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Check changelog entries
+        # A merge group checks the fragments' format only; a pull request also needs an entry.
+        env:
+          CHANGELOG_EVENT: ${{ github.event_name }}
+          CHANGELOG_BASE: ${{ github.event.pull_request.base.sha }}
+          CHANGELOG_HEAD: ${{ github.event.pull_request.head.sha }}
+          CHANGELOG_AUTHOR: ${{ github.event.pull_request.user.login }}
+          CHANGELOG_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/changelog-lint.mjs

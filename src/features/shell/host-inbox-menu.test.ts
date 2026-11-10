@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { beforeEach, expect, it, vi } from "vitest";
 import { buildInboxMenu } from "./host-inbox-menu";
-import type { HostMenuRequest } from "./host-menu-context";
+import type { HostMenuItem, HostMenuRequest } from "./host-menu-context";
 vi.mock("@/features/agents/stores/role-editor-store", () => ({ openRoleEditor: vi.fn() }));
 const team = { org: "fixture", team: "dev" };
 const message = {
@@ -88,7 +88,7 @@ it("sent and self messages omit reply and incoming read actions", async () => {
   expect(menu?.items.filter((i) => !i.separator).map((i) => i.label)).toEqual([
     "React…",
     "Copy text",
-    "Archive message",
+    "Archive",
   ]);
   run.mockResolvedValue({ messages: [{ ...message, from: "human", to: "human" }], hasMore: false });
   const self = await buildInboxMenu(request({ kind: "conversation", key: "human" }));
@@ -163,10 +163,12 @@ it("puts React… first on a message and hands it to the page after the menu clo
     "React…",
     "Reply",
     "Copy text",
-    "Mark as unread",
-    "Go to Mia’s terminal",
-    "Archive message",
+    "Mark unread",
+    "Go to session",
+    "Archive",
   ]);
+  // The message menu acts on one message, not on a list row: it shows no row keys.
+  expect(menu?.items.some((i) => i.shortcut)).toBe(false);
   const react = await menu?.choose("react");
   expect(notify).not.toHaveBeenCalled();
   if (react) react();
@@ -178,4 +180,87 @@ it("puts React… first on a message and hands it to the page after the menu clo
   );
   const html = await buildInboxMenu(request({ kind: "message", messageId: 10 }));
   expect(html?.items.map((i) => i.id)).not.toContain("react");
+});
+
+it("conversation Mark unread marks only the newest message to you, never your own reply", async () => {
+  const thread = [
+    { ...message, messageId: 14, from: "human", to: "Mia", toHuman: false, createdAtMs: 400 },
+    { ...message, messageId: 13, createdAtMs: 300 },
+    { ...message, messageId: 12, createdAtMs: 200 },
+    { ...message, messageId: 11, createdAtMs: 100 },
+  ];
+  run.mockImplementation(async (verb) =>
+    verb === "inbox" ? { messages: thread, hasMore: false } : [],
+  );
+  const menu = await buildInboxMenu(request({ kind: "conversation", key: "Mia" }));
+  await menu?.choose("mark-unread");
+  const writes = run.mock.calls.filter(([verb]) => verb === "markUnread");
+  expect(writes).toEqual([["markUnread", { ...team, messageIds: [13] }]]);
+});
+it("a merged two-team conversation marks the single newest message to you", async () => {
+  const other = { org: "fixture", team: "web" };
+  run.mockImplementation(async (verb, args: { team?: string }) =>
+    verb === "inbox"
+      ? {
+          messages:
+            args.team === "web"
+              ? [{ ...message, messageId: 3, createdAtMs: 500 }]
+              : [{ ...message, messageId: 40, createdAtMs: 450 }],
+          hasMore: false,
+        }
+      : [],
+  );
+  const req = request({
+    kind: "conversation",
+    key: "Mia",
+    conversations: [
+      { with: "Mia", team },
+      { with: "Mia", team: other },
+    ],
+  });
+  const menu = await buildInboxMenu(req);
+  await menu?.choose("mark-unread");
+  expect(run.mock.calls.filter(([verb]) => verb === "markUnread")).toEqual([
+    ["markUnread", { ...other, messageIds: [3] }],
+  ]);
+});
+it("a conversation with no message to you offers no Mark unread", async () => {
+  run.mockImplementation(async (verb) =>
+    verb === "inbox"
+      ? { messages: [{ ...message, from: "human", to: "Mia", toHuman: false }], hasMore: false }
+      : verb === "sessions"
+        ? [{ handle: "Mia", displayName: "Mia", state: "running" }]
+        : [],
+  );
+  const menu = await buildInboxMenu(request({ kind: "conversation", key: "Mia" }));
+  const ids = menu?.items.map((i) => i.id);
+  expect(ids).not.toContain("mark-unread");
+  expect(ids).not.toContain("mark-read");
+  expect(ids).toContain("archive");
+});
+it("row menus show the list keys: U on Mark read or unread, E on Archive", async () => {
+  const shortcuts = (items: HostMenuItem[] | undefined) =>
+    items?.filter((i) => i.shortcut).map((i) => [i.label, i.shortcut]);
+  const conversation = await buildInboxMenu(request({ kind: "conversation", key: "Mia" }));
+  expect(shortcuts(conversation?.items)).toEqual([
+    ["Mark unread", "U"],
+    ["Archive", "E"],
+  ]);
+  run.mockImplementation(async (verb) =>
+    verb === "inbox"
+      ? { messages: [{ ...message, unread: true }], hasMore: false }
+      : verb === "roles"
+        ? { roles: [{ role: "docs" }] }
+        : [],
+  );
+  const unread = await buildInboxMenu(request({ kind: "conversation", key: "Mia" }));
+  expect(shortcuts(unread?.items)).toEqual([
+    ["Mark read", "U"],
+    ["Archive", "E"],
+  ]);
+  const queue = await buildInboxMenu(request({ kind: "role-queue", role: "docs" }));
+  expect(shortcuts(queue?.items)).toEqual([
+    ["Mark read", "U"],
+    ["Archive", "E"],
+  ]);
 });
