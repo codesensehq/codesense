@@ -883,7 +883,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
 
   it("story: the open resolves with launchFailed, and nothing is typed or closed", async () => {
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
       initialPrompt: "/bmad-dev-story x",
     });
     const [shell] = terminal.shells;
@@ -900,7 +900,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
   it("story: a launch line the wrapper observed still fails closed when it never reads ready", async () => {
     terminal.activityWrapped = true;
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
       initialPrompt: "/bmad-dev-story x",
     });
     expect(readiness.asked).toHaveLength(1);
@@ -912,7 +912,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
     terminal.activityWrapped = true;
     readiness.processUp = false;
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
       initialPrompt: "/bmad-dev-story x",
     });
     expect(readiness.asked).toHaveLength(1);
@@ -924,7 +924,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
   it("story: a line typed raw (never observed) skips the observed-bit gate and reads ready after the process wait", async () => {
     terminal.activityWrapped = false;
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
       initialPrompt: "/bmad-dev-story x",
     });
     const [shell] = terminal.shells;
@@ -939,7 +939,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
     terminal.activityWrapped = false;
     readiness.processUp = false;
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
       initialPrompt: "/bmad-dev-story x",
     });
     expect(readiness.asked).toEqual([]);
@@ -961,7 +961,7 @@ describe("an agent that never becomes input-ready is left alone, for every launc
 
   it("a CLI the host can't observe never asks it: ready once its process is up, no launchFailed", async () => {
     const result = await open({
-      target: { kind: "story", storyId: "SW-1", agent: "opencode" },
+      target: { kind: "story", storyId: "STORY-1", agent: "opencode" },
       initialPrompt: "/bmad-dev-story x",
     });
     const [shell] = terminal.shells;

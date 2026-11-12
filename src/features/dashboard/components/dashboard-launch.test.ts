@@ -759,7 +759,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     const { deps, calls } = makeDeps({
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
     });
-    const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x", readyWaitMs: 5 });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x", readyWaitMs: 5 });
     expect(deps.waitReady).toHaveBeenCalledWith("sess-1", 5, { activityWrapped: undefined });
     expect(deps.sendLine).not.toHaveBeenCalled();
     expect(calls).not.toContain("sendLine");
@@ -771,14 +771,14 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     // Left at its screen for a person: never reaped, and focused so they can see it.
     expect(deps.killSession).not.toHaveBeenCalled();
     expect(deps.abort).not.toHaveBeenCalled();
-    expect(deps.focus).toHaveBeenCalledWith("org:team", "sess-1", "/managed/SW-DX-7.md");
+    expect(deps.focus).toHaveBeenCalledWith("org:team", "sess-1", "/managed/STORY-1.md");
   });
 
   it("(g2) an agent that exited before it was ready: launchFailed exited, no needsYouKind, nothing typed", async () => {
     const { deps } = makeDeps({
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "exited" as const })),
     });
-    const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
     expect(deps.sendLine).not.toHaveBeenCalled();
     expect(res.promptDelivered).toBe(false);
     expect(res.launchFailed).toEqual({ reason: "exited", message: expect.any(String) });
@@ -790,7 +790,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
       connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true })),
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
     });
-    const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
     expect(res.promptDelivered).toBe(false);
     expect(res.launchFailed?.promptPending).toBe(true);
     // An argv prompt whose CLI exited can no longer run: nothing is pending.
@@ -798,14 +798,14 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
       connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true })),
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "exited" as const })),
     });
-    const gone = await openStoryWorkspace("SW-DX-7", exited.deps, { initialPrompt: "/x" });
+    const gone = await openStoryWorkspace("STORY-1", exited.deps, { initialPrompt: "/x" });
     expect(gone.promptDelivered).toBe(false);
     expect(gone.launchFailed).not.toHaveProperty("promptPending");
   });
 
   it("(g4) ready and submitted: promptDelivered true and no launchFailed key", async () => {
     const { deps } = makeDeps();
-    const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
     expect(res).toEqual({ sessionId: "sess-1", promptDelivered: true });
     expect("launchFailed" in res).toBe(false);
     expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
@@ -819,7 +819,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
       const { deps } = makeDeps({
         connect: vi.fn(async () => ({ sessionId: "sess-1", activityWrapped })),
       });
-      await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
+      await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
       expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
         activityWrapped,
       });
@@ -841,7 +841,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     const { deps } = makeDeps({
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
     });
-    const res = await openStoryWorkspace("SW-DX-7", deps);
+    const res = await openStoryWorkspace("STORY-1", deps);
     expect(deps.waitReady).toHaveBeenCalledOnce();
     expect(res.launchFailed?.reason).toBe("startup");
   });
@@ -1367,7 +1367,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
     const { deps } = makeBranchDeps({
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
     });
-    const res = await openBranchWorkspace({ ...target, linkedStoryId: "SW-OR-8" }, deps);
+    const res = await openBranchWorkspace({ ...target, linkedStoryId: "STORY-2" }, deps);
     expect(res).toMatchObject({
       sessionId: "sess-b",
       reconcileStatus: "reconciled",
