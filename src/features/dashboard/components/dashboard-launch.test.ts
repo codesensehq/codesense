@@ -848,25 +848,41 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
 
   it("(g6) a first launch stuck waiting for readiness does not block an open of another handle", async () => {
     let release!: (readiness: AgentSessionReadiness) => void;
-    const stuck = makeDeps({
-      waitReady: vi.fn(
-        () =>
-          new Promise<AgentSessionReadiness>((resolve) => {
-            release = resolve;
-          }),
+    // One registry for both opens, with a single launch permit: `begin` refuses while a
+    // reservation is outstanding, and `bind` (or `abort`) gives it back. A spine that kept
+    // the permit through the readiness wait would refuse the second open here.
+    let permitHeld = false;
+    const sessions = ["sess-1", "sess-2"];
+    const { deps } = makeDeps({
+      begin: vi.fn(async () => {
+        if (permitHeld) throw new Error("busy: a launch permit is still held");
+        permitHeld = true;
+        return true;
+      }),
+      bind: vi.fn(async () => {
+        permitHeld = false;
+      }),
+      abort: vi.fn(async () => {
+        permitHeld = false;
+      }),
+      connect: vi.fn(async () => ({ sessionId: sessions.shift()! })),
+      waitReady: vi.fn((sessionId: string) =>
+        sessionId === "sess-1"
+          ? new Promise<AgentSessionReadiness>((resolve) => {
+              release = resolve;
+            })
+          : Promise.resolve<AgentSessionReadiness>({ ready: true }),
       ),
     });
-    const other = makeDeps({ connect: vi.fn(async () => ({ sessionId: "sess-2" })) });
-    const first = openStoryWorkspace("STORY-A", stuck.deps, { initialPrompt: "/a" });
-    await vi.waitFor(() => expect(stuck.deps.waitReady).toHaveBeenCalled());
-    // The permit is bound and nothing is held while it waits: another open completes.
-    await expect(
-      openStoryWorkspace("STORY-B", other.deps, { initialPrompt: "/b" }),
-    ).resolves.toEqual({
+    const first = openStoryWorkspace("STORY-A", deps, { initialPrompt: "/a" });
+    await vi.waitFor(() => expect(deps.waitReady).toHaveBeenCalledOnce());
+    expect(permitHeld).toBe(false);
+    // Nothing is held while the first waits: the second open reserves, binds and seeds.
+    await expect(openStoryWorkspace("STORY-B", deps, { initialPrompt: "/b" })).resolves.toEqual({
       sessionId: "sess-2",
       promptDelivered: true,
     });
-    expect(stuck.deps.abort).not.toHaveBeenCalled();
+    expect(deps.abort).not.toHaveBeenCalled();
     release({ ready: true });
     await expect(first).resolves.toEqual({ sessionId: "sess-1", promptDelivered: true });
   });
