@@ -208,7 +208,7 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect(await screen.findByTestId("stub-image")).toBeInTheDocument();
   });
 
-  it("on a canvas, says to save or discard unsaved Source edits before drawing", async () => {
+  it("on a canvas, says to save or undo unsaved Source edits before drawing", async () => {
     const CANVAS = `${ROOT}/docs/flow.excalidraw`;
     readFileMock.mockResolvedValue('{"type":"excalidraw","elements":[]}');
     render(pane(CANVAS, backend()));
@@ -219,7 +219,9 @@ describe("WorktreeFilePane Rendered | Source", () => {
       target: { value: '{"type":"excalidraw","elements":[{"id":"x"}]}' },
     });
     fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
-    expect(screen.getByText(/save or discard them before drawing/)).toBeInTheDocument();
+    const note = screen.getByText(/save or undo them there before drawing/);
+    // The bar truncates in a narrow pane; the full instruction stays on hover.
+    expect(note).toHaveAttribute("title", note.textContent);
     expect(screen.queryByText(/⌘S to update/)).toBeNull();
   });
 

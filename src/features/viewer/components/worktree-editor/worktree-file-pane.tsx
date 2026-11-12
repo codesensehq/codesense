@@ -546,7 +546,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
           note={
             showRendered && dirty
               ? renderableType(file.path) === "excalidraw"
-                ? "Source has unsaved edits · save or discard them before drawing"
+                ? "Unsaved edits in Source · save or undo them there before drawing"
                 : "Showing the saved version · ⌘S to update"
               : null
           }
@@ -622,7 +622,11 @@ function ViewModeToggle({
   };
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 text-[0.72rem]">
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" aria-live="polite">
+      <span
+        className="min-w-0 flex-1 truncate text-muted-foreground"
+        aria-live="polite"
+        title={note ?? undefined}
+      >
         {note}
       </span>
       <div
