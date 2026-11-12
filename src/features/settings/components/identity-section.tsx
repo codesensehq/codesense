@@ -226,7 +226,7 @@ export function IdentitySection({ query = "" }: { query?: string }) {
                   <p className="mb-1 text-xs font-medium text-muted-foreground">
                     {pack.name}
                     {pack.scope === "personal" && (
-                      <span className="ml-1 text-[var(--ag-faint)]">· only you</span>
+                      <span className="ml-1 text-muted-foreground">· only you</span>
                     )}
                   </p>
                   <div
