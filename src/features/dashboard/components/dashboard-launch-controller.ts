@@ -659,7 +659,13 @@ async function awaitAgentReady(
   const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
   const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
   if (opts?.activityWrapped !== false && isActivityWrappedCli(cli)) {
-    return agentSessionAwaitReady(sessionId, timeoutMs);
+    const readiness = await agentSessionAwaitReady(sessionId, timeoutMs);
+    // A CLI that quit back to the shell it was typed into leaves that shell running, so
+    // the host never records an exit: ask the process tree before naming a startup screen.
+    // A probe the host can't answer keeps the startup answer.
+    if (readiness.ready || readiness.reason !== "startup") return readiness;
+    const alive = await sessionHasLiveAgent(sessionId, cli).catch(() => true);
+    return alive ? readiness : { ready: false, reason: "exited" };
   }
   return (await waitAgentLive(getAgentPath, sessionId))
     ? { ready: true }

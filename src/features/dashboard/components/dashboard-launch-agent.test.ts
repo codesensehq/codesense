@@ -57,7 +57,10 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   dashboardLaunchBegin: vi.fn(async () => true),
   agentsList: vi.fn(async () => agentRows.rows),
   sessionHasLiveAgent: vi.fn(
-    async (sessionId: string, agentName: string) => running.get(sessionId) === agentName,
+    async (sessionId: string, agentName: string) =>
+      running.get(sessionId) === agentName ||
+      // A shell this test spawned runs its agent unless the test says it never came up.
+      (readiness.processUp && terminal.shells.some((shell) => shell.sessionId === sessionId)),
   ),
   sessionsRunningProcesses: vi.fn(async (ids: string[]) =>
     ids.map((id) => jobs.get(id) ?? { foreground: null, background: [] }),
@@ -902,6 +905,19 @@ describe("an agent that never becomes input-ready is left alone, for every launc
     });
     expect(readiness.asked).toHaveLength(1);
     expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "startup" } });
+    await expectUntouched();
+  });
+
+  it("story: an observed launch whose CLI quit back to its shell reads exited, not startup", async () => {
+    terminal.activityWrapped = true;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toHaveLength(1);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    expect(result.launchFailed).not.toHaveProperty("needsYouKind");
     await expectUntouched();
   });
 
