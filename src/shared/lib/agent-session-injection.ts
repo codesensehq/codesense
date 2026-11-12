@@ -93,7 +93,7 @@ export interface InjectDeps {
   write: (sessionId: string, text: string) => Promise<void>;
   /** Managed shell launch only, after its idle gate has admitted the write. Says whether the
    *  line ran under the activity wrapper (the host sees the CLI's first hook). */
-  writeShell?: (sessionId: string, text: string) => Promise<ShellWrite | void>;
+  writeShell?: (sessionId: string, text: string) => Promise<ShellWrite>;
   /**
    * SW-GS-30 — reliable submit (the `submit_pty_line` command): settle → write →
    * confirm-from-output → discrete-Enter nudge. Passed the RAW line (it owns the
@@ -132,18 +132,26 @@ export function sessionExists(sessionId: string): boolean {
   return tab !== undefined && tab.exit === undefined;
 }
 
+/** The agent CLIs whose typed launch line runs under the activity wrapper, so the host sees
+ *  their first lifecycle hook and can say when they are input-ready. */
+export const ACTIVITY_WRAPPED_CLIS = ["claude", "codex"] as const;
+type ActivityWrappedCli = (typeof ACTIVITY_WRAPPED_CLIS)[number];
+
+/** Whether `cli` is one of {@link ACTIVITY_WRAPPED_CLIS}. */
+export function isActivityWrappedCli(cli: string | undefined): cli is ActivityWrappedCli {
+  return (ACTIVITY_WRAPPED_CLIS as readonly string[]).includes(cli ?? "");
+}
+
 function managedLaunchTarget(
   sessionId: string,
   text: string,
 ):
-  | { target: NonNullable<ReturnType<typeof sessionTarget>>; provider: "claude" | "codex" }
+  | { target: NonNullable<ReturnType<typeof sessionTarget>>; provider: ActivityWrappedCli }
   | undefined {
   const first = /^(?:'([^']*)'|([^\s"'`;|&<>]+))(?:\s|$)/.exec(text.trimStart());
   const provider = (first?.[1] ?? first?.[2])?.split("/").at(-1);
   const target = sessionTarget(getViewerState().terminalLayout, sessionId);
-  return target && (provider === "claude" || provider === "codex")
-    ? { target, provider }
-    : undefined;
+  return target && isActivityWrappedCli(provider) ? { target, provider } : undefined;
 }
 
 export const defaultInjectDeps: InjectDeps = {
@@ -256,13 +264,12 @@ export async function injectAgentLine(
 
   // Default fast path: the line + Enter (`\r`) in ONE write — same as the chat box
   // (the proven submit path). See ENTER_KEY docs for why \n and a separate \r both fail.
-  const written = await (gate === "shell" && deps.writeShell ? deps.writeShell : deps.write)(
-    sessionId,
-    shellLine + ENTER_KEY,
-  );
-  return written && written.activityWrapped !== undefined
-    ? { ok: true, activityWrapped: written.activityWrapped }
-    : { ok: true };
+  const entered = shellLine + ENTER_KEY;
+  const { activityWrapped } =
+    gate === "shell" && deps.writeShell
+      ? await deps.writeShell(sessionId, entered)
+      : await deps.write(sessionId, entered).then((): ShellWrite => ({}));
+  return activityWrapped === undefined ? { ok: true } : { ok: true, activityWrapped };
 }
 
 /**

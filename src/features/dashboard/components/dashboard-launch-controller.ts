@@ -54,7 +54,7 @@ import {
 } from "@/shared/lib/agent-session-launcher";
 import { resolveAgentCliPath } from "@/shared/lib/default-agent";
 import type { LaunchFailed } from "@/shared/lib/launch-target";
-import { injectAgentLine } from "@/shared/lib/agent-session-injection";
+import { injectAgentLine, isActivityWrappedCli } from "@/shared/lib/agent-session-injection";
 import { awaitWorktreeEstablished } from "@/shared/lib/worktree/pending-establish";
 import { awaitContextForLaunch } from "@/features/viewer/lib/await-worktree-context";
 import {
@@ -635,11 +635,6 @@ async function waitAgentLive(
   return waitForAgentLive(sessionId, agentBasename(agentPath));
 }
 
-/** The CLIs whose typed launch line runs under the activity wrapper (see
- *  `managedLaunchTarget`), so the host sees their first lifecycle hook: only these can be
- *  waited on for input-readiness. */
-const ACTIVITY_OBSERVED_CLIS: ReadonlySet<string> = new Set(["claude", "codex"]);
-
 /** Wait for the launched agent to be input-ready: the host's observed bit for a CLI whose
  *  launch line runs under the activity wrapper. Any other CLI, and a launch line typed raw
  *  (no layout target yet, so no wrapper: the host can never observe it), takes the process
@@ -663,7 +658,7 @@ async function awaitAgentReady(
   }
   const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
   const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
-  if (opts?.activityWrapped !== false && ACTIVITY_OBSERVED_CLIS.has(cli)) {
+  if (opts?.activityWrapped !== false && isActivityWrappedCli(cli)) {
     return agentSessionAwaitReady(sessionId, timeoutMs);
   }
   return (await waitAgentLive(getAgentPath, sessionId))
