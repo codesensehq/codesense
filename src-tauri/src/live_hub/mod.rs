@@ -225,6 +225,23 @@ pub struct LiveHub {
     changes: tokio::sync::watch::Sender<u64>,
     providers: FieldProviders,
 }
+impl LiveHub {
+    /// `session`'s activity snapshot as of the last read of any host, if one holds it.
+    pub(crate) fn activity_snapshot_of(
+        &self,
+        session: &str,
+    ) -> Option<codesense_pty_core::activity::Snapshot> {
+        let model = self.model.lock().unwrap();
+        model.hosts.values().find_map(|(_, activity)| {
+            activity
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|snapshot| snapshot.session == session)
+                .cloned()
+        })
+    }
+}
 impl Default for LiveHub {
     fn default() -> Self {
         let mut providers = FieldProviders::new([
