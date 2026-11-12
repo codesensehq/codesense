@@ -14,9 +14,9 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 107,
-    "actionVerbs": 55,
-    "readVerbs": 52,
+    "bridgeMethods": 111,
+    "actionVerbs": 58,
+    "readVerbs": 53,
     "surfaceMembers": 52
   },
   "sdk": [
@@ -1981,6 +1981,495 @@
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.pin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.pins",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:read:team",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:read:team",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.reorderPins",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.unpin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
       "confirmable": false,
       "feature": null
     },
@@ -5500,6 +5989,10 @@
           "capability": "records:read:team"
         },
         {
+          "topic": "pins",
+          "capability": "inbox:read:team"
+        },
+        {
           "topic": "inbox",
           "callerScope": "team",
           "capability": "inbox:read:team"
@@ -5646,6 +6139,10 @@
           "topic": "records",
           "collectionScope": "story",
           "capability": "records:read:team"
+        },
+        {
+          "topic": "pins",
+          "capability": "inbox:read:team"
         },
         {
           "topic": "inbox",
@@ -6964,6 +7461,487 @@
       "presentationOnlyReason": null,
       "audited": false,
       "action": false,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.pin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.pins",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:read:team",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+      "audited": false,
+      "action": false,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.reorderPins",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.unpin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "audited": true,
+      "action": true,
       "module": "inbox"
     },
     {
@@ -10392,6 +11370,10 @@
           "capability": "records:read:team"
         },
         {
+          "topic": "pins",
+          "capability": "inbox:read:team"
+        },
+        {
           "topic": "inbox",
           "callerScope": "team",
           "capability": "inbox:read:team"
@@ -10507,6 +11489,10 @@
           "topic": "records",
           "collectionScope": "story",
           "capability": "records:read:team"
+        },
+        {
+          "topic": "pins",
+          "capability": "inbox:read:team"
         },
         {
           "topic": "inbox",
@@ -11039,6 +12025,115 @@
       },
       "grant": "inbox:read:team",
       "mcpTwin": "inbox_list"
+    },
+    {
+      "verb": "inbox.pins",
+      "tier": "read",
+      "description": "read · inbox:read:team",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:read:team",
+      "mcpTwin": null
     },
     {
       "verb": "inboxRollup",
@@ -12631,6 +13726,10 @@
           "capability": "records:read:team"
         },
         {
+          "topic": "pins",
+          "capability": "inbox:read:team"
+        },
+        {
           "topic": "inbox",
           "callerScope": "team",
           "capability": "inbox:read:team"
@@ -12685,6 +13784,10 @@
           "topic": "records",
           "collectionScope": "story",
           "capability": "records:read:team"
+        },
+        {
+          "topic": "pins",
+          "capability": "inbox:read:team"
         },
         {
           "topic": "inbox",
@@ -13147,6 +14250,276 @@
       },
       "grant": "sessions:read",
       "mcpTwin": null
+    },
+    {
+      "verb": "inbox.pin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"position\":{\"minimum\":0,\"type\":\"integer\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": "pin"
+    },
+    {
+      "verb": "inbox.reorderPins",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageIds\":{\"items\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"type\":\"array\"},\"org\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageIds\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
+      "verb": "inbox.unpin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": "pin"
     },
     {
       "verb": "launchUnder",
@@ -13817,7 +15190,7 @@
   "tiers": [
     {
       "tier": "metadata",
-      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, loadMedia, markRead, markUnread, react, records.create, records.delete, records.restore, records.setFields, records.write, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive",
+      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, inbox.pin, inbox.reorderPins, inbox.unpin, loadMedia, markRead, markUnread, react, records.create, records.delete, records.restore, records.setFields, records.write, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive",
       "note": "metadata class; Rust checks the effective grant on every call."
     },
     {
@@ -13847,9 +15220,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "111ff4b262955069e6f5e3d2922eeeeea38d90b5383d2de9170c8e9de42ed7b0",
-    "src-tauri/src/verbs/registry.generated.json": "e80d878c6e9007af20d746241f9fdc384d05ab1e67efa115af3f997e5fc16487",
-    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "fb72b8a5de3bda07f4aa7fc9660ee30f286cdd56b9ebd097b22d70329ebf89e9",
+    "src-tauri/src/verbs/registry.generated.json": "c95d88d1d63c9ec3bcecf391103602cd75f5bb196bf2dd56678b964e78791589",
+    "src-tauri/src/verbs/registry.rs": "fc559f32c20039ce7a770c3d5b96c92a5d587ee5de647e0ec5c3b52edc5005fb",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "f91602aa8b1301b1ee623c17ddd92771f25d3aa9ffd07506a6fde787814738ab",

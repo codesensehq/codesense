@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 107 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 111 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -868,6 +868,150 @@ inbox(args?: {
 read · inbox:read:team · MCP twin inbox_list
 
 Class: read; default grant: inbox:read:team; MCP twin: inbox_list.
+
+## VerbMethods: inbox.pin
+
+```ts
+"inbox.pin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
+## VerbMethods: inbox.pins
+
+```ts
+"inbox.pins"(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:read:team
+
+Class: read; default grant: inbox:read:team; MCP twin: Agents read their pins in the result of the pin tool; pages read any thread of their team.
+
+## VerbMethods: inbox.reorderPins
+
+```ts
+"inbox.reorderPins"(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thread's pins; an agent places a pin with the pin tool's position.
+
+## VerbMethods: inbox.unpin
+
+```ts
+"inbox.unpin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
 
 ## VerbMethods: inboxRollup
 
@@ -2106,6 +2250,7 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
 
@@ -2148,6 +2293,7 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
 

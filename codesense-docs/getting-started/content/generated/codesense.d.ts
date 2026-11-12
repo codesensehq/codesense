@@ -987,6 +987,118 @@ declare namespace CodesenseSdk {
       conversation?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.pin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:read:team */
+    "inbox.pins"(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    "inbox.reorderPins"(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.unpin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:read:all-teams */
     inboxRollup(args?: Record<string, unknown>): Promise<unknown>;
     /** spawn · sessions:read */
