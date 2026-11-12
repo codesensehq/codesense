@@ -230,6 +230,9 @@ beforeEach(() => {
   });
   sessionCwdMock.mockReturnValue(null);
   sessionCwdRevisionMock.mockReturnValue(0);
+  // A mode switch writes the shared default; never let one leak into the next test.
+  const { defaultFileDiffMode: _mode, ...settings } = useViewerStore.getState().settings;
+  void _mode;
   useViewerStore.setState({
     sourceDiffShownBySession: {},
     sourceDiffSelectedFile: {},
@@ -244,7 +247,7 @@ beforeEach(() => {
     // SLW-DV-7: reset the comparison basis so a prior test's toggle doesn't leak.
     sourceDiffBaseMode: {},
     // SLW-WD-7: pin the default-layout setting so per-test mutations don't leak.
-    settings: { ...useViewerStore.getState().settings, defaultSourceDiffLayout: "inline" },
+    settings: { ...settings, defaultSourceDiffLayout: "inline" },
   });
 });
 
@@ -632,6 +635,26 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
       "data-diff-mode",
       "structural",
     );
+  });
+
+  it("a new session opens in the code mode last chosen on any diff surface", () => {
+    useViewerStore.getState().setFileDiffMode("code", "structural");
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/mod.ts" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveAttribute(
+      "data-diff-mode",
+      "structural",
+    );
+    // Choosing here writes the shared default too.
+    fireEvent.click(screen.getByTestId("source-diff-ignore-ws-toggle-w1"));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.code).toBe("ignoreWhitespace");
   });
 
   it("the structural toggle is disabled for a flat-tree language (SLW-DV-8b AC-1)", () => {

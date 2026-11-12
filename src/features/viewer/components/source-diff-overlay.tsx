@@ -40,8 +40,10 @@ import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";
 import {
   useViewerStore,
   resolveSourceDiffOption,
+  sourceDiffModeFor,
   type SourceDiffViewOption,
 } from "@/shared/stores/viewer-store";
+import { resolveFileDiffModes } from "@/shared/lib/file-diff-mode";
 import { useTabSourceRepo } from "@/features/viewer/hooks/use-tab-source-repo";
 import { useSessionCwd } from "../hooks/use-session-cwd";
 import { useSessionCwdRevision } from "../hooks/use-session-cwd-revision";
@@ -244,7 +246,9 @@ export function SourceDiffOverlay({
     activeTabSessionId ? (s.worktreeEditorOpenBySession[activeTabSessionId] ?? false) : false,
   );
   const diffMode = useViewerStore((s) =>
-    activeTabSessionId ? (s.sourceDiffMode[activeTabSessionId] ?? "line") : "line",
+    activeTabSessionId
+      ? sourceDiffModeFor(s, activeTabSessionId)
+      : resolveFileDiffModes(s.settings.defaultFileDiffMode).code,
   );
   const toggleShown = useViewerStore((s) => s.toggleSourceDiffShown);
   const setSelectedFile = useViewerStore((s) => s.setSourceDiffSelectedFile);
