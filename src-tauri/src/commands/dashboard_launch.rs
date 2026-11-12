@@ -9270,6 +9270,9 @@ mod tests {
     /// missing, with its reason.
     #[test]
     fn a_launch_record_carries_every_fact_preparation_held() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         let owner = SessionOwner { principal: None, org: "acme".into(), team: Some("dev".into()) };
         let (state, snapshot) = bound_launch(owner);
         let facts = launch_facts(&["--model=claude-opus-5-5", "--session-id", "native-1"]);
@@ -9326,6 +9329,9 @@ mod tests {
     /// other launch records the CLI's default home.
     #[test]
     fn a_launch_record_keeps_the_accounts_home_over_the_default() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         let owner = SessionOwner { principal: None, org: "acme".into(), team: Some("dev".into()) };
         let (state, mut snapshot) = bound_launch(owner);
         let owner = state.owner_for_session("sess-1");
@@ -9356,6 +9362,9 @@ mod tests {
 
     #[test]
     fn a_launch_records_the_home_its_environment_names_in_precedence_order() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         use std::collections::BTreeMap;
         let claude = codesense_pty_core::agent_cli::AgentCli::Claude;
         let codex = codesense_pty_core::agent_cli::AgentCli::Codex;
