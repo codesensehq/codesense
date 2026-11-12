@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 import { mkdirSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  compositeOver,
+  CONTRAST_THRESHOLDS,
+  contrastRatio,
+} from "../../src/shared/lib/color-contrast";
+import { hex } from "../pane-harness/colors";
 
 /**
  * The identity menus portal to `body`, outside every `.ag-*` token scope, so their hints must take
@@ -10,8 +16,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
  */
 
 const SHOTS = process.env.SHOTS;
-const MIN_RATIO = 4.5;
-type Rgb = [number, number, number];
+const MIN_RATIO = CONTRAST_THRESHOLDS.text;
 
 async function boot(page: Page, scheme: "light" | "dark") {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -45,65 +50,40 @@ async function boot(page: Page, scheme: "light" | "dark") {
   await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${scheme}\\b`));
 }
 
-/** An element's computed colour (or the page variable behind it) as sRGB bytes, via a canvas. */
-async function resolved(page: Page, target: Locator, what: "color" | "background") {
-  return target.evaluate((el, what) => {
-    const toRgba = (css: string): [number, number, number, number] => {
-      const c = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
-      c.clearRect(0, 0, 1, 1);
-      c.fillStyle = "#000";
-      c.fillStyle = css;
-      c.fillRect(0, 0, 1, 1);
-      const [r, g, b, a] = c.getImageData(0, 0, 1, 1).data;
-      return [r, g, b, a / 255];
-    };
-    if (what === "color") return toRgba(getComputedStyle(el).color).slice(0, 3);
-    // Composite the translucent backgrounds up to the first opaque one, over white.
-    const layers: [number, number, number, number][] = [];
-    for (let n: Element | null = el; n; n = n.parentElement) {
-      const px = toRgba(getComputedStyle(n).backgroundColor);
-      if (px[3] > 0) layers.push(px);
-      if (px[3] === 1) break;
-    }
-    let out: [number, number, number] = [255, 255, 255];
-    for (const [r, g, b, a] of layers.reverse())
-      out = [r * a + out[0] * (1 - a), g * a + out[1] * (1 - a), b * a + out[2] * (1 - a)];
-    return out.map(Math.round);
-  }, what) as Promise<Rgb>;
+/** An element's computed text colour, as opaque hex. */
+async function inkOf(page: Page, target: Locator) {
+  const css = await target.evaluate((el) => getComputedStyle(el).color);
+  return (await hex(page, [css]))[0].slice(0, 7);
 }
 
-/** The colour a `--muted-foreground` / `--popover-foreground` custom property resolves to at `el`. */
-async function variable(target: Locator, name: string) {
-  return target.evaluate((el, name) => {
+/** The surface under an element: its ancestors' backgrounds composited over white, as hex. */
+async function surfaceOf(page: Page, target: Locator) {
+  const layers = await target.evaluate((el) => {
+    const out: string[] = [];
+    for (let n: Element | null = el; n; n = n.parentElement)
+      out.push(getComputedStyle(n).backgroundColor);
+    return out.reverse();
+  });
+  return (await hex(page, layers)).reduce((under, top) => compositeOver(top, under), "#ffffff");
+}
+
+/** What a custom property (`--muted-foreground`) resolves to as a colour inside `target`. */
+async function variable(page: Page, target: Locator, name: string) {
+  const css = await target.evaluate((el, name) => {
     const probe = document.createElement("span");
     probe.style.color = `var(${name})`;
     el.appendChild(probe);
-    const css = getComputedStyle(probe).color;
+    const resolved = getComputedStyle(probe).color;
     probe.remove();
-    const c = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
-    c.fillStyle = "#000";
-    c.fillStyle = css;
-    c.fillRect(0, 0, 1, 1);
-    return Array.from(c.getImageData(0, 0, 1, 1).data.slice(0, 3));
-  }, name) as Promise<Rgb>;
-}
-
-function luminance([r, g, b]: Rgb) {
-  const lin = (v: number) => {
-    const s = v / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-function ratio(a: Rgb, b: Rgb) {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
+    return resolved;
+  }, name);
+  return (await hex(page, [css]))[0].slice(0, 7);
 }
 
 /** Under `SHOTS`, print each measured ratio so the capture run records them. */
-function measured(label: string, ink: Rgb, surface: Rgb) {
-  const value = ratio(ink, surface);
-  if (SHOTS) console.log(`ratio ${label}: ${value.toFixed(2)} rgb(${ink}) on rgb(${surface})`);
+function measured(label: string, ink: string, surface: string) {
+  const value = contrastRatio(ink, surface);
+  if (SHOTS) console.log(`ratio ${label}: ${value.toFixed(2)} ${ink} on ${surface}`);
   return value;
 }
 
@@ -134,15 +114,15 @@ for (const scheme of ["light", "dark"] as const) {
       const trigger = await openFaceMenu(page);
       const only = trigger.getByText("· only you");
       const menu = trigger.locator('xpath=ancestor::*[@data-surface="overlay"][1]');
-      const muted = await variable(menu, "--muted-foreground");
-      const popover = await variable(menu, "--popover-foreground");
+      const muted = await variable(page, menu, "--muted-foreground");
+      const popover = await variable(page, menu, "--popover-foreground");
       expect(muted).not.toEqual(popover);
 
       // Hover somewhere else so the row is at rest, then read the span on the menu's own surface.
       await page.getByRole("menuitemradio", { name: "Auto" }).first().hover();
       await expect(trigger).not.toHaveAttribute("data-highlighted", "");
-      const surface = await resolved(page, menu, "background");
-      const rest = await resolved(page, only, "color");
+      const surface = await surfaceOf(page, menu);
+      const rest = await inkOf(page, only);
       expect(rest).toEqual(muted);
       expect(measured(`${scheme} rest`, rest, surface)).toBeGreaterThanOrEqual(MIN_RATIO);
       await shot(page, `identity-menu-${scheme}-rest`);
@@ -152,11 +132,11 @@ for (const scheme of ["light", "dark"] as const) {
       const hint = page.getByText(/Agents nobody gave a face/);
       await expect(hint).toBeVisible();
       const sub = hint.locator('xpath=ancestor::*[@data-surface="overlay"][1]');
-      const hintInk = await resolved(page, hint, "color");
-      expect(hintInk).toEqual(await variable(sub, "--muted-foreground"));
-      expect(hintInk).not.toEqual(await variable(sub, "--popover-foreground"));
+      const hintInk = await inkOf(page, hint);
+      expect(hintInk).toEqual(await variable(page, sub, "--muted-foreground"));
+      expect(hintInk).not.toEqual(await variable(page, sub, "--popover-foreground"));
       expect(
-        measured(`${scheme} team hint`, hintInk, await resolved(page, sub, "background")),
+        measured(`${scheme} team hint`, hintInk, await surfaceOf(page, sub)),
       ).toBeGreaterThanOrEqual(MIN_RATIO);
       await shot(page, `identity-menu-${scheme}-team-hint`);
     });
@@ -171,20 +151,21 @@ for (const scheme of ["light", "dark"] as const) {
       // Keyboard-focused.
       await trigger.focus();
       await expect(trigger).toBeFocused();
-      let fill = await resolved(page, trigger, "background");
-      let ink = await resolved(page, only, "color");
-      expect(ink).toEqual(await resolved(page, trigger, "color"));
-      expect(measured(`${scheme} highlight`, ink, fill)).toBeGreaterThanOrEqual(MIN_RATIO);
+      await expect(trigger).toHaveAttribute("data-state", "closed");
+      let fill = await surfaceOf(page, trigger);
+      let ink = await inkOf(page, only);
+      expect(ink).toEqual(await inkOf(page, trigger));
+      expect(measured(`${scheme} focused`, ink, fill)).toBeGreaterThanOrEqual(MIN_RATIO);
       await shot(page, `identity-menu-${scheme}-highlighted`);
 
       // Submenu open: focus moves into the submenu, so the row is open without `:focus`.
       await page.keyboard.press("ArrowRight");
       await expect(trigger).toHaveAttribute("data-state", "open");
       await expect(trigger).not.toBeFocused();
-      fill = await resolved(page, trigger, "background");
-      ink = await resolved(page, only, "color");
-      expect(ink).toEqual(await resolved(page, trigger, "color"));
-      expect(measured(`${scheme} highlight`, ink, fill)).toBeGreaterThanOrEqual(MIN_RATIO);
+      fill = await surfaceOf(page, trigger);
+      ink = await inkOf(page, only);
+      expect(ink).toEqual(await inkOf(page, trigger));
+      expect(measured(`${scheme} submenu open`, ink, fill)).toBeGreaterThanOrEqual(MIN_RATIO);
       await shot(page, `identity-menu-${scheme}-submenu-open`);
     });
 
@@ -209,10 +190,10 @@ for (const scheme of ["light", "dark"] as const) {
       });
       const only = section.getByText("· only you");
       await only.scrollIntoViewIfNeeded();
-      const ink = await resolved(page, only, "color");
-      expect(ink).toEqual(await variable(section, "--muted-foreground"));
+      const ink = await inkOf(page, only);
+      expect(ink).toEqual(await variable(page, section, "--muted-foreground"));
       expect(
-        measured(`${scheme} settings`, ink, await resolved(page, only, "background")),
+        measured(`${scheme} settings`, ink, await surfaceOf(page, only)),
       ).toBeGreaterThanOrEqual(MIN_RATIO);
       await shot(page, `identity-settings-${scheme}`);
     });
