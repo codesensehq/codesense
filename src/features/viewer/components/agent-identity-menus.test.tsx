@@ -1,37 +1,23 @@
 // SPDX-License-Identifier: MIT
-import type { ReactNode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { FaceChoices, type IdentityMenuKit } from "./agent-identity-menus";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { AvatarPacks } from "@/shared/hooks/use-avatar-packs";
 
-afterEach(cleanup);
+import {
+  CONTEXT_MENU_KIT,
+  DROPDOWN_MENU_KIT,
+  FaceChoices,
+  type IdentityMenuKit,
+} from "./agent-identity-menus";
 
-// Plain elements stand in for the Radix menu parts: the classes `FaceChoices` passes are what
-// is under test, and happy-dom can't resolve colours.
-const Plain = ({ children, className }: { children?: ReactNode; className?: string }) => (
-  <div className={className}>{children}</div>
-);
-const kit: IdentityMenuKit = {
-  Shortcut: Plain,
-  Sub: Plain,
-  SubTrigger: ({ children, className }) => (
-    <div data-testid="trigger" className={className}>
-      {children}
-    </div>
-  ),
-  SubContent: Plain,
-  RadioGroup: Plain,
-  RadioItem: Plain,
-  Separator: () => <hr />,
-  Label: ({ children, className }) => (
-    <div data-testid="label" className={className}>
-      {children}
-    </div>
-  ),
-  Item: Plain,
-};
+afterEach(cleanup);
 
 const avatars = {
   packs: [
@@ -45,26 +31,55 @@ const avatars = {
   setDefaultPack: vi.fn(),
 } as unknown as AvatarPacks;
 
-function renderFace() {
-  return render(<FaceChoices kit={kit} choice={undefined} avatars={avatars} onChoose={() => {}} />);
+const face = (kit: IdentityMenuKit) => (
+  <FaceChoices kit={kit} choice={undefined} avatars={avatars} onChoose={() => {}} />
+);
+
+// Happy-dom can't resolve colours, so these assert the classes the real menu parts render.
+const MENUS = {
+  "context menu": () => {
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <div>target</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>{face(CONTEXT_MENU_KIT)}</ContextMenuContent>
+      </ContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByText("target"));
+  },
+  "dropdown menu": () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>target</DropdownMenuTrigger>
+        <DropdownMenuContent>{face(DROPDOWN_MENU_KIT)}</DropdownMenuContent>
+      </DropdownMenu>,
+    );
+  },
+};
+
+for (const [name, open] of Object.entries(MENUS)) {
+  it(`${name}: 'only you' takes the overlay muted ink, and the row's ink when highlighted`, async () => {
+    open();
+    const only = await screen.findByText("· only you");
+    expect(only).toHaveClass("text-muted-foreground");
+    expect(only).toHaveClass("group-focus/identity-pack:text-accent-foreground");
+    expect(only).toHaveClass("group-data-open/identity-pack:text-accent-foreground");
+    expect(screen.getByRole("menuitem", { name: /My Pack/ })).toHaveClass("group/identity-pack");
+  });
+
+  it(`${name}: the team default hint keeps only the kit label's muted ink`, async () => {
+    open();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Team default pack" }));
+    const hint = await screen.findByText(/Agents nobody gave a face/);
+    expect(hint).toHaveClass("text-muted-foreground");
+    expect(hint.className.match(/(?:^|\s)text-(?!\[11px\]|muted-foreground)\S+/g)).toBeNull();
+    expect(hint.className).not.toContain("--ag-faint");
+  });
+
+  it(`${name}: no pane-scoped --ag-faint variable remains`, async () => {
+    open();
+    await screen.findByText("· only you");
+    expect(document.body.innerHTML).not.toContain("--ag-faint");
+  });
 }
-
-it("sets 'only you' in the overlay muted ink, flipping to the row's ink when highlighted", () => {
-  renderFace();
-  const only = screen.getByText("· only you");
-  expect(only).toHaveClass("text-muted-foreground");
-  expect(only).toHaveClass("group-focus/identity-pack:text-accent-foreground");
-  expect(only).toHaveClass("group-data-open/identity-pack:text-accent-foreground");
-  expect(only.closest("[data-testid=trigger]")).toHaveClass("group/identity-pack");
-});
-
-it("leaves the team default pack hint to the kit's muted label ink", () => {
-  renderFace();
-  const hint = screen.getByText(/Agents nobody gave a face/);
-  expect(hint.className).not.toMatch(/text-\[var/);
-});
-
-it("uses no pane-scoped --ag-faint variable", () => {
-  const { container } = renderFace();
-  expect(container.innerHTML).not.toContain("--ag-faint");
-});
