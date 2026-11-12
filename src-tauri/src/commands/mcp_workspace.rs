@@ -1806,7 +1806,7 @@ async fn spawn_and_bind(
     // and an unwritable `.claude.json` must never block the launch.
     // The adapter may return per-launch trust overrides for the managed paths.
     let trust_flags =
-        crate::agents::workspace_trust::pretrust_flags(&agent, Path::new(cwd), &session_id).await;
+        crate::agents::workspace_trust::pretrust_flags(agent, Path::new(cwd), &session_id).await;
 
     // The CLI's own usage export, pointed at the local receiver. A launch with no bound API has
     // nowhere to send it, so it runs without the export.
