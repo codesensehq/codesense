@@ -233,9 +233,9 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   const setViewMode = useCallback(
     (mode: WorktreeViewMode) => {
       setViewModeState(mode);
-      rememberViewMode(file.path, mode);
+      rememberViewMode(file.path, backend.rootPath, mode);
     },
-    [file.path],
+    [file.path, backend.rootPath],
   );
   // The viewer mounts the first time Rendered is shown and then stays mounted
   // (hidden under Source), so a save reaches it as a refresh, not a remount.

@@ -24,34 +24,51 @@ export function renderableType(path: string): ViewerFileType | null {
   return RENDERABLE.has(type) ? type : null;
 }
 
-function remembered(): Partial<Record<ViewerFileType, WorktreeViewMode>> {
+/** Where a file sits: in the hydrated team context, or anywhere else. A choice
+ *  made on a story doc doesn't carry to a README in the source tree. */
+type FolderGroup = "team" | "other";
+
+function folderGroup(path: string, rootPath: string): FolderGroup {
+  const root = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+  const rel = path.startsWith(root) ? path.slice(root.length) : path;
+  return TEAM_CONTEXT_DIRS.some((dir) => rel.startsWith(dir)) ? "team" : "other";
+}
+
+/** The remembered-mode key: file type plus folder group. */
+function memoryKey(type: ViewerFileType, path: string, rootPath: string): string {
+  return `${type}:${folderGroup(path, rootPath)}`;
+}
+
+function remembered(): Record<string, WorktreeViewMode> {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
-    return saved && typeof saved === "object" ? saved : {};
+    return saved && typeof saved === "object" ? (saved as Record<string, WorktreeViewMode>) : {};
   } catch {
     return {};
   }
 }
 
-/** The mode a file opens in: the last choice made for its type, else Rendered
- *  for markdown and html under the team context folders and Source otherwise. */
+/** The mode a file opens in: the last choice made for its type in its folder
+ *  group, else Rendered for images and canvases, and for markdown and html
+ *  under the team context folders; Source otherwise. */
 export function initialViewMode(path: string, rootPath: string): WorktreeViewMode {
   const type = renderableType(path);
   if (!type) return "source";
-  const saved = remembered()[type];
+  const saved = remembered()[memoryKey(type, path, rootPath)];
   if (saved === "rendered" || saved === "source") return saved;
-  if (type !== "markdown" && type !== "html") return "source";
-  const root = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
-  const rel = path.startsWith(root) ? path.slice(root.length) : path;
-  return TEAM_CONTEXT_DIRS.some((dir) => rel.startsWith(dir)) ? "rendered" : "source";
+  if (type === "image" || type === "excalidraw") return "rendered";
+  return folderGroup(path, rootPath) === "team" ? "rendered" : "source";
 }
 
-/** Remember `mode` as the one files of `path`'s type open in. */
-export function rememberViewMode(path: string, mode: WorktreeViewMode): void {
+/** Remember `mode` as the one files of `path`'s type in its folder group open in. */
+export function rememberViewMode(path: string, rootPath: string, mode: WorktreeViewMode): void {
   const type = renderableType(path);
   if (!type) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...remembered(), [type]: mode }));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...remembered(), [memoryKey(type, path, rootPath)]: mode }),
+    );
   } catch {
     // Storage full or unavailable: the choice holds for this pane only.
   }

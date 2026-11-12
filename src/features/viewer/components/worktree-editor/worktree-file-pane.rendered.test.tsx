@@ -152,7 +152,7 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect((props?.changedPaths as Set<string>).has(DASHBOARD)).toBe(true);
   });
 
-  it("opens markdown outside the hydrated paths in Source, and remembers the choice per file type", async () => {
+  it("opens markdown outside the hydrated paths in Source, and remembers the choice per file type and folder group", async () => {
     readFileMock.mockResolvedValue("# notes\n");
     const first = render(pane(SOURCE_MD, backend()));
     expect(await screen.findByTestId("stub-editor")).toBeInTheDocument();
@@ -162,9 +162,61 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
     first.unmount();
 
-    // The next markdown file opens the way the last one was left.
-    render(pane(`${ROOT}/docs/other.md`, backend()));
+    // The next markdown file outside the team context opens the way the last one was left.
+    const second = render(pane(`${ROOT}/docs/other.md`, backend()));
     expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
+    second.unmount();
+
+    // Flipping a story doc to Source doesn't carry to markdown outside the team context.
+    const story = render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    expect(await screen.findByTestId("stub-editor")).toBeInTheDocument();
+    story.unmount();
+
+    render(pane(`${ROOT}/docs/third.md`, backend()));
+    expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
+  });
+
+  it("a choice outside the team context doesn't carry to story docs", async () => {
+    readFileMock.mockResolvedValue("# notes\n");
+    const first = render(pane(`${ROOT}/docs/guide.md`, backend()));
+    fireEvent.click(await screen.findByRole("radio", { name: "Rendered" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    first.unmount();
+
+    render(pane(STORY, backend()));
+    expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
+  });
+
+  it("opens an image anywhere in the worktree Rendered", async () => {
+    readFileMock.mockResolvedValue("\u0089PNG\u0000\u0000");
+    render(pane(`${ROOT}/src/assets/logo.png`, backend()));
+    const image = await screen.findByTestId("stub-image");
+    expect(image.dataset.path).toBe(`${ROOT}/src/assets/logo.png`);
+    expect(screen.getByRole("radio", { name: "Rendered" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("opens a canvas Rendered as its editor, and Source shows the version the canvas saved", async () => {
+    const CANVAS = `${ROOT}/docs/flow.excalidraw`;
+    const v1 = '{"type":"excalidraw","elements":[]}';
+    const v2 = '{"type":"excalidraw","elements":[{"id":"a"}]}';
+    readFileMock.mockResolvedValue(v1);
+    const b = backend();
+    const view = render(pane(CANVAS, b));
+
+    const canvas = await screen.findByTestId("stub-excalidraw");
+    expect(canvas.dataset.path).toBe(CANVAS);
+    // Rendered is the canvas editor: not read-only, so its saves write the file.
+    const props = viewer.props.find((p) => p.kind === "excalidraw");
+    expect(props?.readOnly).toBeFalsy();
+
+    // The canvas saves; the watcher reports the change.
+    readFileMock.mockResolvedValue(v2);
+    view.rerender(pane(CANVAS, b, 1));
+
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    await waitFor(() => expect(screen.getByLabelText("buffer")).toHaveValue(v2));
   });
 
   it("says Rendered shows the saved version while the buffer has unsaved edits", async () => {
