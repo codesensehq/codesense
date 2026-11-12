@@ -42,10 +42,25 @@ export function isLaunchable(target: LaunchTarget | null): target is LaunchTarge
   }
 }
 
+/** Why a page launch left its agent on a screen nothing was typed into. `startup`: the CLI
+ *  never became input-ready in the wait (a trust, login, update or other startup prompt);
+ *  `exited`: it quit first. The session is left running at its prompt for a person. */
+export interface LaunchFailed {
+  reason: "startup" | "exited";
+  /** Set only for `startup`; the same kind a session row carries for a CLI that reports it. */
+  needsYouKind?: "startup";
+  message: string;
+  /** The prompt rode in the CLI's argv and still runs once a person clears the screen: do
+   *  not send it again. */
+  promptPending?: true;
+}
+
 /** What a launch returned. */
 export interface LaunchOpenResult {
   sessionId?: string;
   promptDelivered?: boolean;
+  /** Present only when the agent never became input-ready (see {@link LaunchFailed}). */
+  launchFailed?: LaunchFailed;
   reconcileStatus?: "reconciled" | "skipped";
   /** A named agent launch's warnings; they never block it. */
   warnings?: AgentLaunchWarning[];

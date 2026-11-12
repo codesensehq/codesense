@@ -34,7 +34,9 @@ import {
   sessionHasLiveAgent,
   sessionsRunningProcesses,
   AGENT_PROVIDERS,
+  agentSessionAwaitReady,
   type AgentLaunchWarning,
+  type AgentSessionReadiness,
   type RunningJobs,
   type LaunchBindScope,
   type PreparedAgentLaunch,
@@ -51,6 +53,7 @@ import {
   type PreparedShellLaunch,
 } from "@/shared/lib/agent-session-launcher";
 import { resolveAgentCliPath } from "@/shared/lib/default-agent";
+import type { LaunchFailed } from "@/shared/lib/launch-target";
 import { injectAgentLine } from "@/shared/lib/agent-session-injection";
 import { awaitWorktreeEstablished } from "@/shared/lib/worktree/pending-establish";
 import { awaitContextForLaunch } from "@/features/viewer/lib/await-worktree-context";
@@ -630,12 +633,32 @@ async function waitAgentLive(
   return waitForAgentLive(sessionId, agentBasename(agentPath));
 }
 
+/** The CLIs whose typed launch line runs under the activity wrapper (see
+ *  `managedLaunchTarget`), so the host sees their first lifecycle hook: only these can be
+ *  waited on for input-readiness. */
+const ACTIVITY_OBSERVED_CLIS: ReadonlySet<string> = new Set(["claude", "codex"]);
+
+/** Wait for the launched agent to be input-ready: the host's observed bit for a CLI whose
+ *  launch line it observes. Any other CLI keeps the best-effort process-liveness wait and
+ *  reads as ready (no signal to gate on). */
+async function awaitAgentReady(
+  getAgentPath: () => Promise<string | null>,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<AgentSessionReadiness> {
+  const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
+  const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
+  if (ACTIVITY_OBSERVED_CLIS.has(cli)) return agentSessionAwaitReady(sessionId, timeoutMs);
+  await waitAgentLive(getAgentPath, sessionId);
+  return { ready: true };
+}
+
 /**
  * The kind-AGNOSTIC session seams every launch spine shares — the handle-keyed Rust
  * registry commands (`begin`/`abort`/`bind`/`resolveSession`), the reap choke
  * (`killSession`), and the SW-GW-5 liveness/reap probes
- * (`isSessionParked`/`probeAlive`/`evictStaleTab`) + the process liveness wait
- * (`waitLive`). Every seam is byte-identical across the story (SW-DX-7), branch
+ * (`isSessionParked`/`probeAlive`/`evictStaleTab`) + the input-readiness wait
+ * (`waitReady`). Every seam is byte-identical across the story (SW-DX-7), branch
  * (SW-DX-18), and epic/dir-headless (SW-GW-7) builders — they differ ONLY in the
  * per-kind `resolve`/`ensureCwd`/`connect`/`focus`. Wired ONCE here so the three
  * builders can't drift; each spreads this and adds its own kind-specific seams.
@@ -660,7 +683,7 @@ function sharedManagedSessionSeams(
   | "isSessionParked"
   | "probeAlive"
   | "evictStaleTab"
-  | "waitLive"
+  | "waitReady"
 > & { bind: DashboardLaunchDeps["bind"] } {
   return {
     begin: (h) => dashboardLaunchBegin(h),
@@ -673,7 +696,7 @@ function sharedManagedSessionSeams(
     // SW-GW-8: every session launched through the dashboard controller records
     // its host `docPath` as provenance (the panel's "which surface opened this").
     bind: (h, sessionId, scope) => bindAndArm(h, sessionId, launcher, scope),
-    waitLive: (sessionId) => waitAgentLive(getAgentPath, sessionId),
+    waitReady: (sessionId, timeoutMs) => awaitAgentReady(getAgentPath, sessionId, timeoutMs),
   };
 }
 
@@ -779,7 +802,10 @@ export interface HeadlessSessionLaunchers {
   /** Background a first-class agent session in the resolved epic workspace dir —
    *  NOT the visible N-tile assembly. `ensureEpicWorkspace` materializes the dir;
    *  the agent gets its MCP bridge per session. `agent` is the agent it runs. */
-  openEpicHeadless: (target: EpicOpenTarget, agent: string) => Promise<{ sessionId: string }>;
+  openEpicHeadless: (
+    target: EpicOpenTarget,
+    agent: string,
+  ) => Promise<{ sessionId: string; launchFailed?: LaunchFailed }>;
   /** Background a first-class agent session in an existing `path` (an agent tab,
    *  NOT the SW-GW-1 shell tile). The dir is NOT written to (materialize-safety
    *  invariant): the agent gets its MCP bridge per session. `opts.agent` is the agent it
@@ -789,7 +815,12 @@ export interface HeadlessSessionLaunchers {
   openDirHeadless: (
     path: string,
     opts: { agent: string; prompt?: string; headed?: boolean; session?: string },
-  ) => Promise<{ sessionId: string; promptDelivered?: boolean; warnings?: AgentLaunchWarning[] }>;
+  ) => Promise<{
+    sessionId: string;
+    promptDelivered?: boolean;
+    launchFailed?: LaunchFailed;
+    warnings?: AgentLaunchWarning[];
+  }>;
 }
 
 /** SW-GW-7: the live epic/dir headless launchers (mirrors
@@ -878,7 +909,7 @@ export function makeRealDashboardLaunchDeps(
   const getAgentPath = askAgentPathPerLaunch;
 
   return {
-    // SW-GW-7: the handle-keyed session seams (begin/abort/bind/reap/probe/waitLive)
+    // SW-GW-7: the handle-keyed session seams (begin/abort/bind/reap/probe/waitReady)
     // shared with the branch + epic/dir-headless spines — see the helper.
     // SW-GW-8: `docPath` is the session's launcher provenance.
     ...sharedManagedSessionSeams(getAgentPath, docPath),
@@ -1002,7 +1033,7 @@ export function makeRealBranchLaunchDeps(docPath: string, frameId?: string): Bra
 
   return {
     // SW-GW-7: the SAME handle-keyed session seams the story + epic/dir-headless
-    // spines use (begin/abort/bind/reap/probe/waitLive) — see the helper.
+    // spines use (begin/abort/bind/reap/probe/waitReady) — see the helper.
     // SW-GW-8: `docPath` is the session's launcher provenance.
     ...sharedManagedSessionSeams(getAgentPath, docPath),
     resolveBranch: async (repo) => {
@@ -1306,6 +1337,7 @@ export async function dispatchOpenWorkspace(
 ): Promise<{
   sessionId?: string;
   promptDelivered?: boolean;
+  launchFailed?: LaunchFailed;
   reconcileStatus?: "reconciled" | "skipped";
   warnings?: AgentLaunchWarning[];
 }> {
@@ -1373,7 +1405,9 @@ export async function dispatchOpenWorkspace(
         },
       });
       throwIfCanceled();
-      if (reviewPrompt) {
+      // An agent that never became input-ready is left at its startup screen, and the
+      // review prompt is not typed into it.
+      if (reviewPrompt && !opened.launchFailed) {
         await injectReviewPromptSingleFlight(opened.sessionId, reviewPrompt, deps.injectLine);
         // Prompt delivery is the commit point for a reused session: we do not
         // own that pre-existing run and must not report Canceled while leaving
@@ -1384,7 +1418,7 @@ export async function dispatchOpenWorkspace(
       return {
         ...opened,
         ...(reviewPrompt ? { reconcileStatus: opened.reconcileStatus ?? "skipped" } : {}),
-        promptDelivered: Boolean(reviewPrompt),
+        promptDelivered: Boolean(reviewPrompt) && !opened.launchFailed,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -256,5 +256,7 @@ export function prepareAgentLaunch(args: Record<string, unknown>): PreparedAgent
 export function agentLaunchHandlers(): HandlerRegistry {
   return {
     agent_launch_prepare: (args) => prepareAgentLaunch(args),
+    // A mock agent is always past its startup screens.
+    agent_session_await_ready: () => ({ ready: true }),
   };
 }

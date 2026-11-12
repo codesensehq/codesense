@@ -6129,6 +6129,18 @@ export const agentLaunchPrepare = (p: {
     accountGeneration: p.accountGeneration ?? null,
   });
 
+/** Whether a launched agent session is input-ready: its CLI's first lifecycle hook has been
+ *  seen, so it is past every startup screen (trust, approval, onboarding). `startup`: still
+ *  not ready when the wait ended; `exited`: the process ended first. */
+export type AgentSessionReadiness =
+  | { ready: true }
+  | { ready: false; reason: "startup" | "exited" };
+
+/** Wait up to `timeoutMs` for the agent session to be input-ready (see
+ *  {@link AgentSessionReadiness}); resolves not-ready at the timeout, never rejects for it. */
+export const agentSessionAwaitReady = (sessionId: string, timeoutMs: number) =>
+  invoke<AgentSessionReadiness>("agent_session_await_ready", { sessionId, timeoutMs });
+
 /** The CLI an agent runs on (mirror of Rust `agents::Runtime`). */
 export type AgentRuntime = "claude" | "codex" | "opencode" | "hermes";
 
