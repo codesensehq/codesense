@@ -63,7 +63,8 @@ export function initialViewMode(path: string, rootPath: string): WorktreeViewMod
 /** Remember `mode` as the one files of `path`'s type in its folder group open in. */
 export function rememberViewMode(path: string, rootPath: string, mode: WorktreeViewMode): void {
   const type = renderableType(path);
-  if (!type) return;
+  // Source can't show an image, so it's never what the next image opens in.
+  if (!type || (type === "image" && mode === "source")) return;
   try {
     localStorage.setItem(
       STORAGE_KEY,

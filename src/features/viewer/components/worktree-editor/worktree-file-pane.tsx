@@ -542,7 +542,14 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
           mode={reconciling ? "source" : viewMode}
           disabled={reconciling}
           // Rendered reads the file on disk; say so while the buffer is ahead.
-          note={showRendered && dirty ? "Showing the saved version · ⌘S to update" : null}
+          // A canvas is an editor itself, so drawing would race those edits.
+          note={
+            showRendered && dirty
+              ? renderableType(file.path) === "excalidraw"
+                ? "Source has unsaved edits · save or discard them before drawing"
+                : "Showing the saved version · ⌘S to update"
+              : null
+          }
           onChange={setViewMode}
           onPick={(mode) => {
             if (mode === "source") requestAnimationFrame(() => editorRef.current?.focus());

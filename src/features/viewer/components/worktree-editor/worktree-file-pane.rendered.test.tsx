@@ -197,6 +197,32 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect(screen.getByRole("radio", { name: "Rendered" })).toHaveAttribute("aria-checked", "true");
   });
 
+  it("doesn't carry Source to the next image, which Source can't show", async () => {
+    readFileMock.mockResolvedValue("\u0089PNG\u0000\u0000");
+    const first = render(pane(`${ROOT}/src/assets/logo.png`, backend()));
+    await screen.findByTestId("stub-image");
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    first.unmount();
+
+    render(pane(`${ROOT}/src/assets/icon.png`, backend()));
+    expect(await screen.findByTestId("stub-image")).toBeInTheDocument();
+  });
+
+  it("on a canvas, says to save or discard unsaved Source edits before drawing", async () => {
+    const CANVAS = `${ROOT}/docs/flow.excalidraw`;
+    readFileMock.mockResolvedValue('{"type":"excalidraw","elements":[]}');
+    render(pane(CANVAS, backend()));
+    await screen.findByTestId("stub-excalidraw");
+
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    fireEvent.change(await screen.findByLabelText("buffer"), {
+      target: { value: '{"type":"excalidraw","elements":[{"id":"x"}]}' },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+    expect(screen.getByText(/save or discard them before drawing/)).toBeInTheDocument();
+    expect(screen.queryByText(/⌘S to update/)).toBeNull();
+  });
+
   it("opens a canvas Rendered as its editor, and Source shows the version the canvas saved", async () => {
     const CANVAS = `${ROOT}/docs/flow.excalidraw`;
     const v1 = '{"type":"excalidraw","elements":[]}';
