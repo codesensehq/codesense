@@ -71,6 +71,25 @@ pub(crate) async fn react(
     )
 }
 
+pub(crate) async fn pin(
+    host: &dyn InboxHost,
+    caller: Caller<'_>,
+    params: crate::mcp::handler::PinParams,
+) -> Result<CallToolResult, ErrorData> {
+    let result = agent_inbox::pins::pin_request(
+        host,
+        caller,
+        params.message_id,
+        params.position,
+        params.remove == Some(true),
+    )
+    .await
+    .map_err(|e| ErrorData::internal_error(e, None))?;
+    ok_json(
+        serde_json::to_value(result).map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+    )
+}
+
 pub(crate) async fn reply(
     host: &Arc<dyn InboxHost>,
     caller: Caller<'_>,

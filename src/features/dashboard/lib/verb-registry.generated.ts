@@ -281,6 +281,46 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "inbox.pin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null
+  },
+  {
+    "name": "inbox.pins",
+    "class": "read",
+    "grant": "inbox:read:team",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team"
+  },
+  {
+    "name": "inbox.reorderPins",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position"
+  },
+  {
+    "name": "inbox.unpin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null
+  },
+  {
     "name": "inboxRollup",
     "class": "read",
     "grant": "inbox:read:all-teams",

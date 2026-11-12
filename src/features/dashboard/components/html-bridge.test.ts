@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { setDashboardLaunchController, type DashboardLaunchController } from "./dashboard-launch";
 import { liveHub } from "../lib/live-hub";
+import type { AgentPinsOp } from "@/tauri/commands";
 
 const mockGetDependencyStatus = vi.fn();
 const mockAnalyze = vi.fn();
@@ -45,6 +46,8 @@ const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
 const mockReactAsHuman = vi.fn();
+const mockAgentPins = vi.fn();
+const mockAgentPinsPrepareView = vi.fn();
 const mockAgentDefinitionsPrepare = vi.fn();
 const mockMarkInboxMessagesRead = vi.fn();
 const mockMarkInboxMessagesUnread = vi.fn();
@@ -111,6 +114,8 @@ vi.mock("@/tauri/commands", () => ({
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
+  agentPins: (...a: unknown[]) => mockAgentPins(...a),
+  agentPinsPrepareView: (...a: unknown[]) => mockAgentPinsPrepareView(...a),
   agentDefinitionsPrepare: (...a: unknown[]) => mockAgentDefinitionsPrepare(...a),
   markInboxMessagesRead: (...a: unknown[]) => mockMarkInboxMessagesRead(...a),
   markInboxMessagesUnread: (...a: unknown[]) => mockMarkInboxMessagesUnread(...a),
@@ -286,6 +291,10 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
+      "inbox.pin",
+      "inbox.pins",
+      "inbox.reorderPins",
+      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -1877,6 +1886,85 @@ describe("agents read model verbs", () => {
       /messageId/,
     );
     expect(METADATA_ACTION_VERBS).toContain("react");
+  });
+
+  it("pins then reads an agent thread's pin list in the doc's team", async () => {
+    // A one-thread engine double: the bridge must hand each call to the engine with the
+    // doc's team and the thread, so a pin is what the next read returns.
+    const pins: number[] = [];
+    mockAgentPins.mockImplementation(
+      async (team: unknown, agentId: string, storyId: string | null, call: AgentPinsOp) => {
+        if (call.op === "pin") pins.splice(call.position ?? pins.length, 0, call.messageId);
+        if (call.op === "unpin") pins.splice(pins.indexOf(call.messageId), 1);
+        if (call.op === "reorder") pins.splice(0, pins.length, ...call.messageIds);
+        return {
+          status: "pins",
+          ...(team as object),
+          agentId,
+          storyId: storyId ?? "",
+          pins: pins.map((messageId, position) => ({ messageId, position })),
+        };
+      },
+    );
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    await runBridgeCommand("inbox.pin", { ...thread, messageId: 7 }, DOC);
+    await runBridgeCommand("inbox.pin", { ...thread, messageId: 3, position: 0 }, DOC);
+    const read = (await runBridgeCommand("inbox.pins", thread, DOC)) as {
+      pins: Array<{ messageId: number }>;
+      team: string;
+    };
+    expect(read.pins.map((p) => p.messageId)).toEqual([3, 7]);
+    expect(read.team).toBe("default");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "pin",
+      messageId: 3,
+      position: 0,
+    });
+    await runBridgeCommand("inbox.reorderPins", { ...thread, messageIds: [7, 3] }, DOC);
+    await runBridgeCommand("inbox.unpin", { ...thread, messageId: 7 }, DOC);
+    const after = (await runBridgeCommand("inbox.pins", thread, DOC)) as {
+      pins: Array<{ messageId: number }>;
+    };
+    expect(after.pins.map((p) => p.messageId)).toEqual([3]);
+    // No story: the thread of a session launched with none.
+    await runBridgeCommand("inbox.pins", { agentId: "acme/default/dev" }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "acme/default/dev", null, {
+      op: "read",
+    });
+    expect(METADATA_ACTION_VERBS).toEqual(
+      expect.arrayContaining(["inbox.pin", "inbox.unpin", "inbox.reorderPins"]),
+    );
+    expect(READ_VERBS).toContain("inbox.pins");
+  });
+
+  it("refuses a pins call with no thread, a bad message id or a bad position", async () => {
+    mockAgentPins.mockReset();
+    await expect(runBridgeCommand("inbox.pins", {}, DOC)).rejects.toThrow(
+      /inbox.pins: \{agentId\}/,
+    );
+    await expect(
+      runBridgeCommand("inbox.pin", { agentId: "a", messageId: "7" }, DOC),
+    ).rejects.toThrow(/messageId/);
+    await expect(
+      runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, position: -1 }, DOC),
+    ).rejects.toThrow(/inbox.pin: position/);
+    await expect(
+      runBridgeCommand("inbox.reorderPins", { agentId: "a", messageIds: "7" }, DOC),
+    ).rejects.toThrow(/messageIds/);
+    expect(mockAgentPins).not.toHaveBeenCalled();
+  });
+
+  it("a pins subscription prepares the thread's view in the doc's team", async () => {
+    const viewKey = "pins:acme/default:acme/default/dev:DEMO-1";
+    mockAgentPinsPrepareView.mockResolvedValueOnce(viewKey);
+    const subscribe = vi.fn(async () => ({ topic: "pins", viewKey, rev: 1, snapshot: [] }));
+    await runBridgeCommand(
+      "subscribe",
+      { topic: "pins", agentId: "acme/default/dev", storyId: "DEMO-1" },
+      { ...DOC, liveFrame: async () => ({ subscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1");
+    expect(subscribe).toHaveBeenCalledWith("pins", undefined, { viewKey });
   });
 
   it("agents carries each definition's avatar for faces of ended sessions", async () => {

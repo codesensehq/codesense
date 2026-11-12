@@ -1118,6 +1118,56 @@ export const reactAsHuman = (
   remove: boolean | null = null,
 ) => invoke<ReactResult>("react_as_human", { team, messageId, emoji, remove });
 
+/** One live pin of an agent thread, in its place in the list (0 is first). */
+export interface AgentPin {
+  messageId: number;
+  position: number;
+  pinnedBy: string;
+  pinnedAtMs: number;
+}
+
+/** An agent thread's pins in one team's store after a read or write; `outcome` is set for
+ *  a pin or unpin. Mirror of Rust `PinResult`. */
+export type PinResult =
+  | {
+      status: "pins";
+      org: string;
+      team: string;
+      agentId: string;
+      storyId: string;
+      pins: AgentPin[];
+      outcome?: "pinned" | "unpinned" | "unchanged";
+    }
+  | { status: "invalid"; message: string };
+
+/** What one pins call does to the thread of saved agent `agentId` on `storyId`. */
+export type AgentPinsOp =
+  | { op: "read" }
+  | { op: "pin"; messageId: number; position?: number }
+  | { op: "unpin"; messageId: number }
+  | { op: "reorder"; messageIds: number[] };
+
+/** The human reads or changes an agent thread's pin list in `team`'s store. */
+export const agentPins = (
+  team: InboxTeam,
+  agentId: string,
+  storyId: string | null,
+  call: AgentPinsOp,
+) =>
+  invoke<PinResult>("agent_pins", {
+    team,
+    agentId,
+    storyId,
+    op: call.op,
+    messageId: "messageId" in call ? call.messageId : null,
+    position: "position" in call ? (call.position ?? null) : null,
+    messageIds: "messageIds" in call ? call.messageIds : null,
+  });
+
+/** Prepare the `pins` live view of an agent thread for a page's subscription. */
+export const agentPinsPrepareView = (team: InboxTeam, agentId: string, storyId: string | null) =>
+  invoke<string>("agent_pins_prepare_view", { team, agentId, storyId });
+
 /** SW-AGR-18: what a message asks of the human, which picks its lane in the human inbox:
  *  `needs-you` waits on them (Needs you), `update` is informational (Updates). The
  *  sender's kind, else `needs-you` when it carries a `replyTo` naming someone other than

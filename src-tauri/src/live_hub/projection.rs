@@ -172,7 +172,7 @@ impl CachedProjection {
                     })
             });
         }
-        if matches!(self.topic.as_str(), "agentList" | "records") {
+        if matches!(self.topic.as_str(), "agentList" | "records" | "pins") {
             rows.sort_by(|a, b| {
                 a["order"]
                     .as_f64()
@@ -351,6 +351,7 @@ impl Default for TopicRegistry {
                 "workspaceConfig",
                 "prefs",
                 "storyTotals",
+                "pins",
             ]
             .into_iter()
             .map(|t| (t.into(), CachedProjection::new(t)))

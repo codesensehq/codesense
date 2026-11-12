@@ -2,8 +2,8 @@
   "schema": 1,
   "generatedAt": "deterministic",
   "counts": {
-    "invoke": 107,
-    "kit": 165,
+    "invoke": 111,
+    "kit": 169,
     "classes": 18,
     "tokens": 87,
     "events": 62,
@@ -1070,6 +1070,528 @@
             "conversations": [],
             "humanUnread": 0,
             "hasMore": false
+          }
+        }
+      ],
+      "sourceRef": "src-tauri/src/verbs/registry.generated.json"
+    },
+    {
+      "name": "inbox.pin",
+      "category": "METADATA",
+      "write": true,
+      "readOnlyDocsSafe": false,
+      "audited": true,
+      "description": "Pin a message of the frame's team into an agent thread at position (0 is first; omitted, last). Pinning a pinned message leaves it in place. Agents pin their own thread with the pin MCP tool.",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "returns": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "args": {
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1",
+            "messageId": 42
+          }
+        }
+      ],
+      "sourceRef": "src-tauri/src/verbs/registry.generated.json"
+    },
+    {
+      "name": "inbox.pins",
+      "category": "READ",
+      "write": false,
+      "readOnlyDocsSafe": true,
+      "audited": false,
+      "description": "Read an agent thread's pin list in the frame's team: the thread is the saved agent agentId plus storyId (omit it for a session launched with no story). Pins whose message is archived or withdrawn drop out. Subscribe with codesense.subscribe('pins', {agentId, storyId, onChange}) for live updates.",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "returns": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "args": {
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1"
+          },
+          "result": {
+            "status": "pins",
+            "org": "acme",
+            "team": "core",
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1",
+            "pins": [
+              {
+                "messageId": 42,
+                "position": 0,
+                "pinnedBy": "human",
+                "pinnedAtMs": 1700000000000
+              }
+            ]
+          }
+        }
+      ],
+      "sourceRef": "src-tauri/src/verbs/registry.generated.json"
+    },
+    {
+      "name": "inbox.reorderPins",
+      "category": "METADATA",
+      "write": true,
+      "readOnlyDocsSafe": false,
+      "audited": true,
+      "description": "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "returns": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "args": {
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1",
+            "messageIds": [
+              43,
+              42
+            ]
+          }
+        }
+      ],
+      "sourceRef": "src-tauri/src/verbs/registry.generated.json"
+    },
+    {
+      "name": "inbox.unpin",
+      "category": "METADATA",
+      "write": true,
+      "readOnlyDocsSafe": false,
+      "audited": true,
+      "description": "Take a message out of an agent thread's pin list; the pins after it move up.",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "returns": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "unpinned",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "args": {
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1",
+            "messageId": 42
           }
         }
       ],
@@ -5623,6 +6145,42 @@
       "wraps": "invoke('inbox', args || {})",
       "description": "read · inbox:read:team · MCP twin inbox_list",
       "example": "const builderQueue = await codesense.inbox({ role: \"builder\" });",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
+    },
+    {
+      "name": "codesense.inbox.pin",
+      "category": "action",
+      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "wraps": "invoke('inbox.pin', args)",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "example": "// See the exact declaration for codesense.inbox.pin.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
+    },
+    {
+      "name": "codesense.inbox.pins",
+      "category": "data-read",
+      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "wraps": "invoke('inbox.pins', args)",
+      "description": "read · inbox:read:team",
+      "example": "// See the exact declaration for codesense.inbox.pins.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
+    },
+    {
+      "name": "codesense.inbox.reorderPins",
+      "category": "action",
+      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "wraps": "invoke('inbox.reorderPins', args)",
+      "description": "metadata · inbox:write",
+      "example": "// See the exact declaration for codesense.inbox.reorderPins.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
+    },
+    {
+      "name": "codesense.inbox.unpin",
+      "category": "action",
+      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "wraps": "invoke('inbox.unpin', args)",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "example": "// See the exact declaration for codesense.inbox.unpin.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
     },
     {

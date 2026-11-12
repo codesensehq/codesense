@@ -57,6 +57,8 @@ import {
   setHumanStatus,
   replyAsHuman,
   reactAsHuman,
+  agentPins,
+  agentPinsPrepareView,
   loadInboxMedia,
   markInboxMessagesRead,
   markInboxMessagesUnread,
@@ -215,6 +217,11 @@ async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeConte
     return { viewKey: await fileSurfacePrepareView(ctx!.frame!.frameId, args) };
   if (args.topic === "records")
     return { viewKey: await recordsPrepareView(ctx!.frame!.frameId, String(args.collection)) };
+  if (args.topic === "pins") {
+    const { agentId, storyId } = pinThread(args, "subscribe");
+    const team = await inboxTeam(ctx, "inbox.pins");
+    return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
+  }
   if (args.topic === "agentDefinitions") {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
     liveHub.seed(view);
@@ -500,6 +507,21 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
 }
 
 /** A required inbox message id. */
+/** The agent thread a pins call names: a saved agent id and an optional story id. */
+function pinThread(
+  a: Record<string, unknown>,
+  verb: string,
+): { agentId: string; storyId: string | null } {
+  if (typeof a.agentId !== "string" || !a.agentId.trim()) {
+    throw new Error(`${verb}: {agentId} must be a saved agent id`);
+  }
+  const storyId = optionalNonEmptyString(
+    a.storyId ?? undefined,
+    `${verb}: storyId, if present, must be a story id`,
+  );
+  return { agentId: a.agentId.trim(), storyId: storyId ?? null };
+}
+
 function messageId(value: unknown, verb: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${verb}: {messageId} must be a message id from inbox()`);
@@ -1326,6 +1348,46 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const emoji = a.emoji;
     const remove = typeof a.remove === "boolean" ? a.remove : null;
     return inboxWrite(ctx, "react", a, (team) => reactAsHuman(team, id, emoji, remove));
+  },
+  // An agent thread's pin list (saved agent + story), in the frame's team store. The
+  // person pins into any thread; an agent pins its own with the MCP pin tool.
+  "inbox.pins": async (args, ctx) => {
+    const a = argObject(args, "inbox.pins");
+    const { agentId, storyId } = pinThread(a, "inbox.pins");
+    return inboxWrite(ctx, "inbox.pins", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "read" }),
+    );
+  },
+  "inbox.pin": async (args, ctx) => {
+    const a = argObject(args, "inbox.pin");
+    const { agentId, storyId } = pinThread(a, "inbox.pin");
+    const id = messageId(a.messageId, "inbox.pin");
+    if (a.position != null && (!Number.isSafeInteger(a.position) || (a.position as number) < 0)) {
+      throw new Error("inbox.pin: position, if present, must be a whole number from 0");
+    }
+    const position = a.position == null ? undefined : (a.position as number);
+    return inboxWrite(ctx, "inbox.pin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "pin", messageId: id, position }),
+    );
+  },
+  "inbox.unpin": async (args, ctx) => {
+    const a = argObject(args, "inbox.unpin");
+    const { agentId, storyId } = pinThread(a, "inbox.unpin");
+    const id = messageId(a.messageId, "inbox.unpin");
+    return inboxWrite(ctx, "inbox.unpin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
+    );
+  },
+  "inbox.reorderPins": async (args, ctx) => {
+    const a = argObject(args, "inbox.reorderPins");
+    const { agentId, storyId } = pinThread(a, "inbox.reorderPins");
+    if (!Array.isArray(a.messageIds)) {
+      throw new Error("inbox.reorderPins: {messageIds} must list the thread's pinned message ids");
+    }
+    const messageIds = a.messageIds.map((id) => messageId(id, "inbox.reorderPins"));
+    return inboxWrite(ctx, "inbox.reorderPins", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
+    );
   },
   dismiss_agent_mark: async (args, ctx) => {
     const a = argObject(args, "dismiss_agent_mark");

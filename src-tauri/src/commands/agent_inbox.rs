@@ -223,6 +223,13 @@ pub(crate) trait InboxHost: Send + Sync {
     ) -> Option<String> {
         None
     }
+    /// The saved agent and the story the session under `handle` was launched with, which
+    /// key its pin thread. `None` for a session not launched from a saved agent.
+    async fn launch_thread(&self, _handle: &str) -> Option<(String, Option<String>)> {
+        None
+    }
+    /// The pin list of `thread` in `team`'s store changed.
+    fn pins_changed(&self, _team: &LaunchTeam, _thread: &crate::weft::pins::ThreadKey) {}
 }
 
 /// A session as the inbox addresses and names it.
@@ -2857,6 +2864,23 @@ impl InboxHost for AppInboxHost {
         let _ = self.app.emit(INBOX_EVENT, event);
     }
 
+    async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
+        let rows = crate::mcp::session_list::read_session_list(&self.app, None)
+            .await
+            .ok()?;
+        let row = rows.into_iter().find(|row| row.handle == handle)?;
+        Some((row.agent?, row.story))
+    }
+
+    fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
+        use tauri::Emitter;
+        let _ = self.app.emit(
+            pins::AGENT_PINS_CHANGED_EVENT,
+            pins::PinsChanged::new(team, thread),
+        );
+        crate::live_hub::pins::refresh(&self.app, team.clone(), Some(thread.clone()));
+    }
+
     fn mail_stored(&self, handle: &str) {
         // Its notice goes to the host its tab runs on, this Mac's or a machine's.
         super::host_inbox::mail_stored(&self.app, handle);
@@ -3250,6 +3274,8 @@ pub async fn trigger_hydrate_from_inbox(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub mod pins;
 
 /// Refresh role delivery rows through the same typed inbox event as direct mail.
 pub(crate) async fn role_delivery_changed(

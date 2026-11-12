@@ -50,6 +50,10 @@ pub(crate) struct FakeHost {
     media_workspaces: Mutex<HashMap<String, PathBuf>>,
     /// Every `role_message_queued` call: `(team, role, message id, sender)`.
     queued: Mutex<Vec<(String, String, i64, String)>>,
+    /// handle → the saved agent and story it was launched with.
+    threads: Mutex<HashMap<String, (String, Option<String>)>>,
+    /// Every `pins_changed` call: `(team, thread)`.
+    pin_events: Mutex<Vec<(String, crate::weft::pins::ThreadKey)>>,
 }
 
 impl FakeHost {
@@ -90,7 +94,22 @@ impl FakeHost {
             media_scopes: Mutex::default(),
             media_workspaces: Mutex::default(),
             queued: Mutex::default(),
+            threads: Mutex::default(),
+            pin_events: Mutex::default(),
         })
+    }
+
+    /// `handle` was launched from saved agent `agent` on `story`.
+    pub(crate) fn launched_from(&self, handle: &str, agent: &str, story: Option<&str>) {
+        self.threads.lock().unwrap().insert(
+            handle.to_string(),
+            (agent.to_string(), story.map(String::from)),
+        );
+    }
+
+    /// Every pin list change reported so far, as `(team, thread)`.
+    pub(crate) fn pin_events(&self) -> Vec<(String, crate::weft::pins::ThreadKey)> {
+        self.pin_events.lock().unwrap().clone()
     }
 
     /// A tab `list_sessions` lists: one a person opened by hand has its session id as its
@@ -333,6 +352,15 @@ impl InboxHost for FakeHost {
             sender.to_string(),
         ));
     }
+    async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
+        self.threads.lock().unwrap().get(handle).cloned()
+    }
+    fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
+        self.pin_events
+            .lock()
+            .unwrap()
+            .push((team.team.clone(), thread.clone()));
+    }
     async fn owning_story_for_path(&self, team: &LaunchTeam, logical_path: &str) -> Option<String> {
         self.story_owners
             .lock()
@@ -353,7 +381,7 @@ fn known(handle: &str, session: &str, name: &str, running: bool) -> KnownSession
     }
 }
 
-fn launch_team(team: &str) -> LaunchTeam {
+pub(crate) fn launch_team(team: &str) -> LaunchTeam {
     LaunchTeam {
         org: ORG.to_string(),
         team: team.to_string(),
@@ -365,7 +393,7 @@ pub(crate) fn port(host: &Arc<FakeHost>) -> Arc<dyn InboxHost> {
     host.clone()
 }
 
-fn sent_id(result: SendResult) -> i64 {
+pub(crate) fn sent_id(result: SendResult) -> i64 {
     match result {
         SendResult::Sent { message_id, .. } => message_id,
         other => panic!("expected sent, got {other:?}"),

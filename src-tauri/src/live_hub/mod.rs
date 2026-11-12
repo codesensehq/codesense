@@ -15,6 +15,7 @@ mod inbox_gate_tests;
 mod inbox_offlock_tests;
 pub(crate) mod machine_stats;
 pub mod pane_sources;
+pub mod pins;
 pub mod projection;
 pub mod run_review;
 #[cfg(test)]
@@ -606,6 +607,13 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let handle = app.clone();
     app.listen(inbox_events::INBOX_EVENT, move |event| {
         if let Ok(event) = serde_json::from_str::<inbox_events::InboxEvent>(event.payload()) {
+            // Archive, withdraw and restore change which pins are live.
+            if matches!(
+                event.kind,
+                inbox_events::InboxChange::Archived | inbox_events::InboxChange::Withdrawn
+            ) {
+                pins::refresh(&handle, event.team.clone(), None);
+            }
             let hub = handle.state::<LiveHub>();
             let mut model = hub.model.lock().unwrap();
             model
@@ -622,6 +630,7 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 pub fn start(app: &tauri::AppHandle) {
     app.manage(LiveHub::default());
+    app.manage(pins::PinViews::default());
     crate::records::projection::start(app);
     files::start(app);
     app.manage(agent_marks::AgentMarks::default());
@@ -1646,6 +1655,24 @@ pub(crate) fn replace_records<R: tauri::Runtime>(
             kind.map(str::to_owned),
             request_id.map(str::to_owned),
         )?;
+    publish(app, deltas);
+    Ok(())
+}
+
+/// Replace one view of `topic` with `rows` and publish what changed.
+pub(crate) fn replace_view<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    topic: &str,
+    key: &str,
+    rows: Vec<(Option<String>, serde_json::Value)>,
+) -> Result<(), String> {
+    let deltas = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .projections
+        .replace_view(topic, key, rows)?;
     publish(app, deltas);
     Ok(())
 }

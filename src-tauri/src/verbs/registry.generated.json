@@ -922,6 +922,487 @@
     "module": "inbox"
   },
   {
+    "name": "inbox.pin",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        },
+        "position": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "unpinned",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null,
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
+    "name": "inbox.pins",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "org": {
+          "type": "string"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "unpinned",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:read:team",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+    "audited": false,
+    "action": false,
+    "module": "inbox"
+  },
+  {
+    "name": "inbox.reorderPins",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "messageIds": {
+          "items": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "org": {
+          "type": "string"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "messageIds"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "unpinned",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
+    "name": "inbox.unpin",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "unpinned",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null,
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "inboxRollup",
     "class": "read",
     "argsSchema": {

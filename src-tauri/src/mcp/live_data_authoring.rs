@@ -326,6 +326,27 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         deny_example: "denied: write budget",
     },
     ActionVerbDoc {
+        verb: "inbox.pin",
+        tier: "metadata",
+        args: "{agentId: string, storyId?: string, messageId: number, position?: number}",
+        purpose: "Pin a message of the page's team into an agent thread's pin list, the strip that agent's chat overlay and full view share. The thread is the saved agent agentId plus storyId, as its session was launched (omit storyId for none). position 0 is first; omitted or past the end, it goes last; pinning a pinned message leaves it in place. Requires inbox:write. Fires the pins topic and the agent-pins-changed event. An agent pins its own thread with the pin MCP tool. Resolves `{status:'pins', org, team, agentId, storyId, pins:[{messageId, position, pinnedBy, pinnedAtMs}], outcome:'pinned'|'unchanged'}` or `{status:'invalid', message}` (unknown, archived or withdrawn message).",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.unpin",
+        tier: "metadata",
+        args: "{agentId: string, storyId?: string, messageId: number}",
+        purpose: "Take a message out of an agent thread's pin list; the pins after it move up. Requires inbox:write. Resolves the list as inbox.pin does, with outcome 'unpinned' or 'unchanged'.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.reorderPins",
+        tier: "metadata",
+        args: "{agentId: string, storyId?: string, messageIds: number[]}",
+        purpose: "Put an agent thread's pins in this order. messageIds must name every live pin of the thread exactly once, else it resolves `{status:'invalid', message}` and nothing moves. Requires inbox:write. Resolves the list as inbox.pin does, with no outcome.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
         verb: "markRead",
         tier: "metadata",
         args: "{org?: string, team?: string, messageIds: number[]}",
@@ -458,6 +479,8 @@ pub(crate) const READ_VERBS: &[&str] = &[
     "roles",
     "updates",
     "humanStatus",
+    // An agent thread's pin list (saved agent + story) in the page's team.
+    "inbox.pins",
     "watchInbox",
     "watchAgentInbox",
     "watchAgentActivity",
@@ -581,6 +604,7 @@ fn sdk_section() -> Value {
             "records": "Use codesense.records.collections/list/read/search/history/readAt/create/write/setFields/delete/restore. Every call takes collection; scope, org, team and profile are bound to the frame. Subscribe with codesense.subscribe('records', {collection, window?: [from,to], onChange}); records views default to 200 rows, contain no bodies, and page through codesense.page('records', cursor, {collection}). Multiple collection subscriptions are independent; unsubscribe with its callback or {collection} as the third argument. The view key is records:<scope>:<org>[/<team>]:<collection>. Writer deltas carry actor, kind and optional requestId; duplicate requests and unchanged index rows produce no delta. Private history commits later update headCommit only. Team and story collections have no automatic history.",
             "notes_example": "A private Notes page: const {rows} = await codesense.records.list({collection:'notes'}) (pinned first, then most recent); const note = await codesense.records.read({collection:'notes', id}); keep note.body as base and save with const r = await codesense.records.write({collection:'notes', id, body, base, requestId}); when r.merged is true show r.body and highlight r.overlaps. Pin with codesense.records.setFields({collection:'notes', id, fields:{pinned:true}}). codesense.records.delete({collection:'notes', id}) is confirmable and human-only (agents can't delete notes); bring a note back with codesense.records.restore({collection:'notes', id, commit}) using a commit from records.history.",
             "ui": "Use ui:<slotId> for shared selection, folds and arrangement: subscribe then codesense.setUiState(topic, patch, requestId). Native and page share the host-owned state; writes persist separately from page-private prefs and echo requestId in the resulting delta.",
+            "pins": "Subscribe to an agent thread's pin list with codesense.subscribe('pins', {agentId, storyId?, onChange}): one row per live pin {id, messageId, position, order, pinnedBy, pinnedAtMs, org, team, agentId, storyId} in list order, in the page's team. Requires inbox:read:team. Pin, unpin and reorder (from a page or an agent's pin tool) arrive as deltas; a pin whose message is archived or withdrawn drops out and returns if it is restored. Read once with codesense['inbox.pins']({agentId, storyId?}).",
             "machineStats": "Native Machines subscription: keyed by machine id (id), snapshot plus versioned deltas through this one hub. Resource fields match machines(): load1, cpuCount, memUsedBytes, memTotalBytes, diskFreeBytes, diskTotalBytes, diskPath, sampledAt and machineStatsSupported. The host watches only with subscribers; hidden/disposed frames and closed windows release subscriptions. Samples every 30 seconds while watched, no per-view polling; runtime state only.",
             "sessions": "codesense.onSessions(cb) is subscribe('sessions')-backed. The Rust projection is shared by native and MCP consumers. Inbox and agentList projections are available through subscribe. onAgentsChanged follows the agentDefinitions projection, including unused saved agents changed by a save, external edit or pull; agents() reads its cached summary rows. Rich agent({key}) remains a fresh canonical read of resolved startup and login state. Compatibility revisions preserve role and human-status notifications. onInboxChanged retains visible-only inbox invalidations. No per-frame session re-reads or hidden polling."
         },
