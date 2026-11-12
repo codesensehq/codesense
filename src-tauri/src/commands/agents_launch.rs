@@ -447,15 +447,16 @@ pub async fn agent_launch_prepare(
         attribution_hook_trust,
     )
     .await?;
+    let recorded = recorded_launch_dir(&prepared, &launch_cwd);
     // The page spawns this argv in a shell, so the folder-trust state is written here,
     // as the managed launch spine does before its spawn: the CLI must not open on its
-    // trust dialog, which a typed prompt and Enter would answer with "No, exit".
+    // trust dialog, which a typed prompt and Enter would answer with "No, exit". It
+    // trusts the recorded launch dir, not the raw requested cwd, and is best-effort.
     let trust_flags =
-        pretrust_prepared_launch(&trust_launch, &prepared, &launch_cwd, &session_id).await;
+        crate::agents::workspace_trust::pretrust_flags(&trust_launch, &recorded, &session_id).await;
     crate::agents::workspace_trust::splice_trust_flags(&mut prepared.launch.args, trust_flags);
     // Attended Starts in the same directory share one flight. Local routine
     // wakes have their own identity and never adopt an untagged Start.
-    let recorded = recorded_launch_dir(&prepared, &launch_cwd);
     let flight = if interactive {
         start_flight(&app, &agent_key, &recorded, new_instance.unwrap_or(false))?
     } else {
@@ -612,23 +613,6 @@ pub(crate) async fn prepare_role_startup(
     prepared.default_prompt = None;
     prepared.prompt_in_argv = true;
     Ok(())
-}
-
-/// Pre-trust the dir `prepared` will run in (the recorded launch dir, not the raw requested
-/// cwd) for the agent's CLI, the same step the managed launch spine runs; returns the CLI's
-/// per-launch trust flags. Best-effort: a trust write that fails never blocks a launch.
-async fn pretrust_prepared_launch(
-    launch: &AgentLaunch,
-    prepared: &PreparedAgentLaunch,
-    launch_cwd: &str,
-    session_id: &str,
-) -> Vec<String> {
-    crate::agents::workspace_trust::pretrust_flags(
-        launch,
-        &recorded_launch_dir(prepared, launch_cwd),
-        session_id,
-    )
-    .await
 }
 
 /// The dir a Start's session is recorded as running in (its launch

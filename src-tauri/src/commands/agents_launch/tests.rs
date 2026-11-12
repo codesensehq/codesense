@@ -2521,6 +2521,21 @@ fn prepared_in(launch: &AgentLaunch, cwd: &Path) -> PreparedAgentLaunch {
     .0
 }
 
+/// The page prepare's trust step as `agent_launch_prepare` runs it (its source guard below
+/// pins the call): pre-trust the recorded launch dir, for its per-launch trust flags.
+async fn page_pretrust(
+    launch: &AgentLaunch,
+    prepared: &PreparedAgentLaunch,
+    launch_cwd: &str,
+) -> Vec<String> {
+    crate::agents::workspace_trust::pretrust_flags(
+        launch,
+        &recorded_launch_dir(prepared, launch_cwd),
+        "page-session",
+    )
+    .await
+}
+
 fn trusted(config: &Path, dir: &Path) -> bool {
     read_json(config)["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"]
         == json!(true)
@@ -2535,13 +2550,7 @@ async fn prepare_pretrusts_managed_worktree() {
     prepared.cwd = Some(fixture.managed.to_string_lossy().into_owned());
     let requested = fixture.home.join("elsewhere");
 
-    pretrust_prepared_launch(
-        &fixture.launch,
-        &prepared,
-        &requested.to_string_lossy(),
-        "page-session",
-    )
-    .await;
+    page_pretrust(&fixture.launch, &prepared, &requested.to_string_lossy()).await;
 
     assert!(trusted(&config.file(), &fixture.managed));
     assert!(!read_json(&config.file())["projects"]
@@ -2558,11 +2567,10 @@ async fn prepare_pretrust_refuses_dir_outside_home() {
     let mut prepared = prepared_in(&fixture.launch, outside.path());
     prepared.cwd = None;
 
-    pretrust_prepared_launch(
+    page_pretrust(
         &fixture.launch,
         &prepared,
         &outside.path().to_string_lossy(),
-        "page-session",
     )
     .await;
 
@@ -2583,21 +2591,17 @@ async fn prepare_pretrusts_managed_account_home() {
     let mut prepared = prepared_in(&fixture.launch, &fixture.managed);
     prepared.cwd = Some(fixture.managed.to_string_lossy().into_owned());
 
-    pretrust_prepared_launch(
+    page_pretrust(
         &fixture.launch,
         &prepared,
         &fixture.managed.to_string_lossy(),
-        "page-session",
     )
     .await;
 
     // The home the launch binding gives the spawn (`resolve_for_launch` derives it the same way).
-    let spawn_home = crate::install::agent_account_store::managed_home(
-        &fixture.home,
-        &alice(),
-        "acct-one",
-    )
-    .unwrap();
+    let spawn_home =
+        crate::install::agent_account_store::managed_home(&fixture.home, &alice(), "acct-one")
+            .unwrap();
     assert!(trusted(&spawn_home.join(".claude.json"), &fixture.managed));
     assert!(
         !config.file().exists(),
@@ -2605,32 +2609,109 @@ async fn prepare_pretrusts_managed_account_home() {
     );
 }
 
+/// A Codex launch's per-launch trust flags land among its options, before the `--` that
+/// starts its operands (a prompt), the way the page prepare splices them.
+#[test]
+fn page_prepare_splices_codex_trust_flags_before_its_operands() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    team_content(&home, &alice());
+    save(&home, &alice(), draft("coder", AgentCli::Codex));
+    let managed = home.join("users").join("1").join("fresh-worktree");
+    write(
+        &managed,
+        ".codex/config.toml",
+        b"[mcp_servers.codesense]\ncommand = \"bridge\"\n",
+    );
+    let launch = prepare_named(&home, &alice(), "coder", interactive(None)).unwrap();
+    let args = launch.launch.args.clone();
+    let fixture = mcp_scope::inventory::Fixture::new();
+    let (mut prepared, _creation, _settings) = apply_for_session_with_cli(
+        launch.clone(),
+        Path::new(CLI),
+        &session("pretrust-codex"),
+        &managed,
+        Some(tmp.path()),
+        &fixture.launch(&args),
+    )
+    .unwrap();
+    prepared.cwd = Some(managed.to_string_lossy().into_owned());
+    prepared
+        .launch
+        .args
+        .extend(["--".to_string(), "do the task".to_string()]);
+    let options = prepared.launch.args.len() - 2;
+
+    // Preparing a Codex launch runs its own runtime, so only the trust step runs on this one.
+    let flags = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(page_pretrust(
+            &launch,
+            &prepared,
+            &managed.to_string_lossy(),
+        ));
+    assert!(
+        !flags.is_empty(),
+        "a managed worktree gets Codex trust flags"
+    );
+    crate::agents::workspace_trust::splice_trust_flags(&mut prepared.launch.args, flags.clone());
+
+    let args = &prepared.launch.args;
+    assert_eq!(args[options..options + flags.len()], flags[..]);
+    assert_eq!(args[args.len() - 2..], ["--", "do the task"]);
+}
+
+/// The body of the function that starts with `signature` in `source`: up to its closing
+/// brace at the start of a line.
+fn fn_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let body = &source[source.find(signature).unwrap()..];
+    &body[..body.find("\n}\n").unwrap()]
+}
+
 /// Both launch paths share the trust step, in the order each one's argv needs.
 #[test]
 fn agent_launch_prepare_pretrusts_before_role_startup() {
-    let source = include_str!("../agents_launch.rs");
-    let start = source.find("pub async fn agent_launch_prepare(").unwrap();
-    let body = &source[start..];
+    let body = fn_body(
+        include_str!("../agents_launch.rs"),
+        "pub async fn agent_launch_prepare(",
+    );
     let product = body.find("prepare_product_session(").unwrap();
-    let trust = body.find("pretrust_prepared_launch(").unwrap();
+    let recorded = body
+        .find("let recorded = recorded_launch_dir(&prepared, &launch_cwd);")
+        .unwrap();
+    let trust = body
+        .find("pretrust_flags(&trust_launch, &recorded,")
+        .unwrap();
+    let splice = body
+        .find("splice_trust_flags(&mut prepared.launch.args, trust_flags)")
+        .unwrap();
     let role = body.find("prepare_role_startup(").unwrap();
     assert!(
-        product < trust && trust < role,
-        "the page launch trusts its worktree after the product session and before the role argv"
+        product < recorded && recorded < trust && trust < splice && splice < role,
+        "the page launch trusts its recorded dir after the product session, and splices the \
+         flags into its argv before the role argv"
     );
 }
 
 #[test]
 fn spawn_and_bind_pretrusts_after_the_projected_arguments_and_before_the_spawn() {
-    let source = include_str!("../mcp_workspace.rs");
-    let start = source.find("async fn spawn_and_bind(").unwrap();
-    let body = &source[start..];
+    let body = fn_body(
+        include_str!("../mcp_workspace.rs"),
+        "async fn spawn_and_bind(",
+    );
     let arguments = body.find("projected.take_arguments()").unwrap();
     let flags = body.find("pretrust_flags(").unwrap();
-    let splice = body.find("splice_trust_flags(").unwrap();
+    let splice = body
+        .find("splice_trust_flags(&mut launch_args, trust_flags)")
+        .unwrap();
+    let spawn = body.find("TabSpawn::Cold(").unwrap();
     assert!(
-        flags < arguments && arguments < splice,
-        "trust is written before the arguments are taken and its flags spliced after"
+        flags < arguments && arguments < splice && splice < spawn,
+        "trust is written before the arguments are taken, and its flags spliced after them \
+         and before the spawn"
     );
     assert!(
         !body.contains("pretrust_managed_launch("),
