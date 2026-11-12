@@ -327,6 +327,16 @@ export function sourceDiffHandlers(search: string): HandlerRegistry {
     source_file_redline: (args) => redline(search, args),
     source_remote_changeset: (args) => changeset(search, args.baseRef, true),
     source_remote_file_redline: (args) => redline(search, args),
+    // The open-diff tab reads the same worktree at a rev.
+    open_diff_read: (args) => {
+      const params = args.params as { path: string; rev: string };
+      return {
+        status: "opened",
+        redline: redline(search, { filePath: params.path }),
+        files: fixtureFor(search).map((f) => f.file),
+        resolvedRev: params.rev,
+      };
+    },
     source_remote_watch_start: () => 1,
     source_remote_watch_stop: () => undefined,
     source_remote_tracked_count: () => 1200,
