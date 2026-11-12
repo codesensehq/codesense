@@ -280,9 +280,9 @@ function makeDeps(over: Partial<DashboardLaunchDeps> = {}) {
     bind: vi.fn(async () => {
       calls.push("bind");
     }),
-    waitLive: vi.fn(async () => {
-      calls.push("waitLive");
-      return true;
+    waitReady: vi.fn(async () => {
+      calls.push("waitReady");
+      return { ready: true as const };
     }),
     focus: vi.fn(() => {
       calls.push("focus");

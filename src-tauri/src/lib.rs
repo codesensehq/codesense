@@ -1633,6 +1633,8 @@ pub fn run() {
             mcp::workspace_base::update_workspace_base,
             // The frontend's interactive launch of a named agent
             commands::agents_launch::agent_launch_prepare,
+            // A page launch waits for its agent to be input-ready before typing into it
+            commands::dashboard_launch::agent_session_await_ready,
             // The Agents tab
             commands::agents::agents_list,
             commands::avatars::avatar_packs_list_for_team,

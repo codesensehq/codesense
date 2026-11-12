@@ -21,7 +21,15 @@ const {
   agentRows,
   running,
   jobs,
+  readiness,
 } = vi.hoisted(() => ({
+  /** What the backend's input-readiness wait answers, and each wait asked of it. */
+  readiness: {
+    answer: { ready: true } as { ready: true } | { ready: false; reason: "startup" | "exited" },
+    asked: [] as Array<{ sessionId: string; timeoutMs: number }>,
+    /** Whether the process probe finds the agent CLI running. */
+    processUp: true,
+  },
   agentRows: { rows: [] as unknown[] },
   /** The agent CLIs running in each session, as the process probe reads them. */
   running: new Map<string, string>(),
@@ -39,6 +47,8 @@ const {
     lines: [] as Array<{ sessionId: string; line: string }>,
     seeds: [] as Array<{ sessionId: string; text: string }>,
     shown: [] as Array<{ teamKey: string; workspaceId: string; sessionId: string }>,
+    /** What the launch line's inject step says about the activity wrapper; absent: nothing. */
+    activityWrapped: undefined as boolean | undefined,
   },
 }));
 
@@ -47,7 +57,10 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   dashboardLaunchBegin: vi.fn(async () => true),
   agentsList: vi.fn(async () => agentRows.rows),
   sessionHasLiveAgent: vi.fn(
-    async (sessionId: string, agentName: string) => running.get(sessionId) === agentName,
+    async (sessionId: string, agentName: string) =>
+      running.get(sessionId) === agentName ||
+      // A shell this test spawned runs its agent unless the test says it never came up.
+      (readiness.processUp && terminal.shells.some((shell) => shell.sessionId === sessionId)),
   ),
   sessionsRunningProcesses: vi.fn(async (ids: string[]) =>
     ids.map((id) => jobs.get(id) ?? { foreground: null, background: [] }),
@@ -56,6 +69,12 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   dashboardResolveSession: vi.fn(async () => null),
   dashboardProbeSessionsAlive: vi.fn(async () => []),
   terminalCloseTab: vi.fn(async () => undefined),
+  writePty: vi.fn(async () => undefined),
+  submitPtyLine: vi.fn(async () => ({ submitted: true })),
+  agentSessionAwaitReady: vi.fn(async (sessionId: string, timeoutMs: number) => {
+    readiness.asked.push({ sessionId, timeoutMs });
+    return readiness.answer;
+  }),
   dashboardLaunchBind: vi.fn(
     async (handle: string, sessionId: string, _launcher?: string, scope?: unknown) => {
       bindCalls.push({ handle, sessionId, scope });
@@ -77,7 +96,7 @@ vi.mock("@/shared/lib/agent-session-launcher", async (importOriginal) => {
     ...actual,
     waitForAgentLive: vi.fn(async (sessionId: string, agent: string) => {
       liveProbes.push({ sessionId, agent });
-      return true;
+      return readiness.processUp;
     }),
     makeRealLaunchDeps: () => ({
       findExisting: async () => terminal.existing ?? undefined,
@@ -93,7 +112,9 @@ vi.mock("@/shared/lib/agent-session-launcher", async (importOriginal) => {
       closeTab: () => undefined,
       launchAgentLine: async (sessionId: string, line: string) => {
         terminal.lines.push({ sessionId, line });
-        return { ok: true };
+        return terminal.activityWrapped === undefined
+          ? { ok: true }
+          : { ok: true, activityWrapped: terminal.activityWrapped };
       },
       projectScopeConfig: async (
         sessionId: string,
@@ -235,11 +256,15 @@ beforeEach(() => {
   terminal.lines.length = 0;
   terminal.seeds.length = 0;
   terminal.shown.length = 0;
+  terminal.activityWrapped = undefined;
   liveProbes.length = 0;
   checkouts.length = 0;
   agentRows.rows = [];
   running.clear();
   jobs.clear();
+  readiness.answer = { ready: true };
+  readiness.asked.length = 0;
+  readiness.processUp = true;
 });
 
 describe("dispatchOpenWorkspace — a named agent, prepared trusted-side for the spawned session", () => {
@@ -365,8 +390,10 @@ describe("dispatchOpenWorkspace — a named agent, prepared trusted-side for the
       agentRevision: "acme/backend/reviewer@1",
     });
     expect(result.sessionId).toBe(shell.sessionId);
-    // Readiness waits for the agent that actually runs, not the active pack's.
-    expect(liveProbes).toEqual([{ sessionId: shell.sessionId, agent: "codex" }]);
+    // Its Codex launch is observed through the activity wrapper, so readiness is the host's
+    // observed bit for this session, not a process probe for the active pack's CLI.
+    expect(readiness.asked).toEqual([{ sessionId: shell.sessionId, timeoutMs: 45_000 }]);
+    expect(liveProbes).toEqual([]);
     // The review prompt is the one driven in; nothing else is seeded.
     expect(terminal.seeds.map((s) => s.text)).toEqual(["review it"]);
   });
@@ -833,6 +860,222 @@ describe("adopting an existing tab for a named agent", () => {
     });
     expect(prepareCalls).toHaveLength(0);
     expect(bindCalls[0].sessionId).toBe("shell-busy-triage");
+  });
+});
+
+describe("an agent that never becomes input-ready is left alone, for every launch kind", () => {
+  /** Nothing reached the session: no seed, no raw write, no submit, and no tab closed. */
+  async function expectUntouched() {
+    const commands = await import("@/tauri/commands");
+    expect(terminal.seeds).toEqual([]);
+    expect(commands.writePty).not.toHaveBeenCalled();
+    expect(commands.submitPtyLine).not.toHaveBeenCalled();
+    expect(commands.terminalCloseTab).not.toHaveBeenCalled();
+  }
+
+  beforeEach(async () => {
+    const commands = await import("@/tauri/commands");
+    vi.mocked(commands.writePty).mockClear();
+    vi.mocked(commands.submitPtyLine).mockClear();
+    vi.mocked(commands.terminalCloseTab).mockClear();
+    readiness.answer = { ready: false, reason: "startup" };
+  });
+
+  it("story: the open resolves with launchFailed, and nothing is typed or closed", async () => {
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    const [shell] = terminal.shells;
+    // The wait ran for this session, with the page's bound.
+    expect(readiness.asked).toEqual([{ sessionId: shell.sessionId, timeoutMs: 45_000 }]);
+    expect(result).toMatchObject({
+      sessionId: shell.sessionId,
+      promptDelivered: false,
+      launchFailed: { reason: "startup", needsYouKind: "startup", message: expect.any(String) },
+    });
+    await expectUntouched();
+  });
+
+  it("story: a launch line the wrapper observed still fails closed when it never reads ready", async () => {
+    terminal.activityWrapped = true;
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toHaveLength(1);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "startup" } });
+    await expectUntouched();
+  });
+
+  it("story: an observed launch whose CLI quit back to its shell reads exited, not startup", async () => {
+    terminal.activityWrapped = true;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toHaveLength(1);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    expect(result.launchFailed).not.toHaveProperty("needsYouKind");
+    await expectUntouched();
+  });
+
+  it("story: a line typed raw (never observed) skips the observed-bit gate and reads ready after the process wait", async () => {
+    terminal.activityWrapped = false;
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    const [shell] = terminal.shells;
+    // The host was never asked: it can't observe this launch, so its "not ready" is no signal.
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes.map((p) => p.sessionId)).toContain(shell.sessionId);
+    expect(result).not.toHaveProperty("launchFailed");
+    expect(result).toMatchObject({ sessionId: shell.sessionId });
+  });
+
+  it("story: a line typed raw whose CLI never comes up reads exited, and nothing reaches the bare shell", async () => {
+    terminal.activityWrapped = false;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toEqual([]);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    expect(result.launchFailed).not.toHaveProperty("needsYouKind");
+    await expectUntouched();
+  });
+
+  it("branch review: a raw-typed CLI that never comes up gets no review prompt typed into its shell", async () => {
+    terminal.activityWrapped = false;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "branch", repo: "acme/api", branch: "feat/x", agent: "reviewer" },
+      reviewPrompt: "/review it",
+    });
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    await expectUntouched();
+  });
+
+  it("a CLI the host can't observe never asks it: ready once its process is up, no launchFailed", async () => {
+    const result = await open({
+      target: { kind: "story", storyId: "STORY-1", agent: "opencode" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    const [shell] = terminal.shells;
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes).toEqual([{ sessionId: shell.sessionId, agent: "opencode" }]);
+    expect(result).not.toHaveProperty("launchFailed");
+    expect(terminal.seeds.map((s) => s.text)).toEqual(["/bmad-dev-story x"]);
+  });
+
+  it("an adopted tab is not held to the observed bit: no launchFailed, even when its probe misses", async () => {
+    terminal.existing = { workspaceId: "ws-x", sessionId: "shell-restored-triage" };
+    running.set("shell-restored-triage", "claude");
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "dir", path: "/wt/existing", agent: "triage", session: "triage" },
+      headed: false,
+    });
+    expect(prepareCalls).toHaveLength(0);
+    // Its CLI is not on record, so neither the host's bit nor a missed probe says anything.
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes.map((p) => p.sessionId)).toEqual(["shell-restored-triage"]);
+    expect(result).toMatchObject({ sessionId: "shell-restored-triage" });
+    expect(result).not.toHaveProperty("launchFailed");
+  });
+
+  /** The backend's role startup: the CLI gets its startup facts on argv, and a task too
+   *  when `taskInArgv`. */
+  function roleStartupOnArgv(taskInArgv: boolean) {
+    const router = invoke.router!;
+    invoke.router = async (cmd, args) => {
+      const value = await router(cmd, args);
+      if (cmd !== "agent_launch_prepare") return value;
+      return { ...(value as object), promptInArgv: true, taskInArgv, defaultPrompt: null };
+    };
+  }
+
+  it.each([
+    [
+      "branch review: its review prompt",
+      {
+        target: { kind: "branch" as const, repo: "acme/api", branch: "feat/x", agent: "reviewer" },
+        reviewPrompt: "/review it",
+      },
+    ],
+    [
+      "story: the agent's default task",
+      { target: { kind: "story" as const, storyId: "STORY-1", agent: "triage" } },
+    ],
+  ])("%s rode argv: the failure says it is still pending", async (_label, arg) => {
+    roleStartupOnArgv(true);
+    const result = await open(arg);
+    expect(result).toMatchObject({
+      promptDelivered: false,
+      launchFailed: { reason: "startup", promptPending: true },
+    });
+    await expectUntouched();
+  });
+
+  it("role startup on argv with no task: nothing is pending", async () => {
+    roleStartupOnArgv(false);
+    const result = await open({ target: { kind: "story", storyId: "STORY-1", agent: "triage" } });
+    expect(result).toMatchObject({ launchFailed: { reason: "startup" } });
+    expect(result.launchFailed).not.toHaveProperty("promptPending");
+    await expectUntouched();
+  });
+
+  it("dir headless: the same failure, nothing typed", async () => {
+    const result = await open({
+      target: { kind: "dir", path: "/wt/existing", agent: "triage" },
+      headed: false,
+      initialPrompt: "/bmad-help",
+    });
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "startup" } });
+    await expectUntouched();
+  });
+
+  it("epic headless: the same failure, nothing typed", async () => {
+    const commands = await import("@/tauri/commands");
+    vi.spyOn(commands, "ensureEpicWorkspace").mockResolvedValueOnce({
+      dirPath: "/wt/epic-dir",
+    } as never);
+    const opener = await import("@/features/viewer/lib/epic-workspace-opener");
+    vi.spyOn(opener, "resolveEpicCommandContext").mockReturnValue({
+      codesenseHome: "/home/.codesense",
+      githubUserId: 1,
+      orgSlug: "acme",
+      team: "backend",
+    } as never);
+    vi.spyOn(commands, "resolveEpicPath").mockResolvedValueOnce({
+      epicDirName: "e1",
+      epicFilePath: "/ctx/e1/README.md",
+    } as never);
+    const result = await open({
+      target: { kind: "epic", team: TEAM_KEY, epic: "e1", agent: "builtin/codex" },
+      headed: false,
+    });
+    expect(result).toMatchObject({ launchFailed: { reason: "startup" } });
+    await expectUntouched();
+  });
+
+  it("New terminal: the launch resolves with launchFailed and the tab stays open", async () => {
+    useViewerStore.setState({
+      workspaces: {
+        [TEAM_KEY]: [{ id: "existing-workspace", cwd: "/wt/existing", kind: "generic" } as never],
+      },
+      activeWorkspace: { [TEAM_KEY]: "existing-workspace" },
+    });
+    const result = await launchAgentInWorkspace({
+      teamKey: TEAM_KEY,
+      workspaceKey: "existing-workspace",
+      agent: "triage",
+    });
+    expect(result).toMatchObject({ launchFailed: { reason: "startup" } });
+    await expectUntouched();
   });
 });
 
