@@ -2983,4 +2983,107 @@ mod caller_scope_tests {
             }
         });
     }
+
+    /// A frame whose content root is a source worktree, serving `stories/board.html`
+    /// from it. `register` records the worktree in the index the editor's gate reads.
+    fn worktree_frame_request(register: bool) -> StatusCode {
+        let f = AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9321));
+        // Outside `~/.codesense/users/`: a sibling clone's story worktree.
+        let worktree = f
+            .fixture
+            .temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("acme-wt/feat-story");
+        std::fs::create_dir_all(worktree.join("stories")).unwrap();
+        let page = worktree.join("stories/board.html");
+        std::fs::write(&page, "<p>worktree board</p>").unwrap();
+        if register {
+            use crate::install::worktree_index::{self, WorktreeStoryRecord};
+            let record = WorktreeStoryRecord::new(
+                &worktree,
+                "acme",
+                worktree_index::slug_from_source_repo("acme/api").unwrap(),
+                "SV-1",
+                worktree.join("stories/story.md"),
+            );
+            worktree_index::write_record(
+                &f.fixture.home,
+                &crate::domain::Principal::from(1u64),
+                &record,
+            )
+            .unwrap();
+        }
+        let frames = f
+            .app
+            .state::<std::sync::Arc<crate::dashboard_stream::frame::FrameStore>>()
+            .inner()
+            .clone();
+        let frame = frames.mint(
+            9321,
+            crate::dashboard_stream::frame::FrameGrant {
+                frame_id: String::new(),
+                principal: "1".into(),
+                dashboard: page.to_string_lossy().into(),
+                slot: "viewer".into(),
+                team: None,
+                scope: "private".into(),
+            },
+            worktree.to_string_lossy().into(),
+            page.to_string_lossy().into(),
+            page.parent().unwrap().to_string_lossy().into(),
+            crate::dashboard_stream::frame::FramePolicy::default(),
+            None,
+        );
+        type App = tauri::AppHandle<tauri::test::MockRuntime>;
+        async fn file(
+            State(app): State<App>,
+            Path((root, path)): Path<(String, String)>,
+            headers: HeaderMap,
+        ) -> Result<Response, StatusCode> {
+            serve_file_request(&app, &root, &path, &headers, None).await
+        }
+        let router = crate::http::frame_boundary::with_boundary(
+            Router::new()
+                .route("/viewer/{root}/{*path}", get(file))
+                .with_state(f.app.handle().clone()),
+            crate::http::frame_boundary::FrameBoundary {
+                frames,
+                port: 9321,
+                app_origins: crate::http::app_origins::AppOrigins::default(),
+            },
+        );
+        let root = URL_SAFE_NO_PAD.encode(worktree.to_string_lossy().as_bytes());
+        tauri::async_runtime::block_on(async {
+            let response = router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(format!("/viewer/{root}/stories/board.html"))
+                        .header(header::HOST, frame.origin.trim_start_matches("http://"))
+                        .header(header::ORIGIN, &frame.origin)
+                        .header("x-codesense-proxy-token", &frame.token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            response.status()
+        })
+    }
+
+    #[test]
+    fn viewer_route_serves_a_registered_story_worktree_outside_the_users_dir() {
+        assert_eq!(worktree_frame_request(true), StatusCode::OK);
+    }
+
+    #[test]
+    fn viewer_route_refuses_an_unregistered_worktree_path() {
+        let status = worktree_frame_request(false);
+        assert!(
+            matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+            "an unregistered path must not be served, got {status}"
+        );
+    }
 }
