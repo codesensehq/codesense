@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { Root as HastRoot } from "hast";
 
 const getFileRedlineMock = vi.fn();
@@ -20,6 +20,51 @@ vi.mock("./changed-binary-affordance", () => ({
   ),
 }));
 
+// Stub the heavy viewers: assert which side and source they receive.
+vi.mock("@/features/dashboard/components/excalidraw-viewer", () => ({
+  ExcalidrawViewer: ({
+    sceneText,
+    readOnly,
+  }: {
+    sceneText?: string | null;
+    readOnly?: boolean;
+  }) => (
+    <div
+      data-testid="excalidraw"
+      data-scene={sceneText ?? "DISK"}
+      data-readonly={String(!!readOnly)}
+    />
+  ),
+}));
+vi.mock("@/features/dashboard/components/image-viewer", () => ({
+  ImageViewer: ({ baselineSource }: { baselineSource?: unknown }) => (
+    <div data-testid="image" data-baseline={baselineSource ? "yes" : "no"} />
+  ),
+}));
+vi.mock("@/features/dashboard/components/html-viewer", () => ({
+  HtmlViewer: ({ baselineSource }: { baselineSource?: unknown }) => (
+    <div data-testid="html" data-baseline={baselineSource ? "yes" : "no"} />
+  ),
+}));
+vi.mock("@/shared/components/code-editor", async (orig) => ({
+  ...(await orig<typeof import("@/shared/components/code-editor")>()),
+  CodeDiffReview: ({
+    before,
+    after,
+    diffMode,
+  }: {
+    before: string;
+    after: string;
+    diffMode?: string;
+  }) => (
+    <div data-testid="code-diff" data-diff-mode={diffMode ?? "line"}>
+      {before}→{after}
+    </div>
+  ),
+}));
+
+import { useViewerStore } from "@/shared/stores/viewer-store";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import { MarkdownRedlineViewer } from "./markdown-redline-viewer";
 
 function pHast(text: string): HastRoot {
@@ -42,6 +87,7 @@ describe("MarkdownRedlineViewer (SW-GS-3)", () => {
   beforeEach(() => {
     getFileRedlineMock.mockReset();
     parseToRedlineMock.mockReset();
+    resetModes();
   });
 
   it("renders the worker redline output for a changed markdown file", async () => {
@@ -107,5 +153,139 @@ describe("MarkdownRedlineViewer (SW-GS-3)", () => {
 
     expect(await screen.findByTestId("cba")).toHaveTextContent("modified");
     expect(parseToRedlineMock).not.toHaveBeenCalled();
+  });
+});
+
+function resetModes() {
+  const { defaultFileDiffMode: _mode, ...settings } = useViewerStore.getState().settings;
+  void _mode;
+  useViewerStore.setState({ settings });
+}
+
+function redline(status: "added" | "modified" | "deleted", before = "B", after = "A") {
+  return { status, binary: false, before, after };
+}
+
+const teamContentPath = "/ctx/_team/default/content";
+
+describe("Files diff: every type through the shared dispatch", () => {
+  let ro: ReturnType<typeof stubResizeObserver> | null = null;
+  beforeEach(() => {
+    getFileRedlineMock.mockReset();
+    resetModes();
+  });
+  afterEach(() => {
+    ro?.restore();
+    ro = null;
+  });
+
+  it("a changed .ts is a CodeDiffReview, never a markdown redline", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("modified", "a", "b"));
+    render(<MarkdownRedlineViewer {...baseProps} absPath="/ctx/x.ts" />);
+    expect(await screen.findByTestId("code-diff")).toHaveTextContent("a→b");
+    expect(parseToRedlineMock).not.toHaveBeenCalled();
+  });
+
+  it("a changed HTML file shows Before and After side by side at 900 px", async () => {
+    ro = stubResizeObserver(900);
+    getFileRedlineMock.mockResolvedValue(redline("modified"));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/c.html"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    await screen.findAllByTestId("html");
+    expect(screen.getAllByTestId("html").map((f) => f.dataset.baseline)).toEqual(["yes", "no"]);
+  });
+
+  it("a modified image below 900 px shows the toggle, After (the working tree) first", async () => {
+    ro = stubResizeObserver(899);
+    getFileRedlineMock.mockResolvedValue(redline("modified"));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/a.png"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    expect(await screen.findByTestId("image")).toHaveAttribute("data-baseline", "no");
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(screen.getByTestId("image")).toHaveAttribute("data-baseline", "yes");
+  });
+
+  it("a diff that can't be read says so instead of loading forever", async () => {
+    getFileRedlineMock.mockImplementation(() =>
+      Promise.reject(new Error("not a path inside the repo")),
+    );
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/a.png"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("not a path inside the repo");
+  });
+
+  it("an added file has no toggle and shows only the current version", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("added", "", "A"));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/a.png"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    expect(await screen.findByTestId("image")).toHaveAttribute("data-baseline", "no");
+    expect(screen.queryByRole("button", { name: "Before" })).not.toBeInTheDocument();
+  });
+
+  it("a deleted file has no toggle and shows only the baseline", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("deleted", "B", ""));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/a.png"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    expect(await screen.findByTestId("image")).toHaveAttribute("data-baseline", "yes");
+    expect(screen.queryByRole("button", { name: "After" })).not.toBeInTheDocument();
+  });
+
+  it("Excalidraw's before side is the baseline scene JSON, both sides read-only", async () => {
+    ro = stubResizeObserver(899);
+    getFileRedlineMock.mockResolvedValue(redline("modified", '{"baseline":1}', '{"current":1}'));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        absPath="/ctx/a.excalidraw"
+        teamContentPath={teamContentPath}
+      />,
+    );
+    const after = await screen.findByTestId("excalidraw");
+    expect(after).toHaveAttribute("data-scene", "DISK");
+    expect(after).toHaveAttribute("data-readonly", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    const before = screen.getByTestId("excalidraw");
+    expect(before).toHaveAttribute("data-scene", '{"baseline":1}');
+    expect(before).toHaveAttribute("data-readonly", "true");
+  });
+
+  it("the mode switch writes the shared default", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("modified", "old", "new"));
+    parseToRedlineMock.mockReturnValue({
+      promise: Promise.resolve({ hast: pHast("redline-ok"), perf: {}, receiveAt: 0 }),
+      cancel: vi.fn(),
+    });
+    render(<MarkdownRedlineViewer {...baseProps} />);
+    await screen.findByText("redline-ok");
+    fireEvent.click(
+      within(screen.getByTestId("file-diff-mode-switch")).getByRole("button", { name: "Source" }),
+    );
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
+    expect(screen.getByTestId("code-diff")).toHaveTextContent("old→new");
   });
 });

@@ -79,6 +79,8 @@ export interface FileDiffPrefs {
     className?: string;
     style?: CSSProperties;
     ref?: Ref<HTMLDivElement>;
+    /** The redline's scroll container (keyboard scrolling binds to it). */
+    scrollRef?: Ref<HTMLDivElement>;
     /** Wraps the prose inside the scroll container (width, padding). */
     frameClassName?: string;
     /** Above the prose, inside the scroll container (labels, notes). */
@@ -432,9 +434,17 @@ function SourceBody({
 }
 
 /** The scroll container the prose bodies read in. */
-function ProseScroll({ prefs, children }: { prefs: FileDiffPrefs; children: ReactNode }) {
+function ProseScroll({
+  prefs,
+  scrollRef,
+  children,
+}: {
+  prefs: FileDiffPrefs;
+  scrollRef?: Ref<HTMLDivElement>;
+  children: ReactNode;
+}) {
   return (
-    <div className="h-full overflow-y-auto">
+    <div ref={scrollRef} className="h-full overflow-y-auto">
       <div className={prefs.prose?.frameClassName ?? "px-6 py-5"}>
         {prefs.prose?.header}
         {children}
@@ -461,7 +471,7 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
   } else if (mode === "redline") {
     body = (
       <LargeDiffGate filePath={filePath} sides={sides} prefix={prefix}>
-        <ProseScroll prefs={prefs}>
+        <ProseScroll prefs={prefs} scrollRef={prefs.prose?.scrollRef}>
           <RedlineProse
             before={state.kind === "ready" ? sides.before : null}
             after={state.kind === "ready" ? sides.after : null}
