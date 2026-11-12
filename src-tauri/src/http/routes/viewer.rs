@@ -2810,6 +2810,15 @@ fn validate_frame_path<R: tauri::Runtime>(
     frame: &FrameRecord,
     path: &std::path::Path,
 ) -> Result<(), StatusCode> {
+    // A frame rooted in a registered story worktree (the worktree editor's
+    // Rendered view) reads inside that worktree only.
+    if crate::commands::files::path_in_frame_worktree(
+        app,
+        std::path::Path::new(&frame.content_root),
+        path,
+    ) {
+        return Ok(());
+    }
     let scope = crate::context_repo::caller_scope::for_page(
         app,
         Some(&frame.document_path),

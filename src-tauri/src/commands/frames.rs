@@ -65,12 +65,27 @@ pub async fn mint_frame<R: tauri::Runtime>(
         team = Some(binding);
     } else {
         let path = PathBuf::from(&args.document_path);
-        crate::commands::files::validate_context_path(&path, &app)?;
+        // A story worktree's document, rooted at that registered worktree (the
+        // worktree editor's Rendered view), takes the worktree gate instead.
+        let content_root = PathBuf::from(&args.content_root);
+        let in_worktree = |p: &std::path::Path| {
+            crate::commands::files::path_in_frame_worktree(&app, &content_root, p)
+        };
+        let worktree_doc = in_worktree(&path);
+        if !worktree_doc {
+            crate::commands::files::validate_context_path(&path, &app)?;
+        }
         // Comparisons can show a committed file that has since been deleted.
         // Validate its existing ancestor instead; live documents must exist.
         let target = frame_document_target(&path, args.slot == "baseline")?;
-        crate::commands::files::validate_context_path(&target, &app)?;
-        crate::commands::files::validate_context_path(&PathBuf::from(&args.content_root), &app)?;
+        if worktree_doc {
+            if !in_worktree(&target) {
+                return Err("Access denied: document is outside its worktree".into());
+            }
+        } else {
+            crate::commands::files::validate_context_path(&target, &app)?;
+            crate::commands::files::validate_context_path(&content_root, &app)?;
+        }
         let roots = crate::context_query::known_roots(&app);
         let active = super::pane_bridge::doc_context(&roots, &args.content_root);
         // A built-in lives outside every space: it belongs to the org it is listed in.

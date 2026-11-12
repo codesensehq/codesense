@@ -304,6 +304,22 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
     Err("Access denied: path is outside any registered worktree".to_string())
 }
 
+/// Is `path` inside `root`, where `root` lies in a registered worktree and not
+/// in the context repo? The gate for a viewer frame rooted in a story worktree
+/// (the worktree editor's Rendered view): it reads its own worktree only, never
+/// another worktree, and context content keeps its team-scoped gate.
+/// Traversal-safe like [`validate_worktree_path`].
+pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: &Path,
+    path: &Path,
+) -> bool {
+    let root = normalize_path_components(root);
+    !path_in_context_roots(&root, app)
+        && path_in_worktree_roots(&root)
+        && path_within_any_root(path, std::slice::from_ref(&root))
+}
+
 /// Owned-`PathBuf` variant of `validate_context_path`. Builds the `PathBuf`
 /// from a string, runs validation, and returns the owned path so handlers
 /// can collapse the two-line preamble into a single call.
