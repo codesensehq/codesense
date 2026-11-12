@@ -607,13 +607,6 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let handle = app.clone();
     app.listen(inbox_events::INBOX_EVENT, move |event| {
         if let Ok(event) = serde_json::from_str::<inbox_events::InboxEvent>(event.payload()) {
-            // Archive, withdraw and restore change which pins are live.
-            if matches!(
-                event.kind,
-                inbox_events::InboxChange::Archived | inbox_events::InboxChange::Withdrawn
-            ) {
-                pins::refresh(&handle, event.team.clone(), None);
-            }
             let hub = handle.state::<LiveHub>();
             let mut model = hub.model.lock().unwrap();
             model
