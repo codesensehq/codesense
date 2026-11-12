@@ -73,6 +73,20 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("side-by-side");
   });
 
+  it("labels match the layout: one legend over the redline, the panes' own labels side by side", async () => {
+    readsAs("a", "b");
+    render(<TeamEditDiffDialog workspace={workspace} file={edit("doc.md")} onClose={() => {}} />);
+    await screen.findByTestId("redline");
+    // The redline is one column, so the sides read as one line, not two columns.
+    expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent(
+      "Team's version → Workspace A’s version",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+    expect(screen.queryByTestId("team-edit-diff-sides")).toBeNull();
+    expect(await screen.findAllByTestId("rendered-md")).not.toHaveLength(0);
+    expect(screen.getAllByText("Team's version").length).toBeGreaterThan(0);
+  });
+
   it("a changed HTML file is its source diff, with no rendered viewer", async () => {
     readsAs("<p>a</p>", "<p>b</p>");
     render(

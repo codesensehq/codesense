@@ -181,6 +181,8 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.getByTestId("code-diff")).toBeInTheDocument();
     expect(screen.queryByTestId("html")).toBeNull();
     expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+    // It is a code diff there, so it offers the code modes.
+    expect(screen.getByRole("button", { name: "Structural" })).toBeInTheDocument();
   });
 
   it("off Files: a binary image shows the binary affordance", () => {

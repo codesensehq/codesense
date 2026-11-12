@@ -70,10 +70,12 @@ function sideStatus(team: Side | null, mine: Side | null) {
   return "modified" as const;
 }
 
-/** Tall enough for the longer side (about 20px a line), never past the dialog. */
-function diffHeight(team: Side | null, mine: Side | null): string {
+/** Tall enough for the longer side (about 20px a code line, more for rendered
+ *  markdown), never past the dialog. */
+function diffHeight(team: Side | null, mine: Side | null, rendered: boolean): string {
   const lines = Math.max(sideText(team).split("\n").length, sideText(mine).split("\n").length);
-  return `min(60vh, ${Math.max(120, lines * 20 + 48)}px)`;
+  const px = rendered ? Math.max(240, lines * 36 + 48) : Math.max(120, lines * 20 + 48);
+  return `min(60vh, ${px}px)`;
 }
 
 function sideNote(side: Side | null, which: "team" | "workspace"): string | null {
@@ -123,6 +125,12 @@ export function TeamEditDiffDialog({
   const ready = team !== null && mine !== null;
   const notes = [sideNote(team, "team"), sideNote(mine, "workspace")].filter(Boolean);
   const conflict = file?.kind === "conflict";
+  const teamLabel = conflict ? "Team's version now" : "Team's version";
+  const mineLabel = `${workspace.name}\u2019s version`;
+  // Rendered markdown is one column (the redline) or labels its own panes (side
+  // by side); every other body is a two-column text diff.
+  const markdownMode = file && getViewerFileType(file.path) === "markdown" ? modes.markdown : null;
+  const rendered = markdownMode === "redline" || markdownMode === "side-by-side";
   return (
     <Dialog open={!!file} onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent
@@ -153,20 +161,28 @@ export function TeamEditDiffDialog({
           </p>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
-          <div
-            className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
-            data-testid="team-edit-diff-sides"
-          >
-            <span className="px-3 py-1.5">
-              {conflict ? "Team's version now" : "Team's version"}
-            </span>
-            <span className="border-l border-border px-3 py-1.5">
-              {workspace.name}&rsquo;s version
-            </span>
-          </div>
+          {markdownMode === "redline" ? (
+            <div
+              className="flex-none border-b border-border px-3 py-1.5 text-[11.5px] font-semibold"
+              data-testid="team-edit-diff-sides"
+            >
+              {teamLabel} <span className="font-normal text-muted-foreground">→</span> {mineLabel}
+            </div>
+          ) : markdownMode === "side-by-side" ? null : (
+            <div
+              className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
+              data-testid="team-edit-diff-sides"
+            >
+              <span className="px-3 py-1.5">{teamLabel}</span>
+              <span className="border-l border-border px-3 py-1.5">{mineLabel}</span>
+            </div>
+          )}
           {ready && file ? (
             // The strip adds a row above the diff, so the body grows with it.
-            <div className="min-h-0" style={{ height: `calc(${diffHeight(team, mine)} + 30px)` }}>
+            <div
+              className="min-h-0"
+              style={{ height: `calc(${diffHeight(team, mine, rendered)} + 30px)` }}
+            >
               {renderFileDiff({
                 fileType: getViewerFileType(file.path),
                 filePath: file.path,
@@ -174,6 +190,8 @@ export function TeamEditDiffDialog({
                   before: sideText(team),
                   after: sideText(mine),
                   status: sideStatus(team, mine),
+                  beforeLabel: teamLabel,
+                  afterLabel: mineLabel,
                 },
                 state:
                   "binary" in team || "binary" in mine ? { kind: "binary" } : { kind: "ready" },

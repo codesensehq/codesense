@@ -565,7 +565,12 @@ function RenderedFileDiff({
       testId={`${prefix}-rendered`}
       bodyRef={bodyRef}
       strip={
-        <DiffStrip sides={sides} kind="html" mode={mode} prefs={prefs} showSwitch={!!rendered} />
+        rendered ? (
+          <DiffStrip sides={sides} kind="html" mode={mode} prefs={prefs} showSwitch />
+        ) : (
+          // Off Files the body is a code diff, so it takes the code modes.
+          <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
+        )
       }
     >
       {body}
