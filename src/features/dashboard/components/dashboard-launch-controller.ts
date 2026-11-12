@@ -571,6 +571,7 @@ export async function connectNamedAgent(
     agentRevision: prepared.agent,
     warnings: prepared.warnings,
     promptInArgv: prepared.promptInArgv,
+    taskInArgv: prepared.taskInArgv,
     activityWrapped: result.activityWrapped,
     defaultPrompt: agent.prompt ? undefined : (prepared.defaultPrompt ?? undefined),
   };

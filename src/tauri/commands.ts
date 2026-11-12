@@ -6090,6 +6090,8 @@ export interface PreparedAgentLaunch {
   defaultPrompt?: string | null;
   /** The CLI receives the starting task and role facts on its own startup argv. */
   promptInArgv?: boolean;
+  /** A starting task (the launch's own or the agent's default) rides that argv. */
+  taskInArgv?: boolean;
   /** The agent's display name: the title its terminal tab gets when the launcher names none. */
   name: string;
   /** The MCP scope projected for the session. */

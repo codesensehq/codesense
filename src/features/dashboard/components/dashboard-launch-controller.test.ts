@@ -722,6 +722,64 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
     expect(branchDeps.killSession).not.toHaveBeenCalled();
   });
 
+  it("a re-open of a review left on its startup screen reuses it, still fails and types nothing", async () => {
+    // One registry across both opens: the first reserves, binds and leaves its agent on
+    // its screen; the second finds that live bound session and reuses it.
+    let bound: string | null = null;
+    const branchDeps = {
+      resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),
+      begin: vi.fn(async () => bound === null),
+      abort: vi.fn(async () => undefined),
+      killSession: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => bound),
+      ensureBranchWorktree: vi.fn(async () => "/wt"),
+      reconcileStory: vi.fn(async () => true),
+      connect: vi.fn(async () => ({ sessionId: "stuck-review" })),
+      bind: vi.fn(async (_handle: string, sessionId: string) => {
+        bound = sessionId;
+      }),
+      waitReady: vi.fn(async () => ({ ready: false, reason: "startup" })),
+      focus: vi.fn(),
+      isSessionParked: vi.fn(() => false),
+      probeAlive: vi.fn(async () => true),
+      evictStaleTab: vi.fn(),
+    } as unknown as BranchLaunchDeps;
+    const dashboardDeps = {
+      injectLine: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => bound),
+      evictStaleTab: vi.fn(),
+      closeByHandle: vi.fn(async () => undefined),
+    } as unknown as DashboardLaunchDeps;
+    const reopen = (operationId: string) =>
+      dispatchOpenWorkspace(
+        {
+          target: { kind: "branch", repo: "acme/app", branch: "feature/stuck" },
+          headed: false,
+          reviewPrompt: "/review it",
+          operationId,
+        },
+        DOC,
+        dashboardDeps,
+        branchDeps,
+        {} as DirLaunchDeps,
+        stubHeadless().launchers,
+      );
+    const failed = {
+      sessionId: "stuck-review",
+      promptDelivered: false,
+      launchFailed: { reason: "startup" },
+    };
+    await expect(reopen("stuck-op-1")).resolves.toMatchObject(failed);
+    await expect(reopen("stuck-op-2")).resolves.toMatchObject(failed);
+    // The second open reused the session and asked its readiness again, before any write.
+    expect(branchDeps.connect).toHaveBeenCalledOnce();
+    expect(branchDeps.waitReady).toHaveBeenCalledTimes(2);
+    expect(dashboardDeps.injectLine).not.toHaveBeenCalled();
+    expect(dashboardDeps.closeByHandle).not.toHaveBeenCalled();
+    expect(branchDeps.killSession).not.toHaveBeenCalled();
+    expect(branchDeps.abort).not.toHaveBeenCalled();
+  });
+
   it("closes a newly bound session when the readiness wait itself fails", async () => {
     const branchDeps = {
       resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),

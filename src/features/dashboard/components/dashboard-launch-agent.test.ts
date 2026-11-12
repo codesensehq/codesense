@@ -987,6 +987,47 @@ describe("an agent that never becomes input-ready is left alone, for every launc
     expect(result).not.toHaveProperty("launchFailed");
   });
 
+  /** The backend's role startup: the CLI gets its startup facts on argv, and a task too
+   *  when `taskInArgv`. */
+  function roleStartupOnArgv(taskInArgv: boolean) {
+    const router = invoke.router!;
+    invoke.router = async (cmd, args) => {
+      const value = await router(cmd, args);
+      if (cmd !== "agent_launch_prepare") return value;
+      return { ...(value as object), promptInArgv: true, taskInArgv, defaultPrompt: null };
+    };
+  }
+
+  it.each([
+    [
+      "branch review: its review prompt",
+      {
+        target: { kind: "branch" as const, repo: "acme/api", branch: "feat/x", agent: "reviewer" },
+        reviewPrompt: "/review it",
+      },
+    ],
+    [
+      "story: the agent's default task",
+      { target: { kind: "story" as const, storyId: "STORY-1", agent: "triage" } },
+    ],
+  ])("%s rode argv: the failure says it is still pending", async (_label, arg) => {
+    roleStartupOnArgv(true);
+    const result = await open(arg);
+    expect(result).toMatchObject({
+      promptDelivered: false,
+      launchFailed: { reason: "startup", promptPending: true },
+    });
+    await expectUntouched();
+  });
+
+  it("role startup on argv with no task: nothing is pending", async () => {
+    roleStartupOnArgv(false);
+    const result = await open({ target: { kind: "story", storyId: "STORY-1", agent: "triage" } });
+    expect(result).toMatchObject({ launchFailed: { reason: "startup" } });
+    expect(result.launchFailed).not.toHaveProperty("promptPending");
+    await expectUntouched();
+  });
+
   it("dir headless: the same failure, nothing typed", async () => {
     const result = await open({
       target: { kind: "dir", path: "/wt/existing", agent: "triage" },

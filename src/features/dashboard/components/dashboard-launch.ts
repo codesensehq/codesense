@@ -102,6 +102,9 @@ export interface ConnectedSession {
   /** The agent's own first prompt, for a launch that brought none — seeded once live. */
   defaultPrompt?: string;
   promptInArgv?: boolean;
+  /** A starting task (the launch's own or the agent's default) rode argv, so it still runs
+   *  once a startup screen is cleared. */
+  taskInArgv?: boolean;
   /** An existing tab was adopted rather than spawned: a failed launch never ends it. */
   adopted?: boolean;
   /** The launch line ran under the activity wrapper (see `LaunchResult`). False: the line
@@ -465,6 +468,11 @@ function launchFailedFor(
     : { reason, message: `The agent exited before it was ready to take input.${notSent}` };
 }
 
+/** Bound launches whose agent has not been seen input-ready yet, by session: the wait they
+ *  need, and whether a task rides their argv. A re-open that reuses one asks the wait again
+ *  before handing it back, so a caller never types into a startup screen it left. */
+const unreadyLaunches = new Map<string, { wait: ReadyWaitOptions; promptPending: boolean }>();
+
 /**
  * SW-GW-7: run the shared agent-session dance for `handle`. `headed:false` suppresses
  * EVERY focus (both the idempotent re-open re-focus and the post-bind console swap) —
@@ -509,6 +517,8 @@ export async function launchAgentSession(
   let spawnedSessionId: string | undefined;
   // SW-GW-5: a superseded (parked/dead) session to reap AFTER a successful rebind.
   let staleToReap: string | undefined;
+  // A launch recorded as unready whose bind never committed: nothing reuses it.
+  let unreadyRegistered: string | undefined;
 
   try {
     deps.assertContinue?.();
@@ -549,6 +559,30 @@ export async function launchAgentSession(
           deps.assertContinue?.();
           // A headless re-open must not yank focus to the backgrounded session.
           if (headed) deps.focus(existing);
+          // A launch not yet seen ready may still be on its startup screen: wait again, with
+          // what its own wait needed, and hand it back failed while it is not ready.
+          const unready = unreadyLaunches.get(existing);
+          if (unready) {
+            const readiness = await deps
+              .waitReady(existing, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS, unready.wait)
+              .catch(() => undefined);
+            if (readiness?.ready) {
+              unreadyLaunches.delete(existing);
+            } else if (readiness) {
+              return {
+                sessionId: existing,
+                promptDelivered: false,
+                launchFailed: launchFailedFor(readiness.reason, {
+                  promptPending: unready.promptPending,
+                  promptHeld: false,
+                }),
+              };
+            } else {
+              return initialPrompt
+                ? { sessionId: existing, promptDelivered: false }
+                : { sessionId: existing };
+            }
+          }
           // SW-GW-9 Gap A (AC-5): an already-live session is handed back WITHOUT
           // re-seeding (re-injecting a briefed prompt would be wrong). But a requested
           // seed must not vanish silently — report promptDelivered:false ("asked, not
@@ -558,6 +592,7 @@ export async function launchAgentSession(
             : { sessionId: existing };
         }
         staleToReap = existing;
+        unreadyLaunches.delete(existing);
       }
     }
 
@@ -578,7 +613,17 @@ export async function launchAgentSession(
     // An adopted tab was not spawned here, so a failed bind leaves it running.
     spawnedSessionId = connected.adopted ? undefined : sessionId;
     deps.assertContinue?.();
+    const wait: ReadyWaitOptions = {
+      activityWrapped: connected.activityWrapped,
+      adopted: connected.adopted,
+    };
+    const promptPending = Boolean(connected.taskInArgv);
+    // Recorded before the bind publishes the session, so an open that joins it from then on
+    // waits for readiness too.
+    unreadyLaunches.set(sessionId, { wait, promptPending });
+    unreadyRegistered = sessionId;
     await deps.bind(handle, sessionId, connected.agentRevision);
+    unreadyRegistered = undefined;
     // `bind` COMMITTED the session — first-class + killable via the SW-DX-17a panel,
     // no longer an orphan. Clear the reap handle: a best-effort waitReady/focus failure
     // must NEVER reap a live, bound, registered agent (code-review r1 MAJOR).
@@ -606,10 +651,12 @@ export async function launchAgentSession(
       // Nothing reaches the CLI until it is input-ready: a startup screen (trust, login,
       // update, any prompt) would take the typed line as its answer. Not ready → nothing is
       // typed, and the session is left running for a person to deal with.
-      const readiness = await deps.waitReady(sessionId, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS, {
-        activityWrapped: connected.activityWrapped,
-        adopted: connected.adopted,
-      });
+      const readiness = await deps.waitReady(
+        sessionId,
+        opts?.readyWaitMs ?? PAGE_READY_WAIT_MS,
+        wait,
+      );
+      if (readiness.ready) unreadyLaunches.delete(sessionId);
       // Focus FIRST (a synchronous void store setter) so a headed open paints the
       // terminal INSTANTLY; the user then watches the seed land — no perceived delay
       // (SW-GW-9 Gap B). The seed targets sessionId directly, not the focused tab,
@@ -621,7 +668,7 @@ export async function launchAgentSession(
       const seed = connected.promptInArgv ? undefined : (initialPrompt ?? connected.defaultPrompt);
       if (!readiness.ready) {
         launchFailed = launchFailedFor(readiness.reason, {
-          promptPending: Boolean(initialPrompt && connected.promptInArgv),
+          promptPending,
           promptHeld: Boolean(seed && deps.sendLine),
         });
         if (initialPrompt) promptDelivered = false;
@@ -667,6 +714,7 @@ export async function launchAgentSession(
     if (fresh) {
       await deps.abort(handle);
     }
+    if (unreadyRegistered) unreadyLaunches.delete(unreadyRegistered);
     // SW-DX-17b / SW-GW-5: reap a session WE spawned that never bound — REGARDLESS of
     // permit ownership (a heal runs on a `!fresh` re-open yet still spawns). Evict its
     // tab too so a retry's dedup can't re-bind this dead orphan. Best-effort: a failed

@@ -65,6 +65,9 @@ pub struct PreparedAgentLaunch {
     pub default_prompt: Option<String>,
     pub default_role: Option<String>,
     pub prompt_in_argv: bool,
+    /// A starting task (the launch's own or the agent's default) rides argv. Role startup
+    /// sets `prompt_in_argv` with or without one.
+    pub task_in_argv: bool,
     /// The agent's display name: the title its terminal tab gets when the
     /// launcher names none.
     pub name: String,
@@ -154,6 +157,7 @@ fn apply_for_session_with_cli(
         default_prompt: launch.default_prompt.clone(),
         default_role: launch.queue_role.clone(),
         prompt_in_argv: false,
+        task_in_argv: false,
         name: launch.name.clone(),
         scope,
     };
@@ -593,6 +597,7 @@ pub(crate) async fn prepare_role_startup(
     let prompt = initial_prompt
         .filter(|p| !p.trim().is_empty())
         .or(prepared.default_prompt.as_deref());
+    let task_in_argv = prompt.is_some();
     let args = super::mcp_scope::compose_args(
         prepared.launch.args.clone(),
         prepared.scope.extra_args.clone(),
@@ -612,6 +617,7 @@ pub(crate) async fn prepare_role_startup(
     prepared.scope.extra_args.clear();
     prepared.default_prompt = None;
     prepared.prompt_in_argv = true;
+    prepared.task_in_argv = task_in_argv;
     Ok(())
 }
 

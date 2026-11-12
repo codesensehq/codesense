@@ -1594,6 +1594,8 @@ async fn frontend_role_startup_returns_task_and_facts_on_argv_without_later_inpu
     .await
     .unwrap();
     assert!(prepared.prompt_in_argv);
+    // The launch's own task rode argv.
+    assert!(prepared.task_in_argv);
     assert!(prepared.default_prompt.is_none());
     assert!(prepared.scope.extra_args.is_empty());
     let args = &prepared.launch.args;
@@ -1650,6 +1652,8 @@ async fn opencode_role_startup_is_prepared_with_its_native_prompt_flag() {
         .await
         .unwrap();
     assert!(prepared.prompt_in_argv);
+    // The agent's default task moved into argv: it still rode there.
+    assert!(prepared.task_in_argv);
     assert_eq!(prepared.default_prompt, None);
     assert_eq!(
         prepared.launch.args[prepared.launch.args.len() - 2],
@@ -1698,6 +1702,7 @@ async fn renderer_default_prompt_reaches_both_role_startup_and_task_capture() {
         .await
         .unwrap();
     assert!(prepared.default_prompt.is_none());
+    assert!(prepared.task_in_argv);
     assert!(prepared
         .launch
         .args
