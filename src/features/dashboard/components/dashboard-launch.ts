@@ -374,8 +374,8 @@ export async function reserveForkLabel(
  * SW-GW-7 — the ONE `headed`-aware agent-session dance, shared by every workspace
  * kind (story · branch · epic-headless · dir-headless). The four spines differ ONLY
  * in how they resolve `(teamKey, cwd, handle, role)`; the reserve → idempotent-
- * re-open → connect → bind → reap → waitReady → (seed) → focus sequence — with SW-GW-5's
- * liveness gate + reservation-coherence ordering and SW-DX-17b's reap-at-bind-fail —
+ * re-open → connect → bind → reap → waitReady → (seed) → focus sequence — with its
+ * liveness gate + reservation-coherence ordering and its reap-at-bind-fail —
  * is identical, so it lives here ONCE instead of being copy-pasted per kind. The
  * caller (an adapter) pre-resolves its kind-specific context and closes it into the
  * `ensureCwd` / `connect` / `focus` thunks below. SW-GW-9: an optional (already-
@@ -596,9 +596,10 @@ export async function launchAgentSession(
     // agent never came up. A headed open focuses the terminal; a headless open stays
     // backgrounded + adoptable (no layout swap, no tab steal).
     //
-    // SW-GW-9: honest delivery signal — present ONLY when a seed was requested.
-    // `true` only while nothing says otherwise: it turns `false` when the agent is not
-    // input-ready, `sendLine` reports the line unsent, or anything in the tail throws.
+    // Honest delivery signal — present when a seed was requested, and always `false` on
+    // a failed launch (`launchFailed`) whether or not one was. `true` only while nothing
+    // says otherwise: it turns `false` when the agent is not input-ready, `sendLine`
+    // reports the line unsent, or anything in the tail throws.
     let promptDelivered: boolean | undefined = initialPrompt ? true : undefined;
     let launchFailed: LaunchFailed | undefined;
     try {
@@ -625,11 +626,11 @@ export async function launchAgentSession(
         });
         if (initialPrompt) promptDelivered = false;
       } else {
-        // SW-GW-9 (AC-1/AC-7): seed the live agent via the SHIPPED `sendLine` (SW-DX-10)
-        // — the one injector, reused verbatim (no new primitive, AC-3). The readiness wait
-        // is not gated on `headed`, so this seeds a headless background session too (the
-        // RF-18 combo). Only the story adapter wires `sendLine` + a normalized
-        // `initialPrompt`; branch/epic/dir pass neither, so this is a clean no-op for them.
+        // Seed the live agent via the shipped `sendLine`: the one injector, reused
+        // verbatim (no new primitive). The readiness wait is not gated on `headed`, so this
+        // seeds a headless background session too. Only the story adapter wires `sendLine`
+        // + a normalized `initialPrompt`; branch/epic/dir pass neither, so this is a clean
+        // no-op for them.
         //
         // KNOWN RACE (pre-existing, deferred): two CONCURRENT seeded opens of the SAME
         // handle can double-submit here (the non-`fresh` caller in the begin→bind window
@@ -637,8 +638,8 @@ export async function launchAgentSession(
         // tail against the shared session). The shipped code already double-binds/-focuses
         // in this window; the seed only extends it. A local `fresh`-gate is INCORRECT (it
         // would DROP a legitimate seed in the A-fails/B-succeeds interleaving — an AC-5
-        // silent drop); the real fix is launcher-level in-flight coordination (SW-GW-5/6),
-        // out of scope. Trigger is degenerate; nothing is reaped or corrupted.
+        // silent drop); the real fix is launcher-level in-flight coordination, out of
+        // scope. Trigger is degenerate; nothing is reaped or corrupted.
         if (seed && deps.sendLine) {
           const { submitted } = await deps.sendLine(sessionId, seed);
           if (initialPrompt) promptDelivered = submitted; // honest: what actually landed

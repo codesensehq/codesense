@@ -42,9 +42,10 @@ export function isLaunchable(target: LaunchTarget | null): target is LaunchTarge
   }
 }
 
-/** Why a page launch left its agent on a screen nothing was typed into. `startup`: the CLI
- *  never became input-ready in the wait (a trust, login, update or other startup prompt);
- *  `exited`: it quit first. The session is left running at its prompt for a person. */
+/** Why a page launch typed nothing into its agent. `startup`: the CLI never became
+ *  input-ready in the wait (a trust, login, update or other startup prompt), and its session
+ *  is left running at that prompt for a person. `exited`: the CLI quit before it was ready.
+ *  The message says when a typed starting prompt was held back unsent. */
 export interface LaunchFailed {
   reason: "startup" | "exited";
   /** Set only for `startup`; the same kind a session row carries for a CLI that reports it. */

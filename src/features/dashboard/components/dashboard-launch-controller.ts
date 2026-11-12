@@ -676,7 +676,7 @@ async function awaitAgentReady(
  * registry commands (`begin`/`abort`/`bind`/`resolveSession`), the reap choke
  * (`killSession`), and the SW-GW-5 liveness/reap probes
  * (`isSessionParked`/`probeAlive`/`evictStaleTab`) + the input-readiness wait
- * (`waitReady`). Every seam is byte-identical across the story (SW-DX-7), branch
+ * (`waitReady`). Every seam is byte-identical across the story, branch
  * (SW-DX-18), and epic/dir-headless (SW-GW-7) builders — they differ ONLY in the
  * per-kind `resolve`/`ensureCwd`/`connect`/`focus`. Wired ONCE here so the three
  * builders can't drift; each spreads this and adds its own kind-specific seams.
@@ -928,7 +928,7 @@ export function makeRealDashboardLaunchDeps(
   const getAgentPath = askAgentPathPerLaunch;
 
   return {
-    // SW-GW-7: the handle-keyed session seams (begin/abort/bind/reap/probe/waitReady)
+    // The handle-keyed session seams (begin/abort/bind/reap/probe/waitReady)
     // shared with the branch + epic/dir-headless spines — see the helper.
     // SW-GW-8: `docPath` is the session's launcher provenance.
     ...sharedManagedSessionSeams(getAgentPath, docPath),
