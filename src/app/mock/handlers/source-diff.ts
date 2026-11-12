@@ -203,6 +203,12 @@ const FIXTURE: FixtureFile[] = [
     uncommitted: true,
   },
   {
+    // HTML in the source diff reads as its source; rendering it here is later work.
+    file: { path: "docs/diff-card.html", status: "modified", added: 1, removed: 1 },
+    before: `<section class="card">\n  <h2>Changes</h2>\n</section>\n`,
+    after: `<section class="card">\n  <h2>Changes in this worktree</h2>\n</section>\n`,
+  },
+  {
     file: { path: "assets/diff-hero.png", status: "added" },
     before: null,
     after: null,
