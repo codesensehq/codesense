@@ -641,23 +641,34 @@ async function waitAgentLive(
 const ACTIVITY_OBSERVED_CLIS: ReadonlySet<string> = new Set(["claude", "codex"]);
 
 /** Wait for the launched agent to be input-ready: the host's observed bit for a CLI whose
- *  launch line it observes. Any other CLI, and a launch line typed raw (no layout target
- *  yet, so no activity wrapper: the host can never observe it), keeps the best-effort
- *  process-liveness wait and reads as ready: there is no signal to gate on, and failing it
- *  would report a false startup screen for a launch that worked. */
+ *  launch line runs under the activity wrapper. Any other CLI, and a launch line typed raw
+ *  (no layout target yet, so no wrapper: the host can never observe it), takes the process
+ *  wait instead: there is no observed bit to gate on, and failing on it would report a
+ *  false startup screen for a launch that worked. A CLI that never comes up in that wait is
+ *  reported `exited`, so nothing is typed into the bare shell it left.
+ *
+ *  An adopted tab whose wrapping is unknown was not launched here: its CLI is not on
+ *  record (the probe falls back to the built-in CLI's name), so neither the observed bit
+ *  nor a missed process probe says anything about it. It reads ready after the process
+ *  wait, as before the gate. */
 async function awaitAgentReady(
   getAgentPath: () => Promise<string | null>,
   sessionId: string,
   timeoutMs: number,
   opts?: ReadyWaitOptions,
 ): Promise<AgentSessionReadiness> {
+  if (opts?.adopted && opts.activityWrapped === undefined) {
+    await waitAgentLive(getAgentPath, sessionId);
+    return { ready: true };
+  }
   const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
   const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
   if (opts?.activityWrapped !== false && ACTIVITY_OBSERVED_CLIS.has(cli)) {
     return agentSessionAwaitReady(sessionId, timeoutMs);
   }
-  await waitAgentLive(getAgentPath, sessionId);
-  return { ready: true };
+  return (await waitAgentLive(getAgentPath, sessionId))
+    ? { ready: true }
+    : { ready: false, reason: "exited" };
 }
 
 /**

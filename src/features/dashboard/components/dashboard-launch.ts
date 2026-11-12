@@ -114,6 +114,9 @@ export interface ReadyWaitOptions {
   /** False: the launch line was typed raw (never observed), so the wait falls back to the
    *  process wait instead of failing the launch. Anything else: observed, the gate applies. */
   activityWrapped?: boolean;
+  /** An existing tab was adopted, not launched here: with `activityWrapped` unknown, nothing
+   *  says the host observes its agent, so the observed-bit gate does not apply. */
+  adopted?: boolean;
 }
 
 /** Where a `storyId` resolves to (trusted-side, via the pipeline scan). */
@@ -603,6 +606,7 @@ export async function launchAgentSession(
       // typed, and the session is left running for a person to deal with.
       const readiness = await deps.waitReady(sessionId, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS, {
         activityWrapped: connected.activityWrapped,
+        adopted: connected.adopted,
       });
       // Focus FIRST (a synchronous void store setter) so a headed open paints the
       // terminal INSTANTLY; the user then watches the seed land — no perceived delay

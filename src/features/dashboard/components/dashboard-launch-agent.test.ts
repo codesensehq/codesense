@@ -27,6 +27,8 @@ const {
   readiness: {
     answer: { ready: true } as { ready: true } | { ready: false; reason: "startup" | "exited" },
     asked: [] as Array<{ sessionId: string; timeoutMs: number }>,
+    /** Whether the process probe finds the agent CLI running. */
+    processUp: true,
   },
   agentRows: { rows: [] as unknown[] },
   /** The agent CLIs running in each session, as the process probe reads them. */
@@ -91,7 +93,7 @@ vi.mock("@/shared/lib/agent-session-launcher", async (importOriginal) => {
     ...actual,
     waitForAgentLive: vi.fn(async (sessionId: string, agent: string) => {
       liveProbes.push({ sessionId, agent });
-      return true;
+      return readiness.processUp;
     }),
     makeRealLaunchDeps: () => ({
       findExisting: async () => terminal.existing ?? undefined,
@@ -259,6 +261,7 @@ beforeEach(() => {
   jobs.clear();
   readiness.answer = { ready: true };
   readiness.asked.length = 0;
+  readiness.processUp = true;
 });
 
 describe("dispatchOpenWorkspace — a named agent, prepared trusted-side for the spawned session", () => {
@@ -914,6 +917,58 @@ describe("an agent that never becomes input-ready is left alone, for every launc
     expect(liveProbes.map((p) => p.sessionId)).toContain(shell.sessionId);
     expect(result).not.toHaveProperty("launchFailed");
     expect(result).toMatchObject({ sessionId: shell.sessionId });
+  });
+
+  it("story: a line typed raw whose CLI never comes up reads exited, and nothing reaches the bare shell", async () => {
+    terminal.activityWrapped = false;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toEqual([]);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    expect(result.launchFailed).not.toHaveProperty("needsYouKind");
+    await expectUntouched();
+  });
+
+  it("branch review: a raw-typed CLI that never comes up gets no review prompt typed into its shell", async () => {
+    terminal.activityWrapped = false;
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "branch", repo: "acme/api", branch: "feat/x", agent: "reviewer" },
+      reviewPrompt: "/review it",
+    });
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "exited" } });
+    await expectUntouched();
+  });
+
+  it("a CLI the host can't observe never asks it: ready once its process is up, no launchFailed", async () => {
+    const result = await open({
+      target: { kind: "story", storyId: "SW-1", agent: "opencode" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    const [shell] = terminal.shells;
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes).toEqual([{ sessionId: shell.sessionId, agent: "opencode" }]);
+    expect(result).not.toHaveProperty("launchFailed");
+    expect(terminal.seeds.map((s) => s.text)).toEqual(["/bmad-dev-story x"]);
+  });
+
+  it("an adopted tab is not held to the observed bit: no launchFailed, even when its probe misses", async () => {
+    terminal.existing = { workspaceId: "ws-x", sessionId: "shell-restored-triage" };
+    running.set("shell-restored-triage", "claude");
+    readiness.processUp = false;
+    const result = await open({
+      target: { kind: "dir", path: "/wt/existing", agent: "triage", session: "triage" },
+      headed: false,
+    });
+    expect(prepareCalls).toHaveLength(0);
+    // Its CLI is not on record, so neither the host's bit nor a missed probe says anything.
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes.map((p) => p.sessionId)).toEqual(["shell-restored-triage"]);
+    expect(result).toMatchObject({ sessionId: "shell-restored-triage" });
+    expect(result).not.toHaveProperty("launchFailed");
   });
 
   it("dir headless: the same failure, nothing typed", async () => {

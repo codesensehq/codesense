@@ -826,6 +826,17 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     },
   );
 
+  it("(g4c) an adopted tab says so to the readiness wait", async () => {
+    const { deps } = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", adopted: true })),
+    });
+    await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+      activityWrapped: undefined,
+      adopted: true,
+    });
+  });
+
   it("(g5) the readiness wait also runs for a launch with no prompt, and reports the failure", async () => {
     const { deps } = makeDeps({
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
