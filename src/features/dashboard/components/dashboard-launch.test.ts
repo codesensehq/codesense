@@ -760,7 +760,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
       waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
     });
     const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x", readyWaitMs: 5 });
-    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", 5);
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", 5, { activityWrapped: undefined });
     expect(deps.sendLine).not.toHaveBeenCalled();
     expect(calls).not.toContain("sendLine");
     expect(res).toEqual({
@@ -808,8 +808,23 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
     expect(res).toEqual({ sessionId: "sess-1", promptDelivered: true });
     expect("launchFailed" in res).toBe(false);
-    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS);
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+      activityWrapped: undefined,
+    });
   });
+
+  it.each([true, false])(
+    "(g4b) the launch's activity-wrapper answer (%s) reaches the readiness wait",
+    async (activityWrapped) => {
+      const { deps } = makeDeps({
+        connect: vi.fn(async () => ({ sessionId: "sess-1", activityWrapped })),
+      });
+      await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
+      expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+        activityWrapped,
+      });
+    },
+  );
 
   it("(g5) the readiness wait also runs for a launch with no prompt, and reports the failure", async () => {
     const { deps } = makeDeps({

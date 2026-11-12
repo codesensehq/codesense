@@ -104,6 +104,16 @@ export interface ConnectedSession {
   promptInArgv?: boolean;
   /** An existing tab was adopted rather than spawned: a failed launch never ends it. */
   adopted?: boolean;
+  /** The launch line ran under the activity wrapper (see `LaunchResult`). False: the line
+   *  was typed raw, so the host can never observe the agent and its readiness can't gate. */
+  activityWrapped?: boolean;
+}
+
+/** What `waitReady` is told about the launch it waits on. */
+export interface ReadyWaitOptions {
+  /** False: the launch line was typed raw (never observed), so the wait falls back to the
+   *  process wait instead of failing the launch. Anything else: observed, the gate applies. */
+  activityWrapped?: boolean;
 }
 
 /** Where a `storyId` resolves to (trusted-side, via the pipeline scan). */
@@ -190,7 +200,11 @@ export interface DashboardLaunchDeps {
   /** Wait up to `timeoutMs` for the launched agent to be input-ready, so nothing is
    *  typed into a shell or a startup screen. Resolves `{ready:false}` instead of
    *  rejecting when it never is. */
-  waitReady: (sessionId: string, timeoutMs: number) => Promise<AgentSessionReadiness>;
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** AC-14: focus the launched terminal (layout `console` + active tab). */
   focus: (teamKey: string, sessionId: string, storyFilePath: string) => void;
   /** AC-10/AC-12: resolve the story's bound session id, or `null`. */
@@ -404,7 +418,11 @@ export interface AgentSessionDeps {
   /** Reap an orphaned/superseded session through the one `kill_session` choke. */
   killSession: (sessionId: string) => Promise<void>;
   /** Wait up to `timeoutMs` for the agent to be input-ready (see the story deps). */
-  waitReady: (sessionId: string, timeoutMs: number) => Promise<AgentSessionReadiness>;
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** Focus the launched terminal (layout `console` + active tab). Called ONLY when
    *  `headed`; the adapter closes over teamKey + the focus key. */
   focus: (sessionId: string) => void;
@@ -583,7 +601,9 @@ export async function launchAgentSession(
       // Nothing reaches the CLI until it is input-ready: a startup screen (trust, login,
       // update, any prompt) would take the typed line as its answer. Not ready → nothing is
       // typed, and the session is left running for a person to deal with.
-      const readiness = await deps.waitReady(sessionId, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS);
+      const readiness = await deps.waitReady(sessionId, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS, {
+        activityWrapped: connected.activityWrapped,
+      });
       // Focus FIRST (a synchronous void store setter) so a headed open paints the
       // terminal INSTANTLY; the user then watches the seed land — no perceived delay
       // (SW-GW-9 Gap B). The seed targets sessionId directly, not the focused tab,
@@ -923,7 +943,11 @@ export interface BranchLaunchDeps {
   /** Stamp `handle → sessionId` trusted-side (+ arm status projection). */
   bind: (handle: string, sessionId: string, scope?: LaunchBindScope) => Promise<void>;
   /** Wait up to `timeoutMs` for the agent to be input-ready (see the story deps). */
-  waitReady: (sessionId: string, timeoutMs: number) => Promise<AgentSessionReadiness>;
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** Submit a line into the live agent: a named agent's default prompt, when the launch
    *  brought no review prompt. */
   sendLine?: (sessionId: string, text: string) => Promise<{ submitted: boolean }>;
@@ -1146,10 +1170,10 @@ export async function openBranchWorkspace(
       killSession: deps.killSession,
       // A bounded wait that comes back not-ready is the launch's own result
       // (`launchFailed`); only a wait that throws or hangs is a readiness error.
-      waitReady: async (sessionId, timeoutMs) => {
+      waitReady: async (sessionId, timeoutMs, readyOpts) => {
         try {
           return await withReviewPhaseTimeout(
-            deps.waitReady(sessionId, timeoutMs),
+            deps.waitReady(sessionId, timeoutMs, readyOpts),
             "agent readiness",
           );
         } catch (error) {

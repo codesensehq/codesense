@@ -108,6 +108,7 @@ import {
   type AgentSessionDeps,
   type AgentLaunchRequest,
   type ConnectedSession,
+  type ReadyWaitOptions,
   type RunPromptParams,
   type SendToSessionParams,
   type OpenWorkspaceArg,
@@ -570,6 +571,7 @@ export async function connectNamedAgent(
     agentRevision: prepared.agent,
     warnings: prepared.warnings,
     promptInArgv: prepared.promptInArgv,
+    activityWrapped: result.activityWrapped,
     defaultPrompt: agent.prompt ? undefined : (prepared.defaultPrompt ?? undefined),
   };
 }
@@ -639,16 +641,21 @@ async function waitAgentLive(
 const ACTIVITY_OBSERVED_CLIS: ReadonlySet<string> = new Set(["claude", "codex"]);
 
 /** Wait for the launched agent to be input-ready: the host's observed bit for a CLI whose
- *  launch line it observes. Any other CLI keeps the best-effort process-liveness wait and
- *  reads as ready (no signal to gate on). */
+ *  launch line it observes. Any other CLI, and a launch line typed raw (no layout target
+ *  yet, so no activity wrapper: the host can never observe it), keeps the best-effort
+ *  process-liveness wait and reads as ready: there is no signal to gate on, and failing it
+ *  would report a false startup screen for a launch that worked. */
 async function awaitAgentReady(
   getAgentPath: () => Promise<string | null>,
   sessionId: string,
   timeoutMs: number,
+  opts?: ReadyWaitOptions,
 ): Promise<AgentSessionReadiness> {
   const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
   const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
-  if (ACTIVITY_OBSERVED_CLIS.has(cli)) return agentSessionAwaitReady(sessionId, timeoutMs);
+  if (opts?.activityWrapped !== false && ACTIVITY_OBSERVED_CLIS.has(cli)) {
+    return agentSessionAwaitReady(sessionId, timeoutMs);
+  }
   await waitAgentLive(getAgentPath, sessionId);
   return { ready: true };
 }
@@ -696,7 +703,8 @@ function sharedManagedSessionSeams(
     // SW-GW-8: every session launched through the dashboard controller records
     // its host `docPath` as provenance (the panel's "which surface opened this").
     bind: (h, sessionId, scope) => bindAndArm(h, sessionId, launcher, scope),
-    waitReady: (sessionId, timeoutMs) => awaitAgentReady(getAgentPath, sessionId, timeoutMs),
+    waitReady: (sessionId, timeoutMs, opts) =>
+      awaitAgentReady(getAgentPath, sessionId, timeoutMs, opts),
   };
 }
 

@@ -45,6 +45,8 @@ const {
     lines: [] as Array<{ sessionId: string; line: string }>,
     seeds: [] as Array<{ sessionId: string; text: string }>,
     shown: [] as Array<{ teamKey: string; workspaceId: string; sessionId: string }>,
+    /** What the launch line's inject step says about the activity wrapper; absent: nothing. */
+    activityWrapped: undefined as boolean | undefined,
   },
 }));
 
@@ -105,7 +107,9 @@ vi.mock("@/shared/lib/agent-session-launcher", async (importOriginal) => {
       closeTab: () => undefined,
       launchAgentLine: async (sessionId: string, line: string) => {
         terminal.lines.push({ sessionId, line });
-        return { ok: true };
+        return terminal.activityWrapped === undefined
+          ? { ok: true }
+          : { ok: true, activityWrapped: terminal.activityWrapped };
       },
       projectScopeConfig: async (
         sessionId: string,
@@ -247,6 +251,7 @@ beforeEach(() => {
   terminal.lines.length = 0;
   terminal.seeds.length = 0;
   terminal.shown.length = 0;
+  terminal.activityWrapped = undefined;
   liveProbes.length = 0;
   checkouts.length = 0;
   agentRows.rows = [];
@@ -884,6 +889,31 @@ describe("an agent that never becomes input-ready is left alone, for every launc
       launchFailed: { reason: "startup", needsYouKind: "startup", message: expect.any(String) },
     });
     await expectUntouched();
+  });
+
+  it("story: a launch line the wrapper observed still fails closed when it never reads ready", async () => {
+    terminal.activityWrapped = true;
+    const result = await open({
+      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    expect(readiness.asked).toHaveLength(1);
+    expect(result).toMatchObject({ promptDelivered: false, launchFailed: { reason: "startup" } });
+    await expectUntouched();
+  });
+
+  it("story: a line typed raw (never observed) skips the observed-bit gate and reads ready after the process wait", async () => {
+    terminal.activityWrapped = false;
+    const result = await open({
+      target: { kind: "story", storyId: "SW-1", agent: "triage" },
+      initialPrompt: "/bmad-dev-story x",
+    });
+    const [shell] = terminal.shells;
+    // The host was never asked: it can't observe this launch, so its "not ready" is no signal.
+    expect(readiness.asked).toEqual([]);
+    expect(liveProbes.map((p) => p.sessionId)).toContain(shell.sessionId);
+    expect(result).not.toHaveProperty("launchFailed");
+    expect(result).toMatchObject({ sessionId: shell.sessionId });
   });
 
   it("dir headless: the same failure, nothing typed", async () => {

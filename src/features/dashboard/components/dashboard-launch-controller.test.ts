@@ -663,7 +663,9 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       stubHeadless().launchers,
     );
     await vi.waitFor(() =>
-      expect(branchDeps.waitReady).toHaveBeenCalledWith("bound-review", expect.any(Number)),
+      expect(branchDeps.waitReady).toHaveBeenCalledWith("bound-review", expect.any(Number), {
+        activityWrapped: undefined,
+      }),
     );
     cancelWorkspaceOpen("bound-cancel-op");
     releaseLive({ ready: true });
