@@ -43,14 +43,19 @@ import {
   sourceDiffModeFor,
   type SourceDiffViewOption,
 } from "@/shared/stores/viewer-store";
-import { resolveFileDiffModes } from "@/shared/lib/file-diff-mode";
+import { resolveFileDiffModes, type MarkdownDiffMode } from "@/shared/lib/file-diff-mode";
+import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
+import {
+  FileDiffModeSwitch,
+  renderFileDiff,
+  type FileDiffState,
+} from "@/shared/lib/render-file-diff";
+import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { useTabSourceRepo } from "@/features/viewer/hooks/use-tab-source-repo";
 import { useSessionCwd } from "../hooks/use-session-cwd";
 import { useSessionCwdRevision } from "../hooks/use-session-cwd-revision";
 import { InfoTip } from "@/components/ui/tooltip";
-import { RedlineProse } from "@/features/git-sync/components/redline-prose";
 import {
-  CodeDiffReview,
   detectLanguageId,
   isStructuralLanguage,
   type ChunkPosition,
@@ -81,7 +86,6 @@ import {
   diffTotals,
   filterFiles,
   flatRows,
-  isProseDiffPath,
   navigationOrder,
   prefersTree,
   splitPath,
@@ -100,14 +104,6 @@ import {
   ChromeIconButton,
   useOverlayEscape,
 } from "./overlay-shell";
-
-/**
- * SLW-DV-6 (AC-8): combined before+after character budget above which the code
- * diff is gated behind an explicit "show anyway" (a minified bundle can be many
- * megabytes on one line, and the diff runs on the renderer thread). ~1.5M chars
- * comfortably covers normal source files while catching the pathological ones.
- */
-const LARGE_DIFF_CHARS = 1_500_000;
 
 // SLW-DV-5 (AC-1): coalesce a burst of watcher events onto one re-diff. The
 // max-wait force-flushes at least this often so a SUSTAINED sub-debounce edit
@@ -254,6 +250,8 @@ export function SourceDiffOverlay({
   const setSelectedFile = useViewerStore((s) => s.setSourceDiffSelectedFile);
   const toggleViewOption = useViewerStore((s) => s.toggleSourceDiffOption);
   const setDiffMode = useViewerStore((s) => s.setSourceDiffMode);
+  const { modes: fileDiffModes, setMode: setFileDiffMode } = useFileDiffModes();
+  const markdownMode = fileDiffModes.markdown;
   const toggleEditorOpen = useViewerStore((s) => s.toggleWorktreeEditorOpen);
   const setEditorFile = useViewerStore((s) => s.setWorktreeEditorFile);
   const setEditorRevealLine = useViewerStore((s) => s.setWorktreeEditorRevealLine);
@@ -662,13 +660,13 @@ export function SourceDiffOverlay({
     // Identical sides (a mode-only change) render a sentence, not a diff.
     redline.before !== redline.after &&
     redlineError == null &&
-    !isProseDiffPath(paneFile);
+    readsAsCode(paneFile, markdownMode);
   const resolved = redline != null || redlineError != null;
   const [lastWasCode, setLastWasCode] = useState(false);
   if (resolved && lastWasCode !== resolvedCodeDiff) setLastWasCode(resolvedCodeDiff);
   const paneIsCodeDiff = resolved
     ? resolvedCodeDiff
-    : lastWasCode && paneFile != null && !isProseDiffPath(paneFile);
+    : lastWasCode && paneFile != null && readsAsCode(paneFile, markdownMode);
 
   // The "copied" tick clears itself.
   useEffect(() => {
@@ -1159,6 +1157,17 @@ export function SourceDiffOverlay({
           }
           actions={
             <div className="flex shrink-0 items-center gap-0.5">
+              {paneFile != null && getViewerFileType(paneFile) === "markdown" && (
+                <>
+                  <FileDiffModeSwitch
+                    kind="markdown"
+                    mode={markdownMode}
+                    onChange={(m) => setFileDiffMode("markdown", m)}
+                    testId={`source-diff-markdown-mode-${ws.id}`}
+                  />
+                  <Divider />
+                </>
+              )}
               {paneIsCodeDiff && (
                 <>
                   <div
@@ -1440,17 +1449,21 @@ function DiffCodeControls({
   );
 }
 
+/** Whether a file's diff is the code diff the code controls drive: any
+ *  non-markdown file, and markdown shown as Source. */
+function readsAsCode(path: string, markdownMode: MarkdownDiffMode): boolean {
+  return getViewerFileType(path) !== "markdown" || markdownMode === "source";
+}
+
 /**
  * SLW-WD-5 AC-6 / RD-4 — the renderer-agnostic diff pane: a clean
  * `{ file, redline }` → render boundary that the master-detail layout drops into
- * its right column. WD-6 makes the renderer a pure `path`→renderer branch
- * (`pickRenderer`): binary → placeholder; markdown → `RedlineProse` (the
- * word-level prose redline reads better for docs — RD-3); everything else → a
- * read-only, syntax-highlighted `CodeDiffReview` (split or inline per the
- * `inline` toggle). Loading and redline-error states render inside this pane —
- * `RedlineProse` shows its own skeleton/error; the code path mirrors that with
- * an in-pane skeleton (before/after still loading) and an inline error row
- * (AC-6) — so a redline failure never blanks the rail beside it.
+ * its right column. Binary files and identical sides are this surface's own
+ * states; everything else goes through the shared `renderFileDiff` (markdown in
+ * the shared markdown mode, other files as a `CodeDiffReview` in this session's
+ * code mode, split or inline per the `inline` toggle). Loading, error and the
+ * large-diff gate render inside this pane, so a redline failure never blanks
+ * the rail beside it.
  */
 export function SourceDiffPane({
   filePath,
@@ -1488,10 +1501,7 @@ export function SourceDiffPane({
   navRef?: React.Ref<DiffNavigator | null>;
   onChunkPosition?: (position: ChunkPosition) => void;
 }) {
-  // AC-8: the code diff is computed synchronously on the renderer thread, so a
-  // very large file is gated behind an explicit "show anyway" — opting one file
-  // in is remembered by path (switching files re-gates).
-  const [forcedLargePath, setForcedLargePath] = useState<string | null>(null);
+  const { modes } = useFileDiffModes();
 
   if (binary) {
     // The binary placeholder REUSES the shared `FileWarningPlaceholder` (the WD-2
@@ -1523,97 +1533,31 @@ export function SourceDiffPane({
     );
   }
 
-  // AC-8 (DW-DV6-1): gate an enormous RESOLVED diff behind an explicit opt-in
-  // before EITHER renderer runs — the markdown prose redline is synchronous too,
-  // so the guard can't be code-only (a multi-MB doc would freeze the renderer).
-  // Only fires once content is loaded (non-null); while loading each renderer
-  // shows its own skeleton. Opting one file in is remembered by path.
-  if (
-    before != null &&
-    after != null &&
-    before.length + after.length > LARGE_DIFF_CHARS &&
-    forcedLargePath !== filePath
-  ) {
-    return (
-      <OverlayCenteredState
-        testId="source-diff-large-gate"
-        action={
-          <button
-            type="button"
-            data-testid="source-diff-show-anyway"
-            onClick={() => setForcedLargePath(filePath)}
-            className="rounded border border-border px-2 py-0.5 text-[0.7rem] font-medium text-foreground hover:bg-accent"
-          >
-            Show diff anyway
-          </button>
-        }
-      >
-        This file is large — rendering the diff may be slow.
-      </OverlayCenteredState>
-    );
-  }
-
-  // RD-3/AC-4: markdown keeps the word-level prose redline.
-  if (isProseDiffPath(filePath)) {
-    return (
-      <RedlineProse
-        before={before}
-        after={after}
-        error={error}
-        // AC-2: the file path is the no-flash reset key — a file switch resets the
-        // renderer, an in-place before/after edit at the SAME key keeps the prior render.
-        resetKey={filePath}
-        className="prose prose-sm max-w-none px-6 py-5 dark:prose-invert"
-      />
-    );
-  }
-
-  // AC-6: an upstream (fetch) redline error surfaces in place — never a crash.
-  if (error) {
-    return (
-      <div
-        role="alert"
-        data-testid="source-diff-code-error"
-        className="flex h-full items-center justify-center px-8 text-center text-xs text-destructive"
-      >
-        {error}
-      </div>
-    );
-  }
-
-  // before/after still loading — a quiet skeleton (mirrors RedlineProse's).
-  if (before == null || after == null) {
-    return (
-      <div
-        aria-hidden
-        data-testid="source-diff-code-skeleton"
-        className="h-full w-full animate-pulse rounded bg-muted/40"
-      />
-    );
-  }
-
-  // AC-1/AC-2/AC-3: source code → read-only, syntax-highlighted code diff.
+  const state: FileDiffState = error
+    ? { kind: "error", message: error }
+    : before == null || after == null
+      ? { kind: "loading" }
+      : { kind: "ready" };
   // `CodeDiffReview` remounts on a file/mode/theme change (its own composite
   // key), so no-flash is preserved without an outer `key` here.
-  // SLW-DV-8b (AC-3): both the ignore-whitespace override (synchronous, renderer
-  // thread) and structural mode (worker parse) are cost the plain line diff avoids;
-  // for a file only shown past the large-diff gate, force the plain line diff so an
-  // oversized file never pays either cost.
-  const oversized = before.length + after.length > LARGE_DIFF_CHARS;
-  return (
-    <CodeDiffReview
-      before={before}
-      after={after}
-      path={filePath}
-      mode={inline ? "inline" : "split"}
-      wordWrap={wordWrap}
-      collapseUnchanged={!expandAll}
-      diffMode={oversized ? "line" : diffMode}
-      autoFollow={autoFollow}
-      navRef={navRef}
-      onChunkPosition={onChunkPosition}
-    />
-  );
+  return renderFileDiff({
+    fileType: getViewerFileType(filePath),
+    filePath,
+    sides: { before, after, status },
+    state,
+    prefs: {
+      modes: { ...modes, code: diffMode },
+      testIdPrefix: "source-diff",
+      code: {
+        mode: inline ? "inline" : "split",
+        wordWrap,
+        collapseUnchanged: !expandAll,
+        autoFollow,
+        navRef,
+        onChunkPosition,
+      },
+    },
+  });
 }
 
 /**
@@ -1664,6 +1608,7 @@ function CommitDetailPane({
   workingError: string | null;
 }) {
   const commit = useSourceCommitChangeset(effectiveCwd, sha);
+  const markdownMode = useFileDiffModes().modes.markdown;
   const files = sha === null ? workingFiles : commit.files;
   const loading = sha === null ? workingLoading : commit.loading;
   const error = sha === null ? workingError : commit.error;
@@ -1718,7 +1663,7 @@ function CommitDetailPane({
           redline.before !== redline.after &&
           redlineError == null &&
           selectedFile &&
-          !isProseDiffPath(selectedFile) && (
+          readsAsCode(selectedFile, markdownMode) && (
             <DiffCodeControls
               wsId={ws.id}
               idPrefix="commit-diff"

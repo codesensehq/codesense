@@ -755,6 +755,40 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     );
     expect(screen.getByTestId("mock-redline-prose")).toBeInTheDocument();
     expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
+    // Through the shared file-diff dispatch.
+    expect(screen.getByTestId("source-diff-markdown")).toBeInTheDocument();
+  });
+
+  it("a MARKDOWN file's mode sits in the view options and writes the shared default", () => {
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "docs/readme.md" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    const modes = screen.getByTestId("source-diff-markdown-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("old→new");
+    expect(screen.queryByTestId("mock-redline-prose")).not.toBeInTheDocument();
+  });
+
+  it("an HTML file is its source diff, with no rendered mode offered", () => {
+    stubChangeset({ files: [...FILES, { path: "site/page.html", status: "modified" }] });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "site/page.html" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Side by side" })).not.toBeInTheDocument();
   });
 
   it("an MDX file is a code diff, not the prose redline (its imports and JSX are code)", () => {

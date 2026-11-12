@@ -37,7 +37,9 @@ import type { ViewerFileType } from "./viewer-file-type";
 export const SIDE_BY_SIDE_MIN_WIDTH = 900;
 
 /** Both sides past this many chars wait behind an explicit "show anyway": the
- *  code diff and the prose redline are computed on the renderer thread. */
+ *  code diff and the prose redline are computed on the renderer thread, and a
+ *  minified bundle can be megabytes on one line. ~1.5M chars covers normal
+ *  source files while catching the pathological ones. */
 export const LARGE_DIFF_CHARS = 1_500_000;
 
 export type FileDiffState =
@@ -192,8 +194,8 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
   );
 }
 
-/** The header strip (the `BeforeAfterDiffToggle` pattern): status, then the
- *  mode switch at the right. Drawn only when it has something to say. */
+/** The header strip (the former `BeforeAfterDiffToggle` pattern): status, then
+ *  the mode switch at the right. Drawn only where the surface takes the switch. */
 function DiffStrip<K extends FileDiffKind>({
   sides,
   kind,
@@ -208,7 +210,8 @@ function DiffStrip<K extends FileDiffKind>({
   showSwitch: boolean;
 }) {
   const onModeChange = showSwitch ? prefs.onModeChange : undefined;
-  if (!sides.status && !onModeChange) return null;
+  // A host without a switch here (the source diff) shows status in its own chrome.
+  if (!onModeChange) return null;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
     <div className="flex flex-none items-center gap-2 border-b px-3 py-1.5 text-xs">

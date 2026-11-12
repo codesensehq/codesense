@@ -8,8 +8,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CodeDiffReview } from "@/shared/components/code-editor";
+import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { renderFileDiff } from "@/shared/lib/render-file-diff";
+import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import {
   readFile,
   sourceRemoteFileRead,
@@ -60,6 +62,14 @@ function sideText(side: Side | null): string {
   return side && "text" in side ? side.text : "";
 }
 
+/** The comparison's status: the team side missing reads as added here, the
+ *  workspace side missing as deleted. */
+function sideStatus(team: Side | null, mine: Side | null) {
+  if (team && "missing" in team) return "added" as const;
+  if (mine && "missing" in mine) return "deleted" as const;
+  return "modified" as const;
+}
+
 /** Tall enough for the longer side (about 20px a line), never past the dialog. */
 function diffHeight(team: Side | null, mine: Side | null): string {
   const lines = Math.max(sideText(team).split("\n").length, sideText(mine).split("\n").length);
@@ -97,6 +107,7 @@ export function TeamEditDiffDialog({
 }) {
   const [team, setTeam] = useState<Side | null>(null);
   const [mine, setMine] = useState<Side | null>(null);
+  const { modes, setMode } = useFileDiffModes();
 
   useEffect(() => {
     if (!file) return;
@@ -153,15 +164,35 @@ export function TeamEditDiffDialog({
               {workspace.name}&rsquo;s version
             </span>
           </div>
-          {ready ? (
-            <CodeDiffReview
-              before={sideText(team)}
-              after={sideText(mine)}
-              path={file?.path}
-              mode="split"
-              height={diffHeight(team, mine)}
-              ariaLabel={`Team and workspace versions of ${file?.path ?? "the file"}`}
-            />
+          {ready && file ? (
+            // The strip adds a row above the diff, so the body grows with it.
+            <div className="min-h-0" style={{ height: `calc(${diffHeight(team, mine)} + 30px)` }}>
+              {renderFileDiff({
+                fileType: getViewerFileType(file.path),
+                filePath: file.path,
+                sides: {
+                  before: sideText(team),
+                  after: sideText(mine),
+                  status: sideStatus(team, mine),
+                },
+                state:
+                  "binary" in team || "binary" in mine ? { kind: "binary" } : { kind: "ready" },
+                prefs: {
+                  modes,
+                  onModeChange: setMode,
+                  testIdPrefix: "team-edit-diff",
+                  binary: (
+                    <div className="flex h-full items-center justify-center text-[12px] text-muted-foreground">
+                      Not a text file: no line-by-line view.
+                    </div>
+                  ),
+                  code: {
+                    mode: "split",
+                    ariaLabel: `Team and workspace versions of ${file.path}`,
+                  },
+                },
+              })}
+            </div>
           ) : (
             <div
               className="flex h-full items-center justify-center text-[12px] text-muted-foreground"

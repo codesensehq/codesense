@@ -17,9 +17,21 @@ vi.mock("@/shared/components/code-editor/CodeDiffReview", () => ({
     return <div>Read-only diff</div>;
   },
 }));
+vi.mock("./redline-prose", () => ({
+  RedlineProse: ({ before, after }: { before: string | null; after: string | null }) => (
+    <div data-testid="redline">
+      {before}→{after}
+    </div>
+  ),
+}));
+vi.mock("@/features/dashboard/components/html-viewer", () => ({
+  HtmlViewer: () => <div data-testid="html-viewer" />,
+}));
 vi.mock("@/features/dashboard/components/html-bridge", () => ({
   HTML_BRIDGE_ALLOWLIST: { openWorkspace: mocks.workspace },
 }));
+import { LARGE_DIFF_CHARS } from "@/shared/lib/render-file-diff";
+import { useViewerStore } from "@/shared/stores/viewer-store";
 import { OpenDiffTab } from "./open-diff-tab";
 const params = {
   repo: "acme/app",
@@ -35,7 +47,15 @@ const opened = {
   files: [{ path: "a.ts" }],
   resolvedRev: "abcdef1",
 };
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  const { defaultFileDiffMode: _mode, ...settings } = useViewerStore.getState().settings;
+  void _mode;
+  useViewerStore.setState({ settings });
+});
+function tabFor(file: string) {
+  return "virtual://source-diff/" + encodeURIComponent(JSON.stringify({ ...params, path: file }));
+}
 it("revalidates on mount and Refresh, discards superseded replies and passes the after range", async () => {
   const replies: ((v: unknown) => void)[] = [];
   mocks.read.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
@@ -105,4 +125,45 @@ it("switching file keeps the tab's team context", async () => {
     JSON.parse(decodeURIComponent(target.path.slice("virtual://source-diff/".length))),
   ).toEqual({ repo: "acme/app", rev: "abcdef1", path: "b.ts", storyId: "SV-X", team });
   expect(options).toMatchObject({ newTab: true });
+});
+it("a changed markdown file is the shared redline, with Source a switch away", async () => {
+  mocks.read.mockResolvedValue({ ...opened, files: [{ path: "doc.md" }] });
+  render(<OpenDiffTab filePath={tabFor("doc.md")} />);
+  expect(await screen.findByTestId("redline")).toHaveTextContent("old→new");
+  expect(mocks.review).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Source" }));
+  expect(mocks.review).toHaveBeenCalled();
+  expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
+});
+it("a changed HTML file is its source diff, with no rendered mode offered", async () => {
+  mocks.read.mockResolvedValue({ ...opened, files: [{ path: "page.html" }] });
+  render(<OpenDiffTab filePath={tabFor("page.html")} />);
+  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(screen.queryByTestId("html-viewer")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+});
+it("a changed .ts file is a code diff in the shared code mode, never a redline", async () => {
+  useViewerStore.getState().setFileDiffMode("code", "structural");
+  mocks.read.mockResolvedValue(opened);
+  render(<OpenDiffTab filePath={path} />);
+  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(mocks.review.mock.calls.at(-1)?.[0]).toMatchObject({ diffMode: "structural" });
+  expect(screen.queryByTestId("redline")).toBeNull();
+});
+it("a very large diff waits behind the large-diff gate", async () => {
+  mocks.read.mockResolvedValue({
+    ...opened,
+    redline: { before: "x".repeat(LARGE_DIFF_CHARS), after: "y", binary: false },
+  });
+  render(<OpenDiffTab filePath={path} />);
+  expect(await screen.findByTestId("open-diff-large-gate")).toBeVisible();
+  expect(mocks.review).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByTestId("open-diff-show-anyway"));
+  expect(mocks.review.mock.calls.at(-1)?.[0]).toMatchObject({ diffMode: "line" });
+});
+it("a binary file keeps its note", async () => {
+  mocks.read.mockResolvedValue({ ...opened, redline: { before: "", after: "", binary: true } });
+  render(<OpenDiffTab filePath={path} />);
+  expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
+  expect(mocks.review).not.toHaveBeenCalled();
 });
