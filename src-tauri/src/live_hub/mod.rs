@@ -241,6 +241,26 @@ impl LiveHub {
                 .cloned()
         })
     }
+
+    /// Hold `activity` as the last read of host `key`, as a refresh would.
+    #[cfg(test)]
+    pub(crate) fn hold_host_activity(&self, key: &str, activity: ActivityRead) {
+        use crate::commands::machines::{
+            RuntimeCounter, RuntimeLayoutReply, RuntimeMemberAddress, RuntimeMemberSlot,
+        };
+        let reply = RuntimeLayoutReply::Unavailable {
+            member: RuntimeMemberAddress {
+                machine_id: key.into(),
+                slot: RuntimeMemberSlot::InProcess,
+            },
+            admission_revision: RuntimeCounter::new(1),
+        };
+        self.model
+            .lock()
+            .unwrap()
+            .hosts
+            .insert(key.into(), (reply, activity));
+    }
 }
 impl Default for LiveHub {
     fn default() -> Self {

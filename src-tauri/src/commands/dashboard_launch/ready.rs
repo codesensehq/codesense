@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use codesense_pty_core::activity::Snapshot;
+use codesense_pty_core::activity::{Snapshot, State};
 use serde::Serialize;
 
 /// The longest a caller may ask the wait to run.
@@ -49,10 +49,13 @@ impl AgentReadiness {
     };
 }
 
-/// What a session's activity snapshot says. An exit wins over the observed bit.
+/// What a session's activity snapshot says. An exit wins over the observed bit, and a
+/// crashed agent is exited even before its exit is recorded.
 pub(crate) fn probe_of(snapshot: Option<&Snapshot>) -> ReadyProbe {
     match snapshot {
-        Some(snapshot) if snapshot.exit.is_some() => ReadyProbe::Exited,
+        Some(snapshot) if snapshot.exit.is_some() || snapshot.state == State::Crashed => {
+            ReadyProbe::Exited
+        }
         Some(snapshot) if snapshot.observed => ReadyProbe::Ready,
         _ => ReadyProbe::Pending,
     }
@@ -88,10 +91,20 @@ where
 /// last read of every host, for a session a local read cannot name (a remote one).
 pub(crate) fn session_snapshot(app: &tauri::AppHandle, session: &str) -> Option<Snapshot> {
     use tauri::Manager;
-    crate::mcp::activity::session_snapshot(app, session).or_else(|| {
-        app.state::<crate::live_hub::LiveHub>()
-            .activity_snapshot_of(session)
-    })
+    local_or_hub(
+        crate::mcp::activity::session_snapshot(app, session),
+        &app.state::<crate::live_hub::LiveHub>(),
+        session,
+    )
+}
+
+/// The local owner's read when it has one, else the hub's last read of any host.
+fn local_or_hub(
+    local: Option<Snapshot>,
+    hub: &crate::live_hub::LiveHub,
+    session: &str,
+) -> Option<Snapshot> {
+    local.or_else(|| hub.activity_snapshot_of(session))
 }
 
 #[cfg(test)]
@@ -100,10 +113,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn snapshot(observed: bool, exited: bool) -> Snapshot {
+        snapshot_of("s", "idle", observed, exited)
+    }
+
+    fn snapshot_of(session: &str, state: &str, observed: bool, exited: bool) -> Snapshot {
         serde_json::from_value(serde_json::json!({
-            "session":"s", "identity":{"hostBootId":"boot", "sessionIncarnation":"pty", "invocationId":"run"},
+            "session":session, "identity":{"hostBootId":"boot", "sessionIncarnation":"pty", "invocationId":"run"},
             "revision":1, "turnGeneration":0, "provider":"claude",
-            "state":"idle", "observed":observed, "limited":false,
+            "state":state, "observed":observed, "limited":false,
             "exit": if exited { serde_json::json!({"code":0,"signal":null,"requested":false}) } else { serde_json::Value::Null },
             "asks":[]
         }))
@@ -123,6 +140,44 @@ mod tests {
         // The process ended, observed or not.
         assert_eq!(probe_of(Some(&snapshot(false, true))), ReadyProbe::Exited);
         assert_eq!(probe_of(Some(&snapshot(true, true))), ReadyProbe::Exited);
+        // Crashed (its engine lost) before the exit is recorded: exited, never pending.
+        assert_eq!(
+            probe_of(Some(&snapshot_of("s", "crashed", false, false))),
+            ReadyProbe::Exited
+        );
+    }
+
+    #[test]
+    fn a_remote_session_reads_ready_from_the_hubs_last_read() {
+        // A remote row: the local owner can't name it, and the hub holds the read of the
+        // host it runs on, among other hosts.
+        let hub = crate::live_hub::LiveHub::default();
+        hub.hold_host_activity("local", Ok(vec![snapshot_of("here", "idle", false, false)]));
+        hub.hold_host_activity("down", Err("activity owner unavailable".into()));
+        hub.hold_host_activity(
+            "remote",
+            Ok(vec![snapshot_of("there", "idle", true, false)]),
+        );
+        let read = local_or_hub(None, &hub, "there");
+        assert_eq!(read.as_ref().map(|s| s.session.as_str()), Some("there"));
+        assert_eq!(probe_of(read.as_ref()), ReadyProbe::Ready);
+        // Not yet observed there: still on its startup screen.
+        hub.hold_host_activity(
+            "remote",
+            Ok(vec![snapshot_of("there", "idle", false, false)]),
+        );
+        assert_eq!(
+            probe_of(local_or_hub(None, &hub, "there").as_ref()),
+            ReadyProbe::Pending
+        );
+        // The local owner's read wins over the hub's, which may lag.
+        let local = snapshot_of("there", "idle", true, false);
+        assert!(local_or_hub(Some(local), &hub, "there").unwrap().observed);
+        // A session no host holds is never ready.
+        assert_eq!(
+            probe_of(local_or_hub(None, &hub, "nowhere").as_ref()),
+            ReadyProbe::Pending
+        );
     }
 
     #[tokio::test]
@@ -161,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_or_not_yet_bound_session_never_reads_ready() {
-        // A remote row, a session the owner has not seen and a never-bound id all read as
+        // A session neither the owner nor the hub has seen, or a never-bound id, reads as
         // no snapshot: the wait runs to its timeout and ends startup.
         let answer = await_ready_with(SHORT, TICK, || async { probe_of(None) }).await;
         assert_eq!(answer, AgentReadiness::STARTUP);
