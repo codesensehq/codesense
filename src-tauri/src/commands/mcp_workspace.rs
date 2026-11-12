@@ -1805,24 +1805,13 @@ async fn spawn_and_bind(
     // deliberately non-fatal — a foreground user can still answer the dialog,
     // and an unwritable `.claude.json` must never block the launch.
     // The adapter may return per-launch trust overrides for the managed paths.
-    let pretrust_cwd = cwd.to_string();
-    let pretrust_agent = agent.clone();
-    let pretrust_session = session_id.clone();
-    let trust_flags = super::async_helpers::await_blocking("managed_launch.pretrust", move || {
-        Ok::<Vec<String>, String>(crate::agents::workspace_trust::pretrust_managed_launch(
-            &pretrust_agent,
-            Path::new(&pretrust_cwd),
-            &pretrust_session,
-        ))
-    })
-    .await
-    .unwrap_or_default();
+    let trust_flags =
+        crate::agents::workspace_trust::pretrust_flags(&agent, Path::new(cwd), &session_id).await;
 
     // The CLI's own usage export, pointed at the local receiver. A launch with no bound API has
     // nowhere to send it, so it runs without the export.
     let mut launch_args = projected.take_arguments();
-    let options_end = codesense_pty_core::agent_cli::operands_at(&launch_args);
-    launch_args.splice(options_end..options_end, trust_flags);
+    crate::agents::workspace_trust::splice_trust_flags(&mut launch_args, trust_flags);
     let recorded_scope_env = projected.environment().to_vec();
     let telemetry_export = agent.descriptor().telemetry.clone();
     // The launch's own session id is its telemetry token, so the usage its exporter sends is

@@ -2447,3 +2447,221 @@ fn a_local_argv_launch_carries_the_login_path_and_a_remote_one_never_does() {
     );
     assert_eq!(remote.login_path, None);
 }
+
+/// Points the default (no managed account) `.claude.json` at a temp dir for the test's
+/// lifetime, holding the process env lock.
+struct DefaultClaudeConfig {
+    _env: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+    dir: tempfile::TempDir,
+}
+
+impl DefaultClaudeConfig {
+    fn new() -> Self {
+        let env = crate::content_engine::test_support::env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+        Self {
+            _env: env,
+            previous,
+            dir,
+        }
+    }
+
+    fn file(&self) -> PathBuf {
+        self.dir.path().join(".claude.json")
+    }
+}
+
+impl Drop for DefaultClaudeConfig {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(previous) => std::env::set_var("CLAUDE_CONFIG_DIR", previous),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+    }
+}
+
+/// A prepared Claude launch of a saved agent, its CodeSense home and a worktree under it
+/// that CodeSense manages.
+struct PretrustFixture {
+    _tmp: tempfile::TempDir,
+    home: PathBuf,
+    launch: AgentLaunch,
+    managed: PathBuf,
+}
+
+fn pretrust_fixture() -> PretrustFixture {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    team_content(&home, &alice());
+    save(&home, &alice(), draft("trustee", AgentCli::Claude));
+    let launch = prepare_named(&home, &alice(), "trustee", interactive(None)).unwrap();
+    let managed = home.join("users").join("1").join("fresh-worktree");
+    std::fs::create_dir_all(&managed).unwrap();
+    PretrustFixture {
+        _tmp: tmp,
+        home,
+        launch,
+        managed,
+    }
+}
+
+fn prepared_in(launch: &AgentLaunch, cwd: &Path) -> PreparedAgentLaunch {
+    apply_for_session(
+        launch.clone(),
+        Path::new(CLI),
+        &session("pretrust"),
+        cwd,
+        None,
+        true,
+    )
+    .unwrap()
+    .0
+}
+
+fn trusted(config: &Path, dir: &Path) -> bool {
+    read_json(config)["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"]
+        == json!(true)
+}
+
+#[tokio::test]
+async fn prepare_pretrusts_managed_worktree() {
+    let config = DefaultClaudeConfig::new();
+    let fixture = pretrust_fixture();
+    // The prepared launch recorded the managed dir; the request named another spelling.
+    let mut prepared = prepared_in(&fixture.launch, &fixture.managed);
+    prepared.cwd = Some(fixture.managed.to_string_lossy().into_owned());
+    let requested = fixture.home.join("elsewhere");
+
+    pretrust_prepared_launch(
+        &fixture.launch,
+        &prepared,
+        &requested.to_string_lossy(),
+        "page-session",
+    )
+    .await;
+
+    assert!(trusted(&config.file(), &fixture.managed));
+    assert!(!read_json(&config.file())["projects"]
+        .as_object()
+        .unwrap()
+        .contains_key(requested.to_string_lossy().as_ref()));
+}
+
+#[tokio::test]
+async fn prepare_pretrust_refuses_dir_outside_home() {
+    let config = DefaultClaudeConfig::new();
+    let fixture = pretrust_fixture();
+    let outside = tempfile::tempdir().unwrap();
+    let mut prepared = prepared_in(&fixture.launch, outside.path());
+    prepared.cwd = None;
+
+    pretrust_prepared_launch(
+        &fixture.launch,
+        &prepared,
+        &outside.path().to_string_lossy(),
+        "page-session",
+    )
+    .await;
+
+    assert!(
+        !config.file().exists(),
+        "an unmanaged dir must never be trusted"
+    );
+}
+
+#[tokio::test]
+async fn prepare_pretrusts_managed_account_home() {
+    let config = DefaultClaudeConfig::new();
+    let mut fixture = pretrust_fixture();
+    let mut account = crate::install::agent_account_store::resolve_without_managed_account();
+    account.account_id = Some("acct-one".into());
+    account.provider = Some(crate::install::agent_account_store::AgentProvider::Claude);
+    fixture.launch.account_preview = account;
+    let mut prepared = prepared_in(&fixture.launch, &fixture.managed);
+    prepared.cwd = Some(fixture.managed.to_string_lossy().into_owned());
+
+    pretrust_prepared_launch(
+        &fixture.launch,
+        &prepared,
+        &fixture.managed.to_string_lossy(),
+        "page-session",
+    )
+    .await;
+
+    // The home the launch binding gives the spawn (`resolve_for_launch` derives it the same way).
+    let spawn_home = crate::install::agent_account_store::managed_home(
+        &fixture.home,
+        &alice(),
+        "acct-one",
+    )
+    .unwrap();
+    assert!(trusted(&spawn_home.join(".claude.json"), &fixture.managed));
+    assert!(
+        !config.file().exists(),
+        "the default config file must stay untouched"
+    );
+}
+
+/// Both launch paths share the trust step, in the order each one's argv needs.
+#[test]
+fn agent_launch_prepare_pretrusts_before_role_startup() {
+    let source = include_str!("../agents_launch.rs");
+    let start = source.find("pub async fn agent_launch_prepare(").unwrap();
+    let body = &source[start..];
+    let product = body.find("prepare_product_session(").unwrap();
+    let trust = body.find("pretrust_prepared_launch(").unwrap();
+    let role = body.find("prepare_role_startup(").unwrap();
+    assert!(
+        product < trust && trust < role,
+        "the page launch trusts its worktree after the product session and before the role argv"
+    );
+}
+
+#[test]
+fn spawn_and_bind_pretrusts_after_the_projected_arguments_and_before_the_spawn() {
+    let source = include_str!("../mcp_workspace.rs");
+    let start = source.find("async fn spawn_and_bind(").unwrap();
+    let body = &source[start..];
+    let arguments = body.find("projected.take_arguments()").unwrap();
+    let flags = body.find("pretrust_flags(").unwrap();
+    let splice = body.find("splice_trust_flags(").unwrap();
+    assert!(
+        flags < arguments && arguments < splice,
+        "trust is written before the arguments are taken and its flags spliced after"
+    );
+    assert!(
+        !body.contains("pretrust_managed_launch("),
+        "the shared helper is the only caller"
+    );
+}
+
+/// A Claude launched from a page carries the status hooks, whatever the host's attribution
+/// hook trust decides: that only governs the attribution hooks.
+#[test]
+fn page_launch_settings_carry_status_hooks() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let fixture = pretrust_fixture();
+    for hook_trust in [true, false] {
+        let (_prepared, _creation, settings) = apply_for_session(
+            fixture.launch.clone(),
+            Path::new(CLI),
+            &session("status-hooks"),
+            &fixture.managed,
+            None,
+            hook_trust,
+        )
+        .unwrap();
+        let settings = read_json(settings.as_ref().unwrap().path());
+        for event in crate::agent_state::status_hooks().map(|hook| hook.event) {
+            assert!(
+                settings["hooks"][event]
+                    .to_string()
+                    .contains("codesense-notify"),
+                "{event} hook (attribution hook trust {hook_trust})"
+            );
+        }
+    }
+}
