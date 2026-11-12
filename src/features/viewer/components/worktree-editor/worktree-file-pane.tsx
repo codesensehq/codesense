@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: MIT
 import { FileWarning } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
+import { cn } from "@/lib/utils";
 import { basename } from "@/shared/lib/basename";
+import { renderViewer } from "@/shared/lib/render-viewer";
 import {
   CodeEditor,
   CodeMergeView,
@@ -32,6 +43,12 @@ import type { WorktreeEditorBackend } from "../../lib/worktree-editor-backend";
 import { ReconcileBar, ReconcileErrorBanner, StaleConflictBanner } from "../conflict-banners";
 import { FileWarningPlaceholder } from "../file-warning-placeholder";
 import { EditorSkeleton, EditorStateMessage } from "./editor-states";
+import {
+  initialViewMode,
+  rememberViewMode,
+  renderableType,
+  type WorktreeViewMode,
+} from "./worktree-view-mode";
 
 /** What the workbench chrome (tab strip, status bar, breadcrumbs) shows for a
  *  pane. Reported upward whenever any of it changes. */
@@ -206,6 +223,32 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
 
   const [cursor, setCursor] = useState<CursorInfo | null>(null);
 
+  // Rendered | Source, for the types the viewer renders. The viewer reads this
+  // Mac's disk, so a remote worktree stays source only.
+  const canRender = backend.location === "local" && renderableType(file.path) != null;
+  const [viewMode, setViewModeState] = useState<WorktreeViewMode>(() =>
+    initialViewMode(file.path, backend.rootPath),
+  );
+  const rendered = canRender && viewMode === "rendered";
+  const setViewMode = useCallback(
+    (mode: WorktreeViewMode) => {
+      setViewModeState(mode);
+      rememberViewMode(file.path, mode);
+    },
+    [file.path],
+  );
+  // The viewer mounts the first time Rendered is shown and then stays mounted
+  // (hidden under Source), so a save reaches it as a refresh, not a remount.
+  const [renderedShown, setRenderedShown] = useState(rendered);
+  if (rendered && !renderedShown) setRenderedShown(true);
+  // Its per-file refresh: a new disk version of a text file (a save here, or a
+  // write from outside that the watcher read in) or, for a file the editor
+  // can't hold (an image), any change in the worktree.
+  const refreshSignal = editable ? diskText : changedNonce;
+  const [refresh, setRefresh] = useState({ signal: refreshSignal, key: 0 });
+  if (refresh.signal !== refreshSignal) setRefresh({ signal: refreshSignal, key: refresh.key + 1 });
+  const changedPaths = useMemo(() => new Set([file.path]), [file.path]);
+
   // Report upward. Built field-by-field so an unrelated re-render doesn't
   // allocate a "changed" status object.
   useEffect(() => {
@@ -319,21 +362,28 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   );
 
   // The chrome's handle on this pane.
-  const apiState = useRef({ save, getDraft, reconciling, backOutOfReconcile });
+  const apiState = useRef({ save, getDraft, reconciling, backOutOfReconcile, rendered });
   useEffect(() => {
-    apiState.current = { save, getDraft, reconciling, backOutOfReconcile };
+    apiState.current = { save, getDraft, reconciling, backOutOfReconcile, rendered };
   });
   useEffect(() => {
     const api: PaneApi = {
       // The model's latest buffer (a hand-merge just lifted in included), not
       // the last committed render's.
       save: () => apiState.current.save(apiState.current.getDraft().buffer),
+      // A line jump or a search is about the text: it brings Source forward.
       revealLine: (line, column) => {
+        if (apiState.current.rendered) setViewModeState("source");
         if (editorRef.current) editorRef.current.revealLine(line, column);
         else pendingJumpRef.current = { line, column };
       },
-      openSearch: () => editorRef.current?.openSearch(),
-      focus: () => editorRef.current?.focus(),
+      openSearch: () => {
+        if (apiState.current.rendered) setViewModeState("source");
+        editorRef.current?.openSearch();
+      },
+      focus: () => {
+        if (!apiState.current.rendered) editorRef.current?.focus();
+      },
       // Read from the model's refs, not render state, so a check right after an
       // awaited save sees the save's result.
       // Under the conflict guard the tab holds work even when its buffer
@@ -352,10 +402,90 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
 
   // Re-focus the editor when its tab comes forward (autoFocus is mount-only).
   useEffect(() => {
-    if (active) editorRef.current?.focus();
-  }, [active]);
+    if (active && !rendered) editorRef.current?.focus();
+  }, [active, rendered]);
 
   const name = basename(file.path);
+
+  // The text side: the read state, the merge view, or the editor. Mounted the
+  // first time Source is shown, then kept (hidden under Rendered) so the undo
+  // history, cursor and an open merge survive a toggle.
+  const showRendered = rendered && !reconciling;
+  const [sourceShown, setSourceShown] = useState(!showRendered);
+  if (!showRendered && !sourceShown) setSourceShown(true);
+  const sourceLayer = (
+    <>
+      {state.kind === "loading" && <EditorSkeleton />}
+      {state.kind === "readError" && (
+        <EditorStateMessage
+          tone="destructive"
+          testId="worktree-file-error"
+          title="Couldn’t read this file."
+          detail={state.message}
+          action={
+            <button
+              type="button"
+              onClick={retryRead}
+              className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:[outline-color:var(--ring)]"
+            >
+              Retry
+            </button>
+          }
+        />
+      )}
+      {state.kind === "placeholder" && state.message === TOO_LARGE_MESSAGE && (
+        <TooLargeState name={name} size={file.size} />
+      )}
+      {state.kind === "placeholder" && state.message !== TOO_LARGE_MESSAGE && (
+        <FileWarningPlaceholder
+          message={state.message}
+          filename={name}
+          testId="worktree-file-placeholder"
+        />
+      )}
+      {state.kind === "removed" && (
+        <EditorStateMessage title="This file was removed." detail={name} />
+      )}
+      {editable && reconciling && (
+        <CodeMergeView
+          key={id}
+          ref={mergeRef}
+          diskValue={mergeDisk}
+          localValue={buffer}
+          onSave={resolveSave}
+          path={file.path}
+          lineSeparator={lineEnding}
+          height="100%"
+          ariaLabel={`Reconcile ${name}`}
+        />
+      )}
+      {editable && !reconciling && (
+        <CodeEditor
+          key={id}
+          ref={attachEditor}
+          value={buffer}
+          onChange={setBuffer}
+          onSave={save}
+          path={file.path}
+          gutters
+          lineWrap={lineWrap}
+          folding={affordances.folding}
+          showWhitespace={affordances.showWhitespace}
+          tabSize={indentation.size}
+          indentWithTabs={indentation.useTabs}
+          lineSeparator={lineEnding}
+          fontFamily={affordances.fontFamily}
+          search
+          ide
+          changeBaseline={head}
+          onCursorChange={setCursor}
+          autoFocus={active}
+          height="100%"
+          ariaLabel={`Editor for ${name}`}
+        />
+      )}
+    </>
+  );
 
   return (
     <div
@@ -406,80 +536,88 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
         </div>
       )}
 
+      {canRender && <ViewModeToggle mode={viewMode} onChange={setViewMode} />}
+
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {state.kind === "loading" && <EditorSkeleton />}
-        {state.kind === "readError" && (
-          <EditorStateMessage
-            tone="destructive"
-            testId="worktree-file-error"
-            title="Couldn’t read this file."
-            detail={state.message}
-            action={
-              <button
-                type="button"
-                onClick={retryRead}
-                className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:[outline-color:var(--ring)]"
-              >
-                Retry
-              </button>
-            }
-          />
+        {renderedShown && (
+          <div
+            className="absolute inset-0 flex flex-col"
+            hidden={!showRendered}
+            data-testid="worktree-rendered"
+          >
+            {renderViewer(
+              { filePath: file.path, teamContentPath: backend.rootPath, refreshKey: refresh.key },
+              { changedPaths },
+            )}
+          </div>
         )}
-        {state.kind === "placeholder" && state.message === TOO_LARGE_MESSAGE && (
-          <TooLargeState name={name} size={file.size} />
-        )}
-        {state.kind === "placeholder" && state.message !== TOO_LARGE_MESSAGE && (
-          <FileWarningPlaceholder
-            message={state.message}
-            filename={name}
-            testId="worktree-file-placeholder"
-          />
-        )}
-        {state.kind === "removed" && (
-          <EditorStateMessage title="This file was removed." detail={name} />
-        )}
-        {editable && reconciling && (
-          <CodeMergeView
-            key={id}
-            ref={mergeRef}
-            diskValue={mergeDisk}
-            localValue={buffer}
-            onSave={resolveSave}
-            path={file.path}
-            lineSeparator={lineEnding}
-            height="100%"
-            ariaLabel={`Reconcile ${name}`}
-          />
-        )}
-        {editable && !reconciling && (
-          <CodeEditor
-            key={id}
-            ref={attachEditor}
-            value={buffer}
-            onChange={setBuffer}
-            onSave={save}
-            path={file.path}
-            gutters
-            lineWrap={lineWrap}
-            folding={affordances.folding}
-            showWhitespace={affordances.showWhitespace}
-            tabSize={indentation.size}
-            indentWithTabs={indentation.useTabs}
-            lineSeparator={lineEnding}
-            fontFamily={affordances.fontFamily}
-            search
-            ide
-            changeBaseline={head}
-            onCursorChange={setCursor}
-            autoFocus={active}
-            height="100%"
-            ariaLabel={`Editor for ${name}`}
-          />
+        {sourceShown && (
+          <div className="absolute inset-0 flex flex-col" hidden={showRendered}>
+            {sourceLayer}
+          </div>
         )}
       </div>
     </div>
   );
 });
+
+/** Rendered | Source for a file the viewer can render: one radio group, so
+ *  arrow keys move between the two the way a segmented control does. */
+function ViewModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: WorktreeViewMode;
+  onChange: (mode: WorktreeViewMode) => void;
+}) {
+  const options: { mode: WorktreeViewMode; label: string }[] = [
+    { mode: "rendered", label: "Rendered" },
+    { mode: "source", label: "Source" },
+  ];
+  const refs = useRef<Record<WorktreeViewMode, HTMLButtonElement | null>>({
+    rendered: null,
+    source: null,
+  });
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const next = mode === "rendered" ? "source" : "rendered";
+    onChange(next);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div className="flex h-8 shrink-0 items-center justify-end border-b border-[var(--border)] px-2">
+      <div
+        role="radiogroup"
+        aria-label="View"
+        onKeyDown={onKeyDown}
+        className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-xs"
+      >
+        {options.map((o) => (
+          <button
+            key={o.mode}
+            ref={(el) => {
+              refs.current[o.mode] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={mode === o.mode}
+            tabIndex={mode === o.mode ? 0 : -1}
+            onClick={() => onChange(o.mode)}
+            className={cn(
+              "rounded px-2 py-0.5 font-medium focus-visible:outline-2 focus-visible:[outline-color:var(--ring)]",
+              mode === o.mode
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** `text` with its line breaks in `eol`, when it uses the other ending. */
 export function withLineEnding(text: string, eol: LineEnding): string {
