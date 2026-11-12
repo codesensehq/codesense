@@ -24,6 +24,7 @@ vi.mock("@/shared/stores/viewer-store", async () => {
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { SHORTCUT_ACTIONS } from "./registry";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 
 function run() {
   const action = SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-agent-inbox");
@@ -81,6 +82,12 @@ describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
     expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
     expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
     pane.remove();
+  });
+
+  it.each(AGENT_RUNTIMES)("opens the inbox for the active %s tab the same way", (runtime) => {
+    useAgentStateStore.getState().setProcessAgent("sess1", runtime);
+    run();
+    expect(useAgentInboxRailStore.getState().bySession.sess1).toBeDefined();
   });
 
   it("does not open for a shell, including a shell with launch history", () => {
