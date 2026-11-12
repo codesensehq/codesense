@@ -536,7 +536,19 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
         </div>
       )}
 
-      {canRender && <ViewModeToggle mode={viewMode} onChange={setViewMode} />}
+      {canRender && (
+        <ViewModeToggle
+          // A merge is resolved in the text: Source is what shows until it ends.
+          mode={reconciling ? "source" : viewMode}
+          disabled={reconciling}
+          // Rendered reads the file on disk; say so while the buffer is ahead.
+          note={showRendered && dirty ? "Showing the saved version · ⌘S to update" : null}
+          onChange={setViewMode}
+          onPick={(mode) => {
+            if (mode === "source") requestAnimationFrame(() => editorRef.current?.focus());
+          }}
+        />
+      )}
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {renderedShown && (
@@ -562,13 +574,20 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
 });
 
 /** Rendered | Source for a file the viewer can render: one radio group, so
- *  arrow keys move between the two the way a segmented control does. */
+ *  arrow keys (and Home / End) move between the two the way a segmented
+ *  control does. A click on Source also hands focus to the editor. */
 function ViewModeToggle({
   mode,
+  disabled,
+  note,
   onChange,
+  onPick,
 }: {
   mode: WorktreeViewMode;
+  disabled: boolean;
+  note: string | null;
   onChange: (mode: WorktreeViewMode) => void;
+  onPick: (mode: WorktreeViewMode) => void;
 }) {
   const options: { mode: WorktreeViewMode; label: string }[] = [
     { mode: "rendered", label: "Rendered" },
@@ -579,19 +598,33 @@ function ViewModeToggle({
     source: null,
   });
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    const next: WorktreeViewMode | null =
+      e.key === "Home"
+        ? "rendered"
+        : e.key === "End"
+          ? "source"
+          : ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
+            ? mode === "rendered"
+              ? "source"
+              : "rendered"
+            : null;
+    if (!next || disabled) return;
     e.preventDefault();
-    const next = mode === "rendered" ? "source" : "rendered";
     onChange(next);
     refs.current[next]?.focus();
   };
   return (
-    <div className="flex h-8 shrink-0 items-center justify-end border-b border-[var(--border)] px-2">
+    <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 text-[0.72rem]">
+      <span className="min-w-0 flex-1 truncate text-muted-foreground" aria-live="polite">
+        {note}
+      </span>
       <div
         role="radiogroup"
-        aria-label="View"
+        aria-label="File view"
+        aria-disabled={disabled || undefined}
+        title={disabled ? "Resolve the conflict first" : undefined}
         onKeyDown={onKeyDown}
-        className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-xs"
+        className="flex shrink-0 items-center rounded-md border border-[var(--border)] p-px"
       >
         {options.map((o) => (
           <button
@@ -603,12 +636,16 @@ function ViewModeToggle({
             role="radio"
             aria-checked={mode === o.mode}
             tabIndex={mode === o.mode ? 0 : -1}
-            onClick={() => onChange(o.mode)}
+            disabled={disabled}
+            onClick={() => {
+              onChange(o.mode);
+              onPick(o.mode);
+            }}
             className={cn(
-              "rounded px-2 py-0.5 font-medium focus-visible:outline-2 focus-visible:[outline-color:var(--ring)]",
+              "rounded px-2 py-px font-medium focus-visible:outline-2 focus-visible:[outline-color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60",
               mode === o.mode
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground",
+                ? "bg-muted text-foreground shadow-[inset_0_0_0_1px_var(--border)]"
+                : "text-muted-foreground enabled:hover:text-foreground",
             )}
           >
             {o.label}

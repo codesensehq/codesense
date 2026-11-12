@@ -167,6 +167,20 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
   });
 
+  it("says Rendered shows the saved version while the buffer has unsaved edits", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    expect(screen.queryByText(/Showing the saved version/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    fireEvent.change(await screen.findByLabelText("buffer"), {
+      target: { value: `${MERMAID_DOC}\nUnsaved.\n` },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+    expect(screen.getByText(/Showing the saved version/)).toBeInTheDocument();
+  });
+
   it("has no toggle for a code file", async () => {
     readFileMock.mockResolvedValue("fn main() {}\n");
     render(pane(`${ROOT}/src/main.rs`, backend()));
