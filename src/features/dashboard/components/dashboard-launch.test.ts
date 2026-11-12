@@ -871,6 +871,50 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     await expect(first).resolves.toEqual({ sessionId: "sess-1", promptDelivered: true });
   });
 
+  it("(g7) an argv prompt whose readiness wait throws: not delivered, and no launchFailed", async () => {
+    const { deps } = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true })),
+      waitReady: vi.fn(async () => {
+        throw new Error("host unreachable");
+      }),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    // Nothing confirmed the CLI took its argv prompt, and a thrown wait says nothing about
+    // its screen, so the result claims neither delivery nor a startup screen.
+    expect(res).toEqual({ sessionId: "sess-1", promptDelivered: false });
+    expect(deps.sendLine).not.toHaveBeenCalled();
+    expect(deps.killSession).not.toHaveBeenCalled();
+  });
+
+  it.each(["startup", "exited"] as const)(
+    "(g8) a typed starting prompt held back by a %s failure is named unsent in the message",
+    async (reason) => {
+      const failing = { waitReady: vi.fn(async () => ({ ready: false as const, reason })) };
+      // The launch's own prompt, typed after readiness: held back.
+      const typed = makeDeps(failing);
+      const own = await openStoryWorkspace("STORY-1", typed.deps, { initialPrompt: "/x" });
+      expect(own.launchFailed?.message).toMatch(/starting prompt was not sent/);
+      expect(own.launchFailed).not.toHaveProperty("promptPending");
+      // The agent's default prompt, typed when the launch brings none: held back too.
+      const named = makeDeps({
+        ...failing,
+        connect: vi.fn(async () => ({ sessionId: "sess-1", defaultPrompt: "/triage" })),
+      });
+      const byDefault = await openStoryWorkspace("STORY-1", named.deps);
+      expect(byDefault.launchFailed?.message).toMatch(/starting prompt was not sent/);
+      expect(named.deps.sendLine).not.toHaveBeenCalled();
+      // A prompt on argv was never going to be typed, and a launch with none holds nothing.
+      const argv = makeDeps({
+        ...failing,
+        connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true })),
+      });
+      const onArgv = await openStoryWorkspace("STORY-1", argv.deps, { initialPrompt: "/x" });
+      expect(onArgv.launchFailed?.message).not.toMatch(/starting prompt/);
+      const bare = await openStoryWorkspace("STORY-1", makeDeps(failing).deps);
+      expect(bare.launchFailed?.message).not.toMatch(/starting prompt/);
+    },
+  );
+
   it("(AC-4) two concurrent opens with different prompts each seed their OWN session (parallel + neutral)", async () => {
     // Distinct sessions per story; the two launches share nothing (own deps + own PTY).
     const a = makeDeps({ connect: vi.fn(async () => ({ sessionId: "sess-A" })) });

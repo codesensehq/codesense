@@ -447,21 +447,22 @@ export const RESERVATION_BIND_TIMEOUT_MS = 180_000;
 export const PAGE_READY_WAIT_MS = 45_000;
 
 /** The failed-launch result for an agent that was not input-ready: what a person sees, and
- *  whether its prompt (carried on argv) is still pending. */
+ *  what became of its starting prompt. `promptPending`: the prompt rode in argv and still
+ *  runs once the screen is cleared. `promptHeld`: a typed starting prompt (the launch's own
+ *  or the agent's default) was held back, so the message says it was not sent. */
 function launchFailedFor(
   reason: "startup" | "exited",
-  promptInArgv: boolean,
-  hasPrompt: boolean,
+  prompt: { promptPending: boolean; promptHeld: boolean },
 ): LaunchFailed {
+  const notSent = prompt.promptHeld ? " Its starting prompt was not sent." : "";
   return reason === "startup"
     ? {
         reason,
         needsYouKind: "startup",
-        message:
-          "The agent is waiting on a startup screen (a trust, login or update prompt). Nothing was typed; open its terminal to answer it.",
-        ...(hasPrompt && promptInArgv ? { promptPending: true as const } : {}),
+        message: `The agent is waiting on a startup screen (a trust, login or update prompt). Nothing was typed; open its terminal to answer it.${notSent}`,
+        ...(prompt.promptPending ? { promptPending: true as const } : {}),
       }
-    : { reason, message: "The agent exited before it was ready to take input." };
+    : { reason, message: `The agent exited before it was ready to take input.${notSent}` };
 }
 
 /**
@@ -614,12 +615,14 @@ export async function launchAgentSession(
       // so focus order can never affect where the line lands. A failed launch is
       // focused too, so the person sees the screen it is stuck on.
       if (headed) deps.focus(sessionId);
+      // A named agent launched with no prompt of its own starts with its default one; a
+      // prompt that rode in argv is never typed.
+      const seed = connected.promptInArgv ? undefined : (initialPrompt ?? connected.defaultPrompt);
       if (!readiness.ready) {
-        launchFailed = launchFailedFor(
-          readiness.reason,
-          Boolean(connected.promptInArgv),
-          Boolean(initialPrompt),
-        );
+        launchFailed = launchFailedFor(readiness.reason, {
+          promptPending: Boolean(initialPrompt && connected.promptInArgv),
+          promptHeld: Boolean(seed && deps.sendLine),
+        });
         if (initialPrompt) promptDelivered = false;
       } else {
         // SW-GW-9 (AC-1/AC-7): seed the live agent via the SHIPPED `sendLine` (SW-DX-10)
@@ -636,10 +639,6 @@ export async function launchAgentSession(
         // would DROP a legitimate seed in the A-fails/B-succeeds interleaving — an AC-5
         // silent drop); the real fix is launcher-level in-flight coordination (SW-GW-5/6),
         // out of scope. Trigger is degenerate; nothing is reaped or corrupted.
-        // A named agent launched with no prompt of its own starts with its default one.
-        const seed = connected.promptInArgv
-          ? undefined
-          : (initialPrompt ?? connected.defaultPrompt);
         if (seed && deps.sendLine) {
           const { submitted } = await deps.sendLine(sessionId, seed);
           if (initialPrompt) promptDelivered = submitted; // honest: what actually landed
@@ -648,7 +647,10 @@ export async function launchAgentSession(
     } catch {
       // swallow — the session is bound and running; the open still succeeds. AC-5:
       // a waitReady throw / sendLine throw ONLY flips promptDelivered; it never
-      // reaches the reap path (gated on spawnedSessionId, cleared at bind above).
+      // reaches the reap path (gated on spawnedSessionId, cleared at bind above). A
+      // thrown wait carries no `launchFailed`: it says nothing about the agent's screen,
+      // and the contract's reasons are what the wait observed. Even an argv prompt reads
+      // undelivered, since nothing confirmed the CLI took it.
       if (initialPrompt) promptDelivered = false;
     }
     const warnings = connected.warnings?.length ? { warnings: connected.warnings } : {};
