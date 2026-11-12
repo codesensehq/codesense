@@ -13,6 +13,8 @@ describe("agents.css secondary ink tokens", () => {
     const scope = block("\\.cs-agents,\\s*\\.cs-agent-identity");
     expect(scope).toContain("--ag-muted: color-mix(in oklab, var(--ag-text) 76%, var(--ag-bg));");
     expect(scope).toContain("--ag-faint: color-mix(in oklab, var(--ag-text) 70%, var(--ag-bg));");
+    // The scope's two declarations plus the two `.ag-quick-send` re-points, and no others.
+    expect(AGENTS_CSS.match(/^\s*--ag-(muted|faint):/gm)).toHaveLength(4);
   });
 
   it("keeps the quick-send overlay re-points", () => {
