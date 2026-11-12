@@ -219,7 +219,11 @@ pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin
     ))?;
     let rows = stmt
         .query_map(params![thread.agent_id, thread.story_id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get(1)?, r.get(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows
