@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   ROW_POPUP_ATTR,
   TERMINAL_POPUP_ATTR,
+  exitTopmostOverlay,
   getActivePaneType,
   isCmdW,
   isRowPopupFocused,
@@ -110,6 +111,63 @@ describe("focus-utils", () => {
     it("reads an event with no key as no ⌘W, without throwing", () => {
       const noKey = { metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, code: "KeyW" };
       expect(isCmdW({ ...noKey, key: undefined as unknown as string })).toBe(false);
+    });
+  });
+
+  describe("exitTopmostOverlay", () => {
+    const overlay = (id: string, extra = "") =>
+      `<div id="${id}" data-fullscreen="true" ${extra}><button id="${id}-btn"></button></div>`;
+    const listen = (id: string) => {
+      const onEscape = vi.fn();
+      document.getElementById(id)!.addEventListener("codesense:frame-escape", onEscape);
+      return onEscape;
+    };
+
+    it("sends the frame-escape event to the last open overlay in document order", () => {
+      document.body.innerHTML = overlay("a") + overlay("b");
+      const a = listen("a");
+      const b = listen("b");
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(a).not.toHaveBeenCalled();
+    });
+
+    it("skips an overlay inside a hidden team and a docked (false) one", () => {
+      document.body.innerHTML =
+        overlay("shown") +
+        `<div style="display: none">${overlay("hidden")}</div>` +
+        '<div id="docked" data-fullscreen="false"></div>';
+      const shown = listen("shown");
+      const hidden = listen("hidden");
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(shown).toHaveBeenCalledTimes(1);
+      expect(hidden).not.toHaveBeenCalled();
+    });
+
+    it("does nothing and says so when no overlay is open", () => {
+      document.body.innerHTML = '<div data-fullscreen="false"></div>';
+      expect(exitTopmostOverlay()).toBe(false);
+    });
+
+    it.each([
+      ["an input", "<input id='f' />"],
+      ["a textarea", "<textarea id='f'></textarea>"],
+      ["a contenteditable", "<div id='f' contenteditable='true' tabindex='0'></div>"],
+      ["a terminal", "<div class='xterm'><textarea id='f'></textarea></div>"],
+    ])("leaves the overlay alone while focus is in %s", (_name, field) => {
+      document.body.innerHTML = overlay("a", "") + field;
+      const a = listen("a");
+      (document.getElementById("f") as HTMLElement).focus();
+      expect(exitTopmostOverlay()).toBe(false);
+      expect(a).not.toHaveBeenCalled();
+    });
+
+    it("exits from the overlay's own chrome", () => {
+      document.body.innerHTML = overlay("a");
+      const a = listen("a");
+      document.getElementById("a-btn")!.focus();
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(a).toHaveBeenCalledTimes(1);
     });
   });
 });

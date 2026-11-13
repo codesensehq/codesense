@@ -70,6 +70,7 @@ import {
 } from "@/shared/lib/viewer-file-type";
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
 import { closeActiveFileTab } from "@/shared/lib/close-active-file-tab";
+import { exitTopmostOverlay } from "@/shared/lib/focus-utils";
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import { useInstanceCount } from "@/shared/hooks/use-instance-count";
 import { useActionGate } from "./use-action-gate";
@@ -1724,6 +1725,8 @@ export function HtmlViewer({
       // same close primitive as every other affordance — parity with markdown/
       // image tabs, which close on ⌘W because they render in-app.
       if (type === "codesense:close-tab") {
+        // A maximized surface in front closes first, as ⌘W does from its chrome.
+        if (exitTopmostOverlay()) return;
         // A pane or a message is not a tab: ⌘W inside it must not close the centre tab.
         if (!embedded) closeActiveFileTab(filePath);
         return;

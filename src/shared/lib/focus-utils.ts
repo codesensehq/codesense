@@ -7,6 +7,8 @@
  * check and extend the PaneType union.
  */
 
+import { queryAllShown } from "@/shared/lib/warm-scopes";
+
 export type PaneType = "file" | "terminal" | "scratch-note";
 
 /** Marks a popup that shows a terminal outside the CLI (the Agents pane's quick view). Its
@@ -77,4 +79,28 @@ export function editorOwnsShortcut(
   editorTarget = isTextEditorTarget(target),
 ): boolean {
   return (actionId === "nav.context-back" || actionId === "nav.context-forward") && editorTarget;
+}
+
+/** The topmost open maximize overlay (`FullscreenOverlayShell`): the last shown one in document order. */
+function topmostOverlay(): HTMLElement | null {
+  return queryAllShown('[data-fullscreen="true"]').at(-1) ?? null;
+}
+
+/** Leaves the topmost maximize overlay by the same event Esc from a frame sends, so ⌘W and Esc
+ *  share one exit. Typing keeps its chord: focus in an input, a textarea, a contenteditable or a
+ *  terminal is left alone, as the overlay's own Esc handler does. Returns whether it acted. */
+export function exitTopmostOverlay(): boolean {
+  const overlay = topmostOverlay();
+  if (!overlay) return false;
+  const active = document.activeElement as HTMLElement | null;
+  if (
+    active &&
+    (active.tagName === "INPUT" ||
+      active.tagName === "TEXTAREA" ||
+      active.isContentEditable ||
+      active.closest(".xterm"))
+  )
+    return false;
+  overlay.dispatchEvent(new CustomEvent("codesense:frame-escape", { bubbles: true }));
+  return true;
 }
