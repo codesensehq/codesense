@@ -27,7 +27,12 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { initLogging, logger } from "@/shared/lib/logger";
-import { isCmdW, isRowPopupFocused, isTerminalFocused } from "@/shared/lib/focus-utils";
+import {
+  exitTopmostOverlay,
+  isCmdW,
+  isRowPopupFocused,
+  isTerminalFocused,
+} from "@/shared/lib/focus-utils";
 import { closeAgentResult } from "@/features/viewer/components/agent-result-panel";
 import { isRunOutputFocused } from "@/features/viewer/components/agent-run-output-host";
 import { closeActiveTerminalTab } from "@/features/viewer/lib/terminal-close";
@@ -704,6 +709,11 @@ function App() {
         // The worktree code editor closes its own tabs on ⌘W (with its unsaved-
         // changes guard); its handler runs after this capture-phase one.
         if ((document.activeElement as HTMLElement | null)?.closest?.("[data-worktree-editor]")) {
+          return;
+        }
+        // A maximized surface in front closes first: the tab behind it is not the one in view.
+        if (exitTopmostOverlay()) {
+          e.preventDefault();
           return;
         }
         const state = useViewerStore.getState();

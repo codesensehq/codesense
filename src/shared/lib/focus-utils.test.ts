@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   ROW_POPUP_ATTR,
   TERMINAL_POPUP_ATTR,
+  exitTopmostOverlay,
+  isTypingTarget,
   getActivePaneType,
   isCmdW,
   isRowPopupFocused,
@@ -111,5 +113,100 @@ describe("focus-utils", () => {
       const noKey = { metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, code: "KeyW" };
       expect(isCmdW({ ...noKey, key: undefined as unknown as string })).toBe(false);
     });
+  });
+
+  describe("exitTopmostOverlay", () => {
+    const overlay = (id: string, extra = "") =>
+      `<div id="${id}" data-fullscreen="true" ${extra}><button id="${id}-btn"></button></div>`;
+    const listen = (id: string) => {
+      const onEscape = vi.fn();
+      document.getElementById(id)!.addEventListener("codesense:frame-escape", onEscape);
+      return onEscape;
+    };
+
+    it("sends the frame-escape event to the last open overlay in document order", () => {
+      document.body.innerHTML = overlay("a") + overlay("b");
+      const a = listen("a");
+      const b = listen("b");
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(a).not.toHaveBeenCalled();
+    });
+
+    it("skips an overlay inside a hidden team and a docked (false) one", () => {
+      document.body.innerHTML =
+        overlay("shown") +
+        `<div style="display: none">${overlay("hidden")}</div>` +
+        '<div id="docked" data-fullscreen="false"></div>';
+      const shown = listen("shown");
+      const hidden = listen("hidden");
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(shown).toHaveBeenCalledTimes(1);
+      expect(hidden).not.toHaveBeenCalled();
+    });
+
+    it("does nothing and says so when no overlay is open", () => {
+      document.body.innerHTML = '<div data-fullscreen="false"></div>';
+      expect(exitTopmostOverlay()).toBe(false);
+    });
+
+    it.each([
+      ["an input", "<input id='f' />"],
+      ["a textarea", "<textarea id='f'></textarea>"],
+      ["a contenteditable", "<div id='f' contenteditable='true' tabindex='0'></div>"],
+      ["a terminal", "<div class='xterm'><textarea id='f'></textarea></div>"],
+    ])("leaves the overlay alone while focus is in %s", (_name, field) => {
+      document.body.innerHTML = overlay("a", "") + field;
+      const a = listen("a");
+      (document.getElementById("f") as HTMLElement).focus();
+      expect(exitTopmostOverlay()).toBe(false);
+      expect(a).not.toHaveBeenCalled();
+    });
+
+    it("with `within`, exits only the overlay containing it", () => {
+      document.body.innerHTML = overlay("a") + overlay("b");
+      const a = listen("a");
+      const b = listen("b");
+      expect(exitTopmostOverlay(document.getElementById("a-btn"))).toBe(true);
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).not.toHaveBeenCalled();
+    });
+
+    it("with `within` outside every overlay, leaves an open overlay alone", () => {
+      document.body.innerHTML = overlay("a") + "<iframe id='f'></iframe>";
+      const a = listen("a");
+      expect(exitTopmostOverlay(document.getElementById("f"))).toBe(false);
+      expect(a).not.toHaveBeenCalled();
+    });
+
+    it("exits from the overlay's own chrome", () => {
+      document.body.innerHTML = overlay("a");
+      const a = listen("a");
+      document.getElementById("a-btn")!.focus();
+      expect(exitTopmostOverlay()).toBe(true);
+      expect(a).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("isTypingTarget", () => {
+    it.each([
+      ["an input", "<input />", true],
+      ["a textarea", "<textarea></textarea>", true],
+      ["a contenteditable", "<div contenteditable='true'></div>", true],
+      ["inside a terminal", "<div class='xterm'><span></span></div>", true],
+      ["a button", "<button></button>", false],
+    ])("%s", (_name, html, expected) => {
+      document.body.innerHTML = html;
+      const el = document.body.querySelector("input, textarea, div, button")!;
+      const target = el.classList.contains("xterm") ? el.firstElementChild! : el;
+      // jsdom has no layout: it reports contenteditable only through the attribute.
+      Object.defineProperty(target, "isContentEditable", {
+        value: target.getAttribute("contenteditable") === "true",
+        configurable: true,
+      });
+      expect(isTypingTarget(target)).toBe(expected);
+    });
+
+    it("is false for no target", () => expect(isTypingTarget(null)).toBe(false));
   });
 });

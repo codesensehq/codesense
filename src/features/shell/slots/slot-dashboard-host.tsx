@@ -28,6 +28,7 @@ import {
 } from "@/features/dashboard/components/html-viewer";
 import { useDashboardPolicy } from "@/features/dashboard/lib/verb-policy";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
+import { setSlotDisplayedBody } from "@/features/dashboard/lib/dashboard-commands";
 import {
   captureReloadState,
   setFrameFrozen,
@@ -942,6 +943,27 @@ export function SlotDashboardHost({
     [presentationRef],
   );
   const showingEntryFallback = !!failure && !retained && !!fallbackConfig;
+  // The registry's commands follow the body on screen. A dock's entry fallback keeps its own path.
+  const failedKey = entry.dashboardRef ? dashboardRefKey(entry.dashboardRef) : null;
+  const shownInPlace: PaneEntry | "native" | null =
+    failure && !retained && !fallbackConfig ? (fallbackInbox ?? "native") : null;
+  // Withdrawing follows the fallback's key, so a refreshed copy of the same entry doesn't
+  // withdraw and re-register its commands; publishing follows the body itself, so the refreshed
+  // copy's commands (an edited team Inbox, say) replace the old ones in place.
+  const shownKey =
+    typeof shownInPlace === "object" && shownInPlace
+      ? shownInPlace.dashboardRef
+        ? dashboardRefKey(shownInPlace.dashboardRef)
+        : shownInPlace.panelId
+      : shownInPlace;
+  const showingInPlace = !!shownInPlace;
+  useEffect(() => {
+    if (!failedKey || !showingInPlace) return;
+    return () => setSlotDisplayedBody(slotId, failedKey, null);
+  }, [slotId, failedKey, showingInPlace, shownKey]);
+  useEffect(() => {
+    if (failedKey && shownInPlace) setSlotDisplayedBody(slotId, failedKey, shownInPlace);
+  }, [slotId, failedKey, shownInPlace]);
   const strip = failure && !showingEntryFallback && (
     <SlotFallbackStrip
       entry={entry}

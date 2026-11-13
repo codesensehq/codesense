@@ -1313,10 +1313,11 @@ describe("Tauri IPC Contract", () => {
     // in a worktree writes its PNG render), so 523/542.
     // +1 on both sides for worktreeHydratedFiles/worktree_hydrated_files (the story files a
     // worktree's Rendered view serves), so 524/543.
+    // +1 on both sides for readInboxMedia/read_inbox_media, so 525/544.
     // +1 on both sides for setupState/setup_state (the page's read of orgs, teams and source
-    // repos), so 525/544.
-    const EXPECTED_TS_COMMAND_COUNT = 525;
-    const EXPECTED_RUST_COMMAND_COUNT = 544;
+    // repos), so 526/545.
+    const EXPECTED_TS_COMMAND_COUNT = 526;
+    const EXPECTED_RUST_COMMAND_COUNT = 545;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

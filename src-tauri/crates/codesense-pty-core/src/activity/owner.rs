@@ -9,7 +9,7 @@ use crate::inbox_host::{Fate, HostInbox, InboxOutlet, Repeat};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MAX_SESSIONS: usize = 1024;
 const RECENT_REPORTS: usize = 128;
@@ -227,6 +227,14 @@ impl Invocation {
             snapshot.reason = Some("inbox-update-required".into());
         }
         snapshot
+    }
+
+    /// How long ago its last provider evidence came: for an agent at its prompt, its turn
+    /// end. Unlike `activity_age_ms`, terminal output (a prompt's repaints) never renews
+    /// it. None counts as just now.
+    fn evidence_age(&self, now: Instant) -> Duration {
+        self.evidence_at
+            .map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
     }
 
     /// New provider evidence clears a self-reported block, while independent
@@ -745,7 +753,9 @@ impl ActivityOwner {
                         && invocation.snapshot.observed
                         && invocation.snapshot.takes_input()
                         && invocation.snapshot.exit.is_none()
-                        && !self.inbox.waiter_armed(session)
+                        && !self
+                            .inbox
+                            .waiter_covers(session, invocation.evidence_age(now))
                         && outlet.has_tools(session) != Some(false)
                         && self.inbox.awaits_submit(session))
                     .then(|| session.clone())
@@ -2019,7 +2029,7 @@ impl ActivityOwner {
         self.output_at(session, incarnation, Instant::now());
     }
 
-    fn output_at(&self, session: &str, incarnation: &str, now: Instant) {
+    pub(super) fn output_at(&self, session: &str, incarnation: &str, now: Instant) {
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(invocation) = sessions
             .get_mut(session)

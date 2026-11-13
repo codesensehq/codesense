@@ -1080,8 +1080,9 @@ pub use async_helpers::await_blocking;
 // +1 `dashboard_launch::agent_session_await_ready` (a page launch waits for its agent to be input-ready). → 502.
 // +1 `write_binary_worktree_file` (a canvas drawn in a worktree writes its PNG render). → 503.
 // +1 `worktree_hydrated_files` (the story files a worktree's Rendered view serves). → 504.
-// +1 `data_read_model::setup_state` (the page's `setupState()`: orgs, teams and source repos). → 505.
-pub const EXPECTED_COMMAND_COUNT: usize = 505;
+// +1 `agent_inbox::read_inbox_media` (the app window's cached inbox images). → 505.
+// +1 `data_read_model::setup_state` (the page's `setupState()`: orgs, teams and source repos). → 506.
+pub const EXPECTED_COMMAND_COUNT: usize = 506;
 
 #[cfg(test)]
 mod tests {
