@@ -18,6 +18,10 @@ pub struct MintFrameArgs {
     pub builtin_team: Option<FrameTeam>,
     #[serde(default)]
     pub policy: FramePolicy,
+    /// The placed docs checkout, set natively (never from the caller) so a bundled page can
+    /// earn `foreman.launch`.
+    #[serde(skip)]
+    pub docs_root: Option<PathBuf>,
 }
 
 #[tauri::command]
@@ -31,6 +35,10 @@ pub async fn mint_frame<R: tauri::Runtime>(
         .0;
     let (records_home, local_principal) =
         crate::commands::route_to_context::resolve_ambient(&app).await?;
+    args.docs_root = Some(crate::context_repo::codesense_docs::docs_root(
+        &records_home,
+        &local_principal.into(),
+    ));
     let mut principal = "human".to_string();
     let team;
     let mut pane = None;
@@ -65,12 +73,35 @@ pub async fn mint_frame<R: tauri::Runtime>(
         team = Some(binding);
     } else {
         let path = PathBuf::from(&args.document_path);
-        crate::commands::files::validate_context_path(&path, &app)?;
+        // A story worktree's document, rooted at that registered worktree (the
+        // worktree editor's Rendered view), takes the worktree gate instead.
+        let content_root = PathBuf::from(&args.content_root);
+        let worktree = crate::commands::files::frame_worktree_root(&app, &content_root)
+            .filter(|roots| codesense_fs_core::gate::path_within_any_root(&path, roots));
+        let worktree_doc = worktree.is_some();
+        if !worktree_doc {
+            crate::commands::files::validate_context_path(&path, &app)?;
+        }
         // Comparisons can show a committed file that has since been deleted.
         // Validate its existing ancestor instead; live documents must exist.
         let target = frame_document_target(&path, args.slot == "baseline")?;
-        crate::commands::files::validate_context_path(&target, &app)?;
-        crate::commands::files::validate_context_path(&PathBuf::from(&args.content_root), &app)?;
+        if let Some(roots) = &worktree {
+            if !codesense_fs_core::gate::path_within_any_root(&target, roots) {
+                return Err("Access denied: document is outside its worktree".into());
+            }
+            // The repo's own pages are its authors', not the team's: only a
+            // story file hydrated from the team's context (or an image, which
+            // runs nothing) renders here.
+            if !crate::commands::files::path_in_frame_worktree(&app, roots, &path, &path) {
+                return Err("Access denied: not a hydrated story file".into());
+            }
+            // Forced here: the caller's policy comes from the renderer.
+            args.policy.no_outside_network = true;
+            args.policy.allowed_hosts.clear();
+        } else {
+            crate::commands::files::validate_context_path(&target, &app)?;
+            crate::commands::files::validate_context_path(&content_root, &app)?;
+        }
         let roots = crate::context_query::known_roots(&app);
         let active = super::pane_bridge::doc_context(&roots, &args.content_root);
         // A built-in lives outside every space: it belongs to the org it is listed in.
@@ -120,7 +151,19 @@ pub async fn mint_frame<R: tauri::Runtime>(
                 }
             }
         }
-        let source_team = if caller_scope == "built-in" {
+        let source_team = if worktree_doc {
+            // A worktree frame is bound to the story's team from the worktree
+            // record, never to whichever team happens to be active.
+            crate::context_repo::caller_scope::workspace_team(
+                &records_home,
+                &local_principal.into(),
+                &content_root,
+            )
+            .map(|t| FrameTeam {
+                org: t.org,
+                team: t.team,
+            })
+        } else if caller_scope == "built-in" {
             active_team.clone()
         } else {
             location
@@ -296,7 +339,7 @@ fn mint_record(
     team: Option<FrameTeam>,
     declared: &[String],
 ) -> FrameRecord {
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut args.policy,
         &args.slot,
@@ -304,6 +347,18 @@ fn mint_record(
         source_scope,
         declared,
     );
+    // Held only by a bundled page at its place in the docs checkout whose bytes match; never
+    // by declaration, and never by a baseline frame, which renders a committed blob.
+    if let Some(docs_root) = args
+        .docs_root
+        .as_deref()
+        .filter(|_| args.slot != "baseline")
+    {
+        effective_grant.extend(crate::verbs::foreman_launch::grant_for(
+            docs_root,
+            &args.document_path,
+        ));
+    }
     let scope = grant_scope(args.policy.team_safe, source_scope);
     let kind = if args.slot == "message" || args.message.is_some() {
         FrameCallerKind::Message
@@ -394,7 +449,7 @@ fn rebind_record(
         FrameCallerKind::Message => "message",
     };
     let mut frame_policy = record.policy.clone();
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut frame_policy,
         &record.grant.slot,
@@ -402,6 +457,14 @@ fn rebind_record(
         source_scope,
         &record.declared,
     );
+    // A rebind keeps the page's own file, so it keeps what its bytes earned at mint.
+    if record
+        .effective_grant
+        .iter()
+        .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
+    {
+        effective_grant.push(crate::verbs::foreman_launch::CAPABILITY.to_owned());
+    }
     frames.rebind(
         frame_id,
         token,
@@ -535,7 +598,7 @@ fn check_message_thread(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[test]
     fn builtin_frame_rejects_an_unknown_local_team() {
@@ -660,6 +723,208 @@ mod tests {
             assert_eq!(frame.grant.slot, slot);
         }
     }
+
+    /// Record `files` as hydrated from the `sibling` team's context into the
+    /// worktree at `root`.
+    pub(crate) fn hydrate(
+        f: &crate::context_repo::caller_scope::tests::AppFixture,
+        root: &std::path::Path,
+        files: &[&str],
+    ) {
+        let files: Vec<_> = files
+            .iter()
+            .map(|p| (*p, "team:acme/ctx/sibling"))
+            .collect();
+        crate::agents::prepare::step3::tests::record_managed(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            root,
+            &files,
+        );
+    }
+
+    /// A story worktree outside `~/.codesense/users/` with a dashboard at
+    /// `stories/board.html` hydrated from the story's team context, registered
+    /// for a story of the `sibling` team.
+    pub(crate) fn story_worktree(
+        f: &crate::context_repo::caller_scope::tests::AppFixture,
+        at: &std::path::Path,
+    ) -> PathBuf {
+        use crate::install::worktree_index::{self, WorktreeStoryRecord};
+        std::fs::create_dir_all(at.join("stories")).unwrap();
+        std::fs::write(at.join("stories/board.html"), "<p>board</p>").unwrap();
+        let record = WorktreeStoryRecord::new(
+            at,
+            "acme/ctx",
+            worktree_index::slug_from_source_repo("acme/api").unwrap(),
+            "SV-1",
+            f.fixture.path("sibling", "content/stories/story.md"),
+        );
+        worktree_index::write_record(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            &record,
+        )
+        .unwrap();
+        hydrate(f, at, &["stories/board.html"]);
+        at.to_path_buf()
+    }
+
+    pub(crate) fn document_args(
+        document: &std::path::Path,
+        root: &std::path::Path,
+        slot: &str,
+    ) -> MintFrameArgs {
+        serde_json::from_value(serde_json::json!({
+            "documentPath": document, "contentRoot": root, "slot": slot,
+        }))
+        .unwrap()
+    }
+
+    pub(crate) fn worktree_fixture() -> (
+        crate::context_repo::caller_scope::tests::AppFixture,
+        PathBuf,
+    ) {
+        let fixture = crate::context_repo::caller_scope::tests::AppFixture::new();
+        fixture.app.manage(crate::http::HttpApiPort(9400));
+        let base = fixture.fixture.temp.path().canonicalize().unwrap();
+        (fixture, base.join("acme-wt"))
+    }
+
+    #[tokio::test]
+    async fn a_worktree_frame_is_bound_to_the_story_team_while_another_team_is_active() {
+        let (f, wt) = worktree_fixture();
+        let worktree = story_worktree(&f, &wt.join("feat-a"));
+        // The fixture's active team is `child`; the worktree's story is `sibling`'s.
+        let frame = mint_frame(
+            f.app.handle().clone(),
+            document_args(&worktree.join("stories/board.html"), &worktree, "centre"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            frame.grant.team,
+            Some(FrameTeam {
+                org: "acme/ctx".into(),
+                team: "sibling".into()
+            })
+        );
+        assert_eq!(frame.content_root, worktree.to_string_lossy());
+        assert_eq!(
+            frame
+                .records_binding
+                .as_ref()
+                .and_then(|b| b.team.as_deref()),
+            Some("sibling")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_worktree_frame_reads_only_its_own_worktree() {
+        let (f, wt) = worktree_fixture();
+        let a = story_worktree(&f, &wt.join("feat-a"));
+        let b = story_worktree(&f, &wt.join("feat-b"));
+        let mint = |document: PathBuf, root: &std::path::Path, slot: &str| {
+            mint_frame(f.app.handle().clone(), document_args(&document, root, slot))
+        };
+        // A document in worktree B is not worktree A's: it falls to the context
+        // gate, which refuses a path outside every context root.
+        let err = mint(b.join("stories/board.html"), &a, "centre")
+            .await
+            .unwrap_err();
+        assert_eq!(err, OUTSIDE_CONTEXT);
+        // Nor is a document outside every worktree.
+        let outside = wt.join("loose/board.html");
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "<p>loose</p>").unwrap();
+        let err = mint(outside.clone(), &a, "centre").await.unwrap_err();
+        assert_eq!(err, OUTSIDE_CONTEXT);
+        // A deleted baseline under a link out of the worktree resolves to its
+        // existing ancestor, the link's target, which is outside the worktree.
+        std::os::unix::fs::symlink(outside.parent().unwrap(), a.join("escape")).unwrap();
+        let err = mint(a.join("escape/gone.html"), &a, "baseline")
+            .await
+            .unwrap_err();
+        assert_eq!(err, "Access denied: document is outside its worktree");
+        // The same deleted baseline of a hydrated story file mints.
+        hydrate(&f, &a, &["stories/gone.html"]);
+        mint(a.join("stories/gone.html"), &a, "baseline")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_worktree_frame_has_no_outside_network() {
+        let (f, wt) = worktree_fixture();
+        let worktree = story_worktree(&f, &wt.join("feat-a"));
+        let mut args = document_args(&worktree.join("stories/board.html"), &worktree, "centre");
+        // The renderer asks for outside hosts; a worktree page gets none.
+        args.policy.no_outside_network = false;
+        args.policy.allowed_hosts = vec!["https://example.com".into()];
+        let frame = mint_frame(f.app.handle().clone(), args).await.unwrap();
+        assert!(frame.policy.no_outside_network);
+        assert!(frame.policy.allowed_hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn worktree_hydrated_files_lists_only_team_entries() {
+        let (f, wt) = worktree_fixture();
+        let worktree = story_worktree(&f, &wt.join("feat-a"));
+        crate::agents::prepare::step3::tests::record_managed(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            &worktree,
+            &[
+                (".codex/config.toml", "generated"),
+                ("AGENTS.md", "repo:github.com/acme/api"),
+                ("design/SV-1/board.html", "team:acme/ctx/sibling"),
+            ],
+        );
+        let files = crate::commands::worktree_editor::worktree_hydrated_files(
+            f.app.handle().clone(),
+            worktree.to_string_lossy().into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(files, ["design/SV-1/board.html", "stories/board.html"]);
+        // A folder that isn't a registered worktree root is refused, even one
+        // inside a worktree.
+        for root in [wt.join("loose"), worktree.join("stories")] {
+            std::fs::create_dir_all(&root).unwrap();
+            let err = crate::commands::worktree_editor::worktree_hydrated_files(
+                f.app.handle().clone(),
+                root.to_string_lossy().into(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err, "Access denied: path is not a registered worktree root");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_worktree_inside_a_context_root_keeps_the_context_gate() {
+        let (f, _) = worktree_fixture();
+        // Registered as a worktree, but it sits in `child`'s content: it is
+        // context, scoped to the team that holds it, not the record's team.
+        let inside = story_worktree(&f, &f.fixture.path("child", "content/wt"));
+        assert!(crate::commands::files::frame_worktree_root(f.app.handle(), &inside).is_none());
+        let frame = mint_frame(
+            f.app.handle().clone(),
+            document_args(&inside.join("stories/board.html"), &inside, "centre"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(frame.kind, FrameCallerKind::Team);
+        assert_eq!(
+            frame.grant.team,
+            Some(FrameTeam {
+                org: "acme/ctx".into(),
+                team: "child".into()
+            })
+        );
+    }
+
+    const OUTSIDE_CONTEXT: &str = "Access denied: path is outside context repo directory";
 
     #[test]
     fn every_builtin_pane_mints_only_in_its_declared_slot() {

@@ -5,6 +5,7 @@ import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key
 import { readFile } from "@/tauri/commands";
 import { useReadyResolverContext } from "@/shared/hooks/use-resolver-context";
 import { logger } from "@/shared/lib/logger";
+import type { CanvasWriter } from "./excalidraw-canvas";
 import { toast } from "sonner";
 import {
   BLANK_SCENE,
@@ -54,6 +55,9 @@ class CanvasErrorBoundary extends Component<
   }
 }
 
+/** A scene and the exact text it was parsed from (`null`: the read failed). */
+type LoadedScene = { scene: ExcalidrawScene; text: string | null };
+
 type ExcalidrawViewerProps = CommonViewerProps & {
   // SW-SC-3: the per-path changed set forwarded from `renderViewer`, mirroring
   // the html viewer's reload gate. Lets us advance the reload key only when
@@ -69,6 +73,8 @@ type ExcalidrawViewerProps = CommonViewerProps & {
   /** SW-GS-3: render as a read-only review surface (the sync-view diff) — no
    *  editing, no persistence back to disk. */
   readOnly?: boolean;
+  /** Where the canvas saves; absent, the context repo's writers. */
+  writer?: CanvasWriter;
 };
 
 /**
@@ -92,13 +98,15 @@ export function ExcalidrawViewer({
   changedPaths,
   sceneText,
   readOnly,
+  writer,
 }: ExcalidrawViewerProps) {
-  // `null` = still reading the file; a scene object once resolved (blank on
-  // empty / missing / malformed).
-  const [scene, setScene] = useState<ExcalidrawScene | null>(null);
+  // `null` = still reading the file; a scene once resolved (blank on empty /
+  // missing / malformed), with the exact text read (`null` when the read
+  // failed) so the canvas can lock its saves to the version it adopted.
+  const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   // An external on-disk write of this file, parsed; bumped together with
   // `reloadNonce` so the canvas reacts once per genuine change.
-  const [externalScene, setExternalScene] = useState<ExcalidrawScene | null>(null);
+  const [external, setExternal] = useState<LoadedScene | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const effectiveRefreshKey = useEffectiveRefreshKey(refreshKey, changedPaths, filePath);
@@ -119,17 +127,17 @@ export function ExcalidrawViewer({
     // we want the reset committed before the read starts (mirrors
     // html-viewer.tsx's fileDeleted reset).
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setScene(null);
+    setLoaded(null);
     // Drop any external scene staged for the previous file.
-    setExternalScene(null);
+    setExternal(null);
 
     // SW-GS-3 baseline ("before") side: render the supplied scene JSON instead
     // of reading the working-tree file.
     if (sceneText != null) {
       try {
-        setScene(parseExcalidrawScene(sceneText));
+        setLoaded({ scene: parseExcalidrawScene(sceneText), text: sceneText });
       } catch {
-        setScene(BLANK_SCENE);
+        setLoaded({ scene: BLANK_SCENE, text: sceneText });
       }
       return () => {
         cancelled = true;
@@ -140,12 +148,12 @@ export function ExcalidrawViewer({
       .then((text) => {
         if (cancelled) return;
         try {
-          setScene(parseExcalidrawScene(text));
+          setLoaded({ scene: parseExcalidrawScene(text), text });
         } catch {
           // Malformed JSON → blank canvas + a non-fatal nudge (AC-3); never
           // crash the pane.
           toast.error("Couldn't parse this .excalidraw file — opened a blank canvas.");
-          setScene(BLANK_SCENE);
+          setLoaded({ scene: BLANK_SCENE, text });
         }
       })
       .catch((e) => {
@@ -153,7 +161,7 @@ export function ExcalidrawViewer({
         // A new / not-yet-created `.excalidraw` is valid — open blank. Read
         // failures (ENOENT and otherwise) are a normal new-canvas path.
         logger.debug("viewer", `excalidraw read fell back to blank for ${filePath}: ${e}`);
-        setScene(BLANK_SCENE);
+        setLoaded({ scene: BLANK_SCENE, text: null });
       });
     return () => {
       cancelled = true;
@@ -198,7 +206,7 @@ export function ExcalidrawViewer({
           logger.debug("viewer", `excalidraw reload skipped — unparsed write for ${filePath}`);
           return;
         }
-        setExternalScene(parsed);
+        setExternal({ scene: parsed, text });
         setReloadNonce((n) => n + 1);
       })
       .catch((e) => {
@@ -225,7 +233,7 @@ export function ExcalidrawViewer({
     </div>
   );
 
-  if (scene === null) return loading;
+  if (loaded === null) return loading;
 
   return (
     // key on filePath: Excalidraw reads `initialData` once at mount, so a
@@ -243,14 +251,17 @@ export function ExcalidrawViewer({
         <Suspense fallback={loading}>
           <ExcalidrawCanvas
             filePath={filePath}
-            scene={scene}
-            externalScene={externalScene}
+            scene={loaded.scene}
+            sourceText={loaded.text}
+            externalScene={external?.scene ?? null}
+            externalText={external?.text ?? null}
             reloadNonce={reloadNonce}
             // SW-GS-3: a read-only review surface persists NOTHING — withhold the
             // library context so the canvas no-ops library load/inject/persist
             // (it would otherwise write the shared team .excalidrawlib).
             libraryCtx={readOnly ? null : libraryCtx}
             readOnly={readOnly}
+            writer={writer}
           />
         </Suspense>
       </div>

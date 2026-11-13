@@ -12224,6 +12224,10 @@ pub struct OpenWorkspaceParams {
     /// `builtin/claude-unattended` for a headless open.
     #[serde(default)]
     pub agent: Option<String>,
+    /// The model to run (with `target`), such as `opus` or `sonnet`: passed to the agent's CLI
+    /// as `--model <model>` after the agent's own args. Omitted, the agent's own model.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Who is launching: your `$CODESENSE_TAB_SESSION_ID`. Omit when a person asked.
     /// Shown as "Launched by"; nothing is checked against it.
     #[serde(default, alias = "launchedBy")]
@@ -16781,6 +16785,18 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(request.worktree.as_deref(), Some("cw_one"));
         assert_eq!(request.create_worktree, None);
+    }
+
+    #[test]
+    fn open_workspace_accepts_a_model_for_a_targeted_launch() {
+        let request: OpenWorkspaceParams = serde_json::from_value(
+            json!({ "target": "team-workspace", "name": "Agent", "model": "sonnet" }),
+        )
+        .unwrap();
+        assert_eq!(request.model.as_deref(), Some("sonnet"));
+        let request: OpenWorkspaceParams =
+            serde_json::from_value(json!({ "target": "team-workspace", "name": "Agent" })).unwrap();
+        assert_eq!(request.model, None);
     }
 
     #[test]

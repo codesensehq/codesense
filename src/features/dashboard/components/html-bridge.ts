@@ -6,7 +6,7 @@ import {
   pasteToActiveTerminal,
   type PasteStatus,
 } from "@/shared/lib/send-to-terminal";
-import { fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
+import { agentLaunchOpen, fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
@@ -348,6 +348,51 @@ async function resolveInboxTeam(ctx: BridgeContext | undefined): Promise<InboxTe
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
   if (!activeOrgSlug || !activeTeamName) return null;
   return { org: activeOrgSlug, team: activeTeamName };
+}
+
+const TEAM_WORKSPACE_MODES = ["headed", "visible-unfocused", "headless"] as const;
+
+/**
+ * `openWorkspace` with a `team-workspace` target: launch an agent in a worktree of a team's
+ * context repo. The native dispatcher admits it only for a frame holding `foreman.launch`.
+ * A refusal (a missing worktree, a bad model) comes back as the launch's own `status:"invalid"`
+ * result so the page can match its message; only a malformed call throws.
+ */
+async function openTeamWorkspace(a: Record<string, unknown>, target: Record<string, unknown>) {
+  if ("profile" in target || "packId" in target) {
+    throw new Error(
+      "invalid: openWorkspace launches an agent; pass { agent }, not profile or packId",
+    );
+  }
+  const text = (value: unknown, label: string) =>
+    optionalNonEmptyString(
+      value,
+      `openWorkspace: ${label}, if present, must be a non-empty string`,
+    );
+  const name = text(target.name, "name");
+  if (name === undefined) throw new Error("openWorkspace: team-workspace target needs a { name }");
+  if (target.createWorktree !== undefined && typeof target.createWorktree !== "boolean") {
+    throw new Error("openWorkspace: createWorktree, if present, must be a boolean");
+  }
+  const mode = a.mode;
+  if (mode !== undefined && !TEAM_WORKSPACE_MODES.some((m) => m === mode)) {
+    throw new Error(
+      `openWorkspace: mode, if present, must be one of ${TEAM_WORKSPACE_MODES.join(", ")}`,
+    );
+  }
+  return agentLaunchOpen({
+    target: "team-workspace",
+    name,
+    worktree: text(target.worktree, "worktree"),
+    createWorktree: target.createWorktree,
+    team: text(target.team, "team"),
+    org: text(target.org, "org"),
+    agent: text(a.agent, "agent"),
+    model: text(a.model, "model"),
+    role: text(a.role, "role"),
+    initialPrompt: normalizeInitialPrompt(a.initialPrompt),
+    mode: mode as (typeof TEAM_WORKSPACE_MODES)[number] | undefined,
+  });
 }
 
 /** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
@@ -1715,6 +1760,11 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       sessionMode?: unknown;
       reviewPrompt?: unknown;
       operationId?: unknown;
+      // `team-workspace` only: the agent, its model, display role and surfacing.
+      agent?: unknown;
+      model?: unknown;
+      role?: unknown;
+      mode?: unknown;
     };
     const headed = a.headed === false ? false : true;
     // SW-GW-9 (AC-8): normalize the optional seed at the untrusted wire boundary via
@@ -1762,6 +1812,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       }
       if (a.reviewPrompt !== undefined && target.kind !== "branch") {
         throw new Error("openWorkspace: reviewPrompt is only supported for branch targets");
+      }
+      if (target.kind === "team-workspace") {
+        return openTeamWorkspace(a, target as Record<string, unknown>);
       }
       // SW-GW-9 (AC-2): `initialPrompt` is STORY-ONLY. A non-story target has no agent
       // to seed at call time — `dir` is a bare CLI shell, `epic` returns no sessionId

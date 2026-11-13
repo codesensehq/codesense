@@ -1102,14 +1102,23 @@ Class: spawn; default grant: launch; MCP twin: open_terminal_tab.
 
 ```ts
 openWorkspace(args?: {
+      agent?: string;
       headed?: boolean;
       initialPrompt?: string;
+      mode?: string;
+      model?: string;
+      role?: string;
       sessionMode?: "new" | "focus";
       storyId?: string;
       target?: {
-        kind?: "story" | "epic" | "branch" | "dir";
+        createWorktree?: boolean;
+        kind?: "story" | "epic" | "branch" | "dir" | "team-workspace";
+        name?: string;
+        org?: string;
         path?: string;
         storyId?: string;
+        team?: string;
+        worktree?: string;
         [key: string]: unknown;
       };
       [key: string]: unknown;

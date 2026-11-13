@@ -17,6 +17,34 @@ pub(crate) struct Fx {
     pub root: PathBuf,
 }
 
+/// Record `files` (`(path, source layer)`) as managed in the local worktree at
+/// `root`, the way a hydrate or a Step 2 leaves them.
+pub(crate) fn record_managed(
+    home: &Path,
+    principal: &crate::domain::Principal,
+    root: &Path,
+    files: &[(&str, &str)],
+) {
+    let identity = crate::content_engine::context_lifecycle::local_identity(root);
+    let mut record = ManagedRecord::load(home, principal, &identity);
+    for (path, layer) in files {
+        record.entries.insert(
+            (*path).to_string(),
+            ManagedEntry {
+                source_context: None,
+                hash: crate::agents::prepare::record::Hash32([0; 32]),
+                origin: "step3:test".into(),
+                source_layer: (*layer).to_string(),
+                mode: 0o644,
+                dest_stat: None,
+                source_stat: None,
+                source: None,
+            },
+        );
+    }
+    record.save(home, principal, &identity).unwrap();
+}
+
 pub(crate) fn write(root: &Path, path: &str, bytes: &[u8]) {
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();

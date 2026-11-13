@@ -9,7 +9,8 @@ import { toastFailure } from "@/shared/lib/with-error-toast";
 import type { Workspace, WorktreeEditorDraft } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { getKindCapabilities } from "@/shared/lib/workspace-kind-capabilities";
-import { setScratchFileUseTeam } from "@/tauri/commands";
+import { setScratchFileUseTeam, worktreeHydratedFiles } from "@/tauri/commands";
+import { logger } from "@/shared/lib/logger";
 import { workspaceSourceRepo, isRemoteWorkspace } from "@/shared/lib/workspace-location";
 import { useMachine } from "@/features/machines/stores/machines-store";
 import { machineOfflineWord } from "@/features/machines/components/machine-location-badge";
@@ -43,6 +44,7 @@ import { EditorStatusBar } from "./worktree-editor/editor-status-bar";
 import { EditorBreadcrumbs } from "./worktree-editor/editor-breadcrumbs";
 import { EditorQuickOpen } from "./worktree-editor/editor-quick-open";
 import { EditorStateMessage, Kbd } from "./worktree-editor/editor-states";
+import { isViewToggleChord } from "./worktree-editor/worktree-view-mode";
 
 /** A pending discard confirmation: closing a dirty tab, or the whole editor
  *  while any tab is dirty. Held until confirmed or cancelled — unsaved edits
@@ -407,6 +409,35 @@ export function SourceEditorInset({
   const changedNonce = isRemoteRepo ? remoteChangedNonce : localChangedNonce;
   useWorktreeWatch(ws.id, ws.cwd, !isRemoteRepo, teamKey);
 
+  // ── The story files hydrated into this worktree ─────────────────────────
+  // Only they render as html, and they open Rendered. Read once for the root
+  // (not per open file) and again on each worktree change, since a hydrate or
+  // a publish lands as one. A remote worktree renders nothing, so it needs none.
+  const localRoot = backend?.location === "local" && rootReady ? rootPath : null;
+  const [hydrated, setHydrated] = useState<{ root: string; files: ReadonlySet<string> } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (localRoot == null) return;
+    let cancelled = false;
+    worktreeHydratedFiles(localRoot)
+      .catch((e: unknown) => {
+        // Unknown means not hydrated: every file still opens, in Source.
+        logger.warn("viewer", `worktree hydrated files unavailable for ${localRoot}: ${e}`);
+        return [] as string[];
+      })
+      .then((files) => {
+        if (!cancelled) setHydrated({ root: localRoot, files: new Set(files) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [localRoot, changedNonce]);
+  const hydratedFor = (rel: string): boolean | null => {
+    if (backend?.location !== "local") return false;
+    return hydrated?.root === rootPath ? hydrated.files.has(rel) : null;
+  };
+
   // ── Quick open's file list ──────────────────────────────────────────────
   const [fileList, setFileList] = useState<{
     paths: string[] | null;
@@ -602,6 +633,14 @@ export function SourceEditorInset({
     if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "g") {
       claim();
       openPalette(":");
+      return;
+    }
+    if (isViewToggleChord(e)) {
+      // Rendered ⇄ Source, as VS Code's preview toggle. CodeMirror binds
+      // nothing to it; inside a canvas it is Excalidraw's plain paste.
+      if (target?.closest?.(".excalidraw")) return;
+      claim();
+      activeApi()?.toggleView();
       return;
     }
     if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s" && !inCode) {
@@ -941,6 +980,7 @@ export function SourceEditorInset({
                     onStatus={onStatus}
                     registerApi={registerApi}
                     wrapOverride={wrapOverride}
+                    hydrated={hydratedFor(rel)}
                   />
                 ))}
               {palette && (
