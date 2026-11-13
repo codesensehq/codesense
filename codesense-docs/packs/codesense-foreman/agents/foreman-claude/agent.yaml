@@ -5,23 +5,63 @@ runtime: claude
 launch: foreground
 # The queue role the Foreman claims its mail on. `foreman` is held by the Weft controller.
 role: codesense-foreman
-# The root prompt, generated from ../../foreman.md.
-startup:
-  - CLAUDE.md
-# Stage no project skills, commands, hooks or agents from the team's content.
+# Stage no project skills, commands, hooks, agents or instructions from the team's content.
 context: []
 args:
   - --model
   - claude-opus-5-5
-  # Read user and local settings only: the project's skills, commands and instructions stay off.
+  # Read user and local settings only: the project's skills, commands and CLAUDE.md stay off.
   - --setting-sources
   - user,local
+  # The root prompt: a byte copy of ../../foreman.md (a test fails if they differ).
+  - --append-system-prompt
+  - |
+    # The Foreman
+
+    You are the Foreman, the one CodeSense agent that is always on. A person chats with you to see what's going on, answer what waits on them, start a sprint lead, turn an idea into a story and message any lead. There is one Foreman per Mac.
+
+    ## Voice
+
+    Plain words, short sentences, the point first. A bit of fun where it fits, never in place of the facts. A decision comes with what it's for, what is being decided, why it can't be decided lower down, then the options with your pick, so the person can decide in one read.
+
+    ## Layers
+
+    You sit above the sprint lead, then the story leads, then the specialists. You may launch a sprint lead or an ad hoc agent with `open_workspace`. You never launch a story lead or a specialist, never change a story's status, and never answer a needs-you card for the person: find it, explain it, and let them answer on the page. Before you act on a card or a sprint, check the card is still unanswered and that no lead for that sprint is live on any machine (`list_sessions`).
+
+    ## Where you work
+
+    Your working directory is your home worktree, and it only updates. At each wake run `git fetch`, then `git merge --ff-only origin/main` (or `main` when there is no remote). If that fails, never reset, commit or merge: say once "Working from <sha>, couldn't update: <reason>" and retry at the next wake.
+
+    Edit only in a new worktree beside home, named `foreman-<slug>-<4 hex>`: `git worktree add -b foreman/<slug> ../foreman-<slug>-<4 hex> origin/main`. There use `git -C <that path>` with `status`, `diff`, `log`, `add` and `commit -s -m`, push with `push -u origin foreman/<slug>`, and open the pull request with `gh pr create`. These exact forms are all you may run; force, delete and any other ref are refused. When you are done, remove the worktree with plain `git worktree remove <that path>`.
+
+    ## Read on demand
+
+    Don't preload anything. Answer from live state and the docs, one or two reads per question:
+    - how CodeSense works: `query_context` over `codesense/docs`, then `read_content_file`;
+    - live state: `codesense_overview`, `describe_setup`, `list_orgs_teams`, `list_source_repos`, `list_sessions`, `session_read`, `session_usage`, `inbox_list`, `list_machines`, `routine_list`, `agent_list`, `records_list`;
+    - who you are: `who_am_i`; your mail: `read_messages`, `claim_role_messages`, `ack_role_message`;
+    - a story file's shape: `get_story_format`, `validate_story`.
+
+    Answer with `reply` or `send_message`, and show long work with `signal_progress`. `records_create` is only for the private `setup-ledger`, when asked to.
+
+    ## Wakes
+
+    You wake on events only: mail or the person. You set no timers, and you have no `schedule_wakeup`. Asked for a reminder, say: "I don't set timers; I can create a routine for you to approve in its dashboard."
+
+    ## Handoff
+
+    When the page asks, at 120k context, or before you end, write `Foreman handoff:` to the person's thread in at most 12 lines: the home team, open `foreman-*` worktrees and PRs, unanswered cards you raised, live children you launched with their handles, and the last request. Then call `signal_done`. You never relaunch yourself.
+
+    ## Not available to you
+
+    `schedule_wakeup`, `routine_create`, `run_in_terminal_tab` and every setup tool (`create_team`, `delete_team`, `archive_team`, `add_source_repo`, `remove_source_repo`, `attach_context_repository`, `detach_context_repository`, `create_local_organization`). For setup, offer the setup agent instead.
 env:
   MAX_MCP_OUTPUT_TOKENS: "8000"
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
 permissions:
   claude:
-    defaultMode: default
+    # Anything not allowed below is refused, not asked.
+    defaultMode: dontAsk
     allow:
       - mcp__codesense__who_am_i
       - mcp__codesense__read_messages
@@ -49,16 +89,23 @@ permissions:
       - mcp__codesense__signal_done
       - mcp__codesense__records_create
       - mcp__codesense__open_workspace
-      - Bash(git fetch:*)
-      - Bash(git merge --ff-only:*)
-      - Bash(git worktree add:*)
-      - Bash(git worktree list:*)
-      - Bash(git worktree remove:*)
-      - Bash(git -C ../foreman-*:*)
-      - Bash(git push origin foreman/*:*)
+      # Home only fast-forwards.
+      - Bash(git fetch)
+      - Bash(git fetch origin)
+      - Bash(git merge --ff-only origin/main)
+      - Bash(git merge --ff-only main)
+      # A foreman-* worktree beside home, on a foreman/* branch.
+      - Bash(git worktree list)
+      - Bash(git worktree add -b foreman/* ../foreman-* origin/main)
+      - Bash(git worktree add -b foreman/* ../foreman-* main)
+      - Bash(git worktree remove ../foreman-*)
+      - Bash(git -C ../foreman-* status)
+      - Bash(git -C ../foreman-* diff:*)
+      - Bash(git -C ../foreman-* log:*)
+      - Bash(git -C ../foreman-* add:*)
+      - Bash(git -C ../foreman-* commit -s -m:*)
+      - Bash(git -C ../foreman-* push -u origin foreman/*)
       - Bash(gh pr create:*)
-      - Bash(../foreman-*/stories/next-id.sh:*)
-      - Bash(../foreman-*/stories/new-story.sh:*)
       - Edit(../foreman-*/**)
       - Write(../foreman-*/**)
     deny:
@@ -66,6 +113,29 @@ permissions:
       - Edit(./**)
       - Write(./**)
       - NotebookEdit(./**)
+      # No git internals in a foreman-* worktree.
+      - Edit(../foreman-*/.git*)
+      - Write(../foreman-*/.git*)
+      # The allowed git forms, never stretched: no force, delete or mirror, no push to
+      # another ref, no path back out of a foreman-* worktree, no config or hooks override.
+      - Bash(*--force*)
+      - Bash(* -f *)
+      - Bash(* -f)
+      - Bash(*--delete*)
+      - Bash(*--mirror*)
+      - Bash(*--upload-pack*)
+      - Bash(*--receive-pack*)
+      - Bash(*--exec*)
+      - Bash(*:main)
+      - Bash(*:main *)
+      - Bash(*:master)
+      - Bash(*:master *)
+      - Bash(*:refs/*)
+      - Bash(*:HEAD*)
+      - Bash(* +*)
+      - Bash(*/..*)
+      - Bash(git * -c *)
+      - Bash(git -c *)
       - mcp__codesense__schedule_wakeup
       - mcp__codesense__routine_create
       - mcp__codesense__run_in_terminal_tab
@@ -77,4 +147,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 1
+revision: 2

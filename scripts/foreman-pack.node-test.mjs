@@ -63,16 +63,28 @@ const mcp = (name) => `mcp__codesense__${name}`;
 // The same estimate the budget uses elsewhere: four bytes a token.
 const tokens = (s) => Math.ceil(Buffer.byteLength(s) / 4);
 
-test("the root prompt is the spec, under 1.5k tokens", () => {
+test("the root prompt is the spec, under 1.5k tokens, passed as the agent's system prompt", () => {
+  const at = agent.args.indexOf("--append-system-prompt");
+  assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(
-    text("agents/foreman-claude/CLAUDE.md"),
+    agent.args[at + 1],
     spec,
-    "regenerate CLAUDE.md from foreman.md",
+    "copy foreman.md into agent.yaml's --append-system-prompt",
   );
   assert.ok(tokens(spec) <= 1500, `${tokens(spec)} tokens`);
+  // A startup file would be the team's own CLAUDE.md, never this pack's.
+  assert.ok(!agent.startup?.length, "no startup file");
+  assert.ok(!existsSync(new URL("agents/foreman-claude/CLAUDE.md", pack)));
 });
 
-test("the agent allows exactly the Foreman's tools and denies the rest", () => {
+test("the agent allows exactly the Foreman's tools and refuses the rest", () => {
+  assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
+  for (const rule of allow) {
+    assert.ok(
+      /^(mcp__codesense__|Bash\(|Edit\(\.\.\/foreman-|Write\(\.\.\/foreman-)/.test(rule),
+      rule,
+    );
+  }
   const tools = allow.filter((rule) => rule.startsWith("mcp__")).sort();
   assert.deepEqual(tools, TOOLS.map(mcp).sort());
   for (const name of FORBIDDEN) {
@@ -134,23 +146,71 @@ test("edits are denied in the home worktree and allowed in a foreman-* worktree,
       "a foreman-* worktree",
     );
     assert.equal(writeAllowed(home, path.resolve(home, "../other-worktree/a.md")), false);
+    assert.equal(writeAllowed(home, path.join(sibling, ".git")), false, "no git internals");
   }
 });
 
-test("git and gh are limited to the home update, foreman-* worktrees and foreman/* branches", () => {
-  const bash = allow.filter((rule) => rule.startsWith("Bash("));
-  assert.deepEqual(bash, [
-    "Bash(git fetch:*)",
-    "Bash(git merge --ff-only:*)",
-    "Bash(git worktree add:*)",
-    "Bash(git worktree list:*)",
-    "Bash(git worktree remove:*)",
-    "Bash(git -C ../foreman-*:*)",
-    "Bash(git push origin foreman/*:*)",
-    "Bash(gh pr create:*)",
-    "Bash(../foreman-*/stories/next-id.sh:*)",
-    "Bash(../foreman-*/stories/new-story.sh:*)",
-  ]);
+// A Claude Bash rule: `prefix:*` matches the prefix alone or followed by arguments; any other
+// `*` matches any run of characters, spaces and slashes included.
+function bashMatches(rule, command) {
+  const m = /^Bash\((.*)\)$/.exec(rule);
+  if (!m) return false;
+  const prefix = m[1].endsWith(":*");
+  const body = (prefix ? m[1].slice(0, -2) : m[1])
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${body}${prefix ? "( .*)?" : ""}$`, "s").test(command);
+}
+const runs = (command) =>
+  allow.some((rule) => bashMatches(rule, command)) &&
+  !deny.some((rule) => bashMatches(rule, command));
+
+test("git and gh run only in the home update, foreman-* worktrees and foreman/* branches", () => {
+  const wt = "../foreman-fix-docs-9f2a";
+  for (const command of [
+    "git fetch",
+    "git fetch origin",
+    "git merge --ff-only origin/main",
+    "git merge --ff-only main",
+    "git worktree list",
+    `git worktree add -b foreman/fix-docs ${wt} origin/main`,
+    `git -C ${wt} status`,
+    `git -C ${wt} diff stories/a.md`,
+    `git -C ${wt} add stories/a.md`,
+    `git -C ${wt} commit -s -m "Add the docs story"`,
+    `git -C ${wt} push -u origin foreman/fix-docs`,
+    "gh pr create --fill",
+    `git worktree remove ${wt}`,
+  ]) {
+    assert.ok(runs(command), `runs: ${command}`);
+  }
+  for (const command of [
+    `git -C ${wt} push -u origin foreman/x:main`,
+    `git -C ${wt} push -u origin foreman/x :main`,
+    `git -C ${wt} push -u origin foreman/x:refs/heads/main`,
+    `git -C ${wt} push -u origin foreman/x +HEAD:foreman/y`,
+    `git -C ${wt} push -u origin foreman/x --force`,
+    `git -C ${wt} push -u origin foreman/x -f`,
+    `git -C ${wt} push -u origin foreman/x --delete`,
+    `git -C ${wt} push -u origin foreman/x --mirror`,
+    `git -C ${wt}/../home add README.md`,
+    `git -C ${wt} reset --hard`,
+    `git -C ${wt} -c core.hooksPath=/tmp/h commit -s -m x`,
+    `git -C ${wt} config alias.x "!sh"`,
+    "git push origin main",
+    "git merge --ff-only foreman/x",
+    "git fetch --upload-pack=/tmp/x origin",
+    "git worktree remove ../story-lead-worktree",
+    `git worktree remove --force ${wt}`,
+    `git worktree remove -f ${wt}`,
+    `git worktree add -b foreman/x ${wt}/../home origin/main`,
+    `${wt}/stories/next-id.sh`,
+    "gh pr merge 1",
+    "gh api repos/x/y",
+    "rm -rf ../home",
+  ]) {
+    assert.ok(!runs(command), `refused: ${command}`);
+  }
 });
 
 test("the team's own skills and instructions stay out of the first call", () => {
@@ -165,7 +225,6 @@ test("the team's own skills and instructions stay out of the first call", () => 
   assert.ok(at >= 0, "the saved agent sets its setting sources");
   const sources = agent.args[at + 1].split(",");
   assert.ok(!sources.includes("project"), "project settings and skills are off");
-  assert.deepEqual(agent.startup, ["CLAUDE.md"], "the root prompt is the only startup file");
   assert.equal(agent.env.MAX_MCP_OUTPUT_TOKENS, "8000");
   assert.equal(agent.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
   assert.ok(!existsSync(new URL("skills/", pack)), "the pack carries no skills");

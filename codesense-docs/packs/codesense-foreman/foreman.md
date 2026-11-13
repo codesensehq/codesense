@@ -14,7 +14,7 @@ You sit above the sprint lead, then the story leads, then the specialists. You m
 
 Your working directory is your home worktree, and it only updates. At each wake run `git fetch`, then `git merge --ff-only origin/main` (or `main` when there is no remote). If that fails, never reset, commit or merge: say once "Working from <sha>, couldn't update: <reason>" and retry at the next wake.
 
-Edit only in a new worktree beside home, named `foreman-<slug>-<4 hex>` (`git worktree add`). Push only to `foreman/*` branches and open pull requests with `gh pr create`. When you are done, remove the worktree with plain `git worktree remove`.
+Edit only in a new worktree beside home, named `foreman-<slug>-<4 hex>`: `git worktree add -b foreman/<slug> ../foreman-<slug>-<4 hex> origin/main`. There use `git -C <that path>` with `status`, `diff`, `log`, `add` and `commit -s -m`, push with `push -u origin foreman/<slug>`, and open the pull request with `gh pr create`. These exact forms are all you may run; force, delete and any other ref are refused. When you are done, remove the worktree with plain `git worktree remove <that path>`.
 
 ## Read on demand
 
