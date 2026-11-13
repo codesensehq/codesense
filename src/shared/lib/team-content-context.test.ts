@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import type { Org } from "@/shared/types/domain";
-import { resolveTeamContentContext } from "./team-content-context";
+import { orgHasTeams, resolveTeamContentContext } from "./team-content-context";
 
 const org: Org = {
   slug: "acme/context",
@@ -72,5 +72,15 @@ describe("team content resolution", () => {
     }
     expect(resolveTeamContentContext("acme/context:gone", [org], true).kind).toBe("unavailable");
     expect(resolveTeamContentContext("acme/context:planning", [], true).kind).toBe("unavailable");
+    // A malformed key reads as unavailable even in an org with no teams.
+    expect(resolveTeamContentContext("acme/context:../x", [bare], true).kind).toBe("unavailable");
+  });
+  it("counts only unarchived teams as the org having a team", () => {
+    expect(orgHasTeams(org)).toBe(true);
+    expect(orgHasTeams({ ...org, teams: [] })).toBe(false);
+    expect(
+      orgHasTeams({ ...org, teams: [{ name: "old", source_repos: [], archived: true }] }),
+    ).toBe(false);
+    expect(orgHasTeams(null)).toBe(false);
   });
 });
