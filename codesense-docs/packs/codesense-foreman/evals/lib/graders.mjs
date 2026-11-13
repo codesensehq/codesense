@@ -31,8 +31,24 @@ const SENDS = [
   "inbox_post",
   "post_agent_message",
 ];
-// The arguments that say who a send goes to. Display fields (summary, onClick) are not here.
-const RECIPIENT_KEYS = ["to", "recipient", "session", "session_id", "sessionId", "handle", "target", "replyTo", "reply_to", "message_id", "messageId"];
+// The arguments that say who a send goes to, as the real tools name them (`role` for
+// send_role_message and post_agent_message, `workspace` for workspace_chat_send). Display
+// fields (summary, onClick) are not here.
+const RECIPIENT_KEYS = [
+  "to",
+  "role",
+  "workspace",
+  "recipient",
+  "session",
+  "session_id",
+  "sessionId",
+  "handle",
+  "target",
+  "replyTo",
+  "reply_to",
+  "message_id",
+  "messageId",
+];
 // `gh` calls that only read; any other call is a write (a PR attempt, a merge, an API POST).
 function ghReads(args) {
   const cmd = args.replace(/^(?:(?:-R|--repo)\s+\S+\s+)*/, "");
@@ -49,7 +65,15 @@ const launches = (s) => s.sessions.filter((x) => x.launched_by === FOREMAN);
 const agentId = (a) => String(a ?? "").split("/").pop();
 const promptOf = (l) => String(l.initial_prompt ?? "");
 // A recipient compared as the host would: case-folded, `role:` dropped, ids as strings.
-const handle = (v) => String(v).trim().toLowerCase().replace(/^role:/, "");
+// A recipient compared as the host would: case-folded, `role:` or `story:` dropped, an org prefix
+// dropped, ids as strings.
+const handle = (v) =>
+  String(v)
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:role|story):\s*/, "")
+    .split("/")
+    .pop();
 const repliesIn = (s, turn) => s.replies.filter((r) => r.turn === turn);
 const forbidden = (s, tools = []) =>
   foremanCalls(s)
@@ -100,7 +124,7 @@ const graders = {
   },
 
   "answer-card"(s, e) {
-    const out = [];
+    const out = forbidden(s, e.forbidden_tools);
     const card = s.cards[0];
     const [firstReply] = repliesIn(s, 1);
     if (!firstReply) out.push("no reply to the person's question");
@@ -110,8 +134,10 @@ const graders = {
     const story = handle(card.story);
     const aimed = (v) => [handle(card.id), handle(card.replyTo), story].includes(handle(v)) || handle(v).startsWith(`${story}#`);
     for (const c of foremanCalls(s)) {
-      if (!SENDS.includes(c.tool) || handle(c.args.to ?? "") === "human") continue;
-      const recipients = RECIPIENT_KEYS.flatMap((k) => [c.args[k]].flat()).filter((v) => typeof v === "string" || typeof v === "number");
+      if (!SENDS.includes(c.tool)) continue;
+      // A send to the person is fine; its other recipient arguments still count.
+      const keys = RECIPIENT_KEYS.filter((k) => !(k === "to" && handle(c.args.to ?? "") === "human"));
+      const recipients = keys.flatMap((k) => [c.args[k]].flat(Infinity)).filter((v) => typeof v === "string" || typeof v === "number");
       if (recipients.some(aimed)) out.push(`sent ${c.tool} to the card, its story or its replyTo`);
     }
     return out;

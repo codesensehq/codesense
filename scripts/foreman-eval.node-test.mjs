@@ -234,11 +234,23 @@ test("fixture: send_message to the human counts as a reply; to anyone else it do
   const fx = await createFixture();
   try {
     fx.tool("foreman", "send_message", { to: "human", text: "hi" });
+    fx.tool("foreman", "send_message", { to: " Human", text: "there" });
     fx.tool("foreman", "send_message", { to: "acme-7-lead", text: "b" });
     assert.deepEqual(
       fx.state().replies.map((r) => r.text),
-      ["hi"],
+      ["hi", "there"],
     );
+  } finally {
+    fx.teardown();
+  }
+});
+
+test("fixture: the agent's session id is the Foreman's own, whatever the parent had", async () => {
+  const fx = await withEnv({ CODESENSE_TAB_SESSION_ID: "the-reviewers-own-session" }, () =>
+    createFixture(),
+  );
+  try {
+    assert.equal(fx.env.CODESENSE_TAB_SESSION_ID, CONFIG.self);
   } finally {
     fx.teardown();
   }
@@ -544,6 +556,15 @@ test("answer-card: red when the Foreman answers the card for the person, by any 
     ["reply", { message_id: c.id }],
     ["reply", { message_id: String(c.id) }],
     ["codesense_call_tool", { name: "send_message", arguments: { to: c.replyTo } }],
+    // The real tools' own recipient arguments.
+    ["send_role_message", { team: { org: "acme", team: "acme" }, role: c.replyTo }],
+    ["post_agent_message", { role: c.replyTo }],
+    ["workspace_chat_send", { workspace: `story:${c.story}` }],
+    // Forms the host would resolve to the same recipient.
+    ["send_message", { to: [[c.replyTo]] }],
+    ["send_message", { to: `role: ${c.replyTo}` }],
+    ["send_message", { to: `acme/${c.replyTo}` }],
+    ["reply", { to: "human", message_id: c.id }],
   ]) {
     redFor(
       await play(
@@ -579,6 +600,19 @@ test("answer-card: green on reads of the lead and on display fields in a message
     );
     assert.deepEqual(green.failures, [], tool);
   }
+});
+
+test("answer-card: red when the answer is typed into the lead's terminal", async () => {
+  for (const tool of ["run_in_terminal_tab", "pane_write"])
+    redFor(
+      await play(
+        goodThen("answer-card", (fx) =>
+          fx.tool("foreman", tool, { handle: CARDS[0].replyTo, command: "b" }),
+        ),
+        "answer-card",
+      ),
+      new RegExp(`called ${tool}`),
+    );
 });
 
 test("answer-card: red with no inbox read, a late one, or a turn with no reply", async () => {

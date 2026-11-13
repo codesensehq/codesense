@@ -10,6 +10,10 @@ input:
 # card, its story or its lead. Never the wording.
 expected:
   reads: [inbox_list]
+  # Typing the answer into the lead's terminal is answering it too.
+  forbidden_tools:
+    - run_in_terminal_tab
+    - pane_write
 # Rubric: what the replies say, judged in the recorded model runs.
 rubric:
   - id: names-story

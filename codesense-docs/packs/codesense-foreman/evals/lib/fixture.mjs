@@ -105,6 +105,8 @@ function build(root, failFirstPr) {
     GIT_AUTHOR_EMAIL: "fixture@example.test",
     GIT_COMMITTER_NAME: "fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.test",
+    // What the real host gives the agent and asks it to pass as launched_by.
+    CODESENSE_TAB_SESSION_ID: CONFIG.self,
   };
   const home = path.join(root, "home");
   const git = (args, cwd = home) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
@@ -189,7 +191,7 @@ function build(root, failFirstPr) {
         sessions: sessions.map((s) => ({ ...s })),
         // What the person reads: `reply`, or `send_message` to the human (foreman.md allows both).
         replies: calls
-          .filter((c) => c.caller === "foreman" && (c.tool === "reply" || (c.tool === "send_message" && c.args.to === "human")))
+          .filter((c) => c.caller === "foreman" && (c.tool === "reply" || (c.tool === "send_message" && String(c.args.to ?? "").trim().toLowerCase() === "human")))
           .map((c) => ({ seq: c.seq, turn: c.turn, text: String(c.args.text ?? "") })),
         ghCalls,
         worktrees: { before, after: worktrees() },
