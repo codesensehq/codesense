@@ -104,7 +104,13 @@ fn title_is_the_document_title_or_none() {
         pane_title("<html><head><TITLE> Sprint  &amp; risks </TITLE></head>").as_deref(),
         Some("Sprint & risks")
     );
+    // Element text, decoded with the text set like a story title.
+    assert_eq!(
+        pane_title("<title>The clone&#x27;s &#39;risks&apos; &mdash; &rsquo;24</title>").as_deref(),
+        Some("The clone's 'risks' — ’24")
+    );
     assert_eq!(pane_title("<title></title>"), None);
+    assert_eq!(pane_title("<title>&#32;&nbsp;</title>"), None);
     assert_eq!(pane_title("<h1>no title</h1>"), None);
 }
 

@@ -14,7 +14,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::entities::{decode_entities, NamedSet};
+use super::entities::{decode_entities, decode_title, NamedSet};
 use super::{truncate_to_char_boundary, FrontmatterFields, FIELD_NAME_MAP};
 
 // ----- Regex patterns (compiled once) ----------------------------------------
@@ -228,25 +228,14 @@ pub fn template_value_pairs(text: &str) -> Vec<(String, String)> {
 
 /// Extract title from `<title>` or first `<h1>`.
 ///
-/// Priority: `<title>` wins over `<h1>`. HTML tags are stripped from
-/// the extracted text and character references are decoded once. Returns
-/// `None` if neither found or both empty.
+/// Priority: `<title>` wins over `<h1>`. HTML tags are stripped from the
+/// extracted text, character references are decoded once and whitespace is
+/// collapsed (see [`decode_title`]). Returns `None` if neither found or both
+/// blank.
 pub fn extract_title(text: &str) -> Option<String> {
-    // Try <title> first
-    if let Some(cap) = TITLE_TAG.captures(text) {
-        let title = decode_entities(cap[1].trim(), NamedSet::Text);
-        if !title.is_empty() {
-            return Some(title);
-        }
-    }
-    // Fall back to first <h1>
-    if let Some(cap) = H1_TAG.captures(text) {
-        let title = decode_entities(cap[1].trim(), NamedSet::Text);
-        if !title.is_empty() {
-            return Some(title);
-        }
-    }
-    None
+    [&*TITLE_TAG, &*H1_TAG]
+        .into_iter()
+        .find_map(|tag| decode_title(&tag.captures(text)?[1]))
 }
 
 /// Extract a named section from `<section data-cs="{section_name}">`.
@@ -630,6 +619,21 @@ mod tests {
                 "<h1> {src:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_title_blank_once_decoded_falls_back_to_the_h1_and_is_collapsed() {
+        for blank in ["&#32;", "&nbsp;", " &#9;&#10; "] {
+            assert_eq!(
+                extract_title(&format!("<title>{blank}</title><h1>The h1</h1>")),
+                Some("The h1".to_string()),
+                "{blank:?}"
+            );
+        }
+        assert_eq!(
+            extract_title("<title>Two&#10;lines\n  and&#9;a tab</title>"),
+            Some("Two lines and a tab".to_string())
+        );
     }
 
     #[test]
