@@ -24,6 +24,8 @@ export const BUDGET_USD = 12;
 export class InfraError extends Error {}
 
 export async function runEval({ variant, model, k = 3, driver, driverName, out, budget = BUDGET_USD, date = new Date() }) {
+  // The name decides whether the report can ever count (floor.mjs), so there is no default.
+  if (typeof driverName !== "string" || !driverName) throw new Error("runEval needs a driverName");
   const specHash = parse(readFileSync(path.join(packDir, "pack.yml"), "utf8")).spec_hash?.[variant] ?? null;
   const cases = loadCases();
   const ids = cases.map((c) => c.id).sort();
@@ -51,8 +53,10 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
           throw new InfraError(`fixture: ${error.message}`);
         }
         const spent = (await driver({ caseDef, fx })) ?? {};
-        cost += spent.cost_usd ?? 0;
-        tokens += spent.tokens ?? 0;
+        const runCost = Number(spent.cost_usd ?? 0);
+        if (!Number.isFinite(runCost) || runCost < 0) throw new InfraError(`driver reported cost ${spent.cost_usd}`);
+        cost += runCost;
+        tokens += Number(spent.tokens ?? 0) || 0;
         const verdict = grade(caseDef, fx.state());
         results[caseDef.id].push(verdict.pass ? "pass" : "fail");
         if (!verdict.pass) notes.push(`${caseDef.id} run ${run}: ${verdict.failures.join("; ")}`);
@@ -80,8 +84,9 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
     runtime: variant.replace(/^foreman-/, ""),
     model,
     spec_hash: specHash,
-    driver: driverName ?? "model",
+    driver: driverName,
     k,
+    budget_usd: budget,
     complete,
     reason,
     at: date.toISOString(),
@@ -99,14 +104,16 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
 }
 
 const DRIVERS = { "stub:good": stubs.good, "stub:do-nothing": stubs.doNothing };
-const USAGE = "usage: run.sh <variant> --driver <stub:good|stub:do-nothing> [--k N] [--model M] [--budget USD] [--out DIR]";
+const FLAGS = ["driver", "k", "model", "budget", "out"];
+const USAGE = "usage: run.sh <variant> --driver <stub:good|stub:do-nothing> [--k N] [--model M] [--budget USD, at most 12] [--out DIR]";
 
 async function main(argv) {
   const [variant, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) {
-    if (!rest[i].startsWith("--") || rest[i + 1] === undefined) return console.error(USAGE) ?? 2;
-    flags[rest[i].slice(2)] = rest[i + 1];
+    const name = rest[i].replace(/^--/, "");
+    if (!rest[i].startsWith("--") || !FLAGS.includes(name) || rest[i + 1] === undefined) return console.error(USAGE) ?? 2;
+    flags[name] = rest[i + 1];
   }
   const registry = parse(readFileSync(path.join(packDir, "variants.yml"), "utf8"));
   if (!variant || variant.startsWith("--")) return console.error(USAGE) ?? 2;
@@ -121,7 +128,7 @@ async function main(argv) {
   const k = Number(flags.k ?? 3);
   const budget = Number(flags.budget ?? BUDGET_USD);
   if (!Number.isInteger(k) || k < 1) return console.error("--k must be a whole number of at least 1") ?? 2;
-  if (!(budget > 0)) return console.error("--budget must be a positive number") ?? 2;
+  if (!(budget > 0 && budget <= BUDGET_USD)) return console.error(`--budget must be more than 0 and at most ${BUDGET_USD}`) ?? 2;
   // A stub's report is never evidence, so by default it goes to a temp dir, not evals/reports.
   const out = flags.out ?? mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-"));
   const { exitCode, reportPath, report } = await runEval({ variant, model, driver, driverName: flags.driver, k, budget, out });

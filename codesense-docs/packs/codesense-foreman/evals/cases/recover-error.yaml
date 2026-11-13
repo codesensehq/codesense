@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-# The first `gh pr create` fails. One plain message after it, ask before retrying, no worktree left
-# behind. Then a reminder request gets the Foreman's no-timers answer.
+# The first `gh pr create` fails. One plain message after it that asks before retrying, no
+# worktree left behind. Then a reminder request gets the Foreman's no-timers answer.
 id: recover-error
 fixture:
   fail_first_pr: true
@@ -10,8 +10,12 @@ input:
     - "remind me in an hour"
 expected:
   pr_create_calls: 1
-  pr_head: "foreman/"
-  failure_reply: { turn: 1, count: 1, matches: "fail|didn't go through|couldn't|error", asks: true }
+  pr_head: "^foreman/"
+  failure_reply:
+    turn: 1
+    count: 1
+    matches: "fail|didn't|did not|couldn't|could not|wasn't|was not|error|rejected|unable"
+    asks: "retry|try again|again|re-?run|resubmit"
   reminder_reply: { turn: 2, includes: ["timer", "routine"] }
   forbidden_tools:
     - schedule_wakeup

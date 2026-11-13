@@ -20,7 +20,12 @@ export function loadReports(dir) {
     .filter((f) => f.endsWith(".md"))
     .sort()
     .flatMap((f) => {
-      const front = parseReport(readFileSync(path.join(dir, f), "utf8"));
+      let front;
+      try {
+        front = parseReport(readFileSync(path.join(dir, f), "utf8"));
+      } catch {
+        return []; // A front block that isn't YAML is not a report.
+      }
       return front && typeof front === "object" ? [{ ...front, file: f }] : [];
     });
 }
@@ -33,15 +38,15 @@ const dated = (r) => typeof r.at === "string" && !Number.isNaN(Date.parse(r.at))
 // The report that decides a key's status, or undefined.
 export function latestFor(reports, key) {
   return reports
-    .filter((r) => sameKey(r, key) && fromModel(r) && dated(r) && r.complete === true && r.k >= MIN_K)
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.file?.localeCompare(b.file ?? "") || 0)
+    .filter((r) => sameKey(r, key) && fromModel(r) && dated(r) && r.complete === true && Number.isInteger(r.k) && r.k >= MIN_K)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || String(a.file).localeCompare(String(b.file), undefined, { numeric: true }))
     .at(-1);
 }
 
 export function statusFor(reports, key) {
   const latest = latestFor(reports, key);
   if (!latest) return "untested";
-  const runs = CASE_IDS.map((id) => latest.cases?.[id] ?? []);
+  const runs = CASE_IDS.map((id) => (Array.isArray(latest.cases?.[id]) ? latest.cases[id] : []));
   const results = runs.flat();
   if (results.includes("fail")) return "failed";
   const complete = runs.every((r) => r.length >= MIN_K) && results.every((x) => x === "pass");

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # "Start sprint 1" checks for a live lead, then launches exactly one sprint lead (the team's
-# sprint lead agent, named for sprint 1); asking again launches nothing.
+# sprint lead agent in a team workspace, named for sprint 1); asking again launches nothing.
 id: start-sprint-lead
 input:
   turns:
@@ -8,7 +8,8 @@ input:
     - "start sprint 1"
 expected:
   agent_from: sprintLeadAgent
-  sprint: "sprint[ -]?1\\b"
+  target: team-workspace
+  sprint: "1"
   launches_after_turn: [1, 1]
   forbidden_tools:
     - start_remote_agent_task

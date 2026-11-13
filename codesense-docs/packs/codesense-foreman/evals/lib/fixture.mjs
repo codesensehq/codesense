@@ -36,18 +36,28 @@ export const CARDS = [
 ];
 const copyCards = () => JSON.parse(JSON.stringify(CARDS));
 
-// Dropped from the sandbox env: anything that could reach a real account.
-const CREDENTIAL = /TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|^GH_|^GITHUB_|^SSH_AUTH_SOCK$/i;
+// Dropped from the sandbox env: anything that could reach a real account, and every inherited
+// GIT_* (a GIT_DIR from a hook would point the fixture's git at the real repository).
+const DROPPED =
+  /TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|ASKPASS|NETRC|^GH_|^GITHUB_|^GIT_|^AWS_|^SSH_|^KUBECONFIG$|^DOCKER_CONFIG$/i;
+
+// The real open_workspace accepts these camelCase aliases; graders read the snake_case names.
+const ALIASES = { initialPrompt: "initial_prompt", launchedBy: "launched_by", storyId: "story_id", queueRole: "queue_role" };
+const canonical = (args) =>
+  Object.fromEntries(Object.entries(args ?? {}).map(([k, v]) => [ALIASES[k] ?? k, v]));
 
 const SHIM = `#!/bin/sh
 # Fixture gh: records \`pr create\` and can fail the first one. Nothing else reaches the network.
 d="$(dirname "$0")/.."
-if [ "$1" = pr ] && [ "$2" = create ]; then
+create=false; prev=""
+for a in "$@"; do [ "$prev" = pr ] && [ "$a" = create ] && create=true; prev="$a"; done
+if [ "$create" = true ]; then
   n=$(( $(cat "$d/seq" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/seq"
   args="$(printf %s "$*" | tr -d '"\\\\' | tr '\\n\\t\\r' '   ' | tr -d '\\000-\\037')"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -d '"\\\\')"
   ok=true
   [ -f "$d/fail-first-pr" ] && ok=false
-  printf '{"seq":%s,"args":"%s","ok":%s}\\n' "$n" "$args" "$ok" >> "$d/gh-calls.jsonl"
+  printf '{"seq":%s,"args":"%s","branch":"%s","ok":%s}\\n' "$n" "$args" "$branch" "$ok" >> "$d/gh-calls.jsonl"
   if [ "$ok" = false ]; then
     rm "$d/fail-first-pr"
     echo "gh: could not create the pull request (fixture failure)" >&2
@@ -78,7 +88,7 @@ function build(root, failFirstPr) {
   if (failFirstPr) writeFileSync(path.join(root, "fail-first-pr"), "");
 
   const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !CREDENTIAL.test(k))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !DROPPED.test(k))),
     HOME: user,
     XDG_CONFIG_HOME: path.join(user, ".config"),
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
@@ -109,7 +119,6 @@ function build(root, failFirstPr) {
       .split("\n")
       .filter((l) => l.startsWith("worktree "))
       .map((l) => l.slice(9));
-  const branches = () => gitOk(["branch", "--format=%(refname:short)"]).split("\n").filter(Boolean);
   const before = worktrees();
 
   const seqFile = path.join(root, "seq");
@@ -136,17 +145,22 @@ function build(root, failFirstPr) {
       return text;
     },
     // A tool call the agent under test makes. The fixture host answers the few that matter.
+    // `codesense_call_tool` is unwrapped, so graders see the tool it proxies.
     tool(caller, name, args = {}) {
-      const record = { seq: nextSeq(), turn, caller, tool: name, args: args ?? {} };
+      const via = name === "codesense_call_tool" ? { via: name } : {};
+      const tool = via.via ? String(args?.name ?? "") : name;
+      const record = { seq: nextSeq(), turn, caller, tool, args: canonical(via.via ? args?.arguments : args), ...via };
       calls.push(record);
       appendFileSync(logFile, `${JSON.stringify(record)}\n`);
-      if (name === "open_workspace") {
-        const session = { id: `session-${sessions.length + 1}`, launched_by: caller, turn, ...record.args };
+      if (tool === "open_workspace") {
+        // The caller is the launcher; the agent's own launched_by argument is kept beside it.
+        const { launched_by: launchedByArg, ...rest } = record.args;
+        const session = { id: `session-${sessions.length + 1}`, turn, ...rest, launched_by: caller, launched_by_arg: launchedByArg };
         sessions.push(session);
         return { status: "launched", handle: session.id };
       }
-      if (name === "list_sessions") return { sessions: sessions.map((s) => ({ ...s })) };
-      if (name === "inbox_list") return { cards: copyCards() };
+      if (tool === "list_sessions") return { sessions: sessions.map((s) => ({ ...s })) };
+      if (tool === "inbox_list") return { cards: copyCards() };
       return { ok: true };
     },
     say(text) {
@@ -165,12 +179,12 @@ function build(root, failFirstPr) {
       return {
         calls: [...calls],
         sessions: sessions.map((s) => ({ ...s })),
+        // What the person reads: `reply`, or `send_message` to the human (foreman.md allows both).
         replies: calls
-          .filter((c) => c.tool === "reply")
+          .filter((c) => c.caller === "foreman" && (c.tool === "reply" || (c.tool === "send_message" && c.args.to === "human")))
           .map((c) => ({ seq: c.seq, turn: c.turn, text: String(c.args.text ?? "") })),
         ghCalls,
         worktrees: { before, after: worktrees() },
-        branches: branches(),
         turns: [...turns],
         config: { ...fx.config },
         cards: copyCards(),

@@ -24,11 +24,14 @@ export function checkRegistry({
   const rows = registry.variants ?? [];
   for (const m of registry.models ?? [])
     if (!rows.some((r) => r.model === m.model)) errors.push(`${registry.agent} ${m.model}: no variants row`);
+  const runtime = String(registry.agent).replace(/^foreman-/, "");
   for (const row of rows) {
     const label = `${registry.agent} ${row.runtime} ${row.model} ${row.spec_hash ?? "null"}`;
     const key = JSON.stringify([row.runtime, row.model, row.spec_hash ?? null]);
     if (seen.has(key)) errors.push(`${label}: duplicate row`);
     seen.add(key);
+    if (!(registry.models ?? []).some((m) => m.model === row.model)) errors.push(`${label}: model is not in models`);
+    if (row.runtime !== runtime) errors.push(`${label}: runtime is not ${runtime}`);
     const computed = statusFor(all, row);
     if (row.eval !== computed) errors.push(`${label}: eval is "${row.eval}" but its reports say "${computed}"`);
     const latest = latestFor(all, row);

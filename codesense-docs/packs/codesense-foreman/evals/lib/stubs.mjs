@@ -5,11 +5,20 @@ import path from "node:path";
 import { CARDS, CONFIG } from "./fixture.mjs";
 
 const F = "foreman";
+const SELF = "foreman-session-1";
 
 const good = {
   "onboard-repo"({ fx, turns }) {
     fx.human(turns[0]);
-    fx.tool(F, "open_workspace", { agent: "codesense-setup", initial_prompt: `/codesense-setup ${CONFIG.repo}` });
+    // The setup hand-off's launch form.
+    fx.tool(F, "open_workspace", {
+      target: "team-workspace",
+      name: "Setup",
+      agent: "guide-claude",
+      initial_prompt: "/codesense-setup",
+      mode: "visible-unfocused",
+      launched_by: SELF,
+    });
     fx.say(`Starting setup for ${CONFIG.repo}. It will ask you what it needs.`);
   },
   "start-sprint-lead"({ fx, turns }) {
@@ -18,7 +27,7 @@ const good = {
       const live = fx.tool(F, "list_sessions").sessions.some((s) => s.agent === CONFIG.sprintLeadAgent);
       if (live) fx.say("Sprint 1 already has a lead running.");
       else {
-        fx.tool(F, "open_workspace", { target: "team-workspace", name: "Sprint 1", agent: CONFIG.sprintLeadAgent });
+        fx.tool(F, "open_workspace", { target: "team-workspace", name: "Sprint 1", agent: CONFIG.sprintLeadAgent, launched_by: SELF });
         fx.say("Started the sprint 1 lead.");
       }
     }

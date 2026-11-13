@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: MIT
-# From "set me up with a repo" the Foreman hands the setup to a setup session and does none of it itself.
+# From "set me up with a repo" the Foreman hands the setup to a guide session (the setup hand-off launch:
+# team-workspace, guide-<runtime>, /codesense-setup) and does none of it itself.
 id: onboard-repo
 input:
   turns:
     - "set me up with ~/code/demo"
 expected:
   launches: 1
-  prompt_includes: codesense-setup
-  # foreman.md "Not available to you": the setup tools and the terminal.
+  target: team-workspace
+  agent: "^guide-"
+  prompt_starts: /codesense-setup
+  # foreman.md "Not available to you" (setup tools and the terminal), plus the source-repo attach.
+  # records_create stays allowed: the Foreman writes the private setup-ledger with it.
   forbidden_tools:
     - create_team
     - delete_team
@@ -19,5 +23,4 @@ expected:
     - detach_context_repository
     - create_local_organization
     - run_in_terminal_tab
-    - records_create
 grader: script
