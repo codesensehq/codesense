@@ -1826,7 +1826,9 @@ mod tests {
             "if(d.type==='codesense:hello'){if(!window.__csSlotSeen)window.parent.postMessage("
         ));
         assert!(LINK_INTERCEPTOR_JS.contains("type:'codesense:ready',retry:true"));
-        assert!(LINK_INTERCEPTOR_JS.contains("d.type==='codesense:theme'){window.__csSlotSeen=true;"));
+        assert!(
+            LINK_INTERCEPTOR_JS.contains("d.type==='codesense:theme'){window.__csSlotSeen=true;")
+        );
         assert!(LINK_INTERCEPTOR_JS.contains("onVisibility:function(cb)"));
         assert!(LINK_INTERCEPTOR_JS.contains("onIntent:function(cb)"));
         assert!(LINK_INTERCEPTOR_JS.contains("codesense:intent"));
@@ -3011,10 +3013,12 @@ mod caller_scope_tests {
     }
 
     /// How a story worktree is named: its real path, or a symlink to it.
+    /// `Inner` is no worktree: a link committed inside it that points out.
     #[derive(Clone, Copy)]
     enum Spelling {
         Real,
         Link,
+        Inner,
     }
 
     /// A frame whose content root is a source worktree outside `~/.codesense/users/`
@@ -3030,9 +3034,16 @@ mod caller_scope_tests {
         std::fs::write(real.join("stories/board.html"), "<p>worktree board</p>").unwrap();
         let link = base.join("linked-wt");
         std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Outside every worktree and context root, with the same page.
+        let outside = base.join("outside");
+        std::fs::create_dir_all(outside.join("stories")).unwrap();
+        std::fs::write(outside.join("stories/board.html"), "<p>outside</p>").unwrap();
+        let inner = real.join("link");
+        std::os::unix::fs::symlink(&outside, &inner).unwrap();
         let spelled = |s: Spelling| match s {
             Spelling::Real => real.clone(),
             Spelling::Link => link.clone(),
+            Spelling::Inner => inner.clone(),
         };
         if let Some(spelling) = registered {
             use crate::install::worktree_index::{self, WorktreeStoryRecord};
@@ -3112,6 +3123,16 @@ mod caller_scope_tests {
         assert_eq!(
             worktree_frame_request(Some(Spelling::Real), Spelling::Link),
             StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn viewer_route_refuses_a_root_that_is_a_link_inside_the_worktree() {
+        // `W/link → outside`, used as the content root: it lies in a registered
+        // worktree but isn't one, so its target is never served as worktree.
+        assert_eq!(
+            worktree_frame_request(Some(Spelling::Real), Spelling::Inner),
+            StatusCode::FORBIDDEN
         );
     }
 }

@@ -304,7 +304,7 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
     Err("Access denied: path is outside any registered worktree".to_string())
 }
 
-/// Is `path` inside `root`, where `root` lies in a registered worktree and not
+/// Is `path` inside `root`, where `root` is a registered worktree root and not
 /// in the context repo? The gate for a viewer frame rooted in a story worktree
 /// (the worktree editor's Rendered view): it reads its own worktree only, never
 /// another worktree, and context content keeps its team-scoped gate.
@@ -312,7 +312,10 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
 ///
 /// The root is taken both as spelled and as its real path: a worktree behind a
 /// symlink (`/var`, a linked `~/dev`) is requested by its spelling and then
-/// re-checked by its real path once the file is resolved.
+/// re-checked by its real path once the file is resolved. So the root must
+/// *be* a registered root, by either spelling, never merely lie inside one: a
+/// link committed in the worktree (`W/link → $HOME`) would otherwise admit
+/// everything under its target.
 pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     root: &Path,
@@ -320,9 +323,16 @@ pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
 ) -> bool {
     let spelled = normalize_path_components(root);
     let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
+    let registered = codesense_home_dir()
+        .map(|home| crate::install::worktree_index::worktree_roots(&home))
+        .unwrap_or_default();
+    let is_root = registered.iter().any(|r| {
+        let r = normalize_path_components(r);
+        r == spelled || r.canonicalize().is_ok_and(|r| r == real)
+    });
     let roots = [spelled, real];
-    roots.iter().all(|root| !path_in_context_roots(root, app))
-        && roots.iter().any(|root| path_in_worktree_roots(root))
+    is_root
+        && roots.iter().all(|root| !path_in_context_roots(root, app))
         && path_within_any_root(path, &roots)
 }
 
