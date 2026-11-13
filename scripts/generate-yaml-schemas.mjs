@@ -275,6 +275,14 @@ people: []
           "The team's starter page, relative to its content folder (no `..`, no hidden file or folder), opened whenever the team has nothing open. Set it from a file's menu (Set as team starter page), Settings → Workspace, or the set_team_starter_page MCP tool. Unset: README.md, README.html or index.html there, else nothing.",
       },
       {
+        name: "agent_page",
+        type: "string",
+        required: false,
+        default: null,
+        description:
+          "The team's agent page, relative to its content folder (no `..`, no hidden file or folder): the page an agent's Full view opens, with the session named in the URL fragment (`#session=<handle>`). Set it by editing teams.yml. Unset: the team's agents show no Full view.",
+      },
+      {
         name: "description",
         type: "string",
         required: false,

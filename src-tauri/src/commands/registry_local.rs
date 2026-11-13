@@ -743,6 +743,7 @@ mod tests {
             RegistryEdit::SetTeamLandingPage {
                 team_name: docs.team.clone(),
                 landing_page: None,
+                agent_page: None,
             },
         )
         .await

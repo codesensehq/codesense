@@ -8,9 +8,10 @@ import {
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
-import { AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
+import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
@@ -52,6 +53,12 @@ vi.mock("./group-chat", async (orig) => ({
       <button onClick={p.onBack}>Back to the inbox</button>
     </div>
   ),
+}));
+
+const openFullView = vi.hoisted(() => vi.fn());
+vi.mock("../lib/agent-full-view", async (orig) => ({
+  ...(await orig<typeof import("../lib/agent-full-view")>()),
+  openAgentFullView: openFullView,
 }));
 
 import { ChatOverlay } from "./chat-overlay";
@@ -152,7 +159,18 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
   return utils;
 }
 
+const AGENT_PAGE = "pages/agent.html";
+/** The registry's view of the team: `agent_page` is what teams.yml declares (absent ⇒ no page). */
+function declareTeam(agentPage?: string) {
+  useOrgStore.setState({
+    orgs: [
+      { slug: "acme", teams: [{ name: "widgets", source_repos: [], agent_page: agentPage }] },
+    ] as never,
+  });
+}
+
 beforeEach(() => {
+  declareTeam(AGENT_PAGE);
   clearInboxDrafts();
   vi.clearAllMocks();
   events.clear();
@@ -266,15 +284,37 @@ describe("ChatOverlay", () => {
     expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
   });
 
-  it("Full view opens the agent's conversation in the Inbox", async () => {
+  it("Full view opens the team's declared agent page for its session, in the agent's team", async () => {
     await renderOverlay(420, 700);
     fireEvent.click(screen.getByRole("button", { name: "Full view" }));
-    expect(opened).toHaveBeenCalledWith(
-      expect.objectContaining({
-        surface: "inbox",
-        intent: expect.objectContaining({ conversation: LEAD, org: "acme", team: "widgets" }),
-      }),
-    );
+    expect(openFullView).toHaveBeenCalledWith({
+      org: "acme",
+      team: "widgets",
+      handle: LEAD,
+      page: AGENT_PAGE,
+    });
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("with no agent page declared there is no Full view button, and no error", async () => {
+    declareTeam(undefined);
+    await renderOverlay(420, 700);
+    expect(screen.queryByRole("button", { name: "Full view" })).toBeNull();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+  });
+
+  it("a message sent from the page's transport appears in the thread for the same session", async () => {
+    await renderOverlay(420, 700);
+    // The page sends `sendAsHuman({to: handle, text})`; the engine stores it under that handle, the key the overlay reads its thread by.
+    const sent = msg(5, "human", LEAD, "sent from the agent page");
+    api.loadSessionInbox.mockResolvedValue({
+      dto: { handle: LEAD, roles: [], messages: [...MESSAGES, sent] },
+      source: "live",
+    });
+    await act(async () => {
+      events.get(AGENT_INBOX_CHANGED_EVENT)?.({ payload: null });
+    });
+    expect(await screen.findByText("sent from the agent page")).toBeInTheDocument();
   });
 
   it("Terminal hands the tab back to the terminal, and names the key that brings the chat back", async () => {
