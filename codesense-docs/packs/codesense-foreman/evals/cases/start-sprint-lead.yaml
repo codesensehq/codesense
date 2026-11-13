@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# "Start sprint 1" launches exactly one sprint lead; asking again launches nothing.
+id: start-sprint-lead
+input:
+  turns:
+    - "start sprint 1"
+    - "start sprint 1"
+expected:
+  role: sprint-lead
+  agent_from: sprintLeadAgent
+  launched_by: foreman
+  launches_after_turn: [1, 1]
+  forbidden_roles:
+    - story-lead
+    - specialist
+grader: script

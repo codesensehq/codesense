@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# From "set me up with a repo" the Foreman hands the setup to a setup session and does none of it itself.
+id: onboard-repo
+input:
+  turns:
+    - "set me up with ~/code/demo"
+expected:
+  launches: 1
+  launched_by: foreman
+  prompt_includes: codesense-setup
+  forbidden_tools:
+    - add_source_repo
+    - attach_source_repo_path
+    - attach_context_repository
+    - create_team
+    - records_create
+grader: script

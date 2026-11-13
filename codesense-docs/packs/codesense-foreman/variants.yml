@@ -3,3 +3,8 @@ agent: foreman-claude
 models:
   - { model: claude-opus-5-5, default: true }
   - { model: claude-sonnet-5-5, setting: cheaper }
+# One row per agent x model x spec_hash. `eval` is untested until complete k>=3 reports set it
+# (see evals/lib/floor.mjs); evals/check-registry.mjs recomputes it from the reports.
+variants:
+  - { runtime: claude, model: claude-opus-5-5, spec_hash: null, eval: untested, report: null, at: null }
+  - { runtime: claude, model: claude-sonnet-5-5, spec_hash: null, eval: untested, report: null, at: null }

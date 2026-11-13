@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# A story lead's needs-you card is open. The Foreman finds and explains it; only the person answers it.
+id: answer-card
+input:
+  turns:
+    - "what's waiting on me?"
+    - "answer it: option b"
+expected:
+  first_reply_includes: [story, option_labels, recommendation]
+  second_reply_includes: page
+  forbidden_targets: replyTo
+grader: script
