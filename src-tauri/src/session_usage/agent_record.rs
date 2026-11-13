@@ -161,7 +161,9 @@ pub(crate) fn assemble(
                     continue;
                 }
                 for path in paths {
-                    by_path.entry(String::as_str(path)).or_default().push(String::as_str(sha));
+                    let path: &str = path;
+                    let sha: &str = sha;
+                    by_path.entry(path).or_default().push(sha);
                 }
             }
             by_path
