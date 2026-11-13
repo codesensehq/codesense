@@ -110,7 +110,7 @@ pub fn args_schema(name: &str) -> Value {
             json!({"target":string(),"removeWorktree":{"type":"boolean"},"discardUnsaved":{"type":"boolean"}})
         }
         "openWorkspace" => {
-            json!({"storyId":string(),"target":{"type":"object","properties":{"kind":{"enum":["story","epic","branch","dir"]},"storyId":string(),"path":string()}},"headed":{"type":"boolean"},"initialPrompt":string(),"sessionMode":{"enum":["new","focus"]}})
+            json!({"storyId":string(),"target":{"type":"object","properties":{"kind":{"enum":["story","epic","branch","dir","team-workspace"]},"storyId":string(),"path":string(),"name":string(),"worktree":string(),"createWorktree":{"type":"boolean"},"team":string(),"org":string()}},"agent":string(),"model":string(),"role":string(),"mode":string(),"headed":{"type":"boolean"},"initialPrompt":string(),"sessionMode":{"enum":["new","focus"]}})
         }
         "openTab" => json!({"workspaceId":string(),"agent":{"type":"boolean"}}),
         "openFile" => {
