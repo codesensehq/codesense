@@ -4,6 +4,7 @@
 // rule or card parser in the app is a review finding.
 export {
   cardAnswer,
+  createMarkLatch,
   deliveryMark,
   isBusy,
   parseCard,

@@ -11,11 +11,11 @@
 import {h} from './dom.js';
 import {CHAT_COPY,failureText,modelLabel,timeLabel} from './copy.js';
 import {createLaunch,parseFailure} from './launch.js';
-import {activityOf,leadRowsOf,liveLeadOf,presenceOf} from './presence.js';
+import {activityOf,leadRowsOf,liveOf,presenceOf} from './presence.js';
 import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
-import {cardAnswer,deliveryMark,parseCard} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
@@ -35,7 +35,6 @@ function reconcile(parent,cache,items){
  nodes.forEach((node,index)=>{if(parent.childNodes[index]!==node)parent.insertBefore(node,parent.childNodes[index]||null);});
  while(parent.childNodes.length>nodes.length)parent.lastChild.remove();
 }
-const markText={stuck:CHAT_COPY.mark.stuck,starting:CHAT_COPY.mark.starting,held:CHAT_COPY.mark.held,sent:CHAT_COPY.mark.sent,queued:CHAT_COPY.mark.queued,delivered:CHAT_COPY.mark.delivered,kept:CHAT_COPY.mark.kept};
 const storyTarget=(storyId,leadRole)=>({
  rows:sessions=>leadRowsOf(sessions,storyId,leadRole),
  read:(peers,transport)=>Promise.all([...peers.map(row=>transport.threadOf(row.sessionId).catch(()=>[])),transport.roleThread().catch(()=>[])]),
@@ -52,7 +51,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const fails=new Map();
  const wrapped={launch:async prompt=>{const result=await transport.launch(prompt);if(result&&result.sessionId)launchSessionId=result.sessionId;return result;},send:(handle,text)=>transport.send(handle,text)};
  const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue});
- const live=()=>target.rows(rows).find(row=>row.state!=='exited')||null;
+ const live=()=>liveOf(target.rows(rows));
  const leadHandles=()=>new Set(target.rows(rows).map(row=>row.handle));
  const leadCount=()=>{const handles=leadHandles();return thread.filter(row=>sideOf(row,handles)==='lead').length+streams.size;};
  const presence=()=>presenceOf(live(),{launch:{state:launch.state,failure:launch.failure,stuck:launch.stuck},runningSince,done:isDone});
@@ -122,10 +121,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    make:()=>cardNode({lead:target.leadName(row),id,text,parsed,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
  }
  // A sent message is Queued or Delivered by chat-core's rule over the lead's row now; the others are the launch machine's own marks.
+ const deliveryOf=createMarkLatch();
  function markOfItem(item){
   if(item.mark==='starting'&&launch.stuck)return 'stuck';
   if(item.mark!=='sent')return item.mark;
-  return deliveryMark({sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles())});
+  return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles())});
  }
  function threadItems(){
   const handles=leadHandles(),entries=[],rowIds=new Set(thread.map(row=>row.messageId)),sentHere=new Map(launch.messages.filter(item=>item.messageId!==undefined).map(item=>[item.messageId,item]));
@@ -133,12 +133,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    const side=sideOf(row,handles),needs=cards!==false&&row.kind==='needs-you'&&side==='lead';
    if(needs){entries.push(cardEntry(row));continue;}
    const who=side==='you'?CHAT_COPY.who.you:side==='lead'?target.leadName(row):(row.fromName||row.from||''),own=sentHere.get(row.messageId),mark=own?markOfItem(own):null;
-   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,row.text,side,row.createdAtMs,mark].join('|'),make:()=>bubble({id:row.messageId,text:row.text||row.summary||'',mark:mark&&markText[mark],markKey:mark,who,at:row.createdAtMs},side)});
+   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,row.text,side,row.createdAtMs,mark].join('|'),make:()=>bubble({id:row.messageId,text:row.text||row.summary||'',mark:mark&&CHAT_COPY.mark[mark],markKey:mark,who,at:row.createdAtMs},side)});
   }
   for(const item of launch.messages){
    if(item.messageId!==undefined&&rowIds.has(item.messageId))continue;
    const mark=markOfItem(item);
-   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble({text:item.text,mark:markText[mark]||null,markKey:mark,who:CHAT_COPY.who.you,at:item.sentAt},'you')});
+   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble({text:item.text,mark:CHAT_COPY.mark[mark]||null,markKey:mark,who:CHAT_COPY.who.you,at:item.sentAt},'you')});
   }
   entries.sort((a,b)=>a.t-b.t);
   for(const [id,text] of streams)if(!rowIds.has(id))entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble({id,text,who:CHAT_COPY.lead,at:clock.now()},'lead')});

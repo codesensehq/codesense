@@ -46,6 +46,7 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/presence.js
   var leadRowsOf = (rows, storyId, role) => (Array.isArray(rows) ? rows : []).filter((row) => row.story === storyId && row.role === role);
+  var liveOf = (rows) => rows.find((row) => row.state !== "exited") || null;
   var activityOf = (row, runningSince) => {
     const p = row && row.progress;
     return p && typeof p.note === "string" && p.note && Number.isFinite(p.atMs) && p.atMs >= (runningSince || 0) ? p.note : CHAT_COPY.header.activityNone;
@@ -79,9 +80,18 @@
     if (!busyAtSend) return "delivered";
     if (Number.isFinite(newestLeadAt) && newestLeadAt > sentAt) return "delivered";
     if (!lead) return "queued";
-    if (lead.mailNotice === "told") return "delivered";
     const notified = Date.parse(lead.notifiedAt);
-    return lead.unread === 0 && Number.isFinite(notified) && notified >= sentAt ? "delivered" : "queued";
+    if (!Number.isFinite(notified) || notified < sentAt) return "queued";
+    return lead.mailNotice === "told" || lead.unread === 0 ? "delivered" : "queued";
+  }
+  function createMarkLatch() {
+    const done = /* @__PURE__ */ new Set();
+    return (key, input) => {
+      if (done.has(key)) return "delivered";
+      const mark = deliveryMark(input);
+      if (mark === "delivered") done.add(key);
+      return mark;
+    };
   }
   var MAX_OPTIONS = 6;
   var MAX_OPTION = 80;
@@ -108,7 +118,7 @@
     return { question, options: pick ? [pick, ...options.filter((option) => option !== pick)] : options, pick, reason: because ? because[1].trim() : null };
   }
   function cardAnswer(cardId, thread) {
-    const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo !== null && item.inReplyTo !== void 0 && item.inReplyTo === cardId);
+    const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
     return row ? { text: row.text || "", at: row.createdAtMs || 0 } : null;
   }
 
@@ -483,7 +493,6 @@
     });
     while (parent.childNodes.length > nodes.length) parent.lastChild.remove();
   }
-  var markText = { stuck: CHAT_COPY.mark.stuck, starting: CHAT_COPY.mark.starting, held: CHAT_COPY.mark.held, sent: CHAT_COPY.mark.sent, queued: CHAT_COPY.mark.queued, delivered: CHAT_COPY.mark.delivered, kept: CHAT_COPY.mark.kept };
   var storyTarget = (storyId, leadRole) => ({
     rows: (sessions) => leadRowsOf(sessions, storyId, leadRole),
     read: (peers, transport) => Promise.all([...peers.map((row) => transport.threadOf(row.sessionId).catch(() => [])), transport.roleThread().catch(() => [])]),
@@ -505,7 +514,7 @@
       return result;
     }, send: (handle, text) => transport.send(handle, text) };
     const launch = createLaunch({ transport: wrapped, clock, storyId, leadRole, timers, card, onChange: () => render(), rowsOf: target.rows, queue: target.queue });
-    const live = () => target.rows(rows).find((row) => row.state !== "exited") || null;
+    const live = () => liveOf(target.rows(rows));
     const leadHandles = () => new Set(target.rows(rows).map((row) => row.handle));
     const leadCount = () => {
       const handles = leadHandles();
@@ -634,10 +643,11 @@
         make: () => cardNode({ lead: target.leadName(row), id, text, parsed, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
       };
     }
+    const deliveryOf = createMarkLatch();
     function markOfItem(item) {
       if (item.mark === "starting" && launch.stuck) return "stuck";
       if (item.mark !== "sent") return item.mark;
-      return deliveryMark({ sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()) });
+      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()) });
     }
     function threadItems() {
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
@@ -648,12 +658,12 @@
           continue;
         }
         const who = side === "you" ? CHAT_COPY.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
-        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && markText[mark], markKey: mark, who, at: row.createdAtMs }, side) });
+        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && CHAT_COPY.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: markText[mark] || null, markKey: mark, who: CHAT_COPY.who.you, at: item.sentAt }, "you") });
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: CHAT_COPY.mark[mark] || null, markKey: mark, who: CHAT_COPY.who.you, at: item.sentAt }, "you") });
       }
       entries.sort((a, b) => a.t - b.t);
       for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: CHAT_COPY.lead, at: clock.now() }, "lead") });
@@ -793,6 +803,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, deliveryMark, isBusy, parseCard }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

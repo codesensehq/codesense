@@ -125,7 +125,11 @@ describe("kit.chat", () => {
     await flush();
     await typeAndSend(s.el, "when you can");
     expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
-    roster[0] = { ...roster[0], mailNotice: "told" };
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
     await s.reads.sessions();
     await flush();
     expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");

@@ -3,7 +3,14 @@
 // the marks rule and the card parser, through the overlay's import.
 import { describe, expect, it } from "vitest";
 
-import { cardAnswer, deliveryMark, isBusy, parseCard, type ChatLeadRow } from "./chat-core";
+import {
+  cardAnswer,
+  createMarkLatch,
+  deliveryMark,
+  isBusy,
+  parseCard,
+  type ChatLeadRow,
+} from "./chat-core";
 
 const SENT = Date.parse("2026-11-12T10:00:00Z");
 const later = (ms: number) => new Date(SENT + ms).toISOString();
@@ -40,10 +47,9 @@ describe("deliveryMark", () => {
 
   it("Queued clears on mailNotice told", () => {
     expect(mark({ lead: lead({ mailNotice: "told", notifiedAt: later(5) }) })).toBe("delivered");
-    expect(
-      mark({ lead: lead({ mailNotice: "told", notifiedAt: null }) }),
-      "told alone is enough",
-    ).toBe("delivered");
+    expect(mark({ lead: lead({ mailNotice: "told", notifiedAt: later(0) }) })).toBe("delivered");
+    expect(mark({ lead: lead({ mailNotice: "told", notifiedAt: null }) })).toBe("queued");
+    expect(mark({ lead: lead({ mailNotice: "told", notifiedAt: earlier(1) }) })).toBe("queued");
   });
 
   it("Queued clears on notifiedAt at or after sentAt with unread 0", () => {
@@ -89,9 +95,27 @@ describe("deliveryMark", () => {
     expect(mark({ newestLeadAt: SENT - 1 })).toBe("queued");
   });
 
-  it("with no lead row a busy send keeps its mark, so a lead that leaves cannot un-deliver one", () => {
+  it("with no lead row a busy send that was never delivered stays Queued; an idle send is Delivered", () => {
     expect(mark({ lead: null })).toBe("queued");
     expect(mark({ lead: null, busyAtSend: false })).toBe("delivered");
+  });
+
+  it("a Delivered mark latches per message: the lead leaving or other unread mail does not undo it", () => {
+    const of = createMarkLatch();
+    const input = (extra = {}) => ({
+      sentAt: SENT,
+      busyAtSend: true,
+      lead: lead(),
+      newestLeadAt: 0,
+      ...extra,
+    });
+    expect(of("a", input())).toBe("queued");
+    expect(of("a", input({ lead: lead({ mailNotice: "told", notifiedAt: later(5) }) }))).toBe(
+      "delivered",
+    );
+    expect(of("a", input({ lead: null }))).toBe("delivered");
+    expect(of("a", input({ lead: lead({ unread: 3, notifiedAt: null }) }))).toBe("delivered");
+    expect(of("b", input({ lead: null }))).toBe("queued");
   });
 });
 

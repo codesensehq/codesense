@@ -30,6 +30,16 @@ export function deliveryMark(input: {
   lead: ChatLeadRow | null | undefined;
   newestLeadAt?: number;
 }): "queued" | "delivered";
+/** A mark rule that latches Delivered per message key: a later change in the lead never un-delivers it. */
+export function createMarkLatch(): (
+  key: string | number,
+  input: {
+    sentAt: number;
+    busyAtSend: boolean;
+    lead: ChatLeadRow | null | undefined;
+    newestLeadAt?: number;
+  },
+) => "queued" | "delivered";
 /** A needs-you message read as buttons, or null when it is not in the card format. */
 export function parseCard(text: unknown): ChatCard | null;
 /** The person's own row replying to the card, from whichever place sent it. */
