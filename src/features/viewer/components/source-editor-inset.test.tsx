@@ -329,6 +329,8 @@ describe("SourceEditorInset — read/gate (SLW-WDE-1 carried forward)", () => {
     readFileMock.mockResolvedValueOnce("\0PNG rest");
     render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
     fireEvent.click(screen.getByTestId("pick-binary"));
+    // An image opens Rendered; Source is where the editor says it can't hold it.
+    fireEvent.click(await screen.findByRole("radio", { name: "Source" }));
     expect(await screen.findByTestId("worktree-file-placeholder")).toBeInTheDocument();
     expect(screen.getByText(/binary file/i)).toBeInTheDocument();
     expect(screen.queryByTestId("mock-code-editor")).not.toBeInTheDocument();
@@ -544,6 +546,21 @@ describe("SourceEditorInset — edit + save (SLW-WDE-2)", () => {
       "data-disk",
       "a\r\nagent\r\n",
     );
+  });
+
+  it("⇧⌘V switches a renderable file between Rendered and Source", async () => {
+    readFileMock.mockResolvedValueOnce("\0PNG rest");
+    render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("pick-binary"));
+    const source = await screen.findByRole("radio", { name: "Source" });
+    expect(source).toHaveAttribute("aria-checked", "false");
+    fireEvent.keyDown(screen.getByTestId("source-editor-inset-w1"), {
+      key: "v",
+      code: "KeyV",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(source).toHaveAttribute("aria-checked", "true");
   });
 
   it("⌃G over an open quick open switches it to go to line", async () => {

@@ -81,6 +81,8 @@ export interface PaneApi {
   save: () => Promise<void>;
   revealLine: (line: number, column?: number) => void;
   openSearch: () => void;
+  /** Rendered ⇄ Source (⇧⌘V), on a file the viewer renders; otherwise nothing. */
+  toggleView: () => void;
   focus: () => void;
   isDirty: () => boolean;
   /** The pane is being closed on purpose: drop its draft instead of keeping it. */
@@ -246,10 +248,20 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   if (rendered && !renderedShown) setRenderedShown(true);
   // Its per-file refresh: a new disk version of a text file (a save here, or a
   // write from outside that the watcher read in) or, for a file the editor
-  // can't hold (an image), any change in the worktree.
-  const refreshSignal = editable ? diskText : changedNonce;
-  const [refresh, setRefresh] = useState({ signal: refreshSignal, key: 0 });
-  if (refresh.signal !== refreshSignal) setRefresh({ signal: refreshSignal, key: refresh.key + 1 });
+  // can't hold (an image), any change in the worktree. The first read is not
+  // a change: the viewer read the same file when it mounted.
+  const [refresh, setRefresh] = useState({ editable, diskText, changedNonce, key: 0 });
+  if (
+    refresh.editable !== editable ||
+    refresh.diskText !== diskText ||
+    refresh.changedNonce !== changedNonce
+  ) {
+    const changed =
+      editable && refresh.editable
+        ? refresh.diskText !== diskText
+        : refresh.changedNonce !== changedNonce;
+    setRefresh({ editable, diskText, changedNonce, key: refresh.key + (changed ? 1 : 0) });
+  }
   const changedPaths = useMemo(() => new Set([file.path]), [file.path]);
   // A canvas drawn in Rendered saves into the worktree, locked to the disk
   // version it was drawn over.
@@ -303,17 +315,30 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   );
 
   const editorRef = useRef<CodeEditorHandle | null>(null);
-  // A line jump asked for before the editor exists (still reading, CodeMirror
-  // still loading, or the merge view up) lands the moment it mounts.
+  // A line jump or a search asked for before the editor is on screen (still
+  // reading, CodeMirror still loading, the merge view up, or Source hidden
+  // under Rendered) lands once it is: when it mounts, or when Source shows.
   const pendingJumpRef = useRef<{ line: number; column?: number } | null>(null);
-  const attachEditor = useCallback((handle: CodeEditorHandle | null) => {
-    editorRef.current = handle;
+  const pendingSearchRef = useRef(false);
+  const sourceOnScreenRef = useRef(false);
+  const flushPending = useCallback(() => {
+    const handle = editorRef.current;
+    if (!handle || !sourceOnScreenRef.current) return;
     const jump = pendingJumpRef.current;
-    if (handle && jump) {
-      pendingJumpRef.current = null;
-      handle.revealLine(jump.line, jump.column);
+    pendingJumpRef.current = null;
+    if (jump) handle.revealLine(jump.line, jump.column);
+    if (pendingSearchRef.current) {
+      pendingSearchRef.current = false;
+      handle.openSearch();
     }
   }, []);
+  const attachEditor = useCallback(
+    (handle: CodeEditorHandle | null) => {
+      editorRef.current = handle;
+      flushPending();
+    },
+    [flushPending],
+  );
   const mergeRef = useRef<CodeMergeViewHandle | null>(null);
 
   // "Keep mine" writes whatever the merge's editable side holds — but only once
@@ -371,25 +396,34 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   );
 
   // The chrome's handle on this pane.
-  const apiState = useRef({ save, getDraft, reconciling, backOutOfReconcile, rendered });
+  const toggleView = () => {
+    if (!canRender || reconciling) return;
+    const next = viewMode === "rendered" ? "source" : "rendered";
+    setViewMode(next);
+    if (next === "source") requestAnimationFrame(() => editorRef.current?.focus());
+  };
+  const apiState = useRef({ save, getDraft, rendered, backOutOfReconcile, toggleView });
   useEffect(() => {
-    apiState.current = { save, getDraft, reconciling, backOutOfReconcile, rendered };
+    apiState.current = { save, getDraft, rendered, backOutOfReconcile, toggleView };
   });
   useEffect(() => {
     const api: PaneApi = {
       // The model's latest buffer (a hand-merge just lifted in included), not
       // the last committed render's.
       save: () => apiState.current.save(apiState.current.getDraft().buffer),
-      // A line jump or a search is about the text: it brings Source forward.
+      // A line jump or a search is about the text: it brings Source forward,
+      // and lands once the editor is on screen.
       revealLine: (line, column) => {
         if (apiState.current.rendered) setViewModeState("source");
-        if (editorRef.current) editorRef.current.revealLine(line, column);
-        else pendingJumpRef.current = { line, column };
+        pendingJumpRef.current = { line, column };
+        flushPending();
       },
       openSearch: () => {
         if (apiState.current.rendered) setViewModeState("source");
-        editorRef.current?.openSearch();
+        pendingSearchRef.current = true;
+        flushPending();
       },
+      toggleView: () => apiState.current.toggleView(),
       focus: () => {
         if (!apiState.current.rendered) editorRef.current?.focus();
       },
@@ -407,7 +441,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
     };
     registerApi(id, api);
     return () => registerApi(id, null);
-  }, [registerApi, id]);
+  }, [registerApi, id, flushPending]);
 
   // Re-focus the editor when its tab comes forward (autoFocus is mount-only).
   useEffect(() => {
@@ -422,6 +456,10 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   const showRendered = rendered && !reconciling;
   const [sourceShown, setSourceShown] = useState(!showRendered);
   if (!showRendered && !sourceShown) setSourceShown(true);
+  useLayoutEffect(() => {
+    sourceOnScreenRef.current = !showRendered;
+    flushPending();
+  }, [showRendered, flushPending]);
   const sourceLayer = (
     <>
       {state.kind === "loading" && <EditorSkeleton />}
@@ -545,6 +583,14 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
         </div>
       )}
 
+      {backend.location === "remote" && renderableType(file.path) != null && (
+        <div
+          data-testid="worktree-render-remote-hint"
+          className="flex h-7 shrink-0 items-center border-b border-[var(--border)] px-3 text-[0.72rem] text-muted-foreground"
+        >
+          <span className="min-w-0 truncate">Source only · rendering needs a local worktree</span>
+        </div>
+      )}
       {canRender && (
         <ViewModeToggle
           // A merge is resolved in the text: Source is what shows until it ends.
@@ -642,7 +688,8 @@ function ViewModeToggle({
         role="radiogroup"
         aria-label="File view"
         aria-disabled={disabled || undefined}
-        title={disabled ? "Resolve the conflict first" : undefined}
+        aria-keyshortcuts="Meta+Shift+V"
+        title={disabled ? "Resolve the conflict first" : "Switch Rendered / Source (⇧⌘V)"}
         onKeyDown={onKeyDown}
         className="flex shrink-0 items-center rounded-md border border-[var(--border)] p-px"
       >

@@ -604,6 +604,13 @@ export function SourceEditorInset({
       openPalette(":");
       return;
     }
+    if (mod && e.shiftKey && !e.altKey && e.code === "KeyV") {
+      // Rendered ⇄ Source, as VS Code's preview toggle. CodeMirror binds
+      // nothing to it.
+      claim();
+      activeApi()?.toggleView();
+      return;
+    }
     if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s" && !inCode) {
       // ⌘S from the chrome (tab strip, status bar). Inside the code the
       // editor's own keymap saves.

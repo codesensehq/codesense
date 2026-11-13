@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { createElement, forwardRef, useEffect } from "react";
+import { createElement, forwardRef, useEffect, useImperativeHandle } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,8 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // reaches Rendered through its per-file refresh, without a remount.
 
 const readFileMock = vi.fn();
+const writeBinaryWorktreeFileMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/tauri/commands", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
+  writeBinaryWorktreeFile: (...args: unknown[]) => writeBinaryWorktreeFileMock(...args),
   WORKTREE_WRITE_CONFLICT_PREFIX: "conflict:",
 }));
 
@@ -49,7 +51,9 @@ vi.mock("@/features/viewer/components/code-file-viewer", () => ({
   CodeFileViewer: stubViewer("code"),
 }));
 
-// CodeMirror is stubbed: a textarea over the buffer, ⌘S as a button.
+// CodeMirror is stubbed: a textarea over the buffer, ⌘S as a button. Its
+// handle records whether the editor was on screen when each call landed.
+const editorCalls = vi.hoisted(() => [] as Array<{ call: string; visible: boolean }>);
 vi.mock("@/shared/components/code-editor", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/shared/components/code-editor")>();
   const CodeEditor = forwardRef(function CodeEditor(
@@ -59,8 +63,15 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
       onSave: (v: string) => void;
       path: string;
     },
-    _ref,
+    ref,
   ) {
+    useImperativeHandle(ref, () => {
+      const el = () =>
+        document.querySelector(`[data-testid="stub-editor"][data-path="${props.path}"]`);
+      const record = (call: string) => () =>
+        editorCalls.push({ call, visible: el()?.closest("[hidden]") == null });
+      return { revealLine: record("revealLine"), openSearch: record("openSearch"), focus() {} };
+    });
     return createElement(
       "div",
       { "data-testid": "stub-editor", "data-path": props.path },
@@ -75,8 +86,10 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
   return { ...actual, CodeEditor, CodeMergeView: () => null };
 });
 
-import { WorktreeFilePane } from "./worktree-file-pane";
+import { WorktreeFilePane, type PaneApi, type PaneStatus } from "./worktree-file-pane";
 import type { WorktreeEditorBackend } from "../../lib/worktree-editor-backend";
+import { sha256Hex } from "../../lib/use-file-editor";
+import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 
 const ROOT = "/Users/me/dev/acme-wt/feat-story";
 const STORY = `${ROOT}/stories/epic/SV-1-story.md`;
@@ -95,6 +108,12 @@ function backend(write = vi.fn().mockResolvedValue(undefined)): WorktreeEditorBa
   };
 }
 
+/** The pane's latest status and handle, as the workbench chrome sees them. */
+const chrome = vi.hoisted(() => ({
+  status: null as PaneStatus | null,
+  api: null as PaneApi | null,
+}));
+
 function pane(path: string, b: WorktreeEditorBackend, changedNonce = 0) {
   const rel = path.slice(ROOT.length + 1);
   return createElement(WorktreeFilePane, {
@@ -105,17 +124,41 @@ function pane(path: string, b: WorktreeEditorBackend, changedNonce = 0) {
     changedNonce,
     restore: null,
     onPersistDraft: () => {},
-    onStatus: () => {},
-    registerApi: () => {},
+    onStatus: (_id, status) => {
+      chrome.status = status;
+    },
+    registerApi: (_id, api) => {
+      chrome.api = api;
+    },
     wrapOverride: null,
   });
+}
+
+/** The file has been read into the editor. */
+async function settled() {
+  await waitFor(() => expect(chrome.status?.kind).toBe("editable"));
+}
+
+function remoteBackend(text: string): WorktreeEditorBackend {
+  return {
+    ...backend(),
+    location: "remote",
+    remote: {
+      readWithHash: vi.fn().mockResolvedValue({ content: text, hash: "h1" }),
+      inspectHash: vi.fn().mockResolvedValue("h1"),
+    },
+  };
 }
 
 beforeEach(() => {
   localStorage.clear();
   readFileMock.mockReset();
+  writeBinaryWorktreeFileMock.mockClear();
   viewer.mounts = 0;
   viewer.props = [];
+  editorCalls.length = 0;
+  chrome.status = null;
+  chrome.api = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -296,5 +339,133 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect((last?.changedPaths as Set<string>).has(STORY)).toBe(true);
     // The same viewer instance took the refresh.
     expect(viewer.mounts).toBe(1);
+  });
+  it("doesn't refresh Rendered when the first read lands", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    await settled();
+    const keys = viewer.props.filter((p) => p.kind === "markdown").map((p) => p.refreshKey);
+    expect(new Set(keys)).toEqual(new Set([0]));
+  });
+
+  it("shows only the chosen layer, and Source again when Rendered is picked back", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    render(pane(STORY, backend()));
+    expect(await screen.findByTestId("stub-markdown")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    expect(await screen.findByTestId("stub-editor")).toBeVisible();
+    expect(screen.getByTestId("stub-markdown")).not.toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+    expect(screen.getByTestId("stub-markdown")).toBeVisible();
+    expect(screen.getByTestId("stub-editor")).not.toBeVisible();
+  });
+
+  it("locks the view to Source while a conflict is merged, even from Rendered", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    const b = backend();
+    const view = render(pane(STORY, b));
+    await screen.findByTestId("stub-markdown");
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    fireEvent.change(await screen.findByLabelText("buffer"), {
+      target: { value: `${MERMAID_DOC}\nMine.\n` },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+
+    // An agent rewrites the file under the unsaved edit; the user opens the merge.
+    readFileMock.mockResolvedValue(`${MERMAID_DOC}\nTheirs.\n`);
+    view.rerender(pane(STORY, b, 1));
+    fireEvent.click(await screen.findByTestId("worktree-stale-resolve"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Source" })).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByRole("radio", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByTestId("stub-markdown")).not.toBeVisible();
+  });
+
+  it("has no toggle on a remote worktree, and says rendering needs a local one", async () => {
+    render(pane(STORY, remoteBackend(MERMAID_DOC)));
+    await settled();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByTestId("stub-markdown")).toBeNull();
+    expect(screen.getByText(/needs a local worktree/)).toBeInTheDocument();
+  });
+
+  it("says nothing about rendering on a remote file it couldn't render anyway", async () => {
+    render(pane(`${ROOT}/src/main.rs`, remoteBackend("fn main() {}\n")));
+    await settled();
+    expect(screen.queryByText(/needs a local worktree/)).toBeNull();
+  });
+
+  it("a search asked for from Rendered opens once Source is on screen", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    await settled();
+
+    act(() => chrome.api?.openSearch());
+    await waitFor(() => expect(editorCalls).toEqual([{ call: "openSearch", visible: true }]));
+    expect(screen.getByRole("radio", { name: "Source" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("a line jump from Rendered lands after Source is shown, not on the hidden editor", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    // The editor already exists, hidden under Rendered.
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+    await screen.findByTestId("stub-editor");
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+
+    act(() => chrome.api?.revealLine(3));
+    await waitFor(() => expect(editorCalls).toEqual([{ call: "revealLine", visible: true }]));
+  });
+
+  it("switches Rendered and Source from the keyboard shortcut, and names it on the toggle", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    const first = render(pane(STORY, backend()));
+    await screen.findByTestId("stub-markdown");
+    expect(screen.getByRole("radiogroup", { name: "File view" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("⇧⌘V"),
+    );
+
+    act(() => chrome.api?.toggleView());
+    expect(await screen.findByTestId("stub-editor")).toBeVisible();
+    expect(screen.getByRole("radio", { name: "Source" })).toHaveAttribute("aria-checked", "true");
+    first.unmount();
+
+    // Remembered like a click.
+    render(pane(`${ROOT}/stories/epic/SV-2-story.md`, backend()));
+    expect(await screen.findByTestId("stub-editor")).toBeInTheDocument();
+    expect(screen.queryByTestId("stub-markdown")).toBeNull();
+  });
+
+  it("a canvas drawn in Rendered saves through the worktree writer, locked to the disk version, PNG included", async () => {
+    const CANVAS = `${ROOT}/docs/flow.excalidraw`;
+    const v1 = '{"type":"excalidraw","elements":[]}';
+    const v2 = '{"type":"excalidraw","elements":[{"id":"a"}]}';
+    const v3 = '{"type":"excalidraw","elements":[{"id":"a"},{"id":"b"}]}';
+    readFileMock.mockResolvedValue(v1);
+    const write = vi.fn().mockResolvedValue(undefined);
+    render(pane(CANVAS, backend(write)));
+    await screen.findByTestId("stub-excalidraw");
+    await settled();
+
+    const writer = viewer.props.filter((p) => p.kind === "excalidraw").at(-1)?.writer as
+      | CanvasWriter
+      | undefined;
+    expect(writer).toBeDefined();
+    await writer!.writeText(CANVAS, v2);
+    expect(write).toHaveBeenLastCalledWith(CANVAS, v2, await sha256Hex(v1));
+    // The next save is locked to what the canvas just wrote.
+    await writer!.writeText(CANVAS, v3);
+    expect(write).toHaveBeenLastCalledWith(CANVAS, v3, await sha256Hex(v2));
+
+    await writer!.writeBinary(`${CANVAS}.png`, "AQID");
+    expect(writeBinaryWorktreeFileMock).toHaveBeenCalledWith(`${CANVAS}.png`, "AQID");
   });
 });
