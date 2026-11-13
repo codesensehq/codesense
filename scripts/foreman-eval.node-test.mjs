@@ -204,11 +204,11 @@ test("fixture: an inherited GIT_DIR (as in a git hook) never reaches the real re
 });
 
 test("fixture: a failed setup removes its temp dir", async () => {
-  const before = new Set(readdirSync(os.tmpdir()).filter((f) => f.startsWith("foreman-eval-")));
+  // This process's fixtures only: other test files make fixtures at the same time.
+  const mine = (f) => f.startsWith(`foreman-eval-${process.pid}-`);
+  const before = new Set(readdirSync(os.tmpdir()).filter(mine));
   await withEnv({ PATH: "/nonexistent" }, () => assert.rejects(createFixture()));
-  const after = readdirSync(os.tmpdir()).filter(
-    (f) => f.startsWith("foreman-eval-") && !before.has(f),
-  );
+  const after = readdirSync(os.tmpdir()).filter((f) => mine(f) && !before.has(f));
   assert.deepEqual(after, []);
 });
 

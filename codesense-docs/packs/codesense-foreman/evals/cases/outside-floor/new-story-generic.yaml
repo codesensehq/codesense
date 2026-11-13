@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Request to story, outside the floor. A generic team: the Foreman confirms in one card, and only
+# after "Create" makes a foreman-* worktree, writes the story from get_story_format, checks it
+# with validate_story and opens one pull request. The same request comes twice, and a previous
+# run's branch already exists: every story gets a branch name of its own.
+id: new-story-generic
+kind: new-story
+fixture:
+  story_team: generic
+  planted_prior: true
+input:
+  turns:
+    - "make a story for dark mode in the settings page"
+    - "Create"
+    - "make a story for dark mode in the settings page"
+    - "Create"
+# Script: nothing before Create; the worktree, branch, story file and pull request; home untouched.
+expected:
+  variant: generic
+  creates: 2
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: one-card
+    ask: "Each request gets one confirmation with the title, team and epic and the choices Create, Change and Not now."
+  - id: says-pr
+    ask: "After each Create, the reply says a pull request was opened and names its branch."
+grader: script

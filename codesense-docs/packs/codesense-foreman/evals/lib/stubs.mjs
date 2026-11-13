@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Scripted drivers for the model-free CI run: one that does nothing (every grader must be red)
 // and one that makes exactly the expected calls in foreman.md's forms (every grader must be green).
+import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { CARDS, CONFIG } from "./fixture.mjs";
+import { ANSWERED_CARD, CARDS, CONFIG } from "./fixture.mjs";
 
 const F = "foreman";
 const SELF = CONFIG.self;
@@ -21,16 +23,87 @@ const good = {
     });
     fx.say(`Starting setup for ${CONFIG.repo}. It will ask you what it needs.`);
   },
+  // A live lead is the team's sprint agent (the `sprint` key in home's story-view.yml), in this
+  // team, named `Sprint 1` or launched by this Foreman's handle (so a renamed tab still counts).
   "start-sprint-lead"({ fx, turns }) {
+    const config = readFileSync(path.join(fx.root, "home", "story-view.yml"), "utf8");
+    const agent = /^sprint:\s*(\S+)/m.exec(config)[1];
+    const { handle: self } = fx.tool(F, "who_am_i");
     for (const turn of turns) {
       fx.human(turn);
-      const live = fx.tool(F, "list_sessions").sessions.some((s) => s.agent === CONFIG.sprintLeadAgent);
+      const live = fx
+        .tool(F, "list_sessions")
+        .sessions.some(
+          (s) =>
+            s.agent === agent &&
+            s.workspace === CONFIG.team &&
+            (s.displayName === "Sprint 1" || s.launchedBy === self),
+        );
       if (live) fx.say("Sprint 1 already has a lead running.");
       else {
-        fx.tool(F, "open_workspace", { target: "team-workspace", name: "Sprint 1", agent: CONFIG.sprintLeadAgent, launched_by: SELF });
+        fx.tool(F, "open_workspace", { target: "team-workspace", name: "Sprint 1", agent, role: "sprint-lead", initial_prompt: "/sprint-lead 1", launched_by: self });
         fx.say("Started the sprint 1 lead.");
       }
     }
+  },
+  // Each "make a story" turn is followed by its "Create" turn; every story gets a fresh name.
+  "new-story"({ fx, turns, expected }) {
+    const title = "Add dark mode to the settings page";
+    for (let at = 0; at < turns.length; at += 2) {
+      fx.human(turns[at]);
+      fx.tool(F, "describe_setup");
+      if (expected.variant === "docs") {
+        fx.say("Stories live in a team, and you don't have one yet. Want me to start setup?");
+        return;
+      }
+      fx.say(`New story: "${title}" in team ${CONFIG.team}, no epic. Create · Change · Not now?`);
+      fx.human(turns[at + 1]);
+      const hasRemote = fx.git(["remote"]).stdout.trim() !== "";
+      fx.git(["worktree", "list"]);
+      const taken = hasRemote ? fx.git(["ls-remote", "--heads", "origin"]).stdout : "";
+      // A fresh suffix: draw again while a branch of that name exists.
+      let hex;
+      do hex = randomBytes(2).toString("hex");
+      while (taken.includes(`foreman/dark-mode-${hex}`) || fx.git(["branch", "--list", `foreman/dark-mode-${hex}`]).stdout.trim());
+      const branch = `foreman/dark-mode-${hex}`;
+      const wt = `foreman-dark-mode-${hex}`;
+      const dir = path.join(fx.root, wt);
+      fx.git(["worktree", "add", "-b", branch, `../${wt}`, hasRemote ? "origin/main" : "main"]);
+      const [hit] = fx.tool(F, "query_context", { text: "story-create" }).hits;
+      if (hit) {
+        fx.tool(F, "read_content_file", { path: hit.path });
+        const id = fx.run(path.join(dir, "stories", "next-id.sh"), [], dir).stdout.trim();
+        fx.run(path.join(dir, "stories", "new-story.sh"), [id, title], dir);
+      } else {
+        const file = `stories/dark-mode-${hex}.md`;
+        fx.tool(F, "get_story_format");
+        fx.write(path.join(dir, file), `---\ntype: story\nstatus: planning\nsprint: backlog\n---\n# ${title}\n`);
+        fx.tool(F, "validate_story", { path: `../${wt}/${file}` });
+        fx.git(["-C", `../${wt}`, "add", file]);
+        fx.write(path.join(fx.root, `${wt}.msg`), `Add the dark mode story\n`);
+        fx.git(["-C", `../${wt}`, "commit", "-s", "-F", `../${wt}.msg`]);
+        if (hasRemote) fx.git(["-C", `../${wt}`, "push", "-u", "origin", branch]);
+      }
+      if (hasRemote) fx.gh(["pr", "create", "--head", branch, "--title", title, "--body", "Adds the dark mode story."], dir);
+      fx.git(["worktree", "remove", `../${wt}`]);
+      fx.say(
+        hasRemote
+          ? `Opened a pull request for "${title}" from ${branch}.`
+          : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
+      );
+    }
+  },
+  handoff({ fx, turns }) {
+    fx.human(turns[0]);
+    fx.tool(F, "list_sessions");
+    fx.git(["worktree", "list"]);
+    fx.say("Foreman handoff:\nHome team: acme\nOpen worktrees: foreman-x\nLive children: session-child-1 (ACME-7)\nUnanswered cards I raised: none\nLast request: hand off now (test)");
+    fx.tool(F, "signal_done", { status: "success" });
+  },
+  "waiting-on-me"({ fx, turns }) {
+    fx.human(turns[0]);
+    const open = fx.tool(F, "inbox_list", { kind: "needs-you", limit: 50 }).cards.filter((c) => c.state !== ANSWERED_CARD.state);
+    fx.say(`Waiting on you: ${open.map((c) => `${c.story}: ${c.question}`).join("; ")}. Answer on the page.`);
   },
   "answer-card"({ fx, turns }) {
     const card = CARDS[0];
@@ -53,14 +126,14 @@ const good = {
     fx.git(["worktree", "remove", `../${wt}`]);
     fx.say(`The pull request didn't go through (${result.stderr.trim()}). I cleaned up my worktree. Want me to retry?`);
     fx.human(turns[1]);
-    fx.say("I don't set timers; I can create a routine for you to approve in its dashboard.");
+    fx.say("I don't set timers.");
   },
 };
 
 export const stubs = {
   doNothing: async () => ({ cost_usd: 0, tokens: 0 }),
   good: async ({ caseDef, fx }) => {
-    await good[caseDef.id]({ fx, turns: caseDef.input.turns });
+    await good[caseDef.kind ?? caseDef.id]({ fx, turns: caseDef.input.turns, expected: caseDef.expected });
     return { cost_usd: 0, tokens: 0 };
   },
 };

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. The lead the Foreman launched shows a new tab name; asking again
+# still finds it by launchedBy and launches nothing.
+id: start-sprint-lead-renamed
+kind: start-sprint-lead
+fixture:
+  rename_launched: true
+input:
+  turns:
+    - "start sprint 1"
+    - "start sprint 1"
+expected:
+  agent_from: sprintLeadAgent
+  target: team-workspace
+  sprint: "1"
+  launches_after_turn: [1, 1]
+  forbidden_tools:
+    - start_remote_agent_task
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: says-what-happened
+    ask: "Each reply says whether a sprint 1 lead was started or one is already running."
+grader: script

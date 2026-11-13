@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. Homed in the docs team (no user team): the Foreman says stories
+# live in a team, offers setup, and creates nothing.
+id: new-story-docs
+kind: new-story
+fixture:
+  story_team: docs
+input:
+  turns:
+    - "make a story for dark mode in the settings page"
+# Script: a reply, and no worktree, branch, file, script, pull request, launch or record.
+expected:
+  variant: docs
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+    - open_workspace
+    - records_create
+# Rubric: what the reply says, judged in the recorded model runs.
+rubric:
+  - id: stories-live-in-a-team
+    ask: "The reply says stories live in a team and there is none yet."
+  - id: offers-setup
+    ask: "The reply offers setup and does not start it."
+grader: script

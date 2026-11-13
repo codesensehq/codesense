@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Request to story, outside the floor. A repo with no remote is the one pull request exception: the
+# branch stays, the worktree goes, and the reply gives the one command to merge it.
+id: new-story-no-remote
+kind: new-story
+fixture:
+  story_team: generic
+  no_remote: true
+input:
+  turns:
+    - "make a story for dark mode in the settings page"
+    - "Create"
+# Script: the branch in home, no push and no pull request, the worktree removed.
+expected:
+  variant: no-remote
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: one-card
+    ask: "The request gets one confirmation with the choices Create, Change and Not now."
+  - id: merge-command
+    ask: "After Create, the reply names the branch and gives the one command to merge it (`git merge <branch>`) for the person to run in their main workspace."
+grader: script
