@@ -70,7 +70,7 @@ import {
 } from "@/shared/lib/viewer-file-type";
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
 import { closeActiveFileTab } from "@/shared/lib/close-active-file-tab";
-import { exitTopmostOverlay } from "@/shared/lib/focus-utils";
+import { exitTopmostOverlay, requestOverlayExit } from "@/shared/lib/focus-utils";
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import { useInstanceCount } from "@/shared/hooks/use-instance-count";
 import { useActionGate } from "./use-action-gate";
@@ -1726,7 +1726,7 @@ export function HtmlViewer({
       // image tabs, which close on ⌘W because they render in-app.
       if (type === "codesense:close-tab") {
         // A maximized surface in front closes first, as ⌘W does from its chrome.
-        if (exitTopmostOverlay()) return;
+        if (exitTopmostOverlay(focusElement)) return;
         // A pane or a message is not a tab: ⌘W inside it must not close the centre tab.
         if (!embedded) closeActiveFileTab(filePath);
         return;
@@ -1916,8 +1916,7 @@ export function HtmlViewer({
       if (type === "codesense:key-escape") {
         if (dispatchFrameKey({ key: "Escape", code: "Escape" })) return;
         const overlay = focusElement?.closest('[data-fullscreen="true"]');
-        if (overlay)
-          overlay.dispatchEvent(new CustomEvent("codesense:frame-escape", { bubbles: true }));
+        if (overlay) requestOverlayExit(overlay);
         else if (
           slotId === "right-pane" ||
           slotId === "dock" ||

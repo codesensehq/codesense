@@ -46,20 +46,23 @@ function stubTauri(cmd: string, args?: unknown): unknown {
   }
 }
 
-globalThis.fetch = vi.fn().mockResolvedValue({ status: 200 });
-
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
   tauriInvoke.mockImplementation(async (cmd: string, args?: unknown) => stubTauri(cmd, args));
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   document.body.querySelectorAll("[data-fullscreen]").forEach((el) => el.remove());
 });
 
-async function mountAndForwardCmdW(props: Partial<React.ComponentProps<typeof HtmlViewer>> = {}) {
-  render(<HtmlViewer filePath={DOC} teamContentPath={ROOT} {...props} />);
+async function mountAndForwardCmdW(
+  props: Partial<React.ComponentProps<typeof HtmlViewer>> = {},
+  container?: HTMLElement,
+) {
+  render(<HtmlViewer filePath={DOC} teamContentPath={ROOT} {...props} />, { container });
   await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBeTruthy());
   const iframe = document.querySelector("iframe")!;
   const fakeWindow = { postMessage: vi.fn() } as unknown as Window;
@@ -79,15 +82,22 @@ function openOverlay() {
   document.body.appendChild(overlay);
   const onEscape = vi.fn();
   overlay.addEventListener("codesense:frame-escape", onEscape);
-  return onEscape;
+  return { overlay, onEscape };
 }
 
 describe("a forwarded ⌘W from a dashboard frame", () => {
-  it("exits the open maximize overlay and leaves the file tab alone", async () => {
-    const onEscape = openOverlay();
-    await mountAndForwardCmdW();
+  it("exits the maximize overlay holding the frame and leaves the file tab alone", async () => {
+    const { overlay, onEscape } = openOverlay();
+    await mountAndForwardCmdW({}, overlay.appendChild(document.createElement("div")));
     expect(onEscape).toHaveBeenCalledTimes(1);
     expect(closeActiveFileTab).not.toHaveBeenCalled();
+  });
+
+  it("leaves an overlay that does not hold the frame alone and closes the tab", async () => {
+    const { onEscape } = openOverlay();
+    await mountAndForwardCmdW();
+    expect(onEscape).not.toHaveBeenCalled();
+    expect(closeActiveFileTab).toHaveBeenCalledWith(DOC);
   });
 
   it("closes the file tab as before when no overlay is open", async () => {

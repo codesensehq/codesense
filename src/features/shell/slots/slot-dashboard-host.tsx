@@ -945,12 +945,26 @@ export function SlotDashboardHost({
   const showingEntryFallback = !!failure && !retained && !!fallbackConfig;
   // The registry's commands follow the body on screen. A dock's entry fallback keeps its own path.
   const failedKey = entry.dashboardRef ? dashboardRefKey(entry.dashboardRef) : null;
-  const shownInPlace = failure && !retained && !fallbackConfig ? (fallbackInbox ?? "native") : null;
+  const shownInPlace: PaneEntry | "native" | null =
+    failure && !retained && !fallbackConfig ? (fallbackInbox ?? "native") : null;
+  // The effect depends on the fallback's key, so a refreshed copy of the same entry doesn't
+  // withdraw and re-register its commands.
+  const shownBodyRef = useRef(shownInPlace);
   useEffect(() => {
-    if (!failedKey || !shownInPlace) return;
-    setSlotDisplayedBody(slotId, failedKey, shownInPlace);
+    shownBodyRef.current = shownInPlace;
+  });
+  const shownKey =
+    typeof shownInPlace === "object" && shownInPlace
+      ? shownInPlace.dashboardRef
+        ? dashboardRefKey(shownInPlace.dashboardRef)
+        : shownInPlace.panelId
+      : shownInPlace;
+  useEffect(() => {
+    const body = shownBodyRef.current;
+    if (!failedKey || !body) return;
+    setSlotDisplayedBody(slotId, failedKey, body);
     return () => setSlotDisplayedBody(slotId, failedKey, null);
-  }, [slotId, failedKey, shownInPlace]);
+  }, [slotId, failedKey, shownKey]);
   const strip = failure && !showingEntryFallback && (
     <SlotFallbackStrip
       entry={entry}

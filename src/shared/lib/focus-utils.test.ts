@@ -4,6 +4,7 @@ import {
   ROW_POPUP_ATTR,
   TERMINAL_POPUP_ATTR,
   exitTopmostOverlay,
+  isTypingTarget,
   getActivePaneType,
   isCmdW,
   isRowPopupFocused,
@@ -162,6 +163,22 @@ describe("focus-utils", () => {
       expect(a).not.toHaveBeenCalled();
     });
 
+    it("with `within`, exits only the overlay containing it", () => {
+      document.body.innerHTML = overlay("a") + overlay("b");
+      const a = listen("a");
+      const b = listen("b");
+      expect(exitTopmostOverlay(document.getElementById("a-btn"))).toBe(true);
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).not.toHaveBeenCalled();
+    });
+
+    it("with `within` outside every overlay, leaves an open overlay alone", () => {
+      document.body.innerHTML = overlay("a") + "<iframe id='f'></iframe>";
+      const a = listen("a");
+      expect(exitTopmostOverlay(document.getElementById("f"))).toBe(false);
+      expect(a).not.toHaveBeenCalled();
+    });
+
     it("exits from the overlay's own chrome", () => {
       document.body.innerHTML = overlay("a");
       const a = listen("a");
@@ -169,5 +186,27 @@ describe("focus-utils", () => {
       expect(exitTopmostOverlay()).toBe(true);
       expect(a).toHaveBeenCalledTimes(1);
     });
+  });
+
+  describe("isTypingTarget", () => {
+    it.each([
+      ["an input", "<input />", true],
+      ["a textarea", "<textarea></textarea>", true],
+      ["a contenteditable", "<div contenteditable='true'></div>", true],
+      ["inside a terminal", "<div class='xterm'><span></span></div>", true],
+      ["a button", "<button></button>", false],
+    ])("%s", (_name, html, expected) => {
+      document.body.innerHTML = html;
+      const el = document.body.querySelector("input, textarea, div, button")!;
+      const target = el.classList.contains("xterm") ? el.firstElementChild! : el;
+      // jsdom has no layout: it reports contenteditable only through the attribute.
+      Object.defineProperty(target, "isContentEditable", {
+        value: target.getAttribute("contenteditable") === "true",
+        configurable: true,
+      });
+      expect(isTypingTarget(target)).toBe(expected);
+    });
+
+    it("is false for no target", () => expect(isTypingTarget(null)).toBe(false));
   });
 });

@@ -50,11 +50,13 @@ import {
   resolveBindings,
   setDynamicShortcutActions,
 } from "@/shared/lib/shortcuts/registry";
+import { buildStaticItems } from "@/features/home-base/command-palette/command-palette-items";
 import { buildNavMenuEntries } from "@/features/shell/right-pane/panel-menu";
 import { findBindingCollisions, useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import type { SlotId } from "@/features/shell/slots/slot-registry";
 import type { DashboardCommand, DashboardRef, PaneEntry } from "@/tauri/commands";
 
 import { watchAgentListInputs } from "@/features/viewer/lib/agent-list-inputs";
@@ -150,14 +152,29 @@ function key(k: string, init: KeyboardEventInit = {}, target?: Element) {
   return matchShortcut(e, useShortcutsStore.getState().shortcuts, gate)?.id;
 }
 
+/** Every slot override a test set, so `afterEach` can clear exactly those. */
+let shownBodies: [SlotId, string][] = [];
+function showBody(slot: SlotId, failed: string, body: PaneEntry | "native" | null) {
+  if (body) shownBodies.push([slot, failed]);
+  setSlotDisplayedBody(slot, failed, body);
+}
+function resetShownBodies() {
+  for (const [slot, failed] of shownBodies) setSlotDisplayedBody(slot, failed, null);
+  shownBodies = [];
+}
+
 let frames: (() => void)[] = [];
-function mountFrame(dashboard: string, frameId = "f1") {
+function mountFrame(
+  dashboard: string,
+  frameId = "f1",
+  panelId = dashboard === INBOX ? INBOX_PANEL_ID : undefined,
+) {
   const post = vi.fn();
   frames.push(
     registerFrame({
       frameId,
       dashboard,
-      panelId: dashboard === INBOX ? INBOX_PANEL_ID : undefined,
+      panelId,
       slotId: "right-pane",
       post: (message) => {
         if (message.type === "codesense:command") post(message);
@@ -176,7 +193,7 @@ beforeEach(() => {
   toastWarning.mockClear();
 });
 afterEach(() => {
-  setSlotDisplayedBody("right-pane", INBOX, null);
+  resetShownBodies();
   usePaneStore.setState({ sourceRows: {} });
   frames.forEach((dispose) => dispose());
   frames = [];
@@ -1057,7 +1074,7 @@ describe("a slot showing a fallback body", () => {
   it("registers the fallback's commands and withdraws the failed dashboard's", () => {
     const fallback = pane(boardRef, "Inbox", [REPLY]);
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", INBOX, fallback);
+    showBody("right-pane", INBOX, fallback);
     expect(registered().map((a) => a.id)).toEqual([id(BOARD, "compose")]);
     expect(key("y", { metaKey: true, shiftKey: true })).toBeUndefined();
   });
@@ -1065,8 +1082,9 @@ describe("a slot showing a fallback body", () => {
   it("runs a fallback command in the fallback's live frame, with no \"didn't run\" toast", () => {
     vi.useFakeTimers();
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
-    const post = mountFrame(BOARD);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    // The fallback runs inside the Inbox's panel, so its frame registers under that panel.
+    const post = mountFrame(BOARD, "f1", INBOX_PANEL_ID);
     markFrameReady("f1");
     markFrameLive("f1");
     runDashboardCommand(id(BOARD, "compose"));
@@ -1079,28 +1097,126 @@ describe("a slot showing a fallback body", () => {
 
   it("offers a failed dashboard no command while a native body shows", () => {
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", INBOX, "native");
+    showBody("right-pane", INBOX, "native");
     expect(registered()).toEqual([]);
   });
 
   it("brings the failed dashboard's commands back when the override clears", () => {
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
-    setSlotDisplayedBody("right-pane", INBOX, null);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    showBody("right-pane", INBOX, null);
     expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive")]);
   });
 
   it("ignores an override for a dashboard that is not the slot's", () => {
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", BOARD, "native");
+    showBody("right-pane", BOARD, "native");
     expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive")]);
   });
 
   it("clears only the override it set", () => {
     install([pane(inboxRef, "Inbox", [ARCHIVE])]);
-    setSlotDisplayedBody("right-pane", INBOX, "native");
-    setSlotDisplayedBody("right-pane", BOARD, null);
+    showBody("right-pane", INBOX, "native");
+    showBody("right-pane", BOARD, null);
     expect(registered()).toEqual([]);
-    setSlotDisplayedBody("right-pane", INBOX, null);
+  });
+
+  it("keeps each failure's override apart: two failures in one slot clear independently", () => {
+    const other = pane(boardRef, "Board", [REPLY]);
+    install([pane(inboxRef, "Inbox", [ARCHIVE]), other]);
+    const stub: DashboardRef = { scope: "team", org: "acme", team: "dev", id: "stub" };
+    showBody("right-pane", INBOX, "native");
+    showBody("right-pane", BOARD, pane(stub, "Stub", [REPLY]));
+    expect(registered().map((a) => a.id)).toEqual([id(dashboardRefKey(stub), "compose")]);
+    showBody("right-pane", BOARD, null);
+    expect(registered().map((a) => a.id)).toEqual([id(BOARD, "compose")]);
+    showBody("right-pane", INBOX, null);
+    expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive"), id(BOARD, "compose")]);
+  });
+
+  it("withdraws a fallback's commands when the fallback host fails too, in either order", () => {
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    showBody("right-pane", BOARD, "native");
+    expect(registered()).toEqual([]);
+    showBody("right-pane", BOARD, null);
+    expect(registered().map((a) => a.id)).toEqual([id(BOARD, "compose")]);
+    showBody("right-pane", INBOX, null);
+    expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive")]);
+  });
+
+  it("delivers a fallback command only to the frame in the failed entry's panel", () => {
+    vi.useFakeTimers();
+    install([{ ...pane(inboxRef, "Inbox", [ARCHIVE]), panelId: INBOX_PANEL_ID }]);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    const elsewhere = mountFrame(BOARD, "elsewhere", "pane:acme:dev/board");
+    const inPanel = mountFrame(BOARD, "in-panel", INBOX_PANEL_ID);
+    for (const frameId of ["elsewhere", "in-panel"]) {
+      markFrameReady(frameId);
+      markFrameLive(frameId);
+    }
+    runDashboardCommand(id(BOARD, "compose"));
+    expect(inPanel).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "codesense:command", id: "compose" }),
+    );
+    expect(elsewhere).not.toHaveBeenCalled();
+  });
+
+  it("delivers a slot-focused chord into the focused fallback frame", () => {
+    const focusedReply = { ...REPLY, defaultChord: "CmdOrCtrl+Alt+Shift+F" };
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [focusedReply]));
+    const chord = () => key("f", { metaKey: true, altKey: true, shiftKey: true });
+    expect(chord()).toBeUndefined();
+    const frame = document.createElement("button") as unknown as HTMLIFrameElement;
+    document.body.append(frame);
+    const post = vi.fn();
+    frames.push(
+      registerFrame({
+        frameId: "focused",
+        dashboard: BOARD,
+        panelId: INBOX_PANEL_ID,
+        slotId: "right-pane",
+        element: frame,
+        post: (message) => {
+          if (message.type === "codesense:command") post(message);
+        },
+        hide: () => {},
+      }),
+    );
+    markFrameReady("focused");
+    markFrameLive("focused");
+    (frame as unknown as HTMLElement).focus();
+    expect(chord()).toBe(id(BOARD, "compose"));
+    findShortcutAction(id(BOARD, "compose"))!.run();
+    expect(post).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "codesense:command", id: "compose" }),
+    );
+  });
+
+  it("offers the palette no command of the failed dashboard while the fallback shows", () => {
+    const palette = () =>
+      buildStaticItems({
+        teams: [],
+        accounts: [],
+        recentEpics: [],
+        canAttach: false,
+        canAddMachine: false,
+        routinesNeedingYou: 0,
+        commands: registered()
+          .filter((a) => a.command!.active)
+          .map((a) => ({
+            actionId: a.id,
+            label: a.label,
+            dashboardTitle: a.command!.dashboardTitle,
+            chord: "",
+          })),
+      })
+        .filter((item) => item.sublabel === "Inbox")
+        .map((item) => item.label);
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    expect(palette()).toEqual(["Archive thread"]);
+    showBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    expect(palette()).toEqual(["New message"]);
   });
 });

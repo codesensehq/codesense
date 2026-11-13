@@ -3,6 +3,7 @@ import { StrictMode, type ComponentProps } from "react";
 import { listBuiltinPanes } from "@/tauri/commands";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { SlotDashboardHost } from "./slot-dashboard-host";
@@ -1062,14 +1063,14 @@ it("tells the command registry the built-in Inbox shows while a failed Inbox fal
     builtinInbox: builtin,
   });
   displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
   const view = render(
     <SlotDashboardHost slotId="right-pane" entry={keyedEntry} contentRoot="/ctx" visible />,
   );
   await act(async () => props.current.onDocProblem({ kind: "script", message: "broken" }));
   await waitFor(() =>
-    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", expect.any(String), builtin),
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, builtin),
   );
-  const failedKey = displayedBody.mock.calls.at(-1)![1];
   view.unmount();
   expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, null);
 });
@@ -1077,6 +1078,7 @@ it("tells the command registry the built-in Inbox shows while a failed Inbox fal
 it("withdraws a failed dashboard's commands while a native body shows, and gives them back on recovery", () => {
   vi.useFakeTimers();
   displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
   render(
     <SlotDashboardHost
       slotId="dock"
@@ -1088,10 +1090,32 @@ it("withdraws a failed dashboard's commands while a native body shows, and gives
   );
   act(() => vi.advanceTimersByTime(30000));
   expect(screen.getByText("Agents list")).toBeTruthy();
-  expect(displayedBody).toHaveBeenLastCalledWith("dock", expect.any(String), "native");
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", failedKey, "native");
   fireEvent.click(screen.getByRole("button", { name: "Reload" }));
   act(() => props.current.onDocLive());
-  expect(displayedBody).toHaveBeenLastCalledWith("dock", expect.any(String), null);
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", failedKey, null);
+});
+
+it("keeps a live dashboard's commands when only a refresh candidate fails", () => {
+  vi.useFakeTimers();
+  displayedBody.mockClear();
+  const host = (refreshKey: number) => (
+    <SlotDashboardHost
+      slotId="dock"
+      entry={keyedEntry}
+      contentRoot="/ctx"
+      visible
+      refreshKey={refreshKey}
+      renderNative={() => <div>Agents list</div>}
+    />
+  );
+  const view = render(host(1));
+  act(() => props.current.onDocLive());
+  view.rerender(host(2));
+  act(() => vi.advanceTimersByTime(150));
+  act(() => props.current.onDocProblem({ kind: "script", message: "broken candidate" }));
+  expect(screen.queryByText("Agents list")).toBeNull();
+  expect(displayedBody.mock.calls.filter(([, , body]) => body !== null)).toEqual([]);
 });
 
 it("keeps dock retry activity while its native fallback is on screen", () => {

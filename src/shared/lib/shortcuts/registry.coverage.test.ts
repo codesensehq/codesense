@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, afterEach } from "vitest";
-import inboxPane from "@/features/shell/right-pane/__fixtures__/inbox-pane.html?raw";
-import notesPane from "@/features/shell/right-pane/__fixtures__/notes-pane.html?raw";
-import agentListPane from "@/features/shell/slots/__fixtures__/agent-list-pane.html?raw";
+import { readFileSync } from "node:fs";
+// @ts-expect-error -- the built-in pane table is a plain Node ESM script.
+import { BUILTIN_PANES } from "../../../../scripts/lib/builtin-panes.mjs";
 
 import { isReservedKeystroke, matchesKeystroke, parseKeystroke } from "./keystroke";
 import {
@@ -624,16 +624,20 @@ describe("NAV_MENU_ITEMS", () => {
 describe("shipped default shortcuts", () => {
   afterEach(() => setDynamicShortcutActions([]));
 
-  // The built-in panes' `codesense:commands` declarations, as the app registers them.
-  const builtinPanes = { inbox: inboxPane, notes: notesPane, "agent-list": agentListPane };
-  const declared = (pane: string, html: string): ShortcutAction[] => {
-    const raw = /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1];
-    const commands = JSON.parse(raw ?? "[]") as {
-      id: string;
-      label: string;
-      defaultChord?: string;
-    }[];
-    return commands.map((c) => ({
+  // Every built-in pane's `codesense:commands` declaration, as the app registers it.
+  const declarations = (BUILTIN_PANES as { id: string; source: string }[]).flatMap(
+    ({ id, source }) => {
+      const html = readFileSync(source, "utf8");
+      const raw = /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1];
+      // A pane that declares the tag must parse; one that never mentions it has no commands.
+      if (html.includes('name="codesense:commands"'))
+        expect(raw, `${id} commands tag`).toBeTruthy();
+      return raw ? [{ pane: id, commands: JSON.parse(raw) as DeclaredCommand[] }] : [];
+    },
+  );
+  type DeclaredCommand = { id: string; label: string; defaultChord?: string };
+  const declared = (pane: string, commands: DeclaredCommand[]): ShortcutAction[] =>
+    commands.map((c) => ({
       id: `${pane}/${c.id}`,
       label: c.label,
       defaultKeystroke: c.defaultChord ?? "",
@@ -647,10 +651,15 @@ describe("shipped default shortcuts", () => {
       },
       run: () => {},
     }));
-  };
+
+  it("reads a commands declaration from every built-in pane that has one", () => {
+    expect(declarations.map((d) => d.pane)).toEqual(
+      expect.arrayContaining(["inbox", "files-tree", "agent-list", "notes"]),
+    );
+  });
 
   it("never resolves to a conflict on a fresh install", () => {
-    const actions = Object.entries(builtinPanes).flatMap(([pane, html]) => declared(pane, html));
+    const actions = declarations.flatMap((d) => declared(d.pane, d.commands));
     expect(actions.some((a) => a.defaultKeystroke)).toBe(true);
     setDynamicShortcutActions(actions);
     const conflicts = [...resolveBindings({})].filter(([, b]) => b.unbound?.kind === "conflict");
