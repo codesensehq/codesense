@@ -35,6 +35,7 @@ import {
 } from "@/shared/components/code-editor";
 
 import {
+  LOCAL_ABSENT_TOKEN,
   TOO_LARGE_MESSAGE,
   localTextLock,
   useFileEditor,
@@ -264,11 +265,8 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   }
   const changedPaths = useMemo(() => new Set([file.path]), [file.path]);
   // A canvas drawn in Rendered saves into the worktree, locked to the disk
-  // version it was drawn over (see worktreeCanvasWriter).
+  // version it adopted (see worktreeCanvasWriter).
   const canvasWriter = useMemo(() => worktreeCanvasWriter(backend), [backend]);
-  useEffect(() => {
-    canvasWriter.drawnOver(editable ? diskText : null);
-  }, [canvasWriter, editable, diskText]);
 
   // Report upward. Built field-by-field so an unrelated re-render doesn't
   // allocate a "changed" status object.
@@ -725,27 +723,17 @@ function ViewModeToggle({
 
 /** Where a canvas in a local worktree saves: the editor's write, under the
  *  same lock as a save in Source, so it never overwrites an agent's write; and
- *  the worktree's binary writer for its PNG render. The lock is the version on
- *  disk the canvas was drawn over: the editor's text when it holds the file,
- *  else the version the canvas read (a canvas over the editor's size limit, or
- *  one it couldn't read), then the canvas's own last write. */
-function worktreeCanvasWriter(
-  backend: WorktreeEditorBackend,
-): CanvasWriter & { drawnOver: (text: string | null) => void } {
-  let base: string | null = null;
-  let editorHolds = false;
+ *  the worktree's binary writer for its PNG render. The lock is the version
+ *  the canvas adopted, which only the canvas knows; no base means it drew over
+ *  a file that wasn't there. */
+function worktreeCanvasWriter(backend: WorktreeEditorBackend): CanvasWriter {
   return {
-    drawnOver: (text) => {
-      editorHolds = text != null;
-      if (text != null) base = text;
-    },
-    onRead: (_path, text) => {
-      if (!editorHolds) base = text;
-    },
-    writeText: async (path, content) => {
-      if (base == null) throw new Error("The file hasn’t been read yet.");
-      await backend.write(path, content, await localTextLock(base));
-      base = content;
+    writeText: async (path, content, base) => {
+      await backend.write(
+        path,
+        content,
+        base == null ? LOCAL_ABSENT_TOKEN : await localTextLock(base),
+      );
     },
     writeBinary: writeBinaryWorktreeFile,
   };

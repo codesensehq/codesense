@@ -103,7 +103,9 @@ describe("ExcalidrawCanvas PNG export (SW-SC-2)", () => {
 
   it("saves the JSON and the PNG through a writer it is given, never the context writers", async () => {
     const writer = {
-      writeText: vi.fn<(p: string, c: string) => Promise<void>>().mockResolvedValue(),
+      writeText: vi
+        .fn<(p: string, c: string, base: string | null) => Promise<void>>()
+        .mockResolvedValue(),
       writeBinary: vi.fn<(p: string, b: string) => Promise<void>>().mockResolvedValue(),
     };
     render(
@@ -116,7 +118,8 @@ describe("ExcalidrawCanvas PNG export (SW-SC-2)", () => {
     );
     fireScene([{ id: "a" }]);
 
-    expect(writer.writeText).toHaveBeenCalledWith("/wt/d.excalidraw", '{"json":true}');
+    // No text was read for this scene, so the save names no base.
+    expect(writer.writeText).toHaveBeenCalledWith("/wt/d.excalidraw", '{"json":true}', null);
     await waitFor(() =>
       expect(writer.writeBinary).toHaveBeenCalledWith("/wt/d.excalidraw.png", expect.any(String)),
     );

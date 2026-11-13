@@ -88,7 +88,7 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
 
 import { WorktreeFilePane, type PaneApi, type PaneStatus } from "./worktree-file-pane";
 import type { WorktreeEditorBackend } from "../../lib/worktree-editor-backend";
-import { sha256Hex } from "../../lib/use-file-editor";
+import { LOCAL_ABSENT_TOKEN, sha256Hex } from "../../lib/use-file-editor";
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 
 const ROOT = "/Users/me/dev/acme-wt/feat-story";
@@ -444,11 +444,10 @@ describe("WorktreeFilePane Rendered | Source", () => {
     expect(screen.queryByTestId("stub-markdown")).toBeNull();
   });
 
-  it("a canvas drawn in Rendered saves through the worktree writer, locked to the disk version, PNG included", async () => {
+  it("a canvas drawn in Rendered saves through the worktree writer, locked to the base it names, PNG included", async () => {
     const CANVAS = `${ROOT}/docs/flow.excalidraw`;
     const v1 = '{"type":"excalidraw","elements":[]}';
     const v2 = '{"type":"excalidraw","elements":[{"id":"a"}]}';
-    const v3 = '{"type":"excalidraw","elements":[{"id":"a"},{"id":"b"}]}';
     readFileMock.mockResolvedValue(v1);
     const write = vi.fn().mockResolvedValue(undefined);
     render(pane(CANVAS, backend(write)));
@@ -459,16 +458,16 @@ describe("WorktreeFilePane Rendered | Source", () => {
       | CanvasWriter
       | undefined;
     expect(writer).toBeDefined();
-    await writer!.writeText(CANVAS, v2);
+    await writer!.writeText(CANVAS, v2, v1);
     expect(write).toHaveBeenLastCalledWith(CANVAS, v2, await sha256Hex(v1));
-    // The next save is locked to what the canvas just wrote.
-    await writer!.writeText(CANVAS, v3);
-    expect(write).toHaveBeenLastCalledWith(CANVAS, v3, await sha256Hex(v2));
+    // No base: the canvas drew over a file that wasn't there.
+    await writer!.writeText(CANVAS, v2, null);
+    expect(write).toHaveBeenLastCalledWith(CANVAS, v2, LOCAL_ABSENT_TOKEN);
 
     await writer!.writeBinary(`${CANVAS}.png`, "AQID");
     expect(writeBinaryWorktreeFileMock).toHaveBeenCalledWith(`${CANVAS}.png`, "AQID");
   });
-  it("a canvas too large for the editor saves from Rendered, locked to the version the canvas read", async () => {
+  it("a canvas too large for the editor saves from Rendered, locked to the base the canvas names", async () => {
     const CANVAS = `${ROOT}/docs/screenshots.excalidraw`;
     const v1 = '{"type":"excalidraw","elements":[],"files":{"big":"..."}}';
     const v2 = '{"type":"excalidraw","elements":[{"id":"a"}],"files":{"big":"..."}}';
@@ -481,9 +480,7 @@ describe("WorktreeFilePane Rendered | Source", () => {
     const writer = viewer.props.filter((p) => p.kind === "excalidraw").at(-1)?.writer as
       | CanvasWriter
       | undefined;
-    // The canvas read the file itself.
-    writer!.onRead?.(CANVAS, v1);
-    await writer!.writeText(CANVAS, v2);
+    await writer!.writeText(CANVAS, v2, v1);
     expect(write).toHaveBeenLastCalledWith(CANVAS, v2, await sha256Hex(v1));
   });
 });

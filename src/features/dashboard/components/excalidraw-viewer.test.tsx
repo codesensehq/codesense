@@ -13,11 +13,15 @@ vi.mock("./excalidraw-canvas", () => ({
     scene,
     externalScene,
     reloadNonce,
+    sourceText,
+    externalText,
   }: {
     filePath: string;
     scene: { elements: unknown[] };
     externalScene: { elements: unknown[] } | null;
     reloadNonce: number;
+    sourceText?: string | null;
+    externalText?: string | null;
   }) => (
     <div
       data-testid="excalidraw-canvas"
@@ -25,6 +29,8 @@ vi.mock("./excalidraw-canvas", () => ({
       data-elements={scene.elements.length}
       data-external-elements={externalScene ? externalScene.elements.length : "none"}
       data-reload-nonce={reloadNonce}
+      data-source-text={sourceText === null ? "null" : sourceText}
+      data-external-text={externalText === null ? "null" : externalText}
     >
       canvas
     </div>
@@ -181,14 +187,13 @@ describe("ExcalidrawViewer", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("tells its writer each version it reads, so a save can be locked to it", async () => {
+  it("hands the canvas the exact bytes it read, so its save lock is the version it adopted", async () => {
     readFileMock.mockResolvedValue(VALID_SCENE);
-    const writer = { writeText: vi.fn(), writeBinary: vi.fn(), onRead: vi.fn() };
     const { rerender } = render(
-      <ExcalidrawViewer {...BASE_PROPS} refreshKey={1} changedPaths={null} writer={writer} />,
+      <ExcalidrawViewer {...BASE_PROPS} refreshKey={1} changedPaths={null} />,
     );
-    await screen.findByTestId("excalidraw-canvas");
-    expect(writer.onRead).toHaveBeenLastCalledWith(BASE_PROPS.filePath, VALID_SCENE);
+    const canvas = await screen.findByTestId("excalidraw-canvas");
+    expect(canvas).toHaveAttribute("data-source-text", VALID_SCENE);
 
     readFileMock.mockResolvedValue(ONE_ELEMENT_SCENE);
     rerender(
@@ -196,11 +201,35 @@ describe("ExcalidrawViewer", () => {
         {...BASE_PROPS}
         refreshKey={2}
         changedPaths={new Set([BASE_PROPS.filePath])}
-        writer={writer}
       />,
     );
     await waitFor(() =>
-      expect(writer.onRead).toHaveBeenLastCalledWith(BASE_PROPS.filePath, ONE_ELEMENT_SCENE),
+      expect(screen.getByTestId("excalidraw-canvas")).toHaveAttribute(
+        "data-external-text",
+        ONE_ELEMENT_SCENE,
+      ),
+    );
+    // The first read is still what the canvas was seeded with.
+    expect(screen.getByTestId("excalidraw-canvas")).toHaveAttribute(
+      "data-source-text",
+      VALID_SCENE,
+    );
+  });
+
+  it("hands the canvas null for a file it couldn't read, and the raw text of one that didn't parse", async () => {
+    readFileMock.mockRejectedValue(new Error("ENOENT"));
+    const missing = render(<ExcalidrawViewer {...BASE_PROPS} />);
+    expect(await screen.findByTestId("excalidraw-canvas")).toHaveAttribute(
+      "data-source-text",
+      "null",
+    );
+    missing.unmount();
+
+    readFileMock.mockResolvedValue("{not json");
+    render(<ExcalidrawViewer {...BASE_PROPS} />);
+    expect(await screen.findByTestId("excalidraw-canvas")).toHaveAttribute(
+      "data-source-text",
+      "{not json",
     );
   });
 
