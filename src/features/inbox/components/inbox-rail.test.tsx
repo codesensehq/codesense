@@ -1135,18 +1135,18 @@ describe("review pr-inbox round 4 (read state and recipients)", () => {
       useAgentStateStore.setState({ processAgentBySession: { [FX.impl]: "codex" } });
       act(() => openAgentInboxRail(FX.impl));
       const view = render(surface(true));
-      await screen.findByTestId("inbox-rail");
-      await waitFor(() => expect(document.querySelector('[data-thread="human"]')).not.toBeNull());
-      fireEvent.click(await waitFor(() => document.querySelector('[data-thread="human"]')!));
+      // The tab's chat is the agent's conversation with you, open as soon as it shows.
+      await screen.findByTestId("chat-overlay");
+      await screen.findByTestId("ibx-msgs");
       const terminal = screen.getByTestId("warm-terminal");
       view.rerender(surface(false));
       inbox({ ...dto, messages: [{ ...original, id: 707, unread: true }] });
       await act(async () => {
         for (const [event, cb] of vi.mocked(listen).mock.calls as unknown as [
           string,
-          () => void,
+          (e: { payload: unknown }) => void,
         ][]) {
-          if (event === AGENT_INBOX_CHANGED_EVENT) cb();
+          if (event === AGENT_INBOX_CHANGED_EVENT) cb({ payload: null });
         }
       });
       expect(markRead).not.toHaveBeenCalled();

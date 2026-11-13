@@ -11,11 +11,22 @@ import {
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 
-vi.mock("./inbox-rail", () => ({
-  InboxRail: (p: { sessionId: string; style: React.CSSProperties }) => {
+vi.mock("./chat-overlay", () => ({
+  ChatOverlay: (p: {
+    sessionId: string;
+    style: React.CSSProperties;
+    placement: string;
+    size: { width: number; height: number };
+  }) => {
     const [selected, setSelected] = useState(false);
     return (
-      <aside data-testid="inbox-rail" data-session-id={p.sessionId} style={p.style}>
+      <aside
+        data-testid="chat-overlay"
+        data-session-id={p.sessionId}
+        data-placement={p.placement}
+        data-size={`${p.size.width}x${p.size.height}`}
+        style={p.style}
+      >
         <button onClick={() => setSelected(true)}>
           {selected ? "Selected conversation" : "Select conversation"}
         </button>
@@ -33,11 +44,6 @@ vi.mock("@/features/viewer/lib/cli-workspace/store/terminal-selectors", () => ({
 }));
 
 import { InboxSplit, useInboxTabCleanup } from "./inbox-split";
-import {
-  INBOX_RAIL_WIDTH_DEFAULT,
-  INBOX_RAIL_WIDTH_MIN,
-  inboxRailCssWidth,
-} from "./inbox-splitter";
 
 const mounts = vi.fn();
 function Terminal() {
@@ -70,7 +76,7 @@ describe("InboxSplit", () => {
       </div>,
     );
     act(() => openAgentInboxRail(TAB.sessionId));
-    const rail = await screen.findByTestId("inbox-rail");
+    const rail = await screen.findByTestId("chat-overlay");
     expect(rail.closest("[data-surface]")).toHaveAttribute("data-surface", "canvas");
     expect(screen.getByTestId("terminal").closest("[data-surface]")).toHaveAttribute(
       "data-surface",
@@ -100,7 +106,7 @@ describe("InboxSplit", () => {
         0,
       ),
     );
-    expect(screen.getByTestId("inbox-rail")).toBe(rail);
+    expect(screen.getByTestId("chat-overlay")).toBe(rail);
     expect(rail).toBeVisible();
     expect(screen.getByText("Selected conversation")).toBeVisible();
     expect(mounts).toHaveBeenCalledTimes(1);
@@ -113,7 +119,7 @@ describe("InboxSplit", () => {
       </InboxSplit>,
     );
     act(() => openAgentInboxRail(TAB.sessionId));
-    await screen.findByTestId("inbox-rail");
+    await screen.findByTestId("chat-overlay");
     act(() => {
       useAgentStateStore.getState().setProcessAgent(TAB.sessionId, null);
       useAgentStateStore.getState().recordSignal(TAB.sessionId, {
@@ -121,20 +127,20 @@ describe("InboxSplit", () => {
         signal: { kind: "claude-hook", event: "SessionEnd" },
       });
     });
-    expect(screen.queryByTestId("inbox-rail")).toBeNull();
+    expect(screen.queryByTestId("chat-overlay")).toBeNull();
     expect(useAgentInboxRailStore.getState().bySession[TAB.sessionId]).toBeUndefined();
     act(() => openAgentInboxRail(TAB.sessionId));
-    expect(screen.queryByTestId("inbox-rail")).toBeNull();
+    expect(screen.queryByTestId("chat-overlay")).toBeNull();
     act(() => {
       useAgentStateStore.getState().setProcessAgent(TAB.sessionId, "codex");
       openAgentInboxRail(TAB.sessionId);
     });
-    await screen.findByTestId("inbox-rail");
+    await screen.findByTestId("chat-overlay");
     expect(mounts).toHaveBeenCalledTimes(1);
   });
 
   it.each(AGENT_RUNTIMES)(
-    "docks the %s inbox beside the terminal without remounting the terminal",
+    "opens the %s chat on its tab without remounting the terminal",
     async (cli) => {
       useAgentStateStore.getState().setProcessAgent(TAB.sessionId, cli);
       render(
@@ -142,60 +148,52 @@ describe("InboxSplit", () => {
           <Terminal />
         </InboxSplit>,
       );
-      expect(screen.queryByTestId("inbox-rail")).toBeNull();
+      expect(screen.queryByTestId("chat-overlay")).toBeNull();
       act(() => openAgentInboxRail("sess-1"));
-      const rail = await screen.findByTestId("inbox-rail");
+      const rail = await screen.findByTestId("chat-overlay");
       expect(rail).toBeVisible();
       expect(rail).toHaveAttribute("data-session-id", "sess-1");
-      expect(screen.getByTestId("inbox-splitter")).toBeInTheDocument();
       act(() => closeAgentInboxRail("sess-1"));
-      expect(screen.queryByTestId("inbox-rail")).toBeNull();
+      expect(screen.queryByTestId("chat-overlay")).toBeNull();
       expect(mounts).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("holds the rail inside the split's bounds", () => {
-    expect(inboxRailCssWidth(INBOX_RAIL_WIDTH_DEFAULT)).toEqual({
-      width: "min(520px, 72%)",
-      minWidth: "min(360px, 72%)",
-    });
-  });
-
-  it("resizes from the keyboard within its bounds and resets on Enter", async () => {
-    act(() => openAgentInboxRail("sess-1"));
-    render(
-      <InboxSplit tab={TAB} teamKey="o:t">
-        <Terminal />
-      </InboxSplit>,
+  it("docks the chat at 420 px on a wide tab, and covers a tab under 840 wide", async () => {
+    const box = { width: 1200, height: 700 };
+    const observers: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: ResizeObserverCallback) {}
+        observe() {
+          const fire = () => this.cb([{ contentRect: box } as ResizeObserverEntry], this as never);
+          observers.push(fire);
+          fire();
+        }
+        disconnect() {}
+      },
     );
-    const handle = await screen.findByTestId("inbox-splitter");
-    fireEvent.keyDown(handle, { key: "ArrowLeft" });
-    const widened = useAgentInboxRailStore.getState().widthByTab["tab-1"]!;
-    expect(widened).toBeGreaterThanOrEqual(INBOX_RAIL_WIDTH_MIN);
-    fireEvent.keyDown(handle, { key: "Home" });
-    expect(useAgentInboxRailStore.getState().widthByTab["tab-1"]).toBe(INBOX_RAIL_WIDTH_MIN);
-    fireEvent.keyDown(handle, { key: "Enter" });
-    // happy-dom measures the split as 0px wide, so the clamp floors at the minimum.
-    expect(useAgentInboxRailStore.getState().widthByTab["tab-1"]).toBe(INBOX_RAIL_WIDTH_MIN);
-  });
-
-  it("ends a drag when pointer capture is lost (released outside the window)", async () => {
-    act(() => openAgentInboxRail("sess-1"));
-    render(
-      <InboxSplit tab={TAB} teamKey="o:t">
-        <Terminal />
-      </InboxSplit>,
-    );
-    const handle = await screen.findByTestId("inbox-splitter");
-    fireEvent.pointerDown(handle, { button: 0, pointerId: 7, clientX: 500 });
-    expect(handle).toHaveAttribute("data-dragging", "true");
-    act(() => {
-      const lost = new Event("lostpointercapture", { bubbles: true });
-      Object.assign(lost, { pointerId: 7 });
-      window.dispatchEvent(lost);
-    });
-    expect(handle).toHaveAttribute("data-dragging", "false");
-    expect(useAgentInboxRailStore.getState().widthByTab["tab-1"]).toBe(INBOX_RAIL_WIDTH_MIN);
+    try {
+      act(() => openAgentInboxRail("sess-1"));
+      render(
+        <InboxSplit tab={TAB} teamKey="o:t">
+          <Terminal />
+        </InboxSplit>,
+      );
+      const chat = await screen.findByTestId("chat-overlay");
+      expect(chat).toHaveAttribute("data-placement", "dock");
+      expect(chat).toHaveAttribute("data-size", "420x700");
+      expect(chat.style.width).toBe("420px");
+      Object.assign(box, { width: 600, height: 300 });
+      act(() => observers.forEach((f) => f()));
+      expect(chat).toHaveAttribute("data-placement", "cover");
+      expect(chat).toHaveAttribute("data-size", "600x300");
+      expect(chat.style.position).toBe("absolute");
+      expect(mounts).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

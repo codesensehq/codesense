@@ -4,11 +4,11 @@ import { SquareTerminal, WifiOff } from "lucide-react";
 
 import { goToSession } from "@/features/inbox/actions";
 import { revealSlot } from "@/features/shell/slots/reveal-slot";
-import type { ConversationMessage } from "@/features/inbox/api";
 import { teamOfKey } from "@/features/inbox/components/inbox-rail";
 import { InboxViewProvider, type InboxView } from "@/features/inbox/components/inbox-view-context";
 import { InboxLoading, ReadFailure, StaleNotice } from "@/features/inbox/components/primitives";
 import { Conversation } from "@/features/inbox/components/threads-lens";
+import { agentTeam, between } from "@/features/inbox/lib/agent-chat";
 import { fixtureSessions } from "@/features/inbox/fixtures";
 import { useDocumentVisible } from "@/features/inbox/hooks/use-document-visible";
 import { useInboxSessions } from "@/features/inbox/hooks/use-inbox-sessions";
@@ -71,25 +71,6 @@ const draftFocused = (dialog: HTMLElement) => {
     active.value.trim().length > 0
   );
 };
-
-/** A message between the human and `handle`, either way (role mail and other agents' are not). */
-const between = (m: ConversationMessage, handle: string) =>
-  !m.toRole && ((m.from === handle && m.to === HUMAN) || (m.from === HUMAN && m.to === handle));
-
-/** The team an agent works in, by its mail: the pane's team when the agent wrote there, else
- *  where it last wrote, else the pane's team (null when there is none). */
-function agentTeam(
-  messages: readonly ConversationMessage[],
-  handle: string,
-  home: InboxTeam | null,
-): InboxTeam | null {
-  const own = messages.filter((m) => m.from === handle);
-  if (home && own.some((m) => sameTeam(m.team, home))) return home;
-  // The latest by when it was written: a read lists teams one after another, not by time.
-  let last: ConversationMessage | null = null;
-  for (const m of own) if (!last || m.createdAtMs > last.createdAtMs) last = m;
-  return last ? last.team : home;
-}
 
 /** The note an agent on an offline machine wears: its mail is kept on this Mac and pushed to it
  *  again when the machine reconnects. `machine` is its name, or {@link UNKNOWN_MACHINE_LABEL}. */
