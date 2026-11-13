@@ -61,8 +61,8 @@ async function box(page: Page, selector: string) {
 const byTestId = (id: string) => `[data-testid="${id}"]`;
 /** A tab's body under its caption: its terminal and, when open, its docked inbox. */
 const regionOf = (tabId: string) => byTestId(`inbox-split-${tabId}`);
-/** The inbox docked in that tab's own body. */
-const paneOf = (tabId: string) => `${regionOf(tabId)} [data-testid="inbox-rail"]`;
+/** The agent's chat in that tab's own body. */
+const paneOf = (tabId: string) => `${regionOf(tabId)} [data-testid="chat-overlay"]`;
 
 async function paneGeometry(page: Page, tabId: string, wsId: string) {
   return {
@@ -144,10 +144,10 @@ test.describe("a tab's agent inbox pane lives in that tab", () => {
     await showAllTabs(page, BUG);
     await openInbox(page, AGENT_TAB);
     await openInbox(page, OTHER_TAB);
-    await expect(page.getByTestId("inbox-rail")).toHaveCount(2);
+    await expect(page.getByTestId("chat-overlay")).toHaveCount(2);
     for (const tab of [AGENT_TAB, OTHER_TAB]) {
       const cell = page.getByTestId(`terminal-grid-cell-${tab}`);
-      await expect(cell.getByTestId("inbox-rail")).toHaveCount(1);
+      await expect(cell.getByTestId("chat-overlay")).toHaveCount(1);
       expectPaneInItsTab(await paneGeometry(page, tab, BUG));
     }
   });
@@ -171,4 +171,70 @@ test.describe("the shown terminal is sized to its tile", () => {
     await page.locator(`${regionOf(AGENT_TAB)} .xterm textarea`).focus();
     await expectTerminalFitsTile(page, AGENT_TAB, BUG);
   });
+});
+
+/** The design's acceptance sizes, with the layout each must get (its breakpoint table). */
+const SIZES = [
+  { w: 250, h: 250, width: "XS", height: "short", head: "one-line", pins: "line" },
+  { w: 300, h: 700, width: "XS", height: "tall", head: "two-line", pins: "rows" },
+  { w: 900, h: 250, width: "L", height: "short", head: "one-line", pins: "rail" },
+  { w: 640, h: 480, width: "M", height: "medium", head: "two-line", pins: "tiles" },
+] as const;
+
+test.describe("the agent's chat at any pane size", () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  for (const size of SIZES) {
+    test(`${size.w} × ${size.h}: chat, composer and pins usable, nothing scrolls sideways`, async ({
+      page,
+    }) => {
+      await expand(page, BUG);
+      await openInbox(page, AGENT_TAB);
+      // Give the tab's body exactly this size; the chat covers it (every size here is under
+      // 840 wide or 360 tall).
+      await page.evaluate(
+        ({ tabId, w, h }) => {
+          const el = document.querySelector<HTMLElement>(`[data-testid="inbox-split-${tabId}"]`)!;
+          Object.assign(el.style, { flex: "none", width: `${w}px`, height: `${h}px` });
+        },
+        { tabId: AGENT_TAB, w: size.w, h: size.h },
+      );
+      const chat = page.locator(paneOf(AGENT_TAB));
+      await expect(chat).toHaveAttribute("data-placement", "cover");
+      for (const k of ["width", "height", "head", "pins"] as const)
+        await expect(chat).toHaveAttribute(`data-${k}`, size[k]);
+      const b = await box(page, paneOf(AGENT_TAB));
+      expect(Math.round(b.width)).toBe(size.w);
+      expect(Math.round(b.height)).toBe(size.h);
+
+      // Pins: both of the lead's, as previews, inside the chat.
+      const pins = chat.locator('[data-testid^="chat-overlay-pin-"]');
+      await expect(pins).toHaveCount(2);
+      await expect(pins.first()).toContainText("0H 0M 0L");
+      await expect(chat.getByTestId("chat-overlay-pin-9")).toContainText("stopped");
+
+      // The newest message and the composer are on screen, inside the chat.
+      await expect(chat.getByText(/staging verification is waiting/)).toBeVisible();
+      const composer = chat.locator(".ibx-comp textarea");
+      await expect(composer).toBeEnabled();
+      const c = await composer.boundingBox();
+      expect(c).not.toBeNull();
+      expect(c!.y + c!.height).toBeLessThanOrEqual(b.y + b.height + 1);
+      expect(c!.x + c!.width).toBeLessThanOrEqual(b.x + b.width + 1);
+
+      // Nothing in the chat scrolls sideways; a wide table or code block inside a message
+      // scrolls in its own box, as everywhere in the inbox.
+      const wide = await chat.evaluate((root) =>
+        [root, ...root.querySelectorAll<HTMLElement>("*")]
+          .filter((el) => !el.parentElement?.closest(".ibx-m"))
+          .filter((el) => {
+            const o = getComputedStyle(el).overflowX;
+            return (o === "auto" || o === "scroll") && el.scrollWidth > el.clientWidth + 1;
+          })
+          .map((el) => el.className),
+      );
+      expect(wide).toEqual([]);
+      expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    });
+  }
 });
