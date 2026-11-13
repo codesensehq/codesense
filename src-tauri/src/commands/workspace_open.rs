@@ -455,11 +455,12 @@ async fn resolve_agent_launch(
     let prompt = non_blank(req.initial_prompt.as_deref());
     let mut launch = host.prepare_agent(&reference, &team, prompt, mode).await?;
     if let Some(model) = non_blank(req.model.as_deref()) {
-        // After the agent's own args, so the caller's model wins over a saved `--model`.
-        launch
-            .launch
-            .args
-            .extend(["--model".to_string(), model.to_string()]);
+        // After the agent's own options (before any `--` operands), so the caller's model
+        // wins over a saved `--model` and is never read as prompt text.
+        let args = &mut launch.launch.args;
+        let at = codesense_pty_core::agent_cli::operands_at(&args[..]);
+        args.insert(at, model.to_string());
+        args.insert(at, "--model".to_string());
     }
     Ok(launch)
 }
