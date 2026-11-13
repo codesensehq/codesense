@@ -408,9 +408,24 @@ export function agentTeamSessions(search: string): AgentSessionRow[] {
   return [
     ...agentTeamRows(params.get("manager") !== "none"),
     ...(isAgentTeamsWorld(search) ? secondTeamRows() : []),
+    // `headless=1` adds a headless run: it has no tab, so it must offer no chat.
+    ...(params.get("headless") === "1" ? [headlessRow()] : []),
   ].map((r) =>
     ended && (r.handle === ended || r.handle.endsWith(`#${ended}`)) ? { ...r, alive: false } : r,
   );
+}
+
+/** A headless run in the login lead's workspace: running, but with no tab to hold a chat. */
+export const HEADLESS_HANDLE = "BUG-142#nightly";
+
+function headlessRow(): AgentSessionRow {
+  return row(HEADLESS_HANDLE, "sess-login-headless", 5, {
+    displayName: "Nightly sweep",
+    kind: "headless",
+    agentRevision: "builtin/claude@13",
+    launchedBy: "BUG-142#lead",
+    story: "BUG-142",
+  });
 }
 
 function agentTeamRows(withManager: boolean): AgentSessionRow[] {

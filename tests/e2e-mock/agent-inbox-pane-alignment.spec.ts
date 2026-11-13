@@ -238,3 +238,20 @@ test.describe("the agent's chat at any pane size", () => {
     });
   }
 });
+
+test.describe("every agent's chat entry, and none for a headless run", () => {
+  test("a headless run in the agent list has no chat icon; a running agent does", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?agents=teams&headless=1");
+    const headless = page.locator('.ag-row[data-agent-handle="BUG-142#nightly"]').first();
+    await expect(headless).toBeVisible();
+    await headless.hover();
+    await expect(headless.getByTestId("agent-row-message")).toHaveCount(0);
+
+    const lead = page.locator('.ag-row[data-agent-handle="BUG-142#lead"]').first();
+    await lead.hover();
+    await expect(lead.getByTestId("agent-row-message")).toBeVisible();
+  });
+});
