@@ -25,10 +25,10 @@ const { createFixture, CARDS, CONFIG } = await lib("fixture");
 const { loadCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
-const { statusFor, parseReport, loadReports } = await lib("floor");
+const { CASE_IDS, statusFor, parseReport, loadReports } = await lib("floor");
 const { checkRegistry } = await lib("registry");
 
-const CASES = ["onboard-repo", "start-sprint-lead", "answer-card", "recover-error"];
+const CASES = CASE_IDS;
 const cases = loadCases();
 const caseOf = (id) => cases.find((c) => c.id === id);
 const turnsOf = (id) => caseOf(id).input.turns;
@@ -87,12 +87,29 @@ test("fixture: the shim logs every gh call and fails only the first pr create", 
     assert.equal(second.status, 0);
     const calls = fx.state().ghCalls;
     assert.deepEqual(
-      calls.map((c) => [c.args.split(" ")[0], c.create, c.ok]),
+      calls.map((c) => [c.argv[0], c.create, c.ok]),
       [
         ["api", false, true],
         ["pr", true, false],
         ["pr", true, true],
         ["pr", false, true],
+      ],
+    );
+  } finally {
+    fx.teardown();
+  }
+});
+
+test("fixture: the shim finds pr create after a repo flag, and --help spends no failure", async () => {
+  const fx = await createFixture({ failFirstPr: true });
+  try {
+    assert.equal(fx.gh(["pr", "create", "--help"]).status, 0);
+    assert.notEqual(fx.gh(["pr", "-R", "acme/demo", "create", "--title", "t"]).status, 0);
+    assert.deepEqual(
+      fx.state().ghCalls.map((c) => [c.create, c.ok]),
+      [
+        [false, true],
+        [true, false],
       ],
     );
   } finally {
@@ -120,7 +137,7 @@ test("fixture: the shim logs a multi-line --body as valid JSON", async () => {
   try {
     fx.gh(["pr", "create", "--title", "t", "--body", 'line one\n\tline "two"\r\nend']);
     const [call] = fx.state().ghCalls;
-    assert.match(call.args, /line one/);
+    assert.equal(call.argv.at(-1), 'line one\n\tline "two"\r\nend');
   } finally {
     fx.teardown();
   }
@@ -603,7 +620,7 @@ test("answer-card: green on reads of the lead and on display fields in a message
 });
 
 test("answer-card: red when the answer is typed into the lead's terminal", async () => {
-  for (const tool of ["run_in_terminal_tab", "pane_write"])
+  for (const tool of ["run_in_terminal_tab"])
     redFor(
       await play(
         goodThen("answer-card", (fx) =>
@@ -795,6 +812,77 @@ test("recover-error: green with -H, with no head flag from the worktree, with re
     fx.tool("foreman", "send_message", { to: "human", text: "No timers." });
   }, "recover-error");
   assert.deepEqual(viaSend.failures, []);
+});
+
+test("recover-error: gh reads in any form are not writes; field writes and mutations are", async () => {
+  for (const read of [
+    ["--repo=acme/demo", "pr", "list"],
+    ["-Racme/demo", "pr", "view", "1"],
+    ["issue", "list"],
+    ["run", "view", "7"],
+    ["search", "prs", "readme"],
+    ["api", "-X", "GET", "search/issues", "-f", "q=readme"],
+    ["api", "repos/my-Xrepo/pulls"],
+    ["api", "graphql", "-f", "query=query { viewer { login } }"],
+    ["pr", "create", "--help"],
+  ]) {
+    const green = await play(
+      recover({ before: [addWt], attempt: (fx) => (fx.gh(read), prCreate(fx)), after: [removeWt] }),
+      "recover-error",
+    );
+    assert.deepEqual(green.failures, [], read.join(" "));
+  }
+  for (const write of [
+    ["api", "repos/acme/demo/pulls", `-fhead=${BRANCH}`],
+    ["api", "graphql", "-f", "query=mutation { createPullRequest }"],
+    ["pr", "-R", "acme/demo", "create", "--title", "again"],
+  ]) {
+    redFor(
+      await play(
+        recover({
+          before: [addWt],
+          attempt: (fx) => (prCreate(fx), fx.gh(write)),
+          after: [removeWt],
+        }),
+        "recover-error",
+      ),
+      /2 gh writes/,
+    );
+  }
+});
+
+test("recover-error: the head is the --head flag's value, with an owner prefix allowed", async () => {
+  const green = await play(
+    recover({
+      before: [addWt],
+      attempt: (fx) => prCreate(fx, ["--head", `acme:${BRANCH}`]),
+      after: [removeWt],
+    }),
+    "recover-error",
+  );
+  assert.deepEqual(green.failures, []);
+  const home = (fx) => path.join(fx.root, "home");
+  redFor(
+    await play(
+      recover({
+        before: [addWt],
+        attempt: (fx) => prCreate(fx, ["--body", `see --head ${BRANCH}`], home(fx)),
+        after: [removeWt],
+      }),
+      "recover-error",
+    ),
+    /opened from main, not a foreman branch/,
+  );
+});
+
+test("answer-card: pane_write shows a pane and is not an answer", async () => {
+  const green = await play(
+    goodThen("answer-card", (fx) =>
+      fx.tool("foreman", "pane_write", { id: "card", html: "<p>ACME-7</p>" }),
+    ),
+    "answer-card",
+  );
+  assert.deepEqual(green.failures, []);
 });
 
 // ---- wording is rubric, never script -------------------------------------------------------
@@ -1086,6 +1174,15 @@ test("floor: a scalar case result, a string k or an unparsable front block never
   const dir = tmp(t);
   writeFileSync(path.join(dir, "bad.md"), "---\nk: [unclosed\n---\n");
   assert.deepEqual(loadReports(dir), []);
+});
+
+test("floor: with the same time, a day's first report sorts before its -2", () => {
+  const fail = {
+    ...withCase("answer-card", ["fail", "fail", "fail"]),
+    file: "foreman-claude-2026-11-13.md",
+  };
+  const pass = { ...report(), file: "foreman-claude-2026-11-13-2.md" };
+  assert.equal(statusFor([pass, fail], KEY), "passed");
 });
 
 test("floor: reports with the same time are ordered by number, so -10 is after -2", () => {

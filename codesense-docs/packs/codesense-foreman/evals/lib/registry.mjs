@@ -5,11 +5,8 @@
 // Standalone until the pack builder exists; the build runs it once there is one.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { latestFor, loadReports, statusFor } from "./floor.mjs";
-
-const packDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+import { latestFor, loadReports, packDir, runtimeOf, statusOf } from "./floor.mjs";
 
 export function checkRegistry({
   variants = path.join(packDir, "variants.yml"),
@@ -22,24 +19,26 @@ export function checkRegistry({
   const errors = [];
   const seen = new Set();
   const rows = registry.variants ?? [];
-  for (const m of registry.models ?? [])
+  const models = registry.models ?? [];
+  for (const m of models)
     if (!rows.some((r) => r.model === m.model)) errors.push(`${registry.agent} ${m.model}: no variants row`);
-  const runtime = String(registry.agent).replace(/^foreman-/, "");
+  const runtime = runtimeOf(registry.agent);
   for (const row of rows) {
-    const label = `${registry.agent} ${row.runtime} ${row.model} ${row.spec_hash ?? "null"}`;
-    const key = JSON.stringify([row.runtime, row.model, row.spec_hash ?? null]);
+    const specHash = row.spec_hash ?? null;
+    const label = `${registry.agent} ${row.runtime} ${row.model} ${specHash}`;
+    const key = JSON.stringify([row.runtime, row.model, specHash]);
     if (seen.has(key)) errors.push(`${label}: duplicate row`);
     seen.add(key);
-    if (!(registry.models ?? []).some((m) => m.model === row.model)) errors.push(`${label}: model is not in models`);
+    if (!models.some((m) => m.model === row.model)) errors.push(`${label}: model is not in models`);
     if (row.runtime !== runtime) errors.push(`${label}: runtime is not ${runtime}`);
-    const computed = statusFor(all, row);
-    if (row.eval !== computed) errors.push(`${label}: eval is "${row.eval}" but its reports say "${computed}"`);
     const latest = latestFor(all, row);
+    const computed = statusOf(latest);
+    if (row.eval !== computed) errors.push(`${label}: eval is "${row.eval}" but its reports say "${computed}"`);
     const report = latest?.file ?? null;
     const at = latest?.at ?? null;
     if ((row.report ?? null) !== report || (row.at ?? null) !== at)
       errors.push(`${label}: names report ${row.report ?? null} at ${row.at ?? null}, but the deciding report is ${report} at ${at}`);
-    if (row.eval === "passed" && (row.spec_hash ?? null) !== built)
+    if (row.eval === "passed" && specHash !== built)
       errors.push(`${label}: passed on spec_hash ${row.spec_hash} but the pack builds ${built}; re-run the eval or set the row to untested`);
   }
   return errors;

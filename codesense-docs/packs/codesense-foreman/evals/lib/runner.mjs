@@ -13,12 +13,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
-import { createFixture } from "./fixture.mjs";
-import { CASE_IDS } from "./floor.mjs";
+import { fixtureFor } from "./fixture.mjs";
+import { CASE_IDS, packDir, runtimeOf } from "./floor.mjs";
 import { grade, loadCases } from "./graders.mjs";
 import { stubs } from "./stubs.mjs";
 
-const packDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const BUDGET_USD = 12;
 
 export class InfraError extends Error {}
@@ -48,7 +47,7 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
       let fx;
       try {
         try {
-          fx = await createFixture({ failFirstPr: caseDef.fixture?.fail_first_pr === true });
+          fx = await fixtureFor(caseDef);
         } catch (error) {
           throw new InfraError(`fixture: ${error.message}`);
         }
@@ -81,7 +80,7 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
 
   const report = {
     variant,
-    runtime: variant.replace(/^foreman-/, ""),
+    runtime: runtimeOf(variant),
     model,
     spec_hash: specHash,
     driver: driverName,
@@ -95,8 +94,9 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
     cases: results,
   };
   mkdirSync(out, { recursive: true });
-  let reportPath = path.join(out, `${variant}-${report.at.slice(0, 10)}.md`);
-  for (let n = 2; existsSync(reportPath); n += 1) reportPath = path.join(out, `${variant}-${report.at.slice(0, 10)}-${n}.md`);
+  const stem = path.join(out, `${variant}-${report.at.slice(0, 10)}`);
+  let reportPath = `${stem}.md`;
+  for (let n = 2; existsSync(reportPath); n += 1) reportPath = `${stem}-${n}.md`;
   const body = notes.length ? `\n## Failures\n\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
   writeFileSync(reportPath, `---\n${stringify(report)}---\n\n# ${variant} eval, ${report.at}\n${body}`);
   const allPass = CASE_IDS.every((id) => results[id]?.length && results[id].every((r) => r === "pass"));
@@ -107,28 +107,28 @@ const DRIVERS = { "stub:good": stubs.good, "stub:do-nothing": stubs.doNothing };
 const FLAGS = ["driver", "k", "model", "budget", "out"];
 const USAGE = "usage: run.sh <variant> --driver <stub:good|stub:do-nothing> [--k N] [--model M] [--budget USD, at most 12] [--out DIR]";
 
+const refuse = (message) => (console.error(message), 2);
+
 async function main(argv) {
   const [variant, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) {
     const name = rest[i].replace(/^--/, "");
-    if (!rest[i].startsWith("--") || !FLAGS.includes(name) || rest[i + 1] === undefined) return console.error(USAGE) ?? 2;
+    if (!rest[i].startsWith("--") || !FLAGS.includes(name) || rest[i + 1] === undefined) return refuse(USAGE);
     flags[name] = rest[i + 1];
   }
   const registry = parse(readFileSync(path.join(packDir, "variants.yml"), "utf8"));
-  if (!variant || variant.startsWith("--")) return console.error(USAGE) ?? 2;
-  if (variant !== registry.agent) return console.error(`unknown variant ${variant}; this pack has ${registry.agent}`) ?? 2;
+  if (!variant || variant.startsWith("--")) return refuse(USAGE);
+  if (variant !== registry.agent) return refuse(`unknown variant ${variant}; this pack has ${registry.agent}`);
   const driver = DRIVERS[flags.driver];
-  if (!driver) {
-    console.error("no driver: pass --driver stub:good or stub:do-nothing. Real model runs are recorded by a separate task.");
-    return 2;
-  }
+  if (!driver)
+    return refuse(`no driver: pass --driver ${Object.keys(DRIVERS).join(" or ")}. Real model runs are recorded by a separate task.`);
   const model = flags.model ?? registry.models?.find((m) => m.default)?.model;
-  if (!registry.models?.some((m) => m.model === model)) return console.error(`unknown model ${model}`) ?? 2;
+  if (!registry.models?.some((m) => m.model === model)) return refuse(`unknown model ${model}`);
   const k = Number(flags.k ?? 3);
   const budget = Number(flags.budget ?? BUDGET_USD);
-  if (!Number.isInteger(k) || k < 1) return console.error("--k must be a whole number of at least 1") ?? 2;
-  if (!(budget > 0 && budget <= BUDGET_USD)) return console.error(`--budget must be more than 0 and at most ${BUDGET_USD}`) ?? 2;
+  if (!Number.isInteger(k) || k < 1) return refuse("--k must be a whole number of at least 1");
+  if (!(budget > 0 && budget <= BUDGET_USD)) return refuse(`--budget must be more than 0 and at most ${BUDGET_USD}`);
   // A stub's report is never evidence, so by default it goes to a temp dir, not evals/reports.
   const out = flags.out ?? mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-"));
   const { exitCode, reportPath, report } = await runEval({ variant, model, driver, driverName: flags.driver, k, budget, out });

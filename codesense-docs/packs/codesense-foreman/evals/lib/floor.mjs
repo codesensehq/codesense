@@ -4,7 +4,12 @@
 // passed needs all four cases to pass in every run.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+
+export const packDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+// The runtime a variant runs on: `foreman-claude` → `claude`.
+export const runtimeOf = (variant) => String(variant).replace(/^foreman-/, "");
 
 export const CASE_IDS = ["onboard-repo", "start-sprint-lead", "answer-card", "recover-error"];
 export const MIN_K = 3;
@@ -39,12 +44,12 @@ const dated = (r) => typeof r.at === "string" && !Number.isNaN(Date.parse(r.at))
 export function latestFor(reports, key) {
   return reports
     .filter((r) => sameKey(r, key) && fromModel(r) && dated(r) && r.complete === true && Number.isInteger(r.k) && r.k >= MIN_K)
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || String(a.file).localeCompare(String(b.file), undefined, { numeric: true }))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || String(a.file).replace(/\.md$/, "").localeCompare(String(b.file).replace(/\.md$/, ""), undefined, { numeric: true }))
     .at(-1);
 }
 
-export function statusFor(reports, key) {
-  const latest = latestFor(reports, key);
+// The status the deciding report sets.
+export function statusOf(latest) {
   if (!latest) return "untested";
   const runs = CASE_IDS.map((id) => (Array.isArray(latest.cases?.[id]) ? latest.cases[id] : []));
   const results = runs.flat();
@@ -52,3 +57,5 @@ export function statusFor(reports, key) {
   const complete = runs.every((r) => r.length >= MIN_K) && results.every((x) => x === "pass");
   return complete ? "passed" : "untested";
 }
+
+export const statusFor = (reports, key) => statusOf(latestFor(reports, key));

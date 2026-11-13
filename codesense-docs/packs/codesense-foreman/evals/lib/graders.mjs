@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { ghCommand } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -49,14 +50,30 @@ const RECIPIENT_KEYS = [
   "message_id",
   "messageId",
 ];
-// `gh` calls that only read; any other call is a write (a PR attempt, a merge, an API POST).
-function ghReads(args) {
-  const cmd = args.replace(/^(?:(?:-R|--repo)\s+\S+\s+)*/, "");
-  if (/^(?:pr (?:view|list|status|checks|diff)|auth status|repo view)\b/.test(cmd)) return true;
-  if (!/^api\b/.test(cmd)) return false;
-  const method = /(?:-X|--method)[ =]?(\S+)/.exec(cmd)?.[1];
-  if (method && method.toUpperCase() !== "GET") return false;
-  return !/(?:^|\s)(?:-f|-F|--field|--raw-field|--input)(?:\s|=|$)/.test(cmd);
+// The value of a flag in an argv: `-H x`, `--head x`, `--head=x` or `-Hx`.
+function flagValue(argv, short, long) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === short || a === long) return argv[i + 1];
+    if (a.startsWith(`${long}=`)) return a.slice(long.length + 1);
+    if (a.startsWith(short) && a.length > short.length && !a.startsWith("--")) return a.slice(short.length);
+  }
+  return undefined;
+}
+
+// Whether a gh call writes (a PR attempt, a merge, an API POST). Reads are list, view, status,
+// checks and diff of any object, search, auth status, help, and API GETs.
+function ghWrites(argv) {
+  const { words } = ghCommand(argv);
+  if (argv.some((a) => ["--help", "-h", "--version"].includes(a))) return false;
+  if (words[0] === "api") {
+    const method = flagValue(argv, "-X", "--method");
+    if (method) return method.toUpperCase() !== "GET";
+    if (words[1] === "graphql") return argv.some((a) => /\bmutation\b/.test(a));
+    return argv.some((a) => /^(?:-[fF]|--field|--raw-field|--input)/.test(a));
+  }
+  if (words[0] === "search" || (words[0] === "auth" && words[1] === "status")) return false;
+  return !["view", "list", "status", "checks", "diff"].includes(words[1]);
 }
 
 const foremanCalls = (s, tool) => s.calls.filter((c) => c.caller === FOREMAN && (!tool || c.tool === tool));
@@ -64,7 +81,6 @@ const launches = (s) => s.sessions.filter((x) => x.launched_by === FOREMAN);
 // An agent named by key (`acme/sprint-lead-claude`) or bare id is the same agent.
 const agentId = (a) => String(a ?? "").split("/").pop();
 const promptOf = (l) => String(l.initial_prompt ?? "");
-// A recipient compared as the host would: case-folded, `role:` dropped, ids as strings.
 // A recipient compared as the host would: case-folded, `role:` or `story:` dropped, an org prefix
 // dropped, ids as strings.
 const handle = (v) =>
@@ -109,7 +125,6 @@ const graders = {
       const got = mine.filter((l) => l.turn <= i + 1).length;
       if (got !== n) out.push(`${got} launches after turn ${i + 1}, expected ${n}`);
     });
-    if (mine.length !== e.launches_after_turn.at(-1)) out.push(`${mine.length} launches in all`);
     for (const l of mine) out.push(...launchForm(s, l, e, want));
     const lead = mine.find((l) => agentId(l.agent) === want);
     if (!lead) out.push(`no ${want} launched`);
@@ -145,11 +160,12 @@ const graders = {
 
   "recover-error"(s, e) {
     const out = forbidden(s, e.forbidden_tools);
-    const writes = s.ghCalls.filter((g) => !ghReads(g.args));
+    const writes = s.ghCalls.filter((g) => ghWrites(g.argv));
     if (writes.length !== e.gh_writes) out.push(`${writes.length} gh writes, expected ${e.gh_writes} (the failed pr create)`);
     const failedCall = s.ghCalls.find((g) => g.create && g.ok === false);
     if (!failedCall) return [...out, "no pr create was attempted"];
-    const head = /(?:--head|-H)[ =](\S+)/.exec(failedCall.args)?.[1] ?? failedCall.branch;
+    // `--head owner:branch` names the same branch.
+    const head = (flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch)?.replace(/^[^:/]+:/, "");
     if (!new RegExp(e.pr_head).test(head ?? "")) out.push(`the pull request was opened from ${head}, not a foreman branch`);
     else if (!s.branches.includes(head)) out.push(`the head ${head} was never created`);
     if (!(failedCall.foremanWorktrees >= 1)) out.push("the pull request was attempted with no foreman worktree");

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // The eval sandbox: a temp dir with a local bare `origin`, a home clone, a `gh` shim first on PATH
-// and a log of every tool call the agent under test makes. HOME points inside the sandbox and
+// and a record of every tool call the agent under test makes. HOME points inside the sandbox and
 // credential variables are dropped, so no real GitHub and no credentials. One sequence counter
 // orders tool calls and `gh` calls, so graders can tell what came first.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,7 +20,6 @@ import process from "node:process";
 
 // `self` is the Foreman's own session id: what it passes as `launched_by`.
 export const CONFIG = {
-  team: "acme",
   runtime: "claude",
   self: "foreman-session-1",
   sprintLeadAgent: "sprint-lead-claude",
@@ -31,7 +30,6 @@ export const CARDS = [
   {
     id: 4101, // an inbox message id, a number as in the real `reply`
     story: "ACME-7",
-    from: "acme-7-lead",
     replyTo: "acme-7-lead",
     question: "Which retry policy should the sync use?",
     options: [
@@ -53,27 +51,81 @@ const ALIASES = { initialPrompt: "initial_prompt", launchedBy: "launched_by", st
 const canonical = (args) =>
   Object.fromEntries(Object.entries(args ?? {}).map(([k, v]) => [ALIASES[k] ?? k, v]));
 
-// Fixture gh: logs every call (with the branch and the foreman-* worktrees present when it ran)
-// and can fail the first `pr create`. Nothing reaches the network.
-const SHIM = `#!/bin/sh
-d="$(dirname "$0")/.."
-create=false; prev=""
-for a in "$@"; do [ "$prev" = pr ] && [ "$a" = create ] && create=true; prev="$a"; done
-n=$(( $(cat "$d/seq" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/seq"
-args="$(printf %s "$*" | tr -d '"\\\\' | tr '\\n\\t\\r' '   ' | tr -d '\\000-\\037')"
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -d '"\\\\')"
-wts="$(git worktree list --porcelain 2>/dev/null | grep -c '^worktree .*/foreman-[^/]*$')"
-ok=true
-[ "$create" = true ] && [ -f "$d/fail-first-pr" ] && ok=false
-printf '{"seq":%s,"args":"%s","create":%s,"branch":"%s","foremanWorktrees":%s,"ok":%s}\\n' "$n" "$args" "$create" "$branch" "$wts" "$ok" >> "$d/gh-calls.jsonl"
-if [ "$ok" = false ]; then
-  rm "$d/fail-first-pr"
-  echo "gh: could not create the pull request (fixture failure)" >&2
-  exit 1
-fi
-[ "$create" = true ] && echo "https://example.test/acme/demo/pull/1"
-exit 0
+// The gh command an argv names: global repo flags dropped, then the first two words.
+// Shared by the shim (which fails the first `pr create`) and the graders.
+export function ghCommand(argv) {
+  const words = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "-R" || argv[i] === "--repo") i += 1;
+    else if (!argv[i].startsWith("-")) words.push(argv[i]);
+  }
+  const help = argv.some((a) => a === "--help" || a === "-h");
+  return { words, create: !help && words[0] === "pr" && words[1] === "create" };
+}
+
+// Fixture gh: logs every call as its argv, with the branch and the foreman-* worktrees present
+// when it ran, and can fail the first `pr create`. Nothing reaches the network.
+const SHIM = `#!/usr/bin/env node
+const { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+const ghCommand = ${ghCommand.toString()};
+const d = path.join(__dirname, "..");
+const argv = process.argv.slice(2);
+const seqFile = path.join(d, "seq");
+const seq = Number(existsSync(seqFile) ? readFileSync(seqFile, "utf8") : 0) + 1;
+writeFileSync(seqFile, String(seq));
+const git = (...args) => spawnSync("git", args, { encoding: "utf8" }).stdout ?? "";
+const branch = git("rev-parse", "--abbrev-ref", "HEAD").trim();
+const foremanWorktrees = git("worktree", "list", "--porcelain")
+  .split("\\n")
+  .filter((l) => /^worktree .*\\/foreman-[^/]*$/.test(l)).length;
+const { create } = ghCommand(argv);
+const failFirst = path.join(d, "fail-first-pr");
+const ok = !(create && existsSync(failFirst));
+appendFileSync(path.join(d, "gh-calls.jsonl"), JSON.stringify({ seq, argv, create, branch, foremanWorktrees, ok }) + "\\n");
+if (!ok) {
+  rmSync(failFirst);
+  process.stderr.write("gh: could not create the pull request (fixture failure)\\n");
+  process.exit(1);
+}
+if (create) process.stdout.write("https://example.test/acme/demo/pull/1\\n");
 `;
+
+// The fixture a case asks for.
+export const fixtureFor = (caseDef) => createFixture({ failFirstPr: caseDef.fixture?.fail_first_pr === true });
+
+// The git repos every fixture starts from, built once per process and copied: building them
+// takes six git processes, copying them none.
+let template;
+function repos() {
+  if (template) return template;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-template-"));
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !DROPPED.test(k))), ...GIT_ENV, HOME: dir };
+  const gitOk = (args, cwd = path.join(dir, "home")) => {
+    const r = spawnSync("git", args, { cwd, env, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`fixture git ${args.join(" ")}: ${r.stderr}`);
+  };
+  gitOk(["init", "-q", "--bare", "-b", "main", path.join(dir, "origin.git")], dir);
+  gitOk(["clone", "-q", path.join(dir, "origin.git"), "home"], dir);
+  writeFileSync(path.join(dir, "home", "README.md"), "# demo\n");
+  gitOk(["add", "."]);
+  gitOk(["commit", "-q", "-m", "init"]);
+  gitOk(["push", "-q", "-u", "origin", "HEAD:main"]);
+  gitOk(["init", "-q", "-b", "main", path.join(dir, "user", "code", "demo")], dir);
+  template = dir;
+  return dir;
+}
+
+const GIT_ENV = {
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_AUTHOR_NAME: "fixture",
+  GIT_AUTHOR_EMAIL: "fixture@example.test",
+  GIT_COMMITTER_NAME: "fixture",
+  GIT_COMMITTER_EMAIL: "fixture@example.test",
+};
 
 export async function createFixture({ failFirstPr = false } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-"));
@@ -88,8 +140,12 @@ export async function createFixture({ failFirstPr = false } = {}) {
 function build(root, failFirstPr) {
   const bin = path.join(root, "bin");
   const user = path.join(root, "user");
+  const home = path.join(root, "home");
+  const from = repos();
+  cpSync(from, root, { recursive: true });
+  const config = path.join(home, ".git", "config");
+  writeFileSync(config, readFileSync(config, "utf8").replaceAll(from, root));
   mkdirSync(bin);
-  mkdirSync(path.join(user, "code", "demo"), { recursive: true });
   writeFileSync(path.join(bin, "gh"), SHIM);
   chmodSync(path.join(bin, "gh"), 0o755);
   if (failFirstPr) writeFileSync(path.join(root, "fail-first-pr"), "");
@@ -99,29 +155,16 @@ function build(root, failFirstPr) {
     HOME: user,
     XDG_CONFIG_HOME: path.join(user, ".config"),
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_AUTHOR_NAME: "fixture",
-    GIT_AUTHOR_EMAIL: "fixture@example.test",
-    GIT_COMMITTER_NAME: "fixture",
-    GIT_COMMITTER_EMAIL: "fixture@example.test",
+    ...GIT_ENV,
     // What the real host gives the agent and asks it to pass as launched_by.
     CODESENSE_TAB_SESSION_ID: CONFIG.self,
   };
-  const home = path.join(root, "home");
   const git = (args, cwd = home) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
   const gitOk = (args, cwd) => {
     const r = git(args, cwd);
     if (r.status !== 0) throw new Error(`fixture git ${args.join(" ")}: ${r.stderr}`);
     return r.stdout;
   };
-  execFileSync("git", ["init", "--bare", "-b", "main", path.join(root, "origin.git")], { env, stdio: "ignore" });
-  gitOk(["clone", path.join(root, "origin.git"), home], root);
-  writeFileSync(path.join(home, "README.md"), "# demo\n");
-  gitOk(["add", "."]);
-  gitOk(["commit", "-m", "init"]);
-  gitOk(["push", "-u", "origin", "HEAD:main"]);
-  gitOk(["init", "-b", "main", path.join(user, "code", "demo")], root);
 
   const worktrees = () =>
     gitOk(["worktree", "list", "--porcelain"])
@@ -142,12 +185,11 @@ function build(root, failFirstPr) {
   const sessions = [];
   const turns = [];
   let turn = 0;
-  const logFile = path.join(root, "calls.jsonl");
 
   const fx = {
     root,
     env,
-    config: { ...CONFIG, repoPath: path.join(user, "code", "demo") },
+    config: { ...CONFIG },
     // The scripted human: opens the next turn.
     human(text) {
       turn += 1;
@@ -157,11 +199,10 @@ function build(root, failFirstPr) {
     // A tool call the agent under test makes. The fixture host answers the few that matter.
     // `codesense_call_tool` is unwrapped, so graders see the tool it proxies.
     tool(caller, name, args = {}) {
-      const via = name === "codesense_call_tool" ? { via: name } : {};
-      const tool = via.via ? String(args?.name ?? "") : name;
-      const record = { seq: nextSeq(), turn, caller, tool, args: canonical(via.via ? args?.arguments : args), ...via };
+      const proxied = name === "codesense_call_tool";
+      const tool = proxied ? String(args?.name ?? "") : name;
+      const record = { seq: nextSeq(), turn, caller, tool, args: canonical(proxied ? args?.arguments : args), ...(proxied && { via: name }) };
       calls.push(record);
-      appendFileSync(logFile, `${JSON.stringify(record)}\n`);
       if (tool === "open_workspace") {
         // The caller is the launcher; the agent's own launched_by argument is kept beside it.
         const { launched_by: launchedByArg, ...rest } = record.args;
@@ -177,7 +218,7 @@ function build(root, failFirstPr) {
       return fx.tool("foreman", "reply", { text });
     },
     gh: (args, cwd = home) => spawnSync("gh", args, { cwd, env, encoding: "utf8" }),
-    git: (args, cwd) => git(args, cwd),
+    git,
     state() {
       const ghFile = path.join(root, "gh-calls.jsonl");
       const ghCalls = existsSync(ghFile)
