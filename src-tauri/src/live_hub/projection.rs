@@ -634,9 +634,17 @@ impl TopicRegistry {
             subscription.owner = Some(owner.into());
         }
     }
-    pub fn drop_owner(&mut self, owner: &str) {
-        self.subscriptions
-            .retain(|_, s| s.owner.as_deref() != Some(owner));
+    /// Drop the subscriptions `owner` holds; the (topic, view key) each of them followed.
+    pub fn drop_owner(&mut self, owner: &str) -> Vec<(String, String)> {
+        let mut gone: Vec<(String, String)> = Vec::new();
+        self.subscriptions.retain(|_, s| {
+            let kept = s.owner.as_deref() != Some(owner);
+            if !kept {
+                Vec::push(&mut gone, (s.topic.clone(), s.key.clone()));
+            }
+            kept
+        });
+        gone
     }
     pub fn has_view_subscribers(&self, topic: &str, key: &str) -> bool {
         self.subscriptions
