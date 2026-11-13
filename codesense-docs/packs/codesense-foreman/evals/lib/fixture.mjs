@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 export const CONFIG = { team: "acme", sprintLeadAgent: "sprint-lead-claude", repo: "~/code/demo" };
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // Standalone registry check: `node check-registry.mjs [--variants f] [--pack f] [--reports dir]`.
+import console from "node:console";
+import process from "node:process";
 import { checkRegistry } from "./lib/registry.mjs";
 
 const args = process.argv.slice(2);

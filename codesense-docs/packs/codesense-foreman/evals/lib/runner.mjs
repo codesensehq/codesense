@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Runs each case k times in fresh fixtures, grades it and writes the report. Drivers are
 // pluggable: the stubs run in CI at $0; the real model driver belongs to the recorded-runs task.
+import console from "node:console";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
 import { createFixture } from "./fixture.mjs";

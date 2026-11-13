@@ -2,7 +2,7 @@
 // The registry check: every row's `eval` must equal what the reports for its key say (a hand edit
 // fails), and a `passed` row must carry the spec_hash the pack was built with.
 // Standalone until the pack builder exists; the build runs it once there is one.
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
