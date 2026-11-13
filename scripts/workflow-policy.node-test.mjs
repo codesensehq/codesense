@@ -972,7 +972,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
   const red = workflow.jobs["rust-macos"].steps.find(
     (step) => step.name === "Summarize a red run on main",
   );
-  assert.equal(red.if, "failure() && github.ref == 'refs/heads/main'");
+  assert.equal(red.if, "(failure() || cancelled()) && github.ref == 'refs/heads/main'");
   assert.equal(
     red.run,
     'node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"',

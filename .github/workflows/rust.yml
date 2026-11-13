@@ -217,13 +217,6 @@ jobs:
           path: target/nextest/ci/junit.xml
           retention-days: 7
           if-no-files-found: warn
-      - name: Summarize a red run on main
-        # Nothing blocks on this job, so a red run on main says what failed in the job summary for
-        # the hardening pass: the run link and each failed test. Read-only: no issue is written.
-        if: failure() && github.ref == 'refs/heads/main'
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
       - name: Check tracked files are unchanged
         if: success() || failure()
         run: git diff --exit-code 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/tracked-files.log"
@@ -235,6 +228,14 @@ jobs:
           path: ${{ runner.temp }}/rust-ci-logs/
           retention-days: 7
           if-no-files-found: warn
+      - name: Summarize a red run on main
+        # Nothing blocks on this job, so a red run on main says what failed in the job summary for
+        # the hardening pass: the run link and each failed test. Read-only: no issue is written.
+        # Last, so a red tracked-files check or a timeout (cancelled) still gets a summary.
+        if: (failure() || cancelled()) && github.ref == 'refs/heads/main'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
 
   rust-linux:
     name: Rust (Linux)
