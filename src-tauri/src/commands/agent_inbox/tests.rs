@@ -5801,7 +5801,10 @@ async fn archive_and_restore_refresh_the_threads_that_pin_the_messages() {
     mark_archived_many_by_human(&*host, &team, ids.clone())
         .await
         .unwrap();
-    assert_eq!(fake.pin_events(), vec![("default".to_string(), thread.clone())]);
+    assert_eq!(
+        fake.pin_events(),
+        vec![("default".to_string(), thread.clone())]
+    );
     unarchive_many_by_human(&*host, &team, ids, vec![])
         .await
         .unwrap();

@@ -158,11 +158,10 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
         "reorderPins" => args["messageIds"]
             .as_array()
             .map(|pins| format!("{} pins", pins.len())),
-        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" => {
-            args["messageId"]
-                .as_number()
-                .map(|id| format!("message {id}"))
-        }
+        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" => args
+            ["messageId"]
+            .as_number()
+            .map(|id| format!("message {id}")),
         "archive" | "unarchive" | "markRead" | "markUnread" => args["messageIds"]
             .as_array()
             .map(|messages| format!("{} messages", messages.len())),

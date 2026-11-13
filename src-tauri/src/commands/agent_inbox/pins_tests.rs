@@ -288,8 +288,11 @@ async fn an_agent_sends_a_preview_with_its_pin_and_a_fourth_pin_is_refused() {
     let fourth = pin_request(&*fake, Some("S1"), views[3], None, None, false)
         .await
         .unwrap();
+    // The refusal says which pins the thread holds, so the agent can pick one to unpin.
+    let held = format!("Pinned now: {} (QA), {}, {}", views[0], views[1], views[2]);
     assert!(
-        matches!(&fourth, PinResult::Invalid { message } if message.contains("at most 3")),
+        matches!(&fourth, PinResult::Invalid { message }
+            if message.contains("at most 3") && message.contains(&held)),
         "{fourth:?}"
     );
     let bad = pin_request(

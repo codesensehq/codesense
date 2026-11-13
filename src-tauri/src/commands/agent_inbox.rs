@@ -1729,6 +1729,12 @@ pub(crate) enum ReactResult {
     Invalid { message: String },
 }
 
+/// Whether `who` may act on message `m` as a party to it: the mail is the team's role mail,
+/// or `who` sent it, received it, or is the address it replies to.
+pub(crate) fn is_party(m: &inbox::InboxMessage, who: &str) -> bool {
+    m.role.is_some() || m.from == who || m.to == who || m.reply_to.as_deref() == Some(who)
+}
+
 /// React as `reactor` to message `message_id` in the store at `own`. A caller that is a
 /// session (`party`) reacts only to mail it sent, received or is the reply target of, or
 /// to a role queue; the human's pane reacts to anything it shows.
@@ -1745,13 +1751,7 @@ async fn react_in(
     let emoji = emoji.to_string();
     let stored = with_store("react", path, move |store| {
         if party {
-            let held = inbox::inbox_get(store, message_id)?.is_some_and(|m| {
-                m.role.is_some()
-                    || m.from == reactor
-                    || m.to == reactor
-                    || m.reply_to.as_deref() == Some(reactor.as_str())
-            });
-            if !held {
+            if !inbox::inbox_get(store, message_id)?.is_some_and(|m| is_party(&m, &reactor)) {
                 return Ok(Err(format!("no message {message_id}")));
             }
         }
