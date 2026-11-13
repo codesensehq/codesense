@@ -122,4 +122,17 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     );
     expect(h.review).not.toHaveBeenCalled();
   });
+
+  it("a side that can't be read shows the error, not the whole file as inserted", async () => {
+    h.readFile.mockImplementation((p: string) =>
+      p.startsWith("/team/")
+        ? Promise.reject(new Error("permission denied"))
+        : Promise.resolve("mine"),
+    );
+    render(<TeamEditDiffDialog workspace={workspace} file={edit("a.ts")} onClose={() => {}} />);
+    expect(await screen.findByTestId("team-edit-diff-code-error")).toHaveTextContent(
+      "permission denied",
+    );
+    expect(h.review).not.toHaveBeenCalled();
+  });
 });

@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
-import { renderFileDiff } from "@/shared/lib/render-file-diff";
+import { renderFileDiff, type FileDiffState } from "@/shared/lib/render-file-diff";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import {
   readFile,
@@ -60,6 +60,15 @@ function readWorkspaceSide(ws: TeamFileEditsWorkspace, file: TeamFileEdit): Prom
 
 function sideText(side: Side | null): string {
   return side && "text" in side ? side.text : "";
+}
+
+/** What the diff body shows: an unreadable side is an error (not the whole
+ *  file inserted or deleted), a binary side the binary note. */
+function diffState(team: Side, mine: Side): FileDiffState {
+  const failed = "error" in team ? team : "error" in mine ? mine : null;
+  if (failed) return { kind: "error", message: failed.error };
+  if ("binary" in team || "binary" in mine) return { kind: "binary" };
+  return { kind: "ready" };
 }
 
 /** The comparison's status: the team side missing reads as added here, the
@@ -193,8 +202,7 @@ export function TeamEditDiffDialog({
                   beforeLabel: teamLabel,
                   afterLabel: mineLabel,
                 },
-                state:
-                  "binary" in team || "binary" in mine ? { kind: "binary" } : { kind: "ready" },
+                state: diffState(team, mine),
                 prefs: {
                   modes,
                   onModeChange: setMode,
