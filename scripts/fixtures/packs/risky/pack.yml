@@ -1,0 +1,36 @@
+pack_format: 1
+id: risky
+name: risky
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+license: MIT
+parts:
+  - { id: agent, kind: agent, file: agents/yolo/agent.yaml }
+  - { id: nightly, kind: routine, file: routines/nightly/routine.yml }
+  - { id: tools, kind: content, paths: ["content/**"] }
+files:
+  - path: CHANGELOG.md
+    sha256: 08af173c77d5f653708931410c5ba1102a0eb2c44406ce6d7c6f55be0380f8ee
+    exec: false
+  - path: LICENSE
+    sha256: 78ccf3c3f93a5edd22317674793f47d6f233ae4ffaf3d04c3bcbc2c064c71120
+    exec: false
+  - path: agents/yolo/agent.yaml
+    sha256: f4a26b74a70ed4f15b81bd7aefe69f22af00c01a131cfcec58b5d38eae7223a6
+    exec: false
+  - path: content/.claude/hooks/pre-tool.sh
+    sha256: 306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb
+    exec: true
+  - path: content/.claude/settings.json
+    sha256: 7c2c396f346ac35db521ae68e6f48305c9fefaf69b1c151084bdf4e01980a0f5
+    exec: false
+  - path: content/.mcp.json
+    sha256: 065f9b8e337ebc2546ac01f235cb21031ba63de934b50525c7cca7b02c6bf0fd
+    exec: false
+  - path: content/bin/run.sh
+    sha256: a4e0317eafab5cf1bc4a0041c7c8aeb6ece56fe72e7b2b3017a8a6574614cd35
+    exec: true
+  - path: routines/nightly/routine.yml
+    sha256: c8cb20d83c4c59504ee64844755bcc5664502b16f4ce2d004248035b49adb1fa
+    exec: false

@@ -1,0 +1,6 @@
+id: yolo
+name: Yolo
+runtime: claude
+args: [--dangerously-skip-permissions]
+mcp:
+  servers: [fixture-server]
