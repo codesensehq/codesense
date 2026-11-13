@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { InboxRole } from "./inbox-role";
 import {
   AlertTriangle,
@@ -12,6 +12,8 @@ import {
   ImageOff,
   List,
   MessageSquare,
+  Pause,
+  Play,
   Reply,
   RotateCw,
   Terminal,
@@ -22,9 +24,19 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { isLiveInboxMessage } from "@/features/weft/lib/live-inbox-message";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { InboxLens } from "@/features/viewer/stores/agent-inbox-rail-store";
-import { loadInboxMedia, readInboxMedia, type InboxMediaAttachment } from "@/tauri/commands";
+import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
+import { usePrefersReducedMotion } from "@/shared/lib/use-prefers-reduced-motion";
+import { useOrgStore } from "@/shared/stores/org-store";
+import {
+  bridgeResolveOpenTarget,
+  loadInboxMedia,
+  readInboxMedia,
+  type InboxMediaAttachment,
+} from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
+import { acquireMediaUrl } from "../lib/media-urls";
 import {
   dotClass,
   formatClock,
@@ -289,8 +301,9 @@ export function GoButton({
 
 /**
  * A message body: terminal-typed text verbatim, anything else through the shared renderer.
- * A message with an image shows it under its text (the caption), and a message naming a file
- * ends with its Open chip, as the Inbox pane shows them.
+ * A message with an image shows it under its text, which renders as a markdown caption
+ * whatever its content type, and a message naming a file ends with its Open chip, as the
+ * Inbox pane shows them.
  * `liveDashboards`: where the human reads their own conversations (the docked panel and the
  * rollup's conversation), an agent's HTML to the human is a live dashboard whose buttons and
  * forms answer it, as the old conversation view rendered it. Everywhere else (a tab's inbox,
@@ -316,8 +329,10 @@ export function MessageBody({
   const media = m.attachments?.[0];
   return (
     <>
-      {(!media || m.text.trim()) && (
+      {!media ? (
         <InboxMessageContent text={m.text} contentType={m.contentType} live={live} />
+      ) : (
+        m.text.trim() && <InboxMessageContent text={m.text} contentType="markdown" />
       )}
       {media && <MessageMedia m={m} a={media} />}
       {capTarget && (
@@ -341,6 +356,9 @@ export function MessageBody({
 /** "GIF" for a GIF or WebP (or an unknown type), else "Image", as the pane names media. */
 const mediaKind = (a: InboxMediaAttachment) =>
   !a.mime || /gif|webp/.test(a.mime) ? "GIF" : "Image";
+
+/** Whether an image may move: a GIF or WebP, the types the pane gives a Play button. */
+const isAnimated = (a: InboxMediaAttachment) => /gif|webp/.test(a.mime || "");
 
 const FAILURE_REASONS: Record<string, string> = {
   size: "The file is over 8 MB.",
@@ -375,7 +393,8 @@ function MessageMedia({ m, a }: { m: ConversationMessage; a: InboxMediaAttachmen
 }
 
 /** A cached image as an object URL, read through the app (the window can't reach
- *  `/media/v1`); `failed` when it can't be read. The URL is revoked on unmount. */
+ *  `/media/v1`) and shared with every other view of the same image; `failed` when it
+ *  can't be read. The view's hold is released on unmount. */
 function useInboxImage(m: ConversationMessage, sha256: string) {
   const [image, setImage] = useState<{ url: string | null; failed: boolean }>({
     url: null,
@@ -384,13 +403,10 @@ function useInboxImage(m: ConversationMessage, sha256: string) {
   const { org, team } = m.team;
   useEffect(() => {
     let live = true;
-    let url: string | null = null;
-    readInboxMedia({ org, team }, m.id, sha256).then(
-      ({ mime, base64 }) => {
-        if (!live) return;
-        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        url = URL.createObjectURL(new Blob([bytes], { type: mime }));
-        setImage({ url, failed: false });
+    const hold = acquireMediaUrl(sha256, () => readInboxMedia({ org, team }, m.id, sha256));
+    hold.url.then(
+      (url) => {
+        if (live) setImage({ url, failed: false });
       },
       () => {
         if (live) setImage({ url: null, failed: true });
@@ -398,10 +414,57 @@ function useInboxImage(m: ConversationMessage, sha256: string) {
     );
     return () => {
       live = false;
-      if (url) URL.revokeObjectURL(url);
+      hold.release();
     };
   }, [org, team, m.id, sha256]);
   return image;
+}
+
+/** The pane's Reduce Motion rule for an animated image: with the OS setting on it shows a
+ *  still first frame and a Play button, pressing Play is the only thing that starts it, and
+ *  it pauses again once scrolled off-screen or when the setting turns on. With the setting
+ *  off it plays on its own. */
+function useStillFrame(
+  animated: boolean,
+  loaded: boolean,
+  refs: {
+    figure: React.RefObject<HTMLElement | null>;
+    image: React.RefObject<HTMLImageElement | null>;
+    canvas: React.RefObject<HTMLCanvasElement | null>;
+  },
+) {
+  const reduced = usePrefersReducedMotion() && animated;
+  const [playing, setPlaying] = useState(false);
+  const [wasReduced, setWasReduced] = useState(reduced);
+  if (wasReduced !== reduced) {
+    setWasReduced(reduced);
+    setPlaying(false);
+  }
+  const { figure, image, canvas } = refs;
+  useEffect(() => {
+    const still = canvas.current;
+    if (!reduced || !loaded || !image.current || !still) return;
+    try {
+      still.getContext("2d")?.drawImage(image.current, 0, 0, still.width, still.height);
+    } catch {
+      // An undecodable frame leaves the canvas blank; Play still shows the image.
+    }
+  }, [reduced, loaded, image, canvas]);
+  useEffect(() => {
+    const node = figure.current;
+    if (!reduced || !playing || !node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => !e.isIntersecting)) setPlaying(false);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [reduced, playing, figure]);
+  return {
+    /** Showing the still frame in place of the image. */
+    still: reduced && loaded && !playing,
+    /** The Play/Pause control, when the image has one. */
+    control: reduced && loaded ? { playing, toggle: () => setPlaying((p) => !p) } : null,
+  };
 }
 
 /** A figure at the image's stored aspect ratio, so the thread never jumps while it loads. */
@@ -421,10 +484,16 @@ function MediaFigure({
   const unavailable = failed || broken;
   const w = a.width || 480;
   const h = a.height || 270;
+  const figure = useRef<HTMLElement>(null);
+  const image = useRef<HTMLImageElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const motion = useStillFrame(isAnimated(a), loaded, { figure, image, canvas });
+  const scale = Math.min(1, 2048 / w, 2048 / h);
   const content = (
     <>
       {url && (
         <img
+          ref={image}
           className="ibx-media-img"
           src={url}
           alt={a.alt}
@@ -432,6 +501,15 @@ function MediaFigure({
           height={h}
           onLoad={() => setLoaded(true)}
           onError={() => setBroken(true)}
+        />
+      )}
+      {motion.control && (
+        <canvas
+          ref={canvas}
+          className="ibx-media-still"
+          width={Math.max(1, Math.floor(w * scale))}
+          height={Math.max(1, Math.floor(h * scale))}
+          aria-hidden="true"
         />
       )}
       {!loaded && (
@@ -443,7 +521,8 @@ function MediaFigure({
   );
   return (
     <figure
-      className={`ibx-media${unavailable ? " unavailable" : loaded ? "" : " loading"}`}
+      ref={figure}
+      className={`ibx-media${unavailable ? " unavailable" : loaded ? "" : " loading"}${motion.still ? " still" : ""}`}
       style={{ "--w": w, "--h": h } as React.CSSProperties}
       aria-busy={!loaded && !unavailable}
     >
@@ -459,6 +538,17 @@ function MediaFigure({
         </button>
       ) : (
         <div className="ibx-media-open">{content}</div>
+      )}
+      {motion.control && (
+        <button
+          type="button"
+          className="ibx-media-play"
+          aria-pressed={motion.control.playing}
+          aria-label={motion.control.playing ? "Pause GIF" : "Play GIF"}
+          onClick={motion.control.toggle}
+        >
+          <Ico icon={motion.control.playing ? Pause : Play} sm />
+        </button>
       )}
     </figure>
   );
@@ -581,17 +671,25 @@ function MediaCard({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }
 }
 
 /** The file a message names (its primary file, else its open-file click) as a chip that opens
- *  it in a viewer tab through the bridge's `openFile`, the Inbox pane's chip's action. */
+ *  it in a viewer tab. The path is resolved inside the message's team, as the Inbox pane's
+ *  chip resolves it, and opened as the person's own open (it may switch team). */
 export function OpenFileChip({ m }: { m: ConversationMessage }) {
   const [error, setError] = useState<string | null>(null);
   const file = m.primaryFile || (m.onClick?.type === "open-file" ? m.onClick.path : null);
   if (!file) return null;
   const open = () => {
     setError(null);
-    void import("@/features/dashboard/components/html-bridge")
-      .then(({ HTML_BRIDGE_ALLOWLIST }) =>
-        HTML_BRIDGE_ALLOWLIST.openFile!({ ...m.team, path: file }),
-      )
+    const { org, team } = m.team;
+    const known = useOrgStore
+      .getState()
+      .orgs.find((o) => o.slug === org && o.teams.some((t) => t.name === team));
+    if (!known) {
+      setError("unavailable: unknown synced team");
+      return;
+    }
+    const page = `${pathToTeamContentDirSync(known.org_root, team)}/inbox.html`;
+    bridgeResolveOpenTarget(page, file, team)
+      .then((target) => openFileInTeam(target))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
   return (

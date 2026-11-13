@@ -5795,19 +5795,19 @@ fn gif_attachment(state: &str) -> crate::media::Attachment {
 
 #[tokio::test]
 async fn read_media_returns_a_cached_image_the_message_carries() {
-    use base64::Engine as _;
     let fake = FakeHost::new();
-    let id = media_message(&fake, "default", gif_attachment("cached"));
+    // The record claims PNG; the type served is the one the bytes show.
+    let mut attachment = gif_attachment("cached");
+    attachment.mime = Some("image/png".into());
+    let id = media_message(&fake, "default", attachment);
     let got = read_media(&port(&fake), launch_team("default"), id, gif_sha())
         .await
         .unwrap();
     assert_eq!(got.mime, "image/gif");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD
-            .decode(got.base64)
-            .unwrap(),
-        GIF
-    );
+    assert_eq!(got.bytes, GIF);
+    let mut frame = b"image/gif\n".to_vec();
+    frame.extend_from_slice(GIF);
+    assert_eq!(got.into_frame(), frame);
 }
 
 #[tokio::test]

@@ -367,6 +367,12 @@ pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
         return Err("invalid media hash".into());
     }
     let path = dir.join(sha);
+    // Only a regular file within the fetch cap: the cache is app-owned, but the read
+    // path stays bounded whatever sits under the hash name.
+    let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
+        return Err("media unavailable".into());
+    }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
         let _ =

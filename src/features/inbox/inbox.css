@@ -1878,6 +1878,38 @@ button.ibx-media-open {
 .ibx-media.unavailable .ibx-media-img {
   visibility: hidden;
 }
+/* Reduce Motion: an animated image shows its still first frame until Play is pressed. */
+.ibx-media-still {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ibx-media.still .ibx-media-img {
+  display: none;
+}
+.ibx-media.still .ibx-media-still {
+  display: block;
+}
+.ibx-media-play {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ibx-bg) 92%, transparent);
+  box-shadow:
+    0 0 0 1px var(--ibx-border),
+    0 1px 2px var(--ibx-shadow);
+  color: var(--ibx-fg);
+}
+.ibx-media-play:hover {
+  background: var(--ibx-bg);
+}
 .ibx-media.loading {
   box-shadow: inset 0 0 0 1px var(--ibx-border);
 }
