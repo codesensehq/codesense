@@ -80,10 +80,7 @@ test("the root prompt is the spec, under 1.5k tokens, passed as the agent's syst
 test("the agent allows exactly the Foreman's tools and refuses the rest", () => {
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
-    assert.ok(
-      /^(mcp__codesense__|Bash\(|Edit\(\.\.\/foreman-|Write\(\.\.\/foreman-)/.test(rule),
-      rule,
-    );
+    assert.ok(/^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule), rule);
   }
   const tools = allow.filter((rule) => rule.startsWith("mcp__")).sort();
   assert.deepEqual(tools, TOOLS.map(mcp).sort());
@@ -150,63 +147,98 @@ test("edits are denied in the home worktree and allowed in a foreman-* worktree,
   }
 });
 
-// A Claude Bash rule: `prefix:*` matches the prefix alone or followed by arguments; any other
-// `*` matches any run of characters, spaces and slashes included.
+// Claude's Bash rules: `prefix:*` is a literal prefix (its other `*` stays literal);
+// otherwise any `*` matches any run of characters, spaces included, and one trailing ` *`
+// may match nothing; otherwise the rule is exact.
 function bashMatches(rule, command) {
   const m = /^Bash\((.*)\)$/.exec(rule);
   if (!m) return false;
-  const prefix = m[1].endsWith(":*");
-  const body = (prefix ? m[1].slice(0, -2) : m[1])
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*");
-  return new RegExp(`^${body}${prefix ? "( .*)?" : ""}$`, "s").test(command);
+  const body = m[1];
+  const cmd = command.trim();
+  const prefix = /^(.+):\*$/.exec(body);
+  if (prefix) return cmd === prefix[1] || cmd.startsWith(`${prefix[1]} `);
+  if (!body.includes("*")) return cmd === body;
+  const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const optionalTail = body.endsWith(" *");
+  const core = optionalTail ? body.slice(0, -2) : body;
+  const re = core.split("*").map(escape).join(".*") + (optionalTail ? "( .*)?" : "");
+  return new RegExp(`^${re}$`, "s").test(cmd);
 }
 const runs = (command) =>
   allow.some((rule) => bashMatches(rule, command)) &&
   !deny.some((rule) => bashMatches(rule, command));
 
+test("no Bash rule ends in :*, which Claude reads as a literal prefix", () => {
+  for (const rule of [...allow, ...deny].filter((r) => r.startsWith("Bash("))) {
+    assert.ok(!rule.endsWith(":*)"), rule);
+  }
+});
+
 test("git and gh run only in the home update, foreman-* worktrees and foreman/* branches", () => {
   const wt = "../foreman-fix-docs-9f2a";
+  const branch = "foreman/fix-docs-9f2a";
   for (const command of [
     "git fetch",
     "git fetch origin",
     "git merge --ff-only origin/main",
-    "git merge --ff-only main",
     "git worktree list",
-    `git worktree add -b foreman/fix-docs ${wt} origin/main`,
+    `git worktree add -b ${branch} ${wt} origin/main`,
+    "git worktree add -b foreman/a.b-1f2e ../foreman-a.b-1f2e main",
     `git -C ${wt} status`,
+    `git -C ${wt} diff`,
     `git -C ${wt} diff stories/a.md`,
-    `git -C ${wt} add stories/a.md`,
-    `git -C ${wt} commit -s -m "Add the docs story"`,
-    `git -C ${wt} push -u origin foreman/fix-docs`,
-    "gh pr create --fill",
+    `git -C ${wt} log --oneline -5`,
+    `git -C ${wt} add stories/a.md stories/b.md`,
+    `git -C ${wt} commit -s -F ${wt}.msg`,
+    `git -C ${wt} push -u origin ${branch}`,
+    `gh pr create --head ${branch} --title "Add the docs story" --body "Adds a + b: see stories/a.md -f"`,
     `git worktree remove ${wt}`,
   ]) {
     assert.ok(runs(command), `runs: ${command}`);
   }
   for (const command of [
-    `git -C ${wt} push -u origin foreman/x:main`,
-    `git -C ${wt} push -u origin foreman/x :main`,
-    `git -C ${wt} push -u origin foreman/x:refs/heads/main`,
-    `git -C ${wt} push -u origin foreman/x +HEAD:foreman/y`,
-    `git -C ${wt} push -u origin foreman/x --force`,
-    `git -C ${wt} push -u origin foreman/x -f`,
-    `git -C ${wt} push -u origin foreman/x --delete`,
-    `git -C ${wt} push -u origin foreman/x --mirror`,
+    // Another subcommand or another repo slipped in before an allowed word.
+    `git -C ${wt} config core.hooksPath /tmp/h status`,
+    `git -C ${wt} reset --hard origin/main log`,
+    `git -C ${wt} -C ../home commit -s -F ${wt}.msg`,
+    `git -C ${wt} --git-dir=../home/.git add a`,
+    `git -C ${wt} -c core.hooksPath=/tmp/h commit -s -F ${wt}.msg`,
     `git -C ${wt}/../home add README.md`,
-    `git -C ${wt} reset --hard`,
-    `git -C ${wt} -c core.hooksPath=/tmp/h commit -s -m x`,
-    `git -C ${wt} config alias.x "!sh"`,
+    // Any other ref, force or extra refspec on push.
+    `git -C ${wt} push -u origin ${branch} main`,
+    `git -C ${wt} push -u origin ${branch} -d main`,
+    `git -C ${wt} push -u origin ${branch}:main`,
+    `git -C ${wt} push -u origin ${branch}:refs/heads/main`,
+    `git -C ${wt} push -u origin +${branch}`,
+    `git -C ${wt} push -u origin ${branch} --force`,
+    `git -C ${wt} push -u origin ${branch} --all`,
+    `git -C ${wt} push -u origin ${branch} --no-verify`,
     "git push origin main",
+    // Writes, hooks and history through allowed commands.
+    `git -C ${wt} diff --output=../home/CLAUDE.md`,
+    `git -C ${wt} log --output=/tmp/x`,
+    `git -C ${wt} diff --ext-diff`,
+    `git -C ${wt} commit -s -F ${wt}.msg --no-verify`,
+    `git -C ${wt} commit -s -F ${wt}.msg --amend`,
+    `git -C ${wt} commit -s -F ${wt}.msg --author=x`,
+    `git -C ${wt} commit -s -m "x"`,
+    // Home, other worktrees, fetch and merge forms.
     "git merge --ff-only foreman/x",
+    "git merge --ff-only main",
     "git fetch --upload-pack=/tmp/x origin",
     "git worktree remove ../story-lead-worktree",
+    `git worktree remove ${wt} ../story-lead-worktree`,
     `git worktree remove --force ${wt}`,
-    `git worktree remove -f ${wt}`,
-    `git worktree add -b foreman/x ${wt}/../home origin/main`,
-    `${wt}/stories/next-id.sh`,
+    `git worktree add -b ${branch} ${wt} origin/main ../home`,
+    `git worktree add -b ${branch} -f ${wt} origin/main`,
+    // gh beyond one pull request from a foreman branch.
+    `gh pr create --head ${branch} --repo other/repo --title t --body b`,
+    `gh pr create --head ${branch} --title t --body-file /etc/hosts`,
+    `gh pr create --head ${branch} --title t --body b --web`,
+    "gh pr create --fill",
     "gh pr merge 1",
     "gh api repos/x/y",
+    `${wt}/stories/next-id.sh`,
     "rm -rf ../home",
   ]) {
     assert.ok(!runs(command), `refused: ${command}`);

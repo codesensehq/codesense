@@ -30,9 +30,9 @@ args:
 
     ## Where you work
 
-    Your working directory is your home worktree, and it only updates. At each wake run `git fetch`, then `git merge --ff-only origin/main` (or `main` when there is no remote). If that fails, never reset, commit or merge: say once "Working from <sha>, couldn't update: <reason>" and retry at the next wake.
+    Your working directory is your home worktree, and it only updates. At each wake run `git fetch`, then `git merge --ff-only origin/main`. If that fails, never reset, commit or merge: say once "Working from <sha>, couldn't update: <reason>" and retry at the next wake. With no remote, skip both.
 
-    Edit only in a new worktree beside home, named `foreman-<slug>-<4 hex>`: `git worktree add -b foreman/<slug> ../foreman-<slug>-<4 hex> origin/main`. There use `git -C <that path>` with `status`, `diff`, `log`, `add` and `commit -s -m`, push with `push -u origin foreman/<slug>`, and open the pull request with `gh pr create`. These exact forms are all you may run; force, delete and any other ref are refused. When you are done, remove the worktree with plain `git worktree remove <that path>`.
+    Edit only in a new worktree beside home, named `foreman-<slug>-<4 hex>` (`<wt>` below) on branch `foreman/<slug>-<4 hex>` (`<branch>`): `git worktree add -b <branch> ../<wt> origin/main` (`main` with no remote). In it use `git -C ../<wt>` with `status`, `diff`, `log` or `add <paths>`. To commit, write the message to `../<wt>.msg`, then `git -C ../<wt> commit -s -F ../<wt>.msg`. Push with `git -C ../<wt> push -u origin <branch>` and open the pull request with `gh pr create --head <branch> --title "<title>" --body "<body>"`. With no remote, stop after the commit and tell the person the branch. These exact forms are all you may run; anything else is refused. When you are done, remove the worktree with plain `git worktree remove ../<wt>`; if it refuses, leave it and list it in your handoff.
 
     ## Read on demand
 
@@ -89,53 +89,90 @@ permissions:
       - mcp__codesense__signal_done
       - mcp__codesense__records_create
       - mcp__codesense__open_workspace
+      # Claude Bash rules: a `*` matches anything, spaces included, so every form below has
+      # a deny that refuses extra words, and no git command carries free text (a commit
+      # message comes from a file).
       # Home only fast-forwards.
       - Bash(git fetch)
       - Bash(git fetch origin)
       - Bash(git merge --ff-only origin/main)
-      - Bash(git merge --ff-only main)
-      # A foreman-* worktree beside home, on a foreman/* branch.
+      # A foreman-* worktree beside home, on a foreman/* branch of the same name.
       - Bash(git worktree list)
       - Bash(git worktree add -b foreman/* ../foreman-* origin/main)
       - Bash(git worktree add -b foreman/* ../foreman-* main)
       - Bash(git worktree remove ../foreman-*)
       - Bash(git -C ../foreman-* status)
-      - Bash(git -C ../foreman-* diff:*)
-      - Bash(git -C ../foreman-* log:*)
-      - Bash(git -C ../foreman-* add:*)
-      - Bash(git -C ../foreman-* commit -s -m:*)
+      - Bash(git -C ../foreman-* diff *)
+      - Bash(git -C ../foreman-* log *)
+      - Bash(git -C ../foreman-* add *)
+      - Bash(git -C ../foreman-* commit -s -F ../foreman-*.msg)
       - Bash(git -C ../foreman-* push -u origin foreman/*)
-      - Bash(gh pr create:*)
+      - Bash(gh pr create --head foreman/* --title * --body *)
+      - Read(../foreman-*/**)
       - Edit(../foreman-*/**)
       - Write(../foreman-*/**)
+      - Read(../foreman-*.msg)
+      - Write(../foreman-*.msg)
     deny:
       # The home worktree is read-only: it only fast-forwards.
       - Edit(./**)
       - Write(./**)
       - NotebookEdit(./**)
       # No git internals in a foreman-* worktree.
-      - Edit(../foreman-*/.git*)
-      - Write(../foreman-*/.git*)
-      # The allowed git forms, never stretched: no force, delete or mirror, no push to
-      # another ref, no path back out of a foreman-* worktree, no config or hooks override.
-      - Bash(*--force*)
-      - Bash(* -f *)
-      - Bash(* -f)
-      - Bash(*--delete*)
-      - Bash(*--mirror*)
+      - Edit(../foreman-*/.git)
+      - Edit(../foreman-*/.git/**)
+      - Write(../foreman-*/.git)
+      - Write(../foreman-*/.git/**)
+      # Nothing between the worktree and its one allowed subcommand, nothing after the
+      # pushed branch or the removed worktree, nothing more on a new worktree. (A trailing
+      # ` *` may match nothing, so these end in ` * *` to need one more word.)
+      - Bash(git -C ../foreman-* * status*)
+      - Bash(git -C ../foreman-* * diff*)
+      - Bash(git -C ../foreman-* * log*)
+      - Bash(git -C ../foreman-* * add*)
+      - Bash(git -C ../foreman-* * commit*)
+      - Bash(git -C ../foreman-* * push*)
+      - Bash(git -C ../foreman-* push -u origin foreman/* * *)
+      - Bash(git worktree remove ../foreman-* * *)
+      - Bash(git worktree add -b foreman/* * * * *)
+      # No other repo, ref, force, file output, hook skip or rewritten history.
+      - Bash(git -C * -C *)
+      - Bash(git -c *)
+      - Bash(git * -c *)
+      - Bash(*--git-dir*)
+      - Bash(*--work-tree*)
+      - Bash(*--namespace*)
+      - Bash(git *--force*)
+      - Bash(git * -f *)
+      - Bash(git * -f)
+      - Bash(git * -d *)
+      - Bash(git *--delete*)
+      - Bash(git *--mirror*)
+      - Bash(git *--all*)
+      - Bash(git *--tags*)
+      - Bash(git * +*)
+      - Bash(git *:main)
+      - Bash(git *:main *)
+      - Bash(git *:master)
+      - Bash(git *:master *)
+      - Bash(git *:refs/*)
+      - Bash(git *:HEAD*)
+      - Bash(*--output*)
+      - Bash(*--ext-diff*)
+      - Bash(*--textconv*)
       - Bash(*--upload-pack*)
       - Bash(*--receive-pack*)
       - Bash(*--exec*)
-      - Bash(*:main)
-      - Bash(*:main *)
-      - Bash(*:master)
-      - Bash(*:master *)
-      - Bash(*:refs/*)
-      - Bash(*:HEAD*)
-      - Bash(* +*)
+      - Bash(*--no-verify*)
+      - Bash(*--amend*)
+      - Bash(*--author*)
+      - Bash(*--no-gpg-sign*)
       - Bash(*/..*)
-      - Bash(git * -c *)
-      - Bash(git -c *)
+      - Bash(gh *--repo*)
+      - Bash(gh * -R *)
+      - Bash(gh *--body-file*)
+      - Bash(gh * -F *)
+      - Bash(gh *--web*)
       - mcp__codesense__schedule_wakeup
       - mcp__codesense__routine_create
       - mcp__codesense__run_in_terminal_tab
