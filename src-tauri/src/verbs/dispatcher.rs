@@ -126,6 +126,9 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
                         target["branch"].as_str()?
                     ))
                 }
+                "team-workspace" if target["name"].is_string() => {
+                    target["name"].as_str().map(str::to_owned)
+                }
                 "dir"
                     if target["path"]
                         .as_str()
@@ -254,6 +257,13 @@ fn check_capability(
         && !grant
             .iter()
             .any(|g| g == spec.required_capability(caller, args) && allowed(g))
+    {
+        return Err("denied: grant");
+    }
+    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds.
+    if spec.name == "openWorkspace"
+        && args["target"]["kind"] == "team-workspace"
+        && !grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
     {
         return Err("denied: grant");
     }

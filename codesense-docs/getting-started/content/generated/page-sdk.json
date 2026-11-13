@@ -3732,7 +3732,7 @@
     {
       "name": "openWorkspace",
       "owner": "VerbMethods",
-      "signature": "openWorkspace(args?: {\n      headed?: boolean;\n      initialPrompt?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\";\n        path?: string;\n        storyId?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "openWorkspace(args?: {\n      agent?: string;\n      headed?: boolean;\n      initialPrompt?: string;\n      mode?: string;\n      model?: string;\n      role?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        createWorktree?: boolean;\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\" | \"team-workspace\";\n        name?: string;\n        org?: string;\n        path?: string;\n        storyId?: string;\n        team?: string;\n        worktree?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "spawn · launch · confirmable · MCP twin open_workspace",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "spawn",
@@ -3742,10 +3742,22 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "agent": {
+            "type": "string"
+          },
           "headed": {
             "type": "boolean"
           },
           "initialPrompt": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "role": {
             "type": "string"
           },
           "sessionMode": {
@@ -3759,18 +3771,34 @@
           },
           "target": {
             "properties": {
+              "createWorktree": {
+                "type": "boolean"
+              },
               "kind": {
                 "enum": [
                   "story",
                   "epic",
                   "branch",
-                  "dir"
+                  "dir",
+                  "team-workspace"
                 ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
               },
               "path": {
                 "type": "string"
               },
               "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              },
+              "worktree": {
                 "type": "string"
               }
             },
@@ -9837,10 +9865,22 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "agent": {
+            "type": "string"
+          },
           "headed": {
             "type": "boolean"
           },
           "initialPrompt": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "role": {
             "type": "string"
           },
           "sessionMode": {
@@ -9854,18 +9894,34 @@
           },
           "target": {
             "properties": {
+              "createWorktree": {
+                "type": "boolean"
+              },
               "kind": {
                 "enum": [
                   "story",
                   "epic",
                   "branch",
-                  "dir"
+                  "dir",
+                  "team-workspace"
                 ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
               },
               "path": {
                 "type": "string"
               },
               "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              },
+              "worktree": {
                 "type": "string"
               }
             },
@@ -16605,7 +16661,7 @@
     {
       "verb": "openWorkspace",
       "tier": "spawn",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"headed\":{\"type\":\"boolean\"},\"initialPrompt\":{\"type\":\"string\"},\"sessionMode\":{\"enum\":[\"new\",\"focus\"]},\"storyId\":{\"type\":\"string\"},\"target\":{\"properties\":{\"kind\":{\"enum\":[\"story\",\"epic\",\"branch\",\"dir\"]},\"path\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"}},\"type\":\"object\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agent\":{\"type\":\"string\"},\"headed\":{\"type\":\"boolean\"},\"initialPrompt\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"sessionMode\":{\"enum\":[\"new\",\"focus\"]},\"storyId\":{\"type\":\"string\"},\"target\":{\"properties\":{\"createWorktree\":{\"type\":\"boolean\"},\"kind\":{\"enum\":[\"story\",\"epic\",\"branch\",\"dir\",\"team-workspace\"]},\"name\":{\"type\":\"string\"},\"org\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"},\"worktree\":{\"type\":\"string\"}},\"type\":\"object\"}},\"required\":[],\"type\":\"object\"}",
       "description": "spawn · launch · confirmable · MCP twin open_workspace",
       "denyExample": "denied: grant",
       "result": {
@@ -17074,8 +17130,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "c2be4a1745b3f88842fa4604412832c842e47b71f4849a9c04b0be7f5fe68234",
-    "src-tauri/src/verbs/registry.generated.json": "0ab74204fb59072abf617b9a183b64b6afc8486177d24152b8fab21b452dc49f",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "5e88fe636ca293f334eb8c66a91273daeb854bd638b4070cb6aea2e524f88953",
+    "src-tauri/src/verbs/registry.generated.json": "ba1bc7bf6e164acf36d362532e47b70b57f5e724f8e7d8e876c5fc1f1a042aee",
     "src-tauri/src/verbs/registry.rs": "f71ca9bb6b4264addbdb3a652efd7bb37e1dc88952f4de390bb78e89807ffbc4",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",

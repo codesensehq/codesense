@@ -2634,10 +2634,22 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "agent": {
+          "type": "string"
+        },
         "headed": {
           "type": "boolean"
         },
         "initialPrompt": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "role": {
           "type": "string"
         },
         "sessionMode": {
@@ -2651,18 +2663,34 @@
         },
         "target": {
           "properties": {
+            "createWorktree": {
+              "type": "boolean"
+            },
             "kind": {
               "enum": [
                 "story",
                 "epic",
                 "branch",
-                "dir"
+                "dir",
+                "team-workspace"
               ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
             },
             "path": {
               "type": "string"
             },
             "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            },
+            "worktree": {
               "type": "string"
             }
           },

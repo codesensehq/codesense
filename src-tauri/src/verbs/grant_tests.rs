@@ -351,3 +351,91 @@ fn inherited_updates_and_human_status_require_all_team_capability_for_the_resolv
         ));
     }
 }
+
+#[test]
+fn a_team_workspace_open_needs_the_foreman_launch_grant_beside_launch() {
+    let store = FrameStore::default();
+    let mut record = store.mint(
+        9321,
+        FrameGrant {
+            frame_id: String::new(),
+            principal: "human".into(),
+            dashboard: "board".into(),
+            slot: "right-pane".into(),
+            team: Some(crate::dashboard_stream::frame::FrameTeam {
+                org: "acme".into(),
+                team: "a".into(),
+            }),
+            scope: "team".into(),
+        },
+        "/ctx".into(),
+        "/ctx/board.html".into(),
+        "/ctx".into(),
+        FramePolicy::default(),
+        None,
+    );
+    let team_workspace = json!({"target":{"kind":"team-workspace","name":"foreman"}});
+    let story = json!({"target":{"kind":"story","storyId":"S-1"}});
+    // Every grantable capability, `launch` included, still refuses a team-workspace open.
+    record.effective_grant = capabilities::full();
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            team_workspace.clone(),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+    assert!(!matches!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            story.clone(),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny { .. }
+    ));
+    // The narrow grant admits it beside `launch`, and by itself admits no launch at all.
+    record.effective_grant = vec![foreman_launch::CAPABILITY.into()];
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            team_workspace.clone(),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+    record.effective_grant = vec!["launch".into(), foreman_launch::CAPABILITY.into()];
+    assert!(!matches!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            team_workspace,
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny { .. }
+    ));
+    record.effective_grant = vec![foreman_launch::CAPABILITY.into()];
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            story,
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+}
