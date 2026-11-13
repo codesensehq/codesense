@@ -470,6 +470,7 @@ fn production_mint_retains_source_identity_but_reads_as_child_host_and_isolates_
                 parent_frame: None,
                 builtin_team: None,
                 policy: Default::default(),
+                docs_root: None,
             },
         ))
         .unwrap()
