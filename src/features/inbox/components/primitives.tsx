@@ -354,12 +354,11 @@ export function MessageBody({
   );
 }
 
-/** "GIF" for a GIF or WebP (or an unknown type), else "Image", as the pane names media. */
-const mediaKind = (a: InboxMediaAttachment) =>
-  !a.mime || /gif|webp/.test(a.mime) ? "GIF" : "Image";
-
 /** Whether an image may move: a GIF or WebP, the types the pane gives a Play button. */
 const isAnimated = (a: InboxMediaAttachment) => /gif|webp/.test(a.mime || "");
+
+/** "GIF" for a GIF or WebP (or an unknown type), else "Image", as the pane names media. */
+const mediaKind = (a: InboxMediaAttachment) => (!a.mime || isAnimated(a) ? "GIF" : "Image");
 
 const FAILURE_REASONS: Record<string, string> = {
   size: "The file is over 8 MB.",
