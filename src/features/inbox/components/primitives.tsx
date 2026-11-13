@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { useEffect, useState } from "react";
 import { InboxRole } from "./inbox-role";
 import {
   AlertTriangle,
@@ -6,6 +7,9 @@ import {
   ArrowRightLeft,
   ArrowUpRight,
   Check,
+  CircleAlert,
+  ImageIcon,
+  ImageOff,
   List,
   MessageSquare,
   Reply,
@@ -14,13 +18,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { isLiveInboxMessage } from "@/features/weft/lib/live-inbox-message";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { InboxLens } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { loadInboxMedia, readInboxMedia, type InboxMediaAttachment } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
 import {
   dotClass,
+  formatClock,
   initials,
   isLive,
   isRoleKey,
@@ -282,6 +289,8 @@ export function GoButton({
 
 /**
  * A message body: terminal-typed text verbatim, anything else through the shared renderer.
+ * A message with an image shows it under its text (the caption), and a message naming a file
+ * ends with its Open chip, as the Inbox pane shows them.
  * `liveDashboards`: where the human reads their own conversations (the docked panel and the
  * rollup's conversation), an agent's HTML to the human is a live dashboard whose buttons and
  * forms answer it, as the old conversation view rendered it. Everywhere else (a tab's inbox,
@@ -304,9 +313,13 @@ export function MessageBody({
     m.onClick?.type === "goto-agent" && m.onClick.agent_id.endsWith("#cap")
       ? m.onClick.agent_id.slice(0, -4)
       : null;
+  const media = m.attachments?.[0];
   return (
     <>
-      <InboxMessageContent text={m.text} contentType={m.contentType} live={live} />
+      {(!media || m.text.trim()) && (
+        <InboxMessageContent text={m.text} contentType={m.contentType} live={live} />
+      )}
+      {media && <MessageMedia m={m} a={media} />}
       {capTarget && (
         <button
           type="button"
@@ -320,7 +333,278 @@ export function MessageBody({
           Review spend cap
         </button>
       )}
+      <OpenFileChip m={m} />
     </>
+  );
+}
+
+/** "GIF" for a GIF or WebP (or an unknown type), else "Image", as the pane names media. */
+const mediaKind = (a: InboxMediaAttachment) =>
+  !a.mime || /gif|webp/.test(a.mime) ? "GIF" : "Image";
+
+const FAILURE_REASONS: Record<string, string> = {
+  size: "The file is over 8 MB.",
+  pixels: "The image dimensions exceed 4096 × 4096.",
+  address: "The source resolves to a private or blocked address.",
+  cache: "This image is no longer in the cache.",
+  type: "It isn't a GIF, WebP, PNG or JPEG.",
+  redirect: "It redirected to a site that isn't on the list.",
+  https: "The source must use HTTPS.",
+};
+
+/** Why an image isn't shown, in the pane's words. */
+function mediaReason(a: InboxMediaAttachment, team: string): string {
+  if (a.state === "blocked") return `GIF · media is off in ${team}'s team config`;
+  if (a.state === "failed") {
+    return (
+      (a.reason && FAILURE_REASONS[a.reason]) || `${a.sourceHost || "The source"} didn't answer.`
+    );
+  }
+  if (a.reason === "sender") return "GIF · from another person's machine";
+  if (a.reason === "ask") return `GIF · ${team} asks before loading`;
+  return "GIF · not on your auto-load list";
+}
+
+/** A message's image: inline when cached, else a card saying why, with Load or Retry. */
+function MessageMedia({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }) {
+  const sha256 = a.sha256 ?? "";
+  if (a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256)) {
+    return <MediaImage key={sha256} m={m} a={a} sha256={sha256} />;
+  }
+  return <MediaCard key={a.state} m={m} a={a} />;
+}
+
+/** A cached image as an object URL, read through the app (the window can't reach
+ *  `/media/v1`); `failed` when it can't be read. The URL is revoked on unmount. */
+function useInboxImage(m: ConversationMessage, sha256: string) {
+  const [image, setImage] = useState<{ url: string | null; failed: boolean }>({
+    url: null,
+    failed: false,
+  });
+  const { org, team } = m.team;
+  useEffect(() => {
+    let live = true;
+    let url: string | null = null;
+    readInboxMedia({ org, team }, m.id, sha256).then(
+      ({ mime, base64 }) => {
+        if (!live) return;
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        setImage({ url, failed: false });
+      },
+      () => {
+        if (live) setImage({ url: null, failed: true });
+      },
+    );
+    return () => {
+      live = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [org, team, m.id, sha256]);
+  return image;
+}
+
+/** A figure at the image's stored aspect ratio, so the thread never jumps while it loads. */
+function MediaFigure({
+  a,
+  url,
+  failed,
+  onOpen,
+}: {
+  a: InboxMediaAttachment;
+  url: string | null;
+  failed: boolean;
+  onOpen?: () => void;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  const [broken, setBroken] = useState(false);
+  const unavailable = failed || broken;
+  const w = a.width || 480;
+  const h = a.height || 270;
+  const content = (
+    <>
+      {url && (
+        <img
+          className="ibx-media-img"
+          src={url}
+          alt={a.alt}
+          width={w}
+          height={h}
+          onLoad={() => setLoaded(true)}
+          onError={() => setBroken(true)}
+        />
+      )}
+      {!loaded && (
+        <span className="ibx-media-spin">
+          {unavailable ? `Couldn't load this image. ${a.alt}` : `Loading ${mediaKind(a)}…`}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <figure
+      className={`ibx-media${unavailable ? " unavailable" : loaded ? "" : " loading"}`}
+      style={{ "--w": w, "--h": h } as React.CSSProperties}
+      aria-busy={!loaded && !unavailable}
+    >
+      {onOpen ? (
+        <button
+          type="button"
+          className="ibx-media-open"
+          aria-label={`Open ${mediaKind(a)}: ${a.alt}`}
+          aria-haspopup="dialog"
+          onClick={onOpen}
+        >
+          {content}
+        </button>
+      ) : (
+        <div className="ibx-media-open">{content}</div>
+      )}
+    </figure>
+  );
+}
+
+/** A link to the image's source page; nothing when it has no source. */
+function MediaSource({ a, children }: { a: InboxMediaAttachment; children: React.ReactNode }) {
+  if (!a.sourceUrl) return null;
+  return (
+    <a href={a.sourceUrl} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  );
+}
+
+/** A cached image inline; clicking it opens the lightbox. */
+function MediaImage({
+  m,
+  a,
+  sha256,
+}: {
+  m: ConversationMessage;
+  a: InboxMediaAttachment;
+  sha256: string;
+}) {
+  const { url, failed } = useInboxImage(m, sha256);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <MediaFigure a={a} url={url} failed={failed} onOpen={() => setOpen(true)} />
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          className="ibx-lightbox gap-2 sm:max-w-[min(90vw,960px)]"
+          aria-describedby={undefined}
+          // The lightbox owns Esc; the inbox's own Esc handlers must not also act on it.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") e.stopPropagation();
+          }}
+        >
+          <DialogTitle className="ibx-lb-head">
+            <b>{m.fromName}</b>
+            <time>{formatClock(m.createdAtMs)}</time>
+          </DialogTitle>
+          <MediaFigure a={a} url={url} failed={failed} />
+          <div className="ibx-lb-foot">
+            <figcaption>{a.alt}</figcaption>
+            <div className="row2">
+              <span>
+                {mediaKind(a)} · {a.width} × {a.height}
+              </span>
+              <MediaSource a={a}>Open source page · {a.sourceHost} ↗</MediaSource>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** An image not shown (pending, blocked or failed): its alt text, why, and Load, Retry or
+ *  its source page. */
+function MediaCard({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const icon = a.state === "failed" ? CircleAlert : a.state === "blocked" ? ImageOff : ImageIcon;
+  const canLoad = a.state === "pending" || (a.state === "failed" && a.retryable);
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    // Once loaded, the stored row changes and the inbox refetches it as cached.
+    loadInboxMedia(m.team, m.id).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : String(e));
+      setLoading(false);
+    });
+  };
+  const reason = mediaReason(a, m.team.team);
+  return (
+    <div
+      className={`ibx-media-card ${a.state}${loading ? " loading" : ""}`}
+      aria-live="polite"
+      data-testid="ibx-media-card"
+    >
+      <Ico icon={icon} sm />
+      <div className="alt">{a.alt}</div>
+      <div className="meta">
+        <span>
+          {loading ? (
+            "Loading GIF…"
+          ) : error ? (
+            error
+          ) : a.state === "failed" ? (
+            <>
+              <b>Couldn't load this {mediaKind(a) === "GIF" ? "GIF" : "image"}.</b> {reason}
+            </>
+          ) : (
+            reason
+          )}
+        </span>
+        {canLoad ? (
+          <button
+            type="button"
+            className="ibx-chip primary"
+            aria-label={a.state === "failed" ? "Retry" : `Load GIF from ${a.sourceHost}: ${a.alt}`}
+            disabled={loading}
+            onClick={load}
+          >
+            {a.state === "failed" ? "Retry" : `Load from ${a.sourceHost}`}
+          </button>
+        ) : (
+          a.state === "blocked" &&
+          a.sourceUrl && (
+            <span className="ibx-chip">
+              <MediaSource a={a}>{a.sourceHost} ↗</MediaSource>
+            </span>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The file a message names (its primary file, else its open-file click) as a chip that opens
+ *  it in a viewer tab through the bridge's `openFile`, the Inbox pane's chip's action. */
+export function OpenFileChip({ m }: { m: ConversationMessage }) {
+  const [error, setError] = useState<string | null>(null);
+  const file = m.primaryFile || (m.onClick?.type === "open-file" ? m.onClick.path : null);
+  if (!file) return null;
+  const open = () => {
+    setError(null);
+    void import("@/features/dashboard/components/html-bridge")
+      .then(({ HTML_BRIDGE_ALLOWLIST }) =>
+        HTML_BRIDGE_ALLOWLIST.openFile!({ ...m.team, path: file }),
+      )
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  return (
+    <div className="ibx-files">
+      <button type="button" className="ibx-chip" title={`Open ${file}`} onClick={open}>
+        {file}
+      </button>
+      {error && (
+        <span className="ibx-err" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 
