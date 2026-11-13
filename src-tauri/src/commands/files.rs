@@ -367,13 +367,15 @@ pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
 }
 
 /// The hydrated story files of the worktree at `roots`, by their path in it.
+/// The profile is peeked, as the context gate does: a read never pins the
+/// selection, and revoked machine access hydrates nothing.
 fn hydrated_worktree_files<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     roots: &[PathBuf; 2],
 ) -> std::collections::BTreeSet<String> {
-    let (Some(home), Ok(profile)) = (
+    let (Some(home), Some(profile)) = (
         codesense_home_dir(),
-        crate::commands::local_profile::active(app),
+        crate::commands::local_profile::peek_active(app),
     ) else {
         return Default::default();
     };
