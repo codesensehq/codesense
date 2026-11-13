@@ -33,7 +33,14 @@ pub fn grant_in(pages: &[Page], docs_root: &Path, document_path: &str) -> Option
     if pages.is_empty() {
         return None;
     }
-    let relative = Path::new(document_path).strip_prefix(docs_root).ok()?;
+    // The renderer may name the page through the canonical root (attached roots are stored
+    // canonical) or the root as spelled here; either way only plain segments may follow it.
+    let root = std::fs::canonicalize(docs_root).ok()?;
+    let path = Path::new(document_path);
+    let relative = path
+        .strip_prefix(&root)
+        .or_else(|_| path.strip_prefix(docs_root))
+        .ok()?;
     if !relative
         .components()
         .all(|part| matches!(part, Component::Normal(_)))
@@ -44,7 +51,7 @@ pub fn grant_in(pages: &[Page], docs_root: &Path, document_path: &str) -> Option
         .iter()
         .find(|page| relative.to_string_lossy().replace('\\', "/") == page.path)?;
     let document = std::fs::canonicalize(document_path).ok()?;
-    if document != std::fs::canonicalize(docs_root).ok()?.join(relative) {
+    if document != root.join(relative) {
         return None;
     }
     let digest = format!("{:x}", Sha256::digest(std::fs::read(&document).ok()?));
@@ -84,6 +91,19 @@ mod tests {
             grant_in(&pages(), &docs, &page.to_string_lossy()).as_deref(),
             Some(CAPABILITY)
         );
+    }
+
+    #[test]
+    fn the_page_is_found_through_either_spelling_of_the_docs_root() {
+        let (_dir, docs, page) = placed(BODY);
+        let canonical_page = std::fs::canonicalize(&page).unwrap();
+        let canonical_docs = std::fs::canonicalize(&docs).unwrap();
+        for (root, document) in [(&docs, &canonical_page), (&canonical_docs, &page)] {
+            assert_eq!(
+                grant_in(&pages(), root, &document.to_string_lossy()).as_deref(),
+                Some(CAPABILITY)
+            );
+        }
     }
 
     #[test]
