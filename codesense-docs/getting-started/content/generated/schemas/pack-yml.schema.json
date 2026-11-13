@@ -1,0 +1,732 @@
+{
+  "$defs": {
+    "CliRequirement": {
+      "properties": {
+        "for": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ExternalMethod": {
+      "enum": [
+        "files",
+        "setup"
+      ],
+      "type": "string"
+    },
+    "ExternalSetup": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": "string"
+        },
+        "verify": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupVerify"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "ExternalSource": {
+      "properties": {
+        "git": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "npm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "FileEntry": {
+      "properties": {
+        "exec": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "KitRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "chat": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "McpRequirement": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "Part": {
+      "oneOf": [
+        {
+          "properties": {
+            "default": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "includes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "preset",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "includes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "agent",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "file"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "content",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "skill",
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/SkillTarget"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "source",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "routine",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "file"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "dashboards",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "seed",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "starter_page": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "compatible": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expect_license": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "follow": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "integrity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "external",
+              "type": "string"
+            },
+            "method": {
+              "$ref": "#/$defs/ExternalMethod"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "paths": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            "setup": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExternalSetup"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/ExternalSource"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trademark": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tree_sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "method",
+            "source",
+            "version"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setup",
+              "type": "string"
+            },
+            "needs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "command"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Requires": {
+      "properties": {
+        "agents": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clis": {
+          "items": {
+            "$ref": "#/$defs/CliRequirement"
+          },
+          "type": "array"
+        },
+        "codesense": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integrations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KitRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/McpRequirement"
+          },
+          "type": "array"
+        },
+        "packs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "routines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "Setting": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SetupVerify": {
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "read": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "read",
+        "field"
+      ],
+      "type": "object"
+    },
+    "SkillTarget": {
+      "enum": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "files": {
+      "items": {
+        "$ref": "#/$defs/FileEntry"
+      },
+      "type": "array"
+    },
+    "for": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "homepage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "pack_format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "parts": {
+      "items": {
+        "$ref": "#/$defs/Part"
+      },
+      "type": "array"
+    },
+    "publisher": {
+      "type": "string"
+    },
+    "requires": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Requires"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "settings": {
+      "items": {
+        "$ref": "#/$defs/Setting"
+      },
+      "type": "array"
+    },
+    "setup_steps": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "spec_hash": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "type": "object"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "pack_format",
+    "id",
+    "name",
+    "version",
+    "publisher",
+    "summary",
+    "license",
+    "parts"
+  ],
+  "title": "PackManifest",
+  "type": "object"
+}

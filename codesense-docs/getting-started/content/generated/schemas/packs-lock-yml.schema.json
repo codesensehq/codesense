@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "ExternalMethod": {
+      "enum": [
+        "files",
+        "setup"
+      ],
+      "type": "string"
+    },
+    "LockAgent": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "LockExternal": {
+      "properties": {
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fetched_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "follow": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "integrity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "license": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LockLicense"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/ExternalMethod"
+        },
+        "setup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LockSetupState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "tree_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "source",
+        "version"
+      ],
+      "type": "object"
+    },
+    "LockLicense": {
+      "properties": {
+        "class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spdx": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spdx"
+      ],
+      "type": "object"
+    },
+    "LockParts": {
+      "properties": {
+        "excluded": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "installed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "LockRoutine": {
+      "properties": {
+        "enabled_at_install": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "LockSeed": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "LockSetupState": {
+      "properties": {
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "verified_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "LockSource": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/LockSourceKind"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "LockSourceKind": {
+      "enum": [
+        "catalog",
+        "url",
+        "folder"
+      ],
+      "type": "string"
+    },
+    "LockTrust": {
+      "enum": [
+        "verified",
+        "bundled",
+        "unverified"
+      ],
+      "type": "string"
+    },
+    "LockedPack": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/LockAgent"
+          },
+          "type": "array"
+        },
+        "archive_sha256": {
+          "type": "string"
+        },
+        "catalog_sequence": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "external": {
+          "items": {
+            "$ref": "#/$defs/LockExternal"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installed_at": {
+          "type": "string"
+        },
+        "pack_team": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "$ref": "#/$defs/LockParts"
+        },
+        "previous_parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routines": {
+          "items": {
+            "$ref": "#/$defs/LockRoutine"
+          },
+          "type": "array"
+        },
+        "seeds": {
+          "items": {
+            "$ref": "#/$defs/LockSeed"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/LockSource"
+        },
+        "trust": {
+          "$ref": "#/$defs/LockTrust"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "source",
+        "archive_sha256",
+        "trust",
+        "installed_at",
+        "parts"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "lock_format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "packs": {
+      "items": {
+        "$ref": "#/$defs/LockedPack"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "lock_format"
+  ],
+  "title": "PacksLock",
+  "type": "object"
+}
