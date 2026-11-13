@@ -163,6 +163,9 @@ type HtmlViewerProps = CommonViewerProps & {
    * side of the diff toggle) from the git blob instead of the working tree.
    */
   baselineSource?: { orgRoot: string; relPath: string; tree?: string } | null;
+  /** Draw the Snapshot band on a live doc (default true). A host showing the doc
+   *  beside another (a side-by-side diff) turns it off so both start level. */
+  snapshot?: boolean;
   /**
    * Render a custom right pane: the file `fileName` in `panesDir` on the `/pane`
    * route, with the SDK's reads bound to `contentRoot`. A pane has no Snapshot
@@ -378,6 +381,7 @@ export function HtmlViewer({
   onNavigate,
   changedPaths,
   baselineSource,
+  snapshot = true,
   pane,
   onDocProblem,
   onDocLoaded,
@@ -2394,7 +2398,7 @@ export function HtmlViewer({
           opaque-origin frame can't be reached by the request. SW-FX-62: docked in
           a normal-flow toolbar band ABOVE the iframe (right-aligned) instead of
           floating over the content — so no control overlays the HTML doc. */}
-      {live && !embedded && (
+      {live && !embedded && snapshot && (
         <div className="flex flex-shrink-0 items-center justify-end px-2 py-1">
           <button
             type="button"

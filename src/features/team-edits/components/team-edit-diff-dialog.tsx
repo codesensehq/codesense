@@ -8,8 +8,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CodeDiffReview } from "@/shared/components/code-editor";
+import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { renderFileDiff, type FileDiffState } from "@/shared/lib/render-file-diff";
+import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import {
   readFile,
   sourceRemoteFileRead,
@@ -60,10 +62,29 @@ function sideText(side: Side | null): string {
   return side && "text" in side ? side.text : "";
 }
 
-/** Tall enough for the longer side (about 20px a line), never past the dialog. */
-function diffHeight(team: Side | null, mine: Side | null): string {
+/** What the diff body shows: an unreadable side is an error (not the whole
+ *  file inserted or deleted), a binary side the binary note. */
+function diffState(team: Side, mine: Side): FileDiffState {
+  const failed = "error" in team ? team : "error" in mine ? mine : null;
+  if (failed) return { kind: "error", message: failed.error };
+  if ("binary" in team || "binary" in mine) return { kind: "binary" };
+  return { kind: "ready" };
+}
+
+/** The comparison's status: the team side missing reads as added here, the
+ *  workspace side missing as deleted. */
+function sideStatus(team: Side | null, mine: Side | null) {
+  if (team && "missing" in team) return "added" as const;
+  if (mine && "missing" in mine) return "deleted" as const;
+  return "modified" as const;
+}
+
+/** Tall enough for the longer side (about 20px a code line, more for rendered
+ *  markdown), never past the dialog. */
+function diffHeight(team: Side | null, mine: Side | null, rendered: boolean): string {
   const lines = Math.max(sideText(team).split("\n").length, sideText(mine).split("\n").length);
-  return `min(60vh, ${Math.max(120, lines * 20 + 48)}px)`;
+  const px = rendered ? Math.max(240, lines * 36 + 48) : Math.max(120, lines * 20 + 48);
+  return `min(60vh, ${px}px)`;
 }
 
 function sideNote(side: Side | null, which: "team" | "workspace"): string | null {
@@ -97,6 +118,7 @@ export function TeamEditDiffDialog({
 }) {
   const [team, setTeam] = useState<Side | null>(null);
   const [mine, setMine] = useState<Side | null>(null);
+  const { modes, setMode } = useFileDiffModes();
 
   useEffect(() => {
     if (!file) return;
@@ -112,6 +134,12 @@ export function TeamEditDiffDialog({
   const ready = team !== null && mine !== null;
   const notes = [sideNote(team, "team"), sideNote(mine, "workspace")].filter(Boolean);
   const conflict = file?.kind === "conflict";
+  const teamLabel = conflict ? "Team's version now" : "Team's version";
+  const mineLabel = `${workspace.name}\u2019s version`;
+  // Rendered markdown is one column (the redline) or labels its own panes (side
+  // by side); every other body is a two-column text diff.
+  const markdownMode = file && getViewerFileType(file.path) === "markdown" ? modes.markdown : null;
+  const rendered = markdownMode === "redline" || markdownMode === "side-by-side";
   return (
     <Dialog open={!!file} onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent
@@ -142,26 +170,55 @@ export function TeamEditDiffDialog({
           </p>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
-          <div
-            className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
-            data-testid="team-edit-diff-sides"
-          >
-            <span className="px-3 py-1.5">
-              {conflict ? "Team's version now" : "Team's version"}
-            </span>
-            <span className="border-l border-border px-3 py-1.5">
-              {workspace.name}&rsquo;s version
-            </span>
-          </div>
-          {ready ? (
-            <CodeDiffReview
-              before={sideText(team)}
-              after={sideText(mine)}
-              path={file?.path}
-              mode="split"
-              height={diffHeight(team, mine)}
-              ariaLabel={`Team and workspace versions of ${file?.path ?? "the file"}`}
-            />
+          {markdownMode === "redline" ? (
+            <div
+              className="flex-none border-b border-border px-3 py-1.5 text-[11.5px] font-semibold"
+              data-testid="team-edit-diff-sides"
+            >
+              {teamLabel} <span className="font-normal text-muted-foreground">→</span> {mineLabel}
+            </div>
+          ) : markdownMode === "side-by-side" ? null : (
+            <div
+              className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
+              data-testid="team-edit-diff-sides"
+            >
+              <span className="px-3 py-1.5">{teamLabel}</span>
+              <span className="border-l border-border px-3 py-1.5">{mineLabel}</span>
+            </div>
+          )}
+          {ready && file ? (
+            // The strip adds a row above the diff, so the body grows with it.
+            <div
+              className="min-h-0"
+              style={{ height: `calc(${diffHeight(team, mine, rendered)} + 30px)` }}
+            >
+              {renderFileDiff({
+                fileType: getViewerFileType(file.path),
+                filePath: file.path,
+                sides: {
+                  before: sideText(team),
+                  after: sideText(mine),
+                  status: sideStatus(team, mine),
+                  beforeLabel: teamLabel,
+                  afterLabel: mineLabel,
+                },
+                state: diffState(team, mine),
+                prefs: {
+                  modes,
+                  onModeChange: setMode,
+                  testIdPrefix: "team-edit-diff",
+                  binary: (
+                    <div className="flex h-full items-center justify-center text-[12px] text-muted-foreground">
+                      Not a text file: no line-by-line view.
+                    </div>
+                  ),
+                  code: {
+                    mode: "split",
+                    ariaLabel: `Team and workspace versions of ${file.path}`,
+                  },
+                },
+              })}
+            </div>
           ) : (
             <div
               className="flex h-full items-center justify-center text-[12px] text-muted-foreground"

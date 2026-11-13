@@ -7,8 +7,6 @@ import type { PublishFile } from "@/features/git-sync/lib/types";
  * so the rail's behavior is testable without rendering.
  */
 
-import { detectLanguageId } from "@/shared/components/code-editor/language-detection";
-
 export interface DiffTotals {
   added: number;
   removed: number;
@@ -195,12 +193,4 @@ function naturalCompare(a: string, b: string): number {
     a.localeCompare(b) ||
     (a < b ? -1 : a > b ? 1 : 0)
   );
-}
-
-/** Whether the diff tool reads `path` as prose (the word-level redline) rather
- *  than a code diff: Markdown, but not MDX — its imports and JSX are code, and
- *  the prose redline would render them as text. (The editor still highlights
- *  MDX as Markdown.) */
-export function isProseDiffPath(path: string): boolean {
-  return detectLanguageId(path) === "markdown" && !/\.mdx$/i.test(path);
 }

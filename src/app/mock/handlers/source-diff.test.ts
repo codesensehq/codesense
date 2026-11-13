@@ -22,6 +22,15 @@ describe("source diff mock handlers", () => {
     }
   });
 
+  it("resolves a tab's cwd as its repo root, so the source diff opens on the fixture", () => {
+    const h = sourceDiffHandlers("");
+    expect(h.resolve_tab_source_repo({ cwd: "/Users/dev/worktrees/demo" })).toEqual({
+      root: "/Users/dev/worktrees/demo",
+      isRoot: true,
+    });
+    expect(h.resolve_tab_source_repo({ cwd: "" })).toBeNull();
+  });
+
   it("models the empty and error worlds", async () => {
     expect(await sourceDiffHandlers("?diff=empty").source_worktree_changeset({})).toEqual([]);
     await expect(sourceDiffHandlers("?diff=error").source_remote_changeset({})).rejects.toMatch(

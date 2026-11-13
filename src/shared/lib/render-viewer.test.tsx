@@ -25,9 +25,6 @@ vi.mock("@/features/dashboard/components/image-viewer", () => ({
 vi.mock("@/features/git-sync/components/markdown-redline-viewer", () => ({
   MarkdownRedlineViewer: () => createElement("div", { "data-stub": "redline" }),
 }));
-vi.mock("@/features/git-sync/components/before-after-diff-toggle", () => ({
-  BeforeAfterDiffToggle: () => createElement("div", { "data-stub": "diff-toggle" }),
-}));
 vi.mock("@/features/viewer/components/code-file-viewer", () => ({
   CodeFileViewer: () => createElement("div", { "data-stub": "code" }),
 }));
@@ -77,13 +74,14 @@ describe("renderViewer virtual-tab dispatch (AC-11) @P1", () => {
     );
   });
 
-  it("SW-GS-3: a changed image/html/excalidraw file routes to the before/after toggle", () => {
+  it("a changed image/html/excalidraw file routes to the one Files diff wrapper", () => {
     const redline = { orgRoot: "/ctx", teamKey: "acme:default", navRepoPath: "/ctx" };
     for (const path of ["/ctx/a.excalidraw", "/ctx/b.png", "/ctx/c.html"]) {
       const el = renderViewer({ ...common, filePath: path }, { ...md, redline });
       expect((el.type as () => ReactElement)()).toStrictEqual(
-        createElement("div", { "data-stub": "diff-toggle" }),
+        createElement("div", { "data-stub": "redline" }),
       );
+      expect((el.props as { teamContentPath?: string }).teamContentPath).toBe("/team");
     }
   });
 
@@ -101,7 +99,7 @@ describe("renderViewer virtual-tab dispatch (AC-11) @P1", () => {
     );
   });
 
-  it("SW-VE-2: a changed code/config file keeps the pre-VE-2 redline viewer in sync view (NOT the HtmlViewer toggle — avoids the .ts/.sh/.env blank-iframe MIME break)", () => {
+  it("a changed code/config file routes to the Files diff wrapper, which shows a code diff", () => {
     const redline = { orgRoot: "/ctx", teamKey: "acme:default", navRepoPath: "/ctx" };
     for (const path of ["/ctx/d.yaml", "/ctx/e.ts", "/ctx/f.sh"]) {
       const el = renderViewer({ ...common, filePath: path }, { ...md, redline });
