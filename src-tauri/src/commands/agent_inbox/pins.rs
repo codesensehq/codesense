@@ -38,6 +38,26 @@ impl PinsChanged {
     }
 }
 
+/// Tells the viewer about every thread that pins any of `message_ids` in `team`'s
+/// store at `path`: archiving, withdrawing or restoring a message changes which of its
+/// pins are live. A store that cannot be read leaves the lists as they are.
+pub(crate) async fn refresh_pin_threads(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+    path: std::path::PathBuf,
+    message_ids: Vec<i64>,
+) {
+    let found = with_store("pin_threads_for", path, move |store| {
+        pins::pin_threads_for(store, &message_ids)
+    })
+    .await;
+    if let Ok(Ok(threads)) = found {
+        for thread in &threads {
+            host.pins_changed(team, thread);
+        }
+    }
+}
+
 /// A thread's live pins in one team's store, in list order.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

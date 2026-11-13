@@ -2201,11 +2201,13 @@ pub(crate) async fn mark_archived_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("mark_inbox_messages_archived", path, move |store| {
         inbox::inbox_mark_archived_many(store, &message_ids)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2221,11 +2223,13 @@ pub(crate) async fn unarchive_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("unarchive_inbox_messages", path, move |store| {
         inbox::inbox_unarchive_many(store, &message_ids, &restore_unread)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2351,6 +2355,7 @@ pub(crate) async fn withdraw_by_human(
     message_id: i64,
 ) -> Result<WithdrawOutcome, String> {
     let path = host.team_store(team).await?;
+    let pin_path = path.clone();
     let now = chrono::Utc::now().timestamp_millis();
     let (outcome, changed) = with_store("withdraw_inbox_message", path, move |store| {
         crate::weft::role_inbox::withdraw_message_changed(store, message_id, now).map_err(|e| {
@@ -2362,6 +2367,7 @@ pub(crate) async fn withdraw_by_human(
     })
     .await??;
     if changed {
+        pins::refresh_pin_threads(host, team, pin_path, vec![message_id]).await;
         host.inbox_event(InboxEvent::new(InboxChange::Withdrawn, team, [message_id]));
     }
     Ok(outcome)

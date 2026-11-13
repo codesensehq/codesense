@@ -1861,6 +1861,8 @@ async fn the_human_sees_delivery_state_and_withdraws_a_waiting_message() {
     assert_eq!(state_of(&view, waiting), Some(InboxDeliveryState::Reading));
     assert_eq!(state_of(&view, taken), Some(InboxDeliveryState::Queued));
 
+    let thread = crate::weft::pins::ThreadKey::new("agent-a", Some("story-1")).unwrap();
+    crate::weft::pins::pin_add(&store, &thread, taken, HUMAN, None, None).unwrap();
     let before = *fake.changed.lock().unwrap();
     assert!(matches!(
         withdraw_by_human(&*host, &team, taken).await.unwrap(),
@@ -1870,6 +1872,11 @@ async fn the_human_sees_delivery_state_and_withdraws_a_waiting_message() {
         *fake.changed.lock().unwrap(),
         before + 1,
         "a withdrawal refreshes the list"
+    );
+    assert_eq!(
+        fake.pin_events(),
+        vec![("default".to_string(), thread)],
+        "a withdrawal refreshes the thread that pins the message"
     );
     assert_eq!(
         withdraw_by_human(&*host, &team, waiting).await.unwrap(),
@@ -5776,4 +5783,34 @@ async fn a_sender_in_another_team_hears_of_a_reaction_through_read_messages() {
     let again: serde_json::Value =
         serde_json::from_str(&again.content[0].as_text().unwrap().text).unwrap();
     assert!(again.get("reactions").is_none(), "{again}");
+}
+
+#[tokio::test]
+async fn archive_and_restore_refresh_the_threads_that_pin_the_messages() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let team = launch_team("default");
+    let store = WeftStore::open(fake.team_store("default")).unwrap();
+    let insert =
+        |to| inbox::inbox_insert(&store, "H1", to, "hello", None, None, None, None, None).unwrap();
+    let pinned = insert(HUMAN);
+    let other = insert(HUMAN);
+    let thread = crate::weft::pins::ThreadKey::new("agent-a", Some("story-1")).unwrap();
+    crate::weft::pins::pin_add(&store, &thread, pinned, HUMAN, None, None).unwrap();
+    let ids = vec![pinned, other];
+    mark_archived_many_by_human(&*host, &team, ids.clone())
+        .await
+        .unwrap();
+    assert_eq!(fake.pin_events(), vec![("default".to_string(), thread.clone())]);
+    unarchive_many_by_human(&*host, &team, ids, vec![])
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.pin_events(),
+        vec![
+            ("default".to_string(), thread.clone()),
+            ("default".to_string(), thread)
+        ],
+        "a restore refreshes it again"
+    );
 }
