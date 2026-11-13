@@ -174,6 +174,10 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
+    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
+        crate::media::read_cached(&self.dir.path().join("media-cache"), sha)
+    }
+
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
         self.media_scopes
             .lock()
@@ -5748,4 +5752,96 @@ async fn a_sender_in_another_team_hears_of_a_reaction_through_read_messages() {
     let again: serde_json::Value =
         serde_json::from_str(&again.content[0].as_text().unwrap().text).unwrap();
     assert!(again.get("reactions").is_none(), "{again}");
+}
+
+/// A GIF the media inspector accepts, and its cache name.
+const GIF: &[u8] = b"GIF89a\x02\x00\x03\x00";
+
+/// A message in `team` carrying `attachment`, with `GIF` in the fake's media cache.
+fn media_message(fake: &FakeHost, team: &str, attachment: crate::media::Attachment) -> i64 {
+    let cache = fake.dir.path().join("media-cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(gif_sha()), GIF).unwrap();
+    let path = fake.team_store(team);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let store = WeftStore::open(path).unwrap();
+    let id =
+        inbox::inbox_insert(&store, "agent-1", HUMAN, "", None, None, None, None, None).unwrap();
+    inbox::inbox_set_attachments(&store, id, &[attachment]).unwrap();
+    id
+}
+
+fn gif_sha() -> String {
+    use sha2::Digest as _;
+    format!("{:x}", sha2::Sha256::digest(GIF))
+}
+
+fn gif_attachment(state: &str) -> crate::media::Attachment {
+    crate::media::Attachment {
+        kind: "image".into(),
+        sha256: Some(gif_sha()),
+        mime: Some("image/gif".into()),
+        width: Some(2),
+        height: Some(3),
+        bytes: Some(GIF.len() as u64),
+        alt: "a wave".into(),
+        source_url: None,
+        source_host: None,
+        state: state.into(),
+        reason: None,
+        retryable: false,
+    }
+}
+
+#[tokio::test]
+async fn read_media_returns_a_cached_image_the_message_carries() {
+    use base64::Engine as _;
+    let fake = FakeHost::new();
+    let id = media_message(&fake, "default", gif_attachment("cached"));
+    let got = read_media(&port(&fake), launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(got.mime, "image/gif");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(got.base64)
+            .unwrap(),
+        GIF
+    );
+}
+
+#[tokio::test]
+async fn read_media_refuses_what_the_message_does_not_serve() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let cached = media_message(&fake, "default", gif_attachment("cached"));
+    let pending = media_message(&fake, "default", gif_attachment("pending"));
+    // Cached bytes under a hash this message doesn't carry.
+    let other = "a".repeat(64);
+    std::fs::write(fake.dir.path().join("media-cache").join(&other), GIF).unwrap();
+    assert!(read_media(&host, launch_team("default"), cached, other)
+        .await
+        .is_err());
+    // The message carries the hash, but not as a cached image.
+    assert!(
+        read_media(&host, launch_team("default"), pending, gif_sha())
+            .await
+            .is_err()
+    );
+    // The same message id asked of another team's inbox.
+    media_message(&fake, "design", gif_attachment("pending"));
+    assert!(read_media(&host, launch_team("design"), cached, gif_sha())
+        .await
+        .is_err());
+    // A malformed hash is refused before any lookup, even for an unknown team.
+    for bad in [
+        gif_sha().to_uppercase(),
+        "../etc/passwd".into(),
+        String::new(),
+    ] {
+        assert_eq!(
+            read_media(&host, launch_team("nowhere"), cached, bad).await,
+            Err("invalid media hash".to_string())
+        );
+    }
 }

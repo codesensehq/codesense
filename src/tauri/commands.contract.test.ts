@@ -1309,8 +1309,9 @@ describe("Tauri IPC Contract", () => {
     // SV-LUC-17: +1 on both sides for unarchiveInboxMessages/unarchive_inbox_messages, so 522/541.
     // -1 on both sides for reapEmptyScratchNotes/reap_empty_scratch_notes, which is gone, so 521/540.
     // +1 on both sides for agentSessionAwaitReady/agent_session_await_ready, so 522/541.
-    const EXPECTED_TS_COMMAND_COUNT = 522;
-    const EXPECTED_RUST_COMMAND_COUNT = 541;
+    // +1 on both sides for readInboxMedia/read_inbox_media, so 523/542.
+    const EXPECTED_TS_COMMAND_COUNT = 523;
+    const EXPECTED_RUST_COMMAND_COUNT = 542;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

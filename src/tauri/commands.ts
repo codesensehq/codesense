@@ -1041,6 +1041,10 @@ export interface InboxMediaAttachment {
 }
 export const loadInboxMedia = (team: InboxTeam, messageId: number) =>
   invoke<void>("load_inbox_media", { team, messageId });
+/** A message's cached image for the app window (which has no frame to reach `/media/v1`):
+ *  refused unless the message carries `sha256` as a cached attachment. */
+export const readInboxMedia = (team: InboxTeam, messageId: number, sha256: string) =>
+  invoke<{ mime: string; base64: string }>("read_inbox_media", { team, messageId, sha256 });
 
 export interface InboxMessageRow {
   conversation?: string;

@@ -344,12 +344,26 @@ fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?
         .join("inbox-media"))
 }
-pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
-    if sha.len() != 64
-        || !sha
+/// Whether `sha` names a cache file: 64 lowercase hex digits.
+pub(crate) fn valid_sha(sha: &str) -> bool {
+    sha.len() == 64
+        && sha
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
+}
+/// The cached image `sha` among a message's `attachments`, if it has one: the only
+/// image the inbox serves for that message (the `/media/v1` route and the app
+/// window's `read_inbox_media` both ask this).
+pub(crate) fn cached_attachment<'a>(
+    attachments: &'a [Attachment],
+    sha: &str,
+) -> Option<&'a Attachment> {
+    attachments
+        .iter()
+        .find(|a| a.state == "cached" && a.sha256.as_deref() == Some(sha))
+}
+pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
+    if !valid_sha(sha) {
         return Err("invalid media hash".into());
     }
     let path = dir.join(sha);
