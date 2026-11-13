@@ -2886,10 +2886,8 @@ impl InboxHost for AppInboxHost {
     }
 
     async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
-        let rows = crate::mcp::session_list::read_session_list(&self.app, None)
-            .await
-            .ok()?;
-        let row = rows.into_iter().find(|row| row.handle == handle)?;
+        let rows = Result::ok(crate::mcp::session_list::read_session_list(&self.app, None).await)?;
+        let row = Iterator::find(&mut rows.into_iter(), |row| row.handle == handle)?;
         Some((row.agent?, row.story))
     }
 

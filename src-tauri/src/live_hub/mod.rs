@@ -660,10 +660,7 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 pub fn start(app: &tauri::AppHandle) {
     app.manage(LiveHub::default());
-    // A typed value, not `PinViews::default()`: the explicit-sync guard can't resolve a derived
-    // `default` on a crate type.
-    let views: pins::PinViews = Default::default();
-    app.manage(views);
+    app.manage(pins::PinViews::new());
     crate::records::projection::start(app);
     files::start(app);
     app.manage(agent_marks::AgentMarks::default());
@@ -1699,13 +1696,11 @@ pub(crate) fn replace_view<R: tauri::Runtime>(
     key: &str,
     rows: Vec<(Option<String>, serde_json::Value)>,
 ) -> Result<(), String> {
-    let deltas = app
-        .state::<LiveHub>()
-        .model
-        .lock()
-        .map_err(|e| e.to_string())?
-        .projections
-        .replace_view(topic, key, rows)?;
+    let hub = app.state::<LiveHub>();
+    let deltas = {
+        let mut model = hub.model.lock().map_err(|e| e.to_string())?;
+        TopicRegistry::replace_view(&mut model.projections, topic, key, rows)?
+    };
     publish(app, deltas);
     Ok(())
 }

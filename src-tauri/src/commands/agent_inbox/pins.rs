@@ -111,7 +111,7 @@ async fn pins_in(
                     m.role.is_some()
                         || m.from == by
                         || m.to == by
-                        || m.reply_to.as_deref() == Some(String::as_str(&by))
+                        || m.reply_to.as_deref() == Some(&*by)
                 });
                 if !held {
                     return Ok(Err(format!("no message {message_id}")));
@@ -233,7 +233,7 @@ pub async fn agent_pins(
     preview: Option<PinPreview>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
-    let op = match String::as_str(&op) {
+    let op = match &*op {
         "read" => PinOp::Read,
         "pin" => PinOp::Pin {
             message_id: need_id()?,

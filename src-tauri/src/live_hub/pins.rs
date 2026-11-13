@@ -20,6 +20,13 @@ pub const TOPIC: &str = "pins";
 #[derive(Default)]
 pub struct PinViews(Mutex<BTreeMap<String, (LaunchTeam, ThreadKey)>>);
 
+impl PinViews {
+    /// No view is prepared yet.
+    pub fn new() -> Self {
+        Self(Mutex::new(BTreeMap::new()))
+    }
+}
+
 /// The view key of `thread`'s list in `team`'s store.
 pub fn view_key(team: &LaunchTeam, thread: &ThreadKey) -> String {
     format!(
@@ -64,7 +71,7 @@ async fn read(
     thread: &ThreadKey,
 ) -> Result<Vec<Pin>, String> {
     let host = AppInboxHost { app: app.clone() };
-    let story = (!String::is_empty(&thread.story_id)).then_some(String::as_str(&thread.story_id));
+    let story = (!str::is_empty(&thread.story_id)).then_some(&*thread.story_id);
     match pins_from_human(&host, team, &thread.agent_id, story, PinOp::Read).await? {
         PinResult::Pins { list, .. } => Ok(list.pins),
         PinResult::Invalid { message } => Err(message),
@@ -113,7 +120,7 @@ pub fn refresh(app: &tauri::AppHandle, team: LaunchTeam, thread: Option<ThreadKe
                 .collect()
         })
         .unwrap_or_default();
-    if Vec::is_empty(&due) {
+    if slice::is_empty(&due) {
         return;
     }
     let app = app.clone();
