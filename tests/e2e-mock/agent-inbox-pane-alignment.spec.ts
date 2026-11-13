@@ -255,3 +255,61 @@ test.describe("every agent's chat entry, and none for a headless run", () => {
     await expect(lead.getByTestId("agent-row-message")).toBeVisible();
   });
 });
+
+test.describe("the chat is ready when it opens", () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  // The newest message in view and an enabled composer, timed from the click in the page's
+  // own clock. The first open of a booted app is the cold read; the reopen is the warm one.
+  const COLD_MS = 3000;
+  const WARM_MS = 1500;
+
+  async function openToReady(page: Page, tabId: string) {
+    const msg = await page.evaluate(
+      (id) =>
+        new Promise<number>((resolve, reject) => {
+          const caption = document.querySelector<HTMLElement>(
+            `[data-testid="terminal-grid-caption-inbox-${id}"]`,
+          );
+          if (!caption) return reject(new Error("no chat button"));
+          performance.mark("chat-open:click");
+          caption.click();
+          const ready = () => {
+            const chat = document.querySelector(
+              `[data-testid="inbox-split-${id}"] [data-testid="chat-overlay"]`,
+            );
+            const composer = chat?.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
+            const newest = chat?.textContent?.includes("staging verification is waiting");
+            return !!composer && !composer.disabled && !!newest;
+          };
+          const done = () => {
+            performance.mark("chat-open:ready");
+            resolve(
+              performance.measure("chat-open", "chat-open:click", "chat-open:ready").duration,
+            );
+          };
+          if (ready()) return done();
+          const obs = new MutationObserver(() => {
+            if (!ready()) return;
+            obs.disconnect();
+            done();
+          });
+          obs.observe(document.body, { subtree: true, childList: true, attributes: true });
+        }),
+      tabId,
+    );
+    return msg;
+  }
+
+  test("newest message and composer within 3 s cold and 1.5 s warm", async ({ page }) => {
+    await expand(page, BUG);
+    const cold = await openToReady(page, AGENT_TAB);
+    expect(cold).toBeLessThan(COLD_MS);
+
+    // Close it and open it again: the thread is already read, so this is the warm open.
+    await page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`).click();
+    await expect(page.locator(paneOf(AGENT_TAB))).toHaveCount(0);
+    const warm = await openToReady(page, AGENT_TAB);
+    expect(warm).toBeLessThan(WARM_MS);
+  });
+});
