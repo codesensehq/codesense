@@ -120,7 +120,7 @@ pub fn refresh(app: &tauri::AppHandle, team: LaunchTeam, thread: Option<ThreadKe
                 .collect()
         })
         .unwrap_or_default();
-    if slice::is_empty(&due) {
+    if Vec::is_empty(&due) {
         return;
     }
     let app = app.clone();
