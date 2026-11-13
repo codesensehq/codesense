@@ -4,6 +4,8 @@
 //     Lists them in the job summary ($GITHUB_STEP_SUMMARY, else stdout) with a warning each.
 //   node scripts/flaky-tests.mjs track <report-dir> --run-url <url> [--date YYYY-MM-DD]
 //     Opens or updates one public issue per flaky test with gh (GH_TOKEN and GH_REPO set).
+//   node scripts/flaky-tests.mjs failed <junit.xml> --run-url <url>
+//     Lists a red run's failed tests and its link in the job summary (else stdout).
 // No dependencies: the summary step runs before any package install.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -41,11 +43,10 @@ function attributes(tag) {
 // Attributes are read quote-aware, so a > or /> inside a quoted value cannot end the tag.
 const TESTCASE =
   /<testcase\b((?:[^>"'/]|\/(?!>)|"[^"]*"|'[^']*')*)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
-export function flakyTests(xml) {
+function testsMatching(xml, include) {
   const tests = [];
   for (const m of xml.matchAll(TESTCASE)) {
-    const body = m[2] ?? "";
-    if (!/<flaky(?:Failure|Error)\b/.test(body) || /<(?:failure|error)\b/.test(body)) continue;
+    if (!include(m[2] ?? "")) continue;
     const { name, classname } = attributes(m[1]);
     if (!name || !classname) continue;
     const id = `${classname}#${name}`;
@@ -56,6 +57,34 @@ export function flakyTests(xml) {
     tests.push({ key, binary: shown(classname), name: shown(name), hashed: !safe });
   }
   return tests;
+}
+
+export const flakyTests = (xml) =>
+  testsMatching(
+    xml,
+    (body) => /<flaky(?:Failure|Error)\b/.test(body) && !/<(?:failure|error)\b/.test(body),
+  );
+
+// Tests that failed every attempt, the retry included.
+export const failedTests = (xml) => testsMatching(xml, (body) => /<(?:failure|error)\b/.test(body));
+
+// The job summary of a red run on main: what failed and where, for the next hardening pass.
+// Without a report the tests never ran, so the run log names the failed step.
+export function failedMarkdown(tests, { report, runUrl }) {
+  const detail = !report
+    ? ["No JUnit report: a build or setup step failed before the tests ran. See the run log."]
+    : tests.length
+      ? [
+          `${tests.length} failed test${tests.length === 1 ? "" : "s"}:`,
+          "",
+          ...tests.map((t) => `- \`${t.binary}\` \`${t.name}\``),
+        ]
+      : [
+          "No failed test in the JUnit report: a later step (doctests, say) failed. See the run log.",
+        ];
+  return ["### Red on main: file a hardening item", "", `Run: ${runUrl}`, "", ...detail, ""].join(
+    "\n",
+  );
 }
 
 export const marker = (key) => `<!-- flaky:${key} -->`;
@@ -195,6 +224,16 @@ function main(argv) {
     else if (markdown) process.stdout.write(markdown);
     return;
   }
+  if (command === "failed" && target && option("--run-url")) {
+    const report = fs.existsSync(target);
+    const tests = report ? failedTests(fs.readFileSync(target, "utf8")) : [];
+    for (const t of tests) console.log(`::error title=Failed test::${t.key}`);
+    const markdown = failedMarkdown(tests, { report, runUrl: option("--run-url") });
+    if (process.env.GITHUB_STEP_SUMMARY)
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
+    else process.stdout.write(markdown);
+    return;
+  }
   if (command === "track" && target && option("--run-url")) {
     const tests = readReports(target);
     if (!tests.length) return console.log("flaky-tests: no flaky tests");
@@ -220,7 +259,7 @@ function main(argv) {
     return;
   }
   throw new Error(
-    "usage: node scripts/flaky-tests.mjs summary <junit.xml> | track <dir> --run-url <url> [--date YYYY-MM-DD]",
+    "usage: node scripts/flaky-tests.mjs summary <junit.xml> | track <dir> --run-url <url> [--date YYYY-MM-DD] | failed <junit.xml> --run-url <url>",
   );
 }
 

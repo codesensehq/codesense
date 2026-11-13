@@ -66,6 +66,14 @@ const RUST_PATH_FILTER = {
   jobs: ["rust-macos", "rust-linux", "rust-check-linux"],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
+// And one more: rust.yml's macOS job is not a required check and skips merge groups (it runs on
+// push to main and nightly instead). It may put exactly this term right after the path filter's;
+// what follows must still begin with OFF_PULL_REQUESTS, so push and schedule always run it.
+const OFF_MERGE_GROUPS = {
+  file: "rust.yml",
+  job: "rust-macos",
+  term: "github.event_name != 'merge_group'",
+};
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -244,7 +252,13 @@ export function workflowPolicy(text, file = "") {
         needs.includes(RUST_PATH_FILTER.job) &&
         RUST_PATH_FILTER.terms.every((term, i) => terms[i] === term);
       if (pathFiltered) {
-        const rest = terms.slice(RUST_PATH_FILTER.terms.length);
+        let rest = terms.slice(RUST_PATH_FILTER.terms.length);
+        if (
+          file === OFF_MERGE_GROUPS.file &&
+          name === OFF_MERGE_GROUPS.job &&
+          rest[0] === OFF_MERGE_GROUPS.term
+        )
+          rest = rest.slice(1);
         // Nothing more, or one term that runs off pull requests.
         condition = !rest.length
           ? OFF_PULL_REQUESTS
