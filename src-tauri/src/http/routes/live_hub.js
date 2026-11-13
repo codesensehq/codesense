@@ -141,7 +141,9 @@
     var legacy = c[name];
     c[name] = function (callback) {
       var offPing = legacy(callback);
-      var offSessions = c.onSessions(function (_rows, error) { if (!error) callback(); });
+      // A sessions re-read changes no inbox rows; an empty `changes` says so, while a change
+      // without `changes` could be anything.
+      var offSessions = c.onSessions(function (_rows, error) { if (!error) callback({ type: 'codesense:inbox-changed', changes: [] }); });
       return function () { offPing(); offSessions(); };
     };
   });

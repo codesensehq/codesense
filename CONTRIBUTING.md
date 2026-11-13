@@ -53,6 +53,9 @@ open issues first.
 - **Rust (macOS arm64)** runs in the merge queue, not on the pull request.
   For a macOS-specific change, a maintainer adds the `ci:macos` label to run
   it on the pull request too.
+- A change that touches nothing the Rust build reads (see
+  `scripts/rust-changes.mjs`) skips both Rust jobs, which then report as
+  passed. The nightly run on `main` still tests everything.
 
 ### Sign-off (DCO)
 

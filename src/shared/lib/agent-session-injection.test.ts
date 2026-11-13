@@ -86,7 +86,7 @@ describe("injectAgentLine (AC-8/AC-9)", () => {
     expect(submit).toHaveBeenCalledExactlyOnceWith("s1", "continue");
   });
   it("prepares managed shell activity only after the shell gate admits the launch", async () => {
-    const writeShell = vi.fn(async () => {});
+    const writeShell = vi.fn(async () => ({}));
     const { deps, write } = makeDeps({ writeShell, isShellIdle: async () => false });
     expect(await injectAgentLine("s1", "claude", deps, { gate: "shell" })).toEqual({
       ok: false,

@@ -2823,6 +2823,20 @@
           dirty = true,
           refreshing = false,
           sending = false;
+        // A nudge's read waits this long after the last read started (the skip's shorter wait
+        // for loaded mail to the human), and never makes three nudge reads start within a second;
+        // reads the human starts don't count toward that.
+        const REFRESH_PACE_MS = 1000,
+          REFRESH_SKIP_MS = 250,
+          REFRESH_CAP_MS = 1000;
+        let badgeStale = true,
+          urgentRefresh = false,
+          refreshStartedAt = -Infinity,
+          nudgeReadAt = -Infinity,
+          priorNudgeReadAt = -Infinity,
+          skipQueued = false,
+          intentWaited = false,
+          refreshDue = 0;
         let refreshTimer,
           saveTimer,
           offSessions,
@@ -5754,10 +5768,35 @@
             }, 600);
           }, 1200);
         }
-        function applyIntent(intent) {
+        // The thread (and message) an intent names, as the list holds them now.
+        function intentTarget(intent) {
+          const team = intent.team ? { org: intent.org || contextOrg, team: intent.team } : null;
+          const named = (m) =>
+            m.messageId === intent.messageId && (!crossTeam || !team || sameTeam(m.team, team));
+          const t =
+            intent.messageId == null ? null : threads.find((t) => t.messages.some(named));
+          const key =
+            t?.key ||
+            (intent.conversation &&
+              conversationKey(intent.conversation, team || filterTeam || activeTeam));
+          return { team, t, message: t?.messages.find(named), key };
+        }
+        function intentListed(intent) {
+          if (intent.focusList) return true;
+          const { t, key } = intentTarget(intent);
+          // A message intent waits for its message, not just its conversation.
+          if (intent.messageId != null) return !!t;
+          return !!key && threads.some((t) => t.key === key);
+        }
+        // The host calls this with the intent alone; a read that lands passes whether to apply.
+        function applyIntent(intent, fresh) {
+          if (fresh === undefined) intentWaited = false;
           // Architecture: a clean badge does not make a hidden reader ready to render an intent.
-          if (!visible || !loaded || dirty || refreshing) {
+          if (!visible || !loaded || (dirty && !fresh) || refreshing) {
             pendingIntent = intent;
+            // Opening a thread is the human's own action, so it doesn't wait out the pacing
+            // window; a read in flight applies it as soon as it lands.
+            if (visible && loaded && !refreshing) scheduleRefresh();
             return;
           }
           showList(true);
@@ -5781,20 +5820,7 @@
               }
             }
           } else if (team && (team.team !== contextTeam || team.org !== contextOrg)) return;
-          const t =
-            intent.messageId == null
-              ? null
-              : threads.find((t) =>
-                  t.messages.some(
-                    (m) =>
-                      m.messageId === intent.messageId &&
-                      (!crossTeam || !team || sameTeam(m.team, team)),
-                  ),
-                );
-          const key =
-            t?.key ||
-            (intent.conversation &&
-              conversationKey(intent.conversation, team || filterTeam || activeTeam));
+          const { t, message, key } = intentTarget(intent);
           if (!key) return;
           const known = threads.some((t) => t.key === key);
           openThread(known ? key : "__new__:" + key, {
@@ -5802,15 +5828,7 @@
             recipient: known ? undefined : intent.conversation,
             focusComposer: intent.focusComposer,
             team,
-            messageId: t
-              ? messageKey(
-                  t.messages.find(
-                    (m) =>
-                      m.messageId === intent.messageId &&
-                      (!crossTeam || !team || sameTeam(m.team, team)),
-                  ),
-                )
-              : undefined,
+            messageId: t ? messageKey(message) : undefined,
           });
         }
         if (cs.onIntent) cs.onIntent(applyIntent);
@@ -6571,11 +6589,13 @@
           if (!visible || refreshing) return;
           dirty = false;
           refreshing = true;
+          startRead();
           const opened = selected;
           const reactionMark = reactionSaves;
           const changedIds = changedRows;
           changedRows = new Set();
-          let refreshAnchor;
+          let refreshAnchor,
+            landed = false;
           try {
             await contextReady;
             if (crossTeam && loaded) {
@@ -6752,6 +6772,7 @@
 
             drawPresence();
             drawNotice();
+            landed = true;
           } catch (e) {
             // A failed read leaves the changed rows for the next one.
             for (const key of changedIds) changedRows.add(key);
@@ -6773,8 +6794,20 @@
             if (visible) {
               if (loaded && pendingIntent) {
                 const intent = pendingIntent;
+                const waited = intentWaited;
                 pendingIntent = undefined;
-                applyIntent(intent);
+                intentWaited = false;
+                if (landed) {
+                  // Mail for the intent's thread may land just after this read started; if the
+                  // list doesn't hold its target yet, it waits for one more read.
+                  applyIntent(intent, waited || intentListed(intent));
+                  if (pendingIntent) intentWaited = true;
+                } else if (!dirty) applyIntent(intent, true);
+                else {
+                  // A failed read keeps the intent for the next read, paced like any retry.
+                  pendingIntent = intent;
+                  intentWaited = waited;
+                }
               }
               flushHostCommands();
               if (!dirty) markVisible(true);
@@ -6786,15 +6819,17 @@
               }
             }
             // Architecture: visibility gates rendering, not the draining of dirty badge work.
-            if (dirty) scheduleRefresh();
+            queueRefresh();
           }
         }
         // Architecture: hidden invalidations reuse the Inbox's existing read, computing
         // only the badge; message, thread, presence and composer state catch up on show.
         async function refreshBadge() {
           if (visible || refreshing) return;
+          let failed = false;
           refreshing = true;
-          dirty = false;
+          badgeStale = false;
+          startRead();
           try {
             await contextReady;
             const inbox = crossTeam
@@ -6819,19 +6854,59 @@
           } catch {
             // Architecture: hidden failures leave the badge until the next invalidation;
             // the visible refresh owns error UI and retries.
+            failed = badgeStale = true;
           } finally {
             refreshing = false;
-            if (dirty || visible) scheduleRefresh();
+            if (visible || !failed) queueRefresh();
           }
         }
+        // A read that starts serves every request queued so far and opens a new pacing window.
+        function startRead() {
+          refreshStartedAt = performance.now();
+          if (!urgentRefresh) {
+            priorNudgeReadAt = nudgeReadAt;
+            nudgeReadAt = refreshStartedAt;
+          }
+          urgentRefresh = skipQueued = false;
+        }
+        // A refresh the human starts (or that follows the human's own write) runs at once.
         function scheduleRefresh() {
+          dirty = badgeStale = urgentRefresh = true;
+          queueRefresh();
+        }
+        // Change nudges pace on the leading edge: the first refreshes at once, and the ones that
+        // land in the next second or during a read share one trailing refresh. A hidden pane only
+        // re-reads its badge, and only for a change that can touch the human's unread set.
+        // Architecture: the window uses the monotonic clock, so a wall-clock step can't stall it.
+        function paceRefresh(unreadMayChange) {
           dirty = true;
-          if (!prefsReady || refreshing || refreshTimer) return;
-          refreshTimer = setTimeout(() => {
-            refreshTimer = null;
-            if (visible) refresh();
-            else refreshBadge();
-          }, 25);
+          if (unreadMayChange) badgeStale = true;
+          queueRefresh();
+        }
+        // Architecture: a timer is armed only while a refresh is owed, so an idle pane runs none.
+        function queueRefresh() {
+          if (!prefsReady || refreshing || !(visible ? dirty : badgeStale)) return;
+          const now = performance.now();
+          const due = urgentRefresh
+            ? now
+            : Math.max(
+                now,
+                refreshStartedAt + (skipQueued ? REFRESH_SKIP_MS : REFRESH_PACE_MS),
+                priorNudgeReadAt + REFRESH_CAP_MS,
+              );
+          if (refreshTimer && refreshDue <= due) return;
+          clearTimeout(refreshTimer);
+          refreshDue = due;
+          refreshTimer = setTimeout(
+            () => {
+              refreshTimer = null;
+              // A read in flight returns at once and re-queues when it lands.
+              if (visible) refresh();
+              else refreshBadge();
+            },
+            // A read due now waits a tick so a burst in one task shares it; a paced one doesn't.
+            due > now ? due - now : 25,
+          );
         }
         $("composer").onsubmit = async (e) => {
           e.preventDefault();
@@ -7300,13 +7375,36 @@
             $("new-message").disabled = false;
             scheduleRefresh();
           });
+        // Loaded rows by key, rebuilt only when the list is replaced (every update replaces it).
+        let loadedIndex = { list: null, rows: null };
+        function loadedRow(key) {
+          if (loadedIndex.list !== messages)
+            loadedIndex = { list: messages, rows: new Map(messages.map((m) => [messageKey(m), m])) };
+          return loadedIndex.rows.get(key);
+        }
         // A change names the rows it touched; the next refresh re-reads those it has loaded.
+        // Nudges carry only row ids, so new mail can't be told from agents' own traffic and
+        // waits for the pacing window (a second after the last read started). A change to loaded
+        // mail to the human (a read, reaction or archive) waits only 250 ms, but no third nudge
+        // read starts within a second of the nudge read two before it. While hidden, only a
+        // change that names no rows, names a row this pane hasn't loaded, or names mail to the
+        // human can touch the human's unread set. A change without `changes` could be anything;
+        // an empty `changes` (the host's sessions re-read) names no inbox rows.
         cs.onInboxChanged((change) => {
+          const named = [];
+          let unnamed = !Array.isArray(change?.changes);
           for (const c of change?.changes || [])
-            if (crossTeam || sameTeam(c.team, activeTeam))
+            if (crossTeam || sameTeam(c.team, activeTeam)) {
+              if (!c.messageIds?.length) unnamed = true;
               for (const id of c.messageIds || [])
-                changedRows.add(messageKey({ team: c.team, messageId: id }));
-          scheduleRefresh();
+                named.push(messageKey({ team: c.team, messageId: id }));
+            }
+          // Every change named another team's rows.
+          if (!unnamed && !named.length) return;
+          for (const key of named) changedRows.add(key);
+          const rows = named.map(loadedRow);
+          if (visible && rows.some((m) => m?.toHuman)) skipQueued = true;
+          paceRefresh(unnamed || rows.some((m) => !m || m.toHuman !== false));
         });
         cs.onTeardown?.(() => offSessions?.());
         cs.onVisibility((shown) => {
@@ -7315,6 +7413,7 @@
             closeReactions();
             dismissToast();
             readDone = false;
+            intentWaited = false;
             clearTimeout(refreshTimer);
             refreshTimer = null;
             scheduleRefresh();
@@ -7325,7 +7424,7 @@
               if (!visible) return;
               sessions = snapshot.snapshot;
               drawConversationView();
-              scheduleRefresh();
+              paceRefresh(false);
             };
             cs.subscribe?.("sessions", { onChange: changed }).catch((error) =>
               drawNotice(error.message),

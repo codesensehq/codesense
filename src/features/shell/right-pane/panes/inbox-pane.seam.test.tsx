@@ -114,6 +114,10 @@ import { getPanel } from "../panel-registry";
 import { defaultRightPaneLayout, INBOX_PANEL_ID } from "../right-pane-layout";
 import { PanePanelsMount } from "./use-register-pane-panels";
 
+// A change nudge that lands within a second of the last refresh shows on the trailing
+// refresh, up to a second later than the 1 s waitFor default allows.
+const PACED = { timeout: 2000 };
+
 const PORT = 9322;
 const PaneMessageEvent = frameEventClass(PORT);
 const ORIGIN = `http://f-test.localhost:${PORT}`;
@@ -1136,7 +1140,10 @@ describe("human inbox pane through the real bridge", () => {
       messages.push(row(5, "Lee"));
       inboxChanged();
       if (state === "running")
-        await waitFor(() => expect(calls("agent_read_inbox").length).toBeGreaterThan(before));
+        await waitFor(
+          () => expect(calls("agent_read_inbox").length).toBeGreaterThan(before),
+          PACED,
+        );
       act(() => revealSlot("right-pane", { dashboard: PANEL, intent: { messageId: 5 } }));
       await waitFor(() => expect(calls("agent_read_inbox").length).toBeGreaterThan(before));
       await act(async () => releaseInbox());
@@ -1324,7 +1331,7 @@ describe("human inbox pane through the real bridge", () => {
     expect(messages.find((m) => m.messageId === 3)?.archivedAtMs).toBeUndefined();
     messages.push(row(5, "Mia", "human", { inReplyTo: 1, text: "A follow-up question" }));
     inboxChanged();
-    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2), PACED);
     await openThread(p);
     expect(el(p, "log").textContent).toContain("A follow-up question");
     expect(el(p, "log").textContent).not.toContain("Message 1");
@@ -1665,7 +1672,7 @@ describe("cross-team inbox pane through the real bridge", () => {
     });
     rollup.push({ ...row(2, "New sender"), id: 2, team: { org: ORG, team: "fresh" } });
     inboxChanged();
-    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(3));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(3), PACED);
     expect(
       calls("agent_read_roles")
         .slice(oldReads)
@@ -1686,7 +1693,7 @@ describe("cross-team inbox pane through the real bridge", () => {
     web.focus();
     const oldReads = calls("list_inbox_rollup").length;
     inboxChanged();
-    await waitFor(() => expect(calls("list_inbox_rollup").length).toBeGreaterThan(oldReads));
+    await waitFor(() => expect(calls("list_inbox_rollup").length).toBeGreaterThan(oldReads), PACED);
     await waitFor(() => expect(p.doc.activeElement).not.toBe(web));
     expect(el(p, "filter-menu").contains(p.doc.activeElement)).toBe(true);
     expect(p.doc.activeElement?.textContent).toContain("web");
@@ -2141,7 +2148,7 @@ describe("cross-team inbox pane through the real bridge", () => {
     });
     rollup = initial;
     await act(async () => inboxChanged());
-    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1), PACED);
     await act(async () => useViewerStore.setState({ rightPaneOpen: false }));
     await act(async () => useViewerStore.setState({ rightPaneOpen: true }));
     expect(el(p, "team-filter").textContent).toContain("web");
@@ -2801,8 +2808,9 @@ it("refreshes delivery receipts on a reused HTML message without rebuilding its 
   expect(article.querySelector(".foot")?.textContent).toContain("Pending");
   messages[2].delivery = { state: "reading", instance: "Ori" };
   await act(async () => inboxChanged());
-  await waitFor(() =>
-    expect(article.querySelector(".foot")?.textContent).toContain("Reading · Ori"),
+  await waitFor(
+    () => expect(article.querySelector(".foot")?.textContent).toContain("Reading · Ori"),
+    PACED,
   );
   expect(article.querySelector(".bd")).toBe(body);
 });
@@ -2865,6 +2873,51 @@ it("loads 50 older rows, suppresses auto retry, and retries with one status outs
   );
   expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(570);
 });
+
+it.each(["before", "after"])(
+  "refreshes an older retained reaction when an unnamed hidden change lands %s its row change",
+  async (order) => {
+    messages = Array.from({ length: 600 }, (_, n) => row(n + 1, "Mia", "human", { unread: false }));
+    const p = await openInbox(false);
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+    await openThread(p);
+    expect(el(p, "log").querySelector("#message-75")).toBeNull();
+    const older = el(p, "log").querySelector<HTMLButtonElement>(".ib-older button")!;
+    await act(async () => older.click());
+    await waitFor(() => expect(el(p, "log").querySelector("#message-75")).not.toBeNull());
+    expect(el(p, "message-75").querySelector(".rx-chip")).toBeNull();
+    expect(el(p, "message-76").querySelector(".rx-chip")).toBeNull();
+    expect(el(p, "thread-meta").textContent).toBe("600 messages");
+    const before = calls("agent_read_inbox").length;
+
+    await act(async () => useViewerStore.setState({ rightPaneOpen: false }));
+    messages.find((m) => m.messageId === 75)!.reactions = [{ emoji: "👍", reactors: ["Ori"] }];
+    const named = { changes: [{ team: { org: ORG, team: TEAM }, messageIds: [75] }] };
+    await act(async () => {
+      for (const payload of order === "before" ? [null, named] : [named, null])
+        for (const cb of listeners.get(AGENT_INBOX_CHANGED_EVENT) ?? []) cb({ payload });
+    });
+    await act(async () => useViewerStore.setState({ rightPaneOpen: true }));
+
+    await waitFor(
+      () =>
+        expect(el(p, "message-75").querySelector(".rx-chip")?.getAttribute("aria-label")).toBe(
+          "Reacted 👍 by Ori",
+        ),
+      PACED,
+    );
+    expect(el(p, "message-76").querySelector(".bd")?.textContent).toContain("Message 76");
+    expect(el(p, "message-76").querySelector(".rx-chip")).toBeNull();
+    expect(el(p, "thread-meta").textContent).toBe("600 messages");
+    expect(
+      calls("agent_read_inbox")
+        .slice(before)
+        .filter(([, args]) => args.query.limit === 1)
+        .map(([, args]) => args.query),
+    ).toEqual([{ scope: "all", conversation: "Mia", before: 76, limit: 1 }]);
+  },
+  10000,
+);
 
 it("pages cross-team role history team by team until every team ends", async () => {
   crossTeam = true;
@@ -3152,7 +3205,7 @@ it("keeps all outgoing role history archived beyond 500 rows after reopening", a
   expect(reopened.doc.querySelectorAll(".ib-row")).toHaveLength(0);
   messages.push(row(571, "human", "role:docs", { unread: false }));
   inboxChanged();
-  await waitFor(() => expect(reopened.doc.querySelectorAll(".ib-row")).toHaveLength(1));
+  await waitFor(() => expect(reopened.doc.querySelectorAll(".ib-row")).toHaveLength(1), PACED);
   await openThread(reopened, "#docs");
   await waitFor(() => expect(el(reopened, "log").querySelectorAll(".ib-msg")).toHaveLength(1));
   expect(el(reopened, "log").textContent).toContain("Message 571");
@@ -3339,7 +3392,7 @@ it("keeps the badge clear when a refresh read before the open reader's mark land
   holdReads = true;
   inboxChanged();
   // Both inbox reads of the refresh this starts answered while the mark was pending.
-  await waitFor(() => expect(heldReads).toBe(2));
+  await waitFor(() => expect(heldReads).toBe(2), PACED);
   holdReads = false;
   await act(async () => releaseMark());
   await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
@@ -3378,7 +3431,7 @@ it("shows the badge again when the open reader's held mark fails", async () => {
   await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
   // A refresh while the mark is pending keeps the badge clear under the read hold.
   inboxChanged();
-  await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+  await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined(), PACED);
   await act(async () => failMark());
   await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(1));
   expect(el(p, "composer-error").textContent).toContain("Could not mark read");
@@ -3526,7 +3579,7 @@ describe("inbox commands", () => {
     expect(focusDraft).toHaveBeenCalledTimes(1);
     messages.push(row(3, "Lee"));
     await act(async () => inboxChanged());
-    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(3));
+    await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(3), PACED);
     expect(focusDraft).toHaveBeenCalledTimes(1);
     expect(el(p, "inbox").dataset.list).toBe("hidden");
   });
@@ -3665,7 +3718,7 @@ describe("Jump to latest", () => {
     expect(dock(p).hidden).toBe(true);
     messages.push(row(5), row(6), row(7, "human", "Mia", { inReplyTo: 1, unread: false }));
     inboxChanged();
-    await waitFor(() => expect(el(p, "latest").textContent).toContain("2 new"));
+    await waitFor(() => expect(el(p, "latest").textContent).toContain("2 new"), PACED);
     expect(dock(p).hidden).toBe(false);
     expect(el(p, "log").contains(dock(p))).toBe(false);
     expect(el(p, "latest").textContent!.replace(/\s+/g, " ").trim()).toBe("2 new · Jump to latest");
@@ -3686,7 +3739,7 @@ describe("Jump to latest", () => {
     const { p, log } = await scrolledUp();
     messages.push(row(5));
     inboxChanged();
-    await waitFor(() => expect(el(p, "latest-count").textContent).toBe("1 new"));
+    await waitFor(() => expect(el(p, "latest-count").textContent).toBe("1 new"), PACED);
     log.scroll(790);
     await waitFor(() => expect(reads()).toEqual([[1], [5]]));
     expect(dock(p).hidden).toBe(true);
@@ -3700,7 +3753,7 @@ describe("Jump to latest", () => {
     const { p, log } = await scrolledUp();
     messages.push(row(5));
     inboxChanged();
-    await waitFor(() => expect(el(p, "latest-count").textContent).toBe("1 new"));
+    await waitFor(() => expect(el(p, "latest-count").textContent).toBe("1 new"), PACED);
     messages.unshift(row(0.5));
     await act(async () => el(p, "log").querySelector<HTMLElement>(".ib-older button")?.click());
     await settle();
@@ -3714,8 +3767,9 @@ describe("Jump to latest", () => {
     for (const burst of [0, 1]) {
       messages.push(...Array.from({ length: 50 }, (_, i) => row(100 + burst * 50 + i)));
       inboxChanged();
-      await waitFor(() =>
-        expect(el(p, "latest-count").textContent).toBe(burst ? "99+ new" : "50 new"),
+      await waitFor(
+        () => expect(el(p, "latest-count").textContent).toBe(burst ? "99+ new" : "50 new"),
+        PACED,
       );
     }
   });
@@ -3724,7 +3778,7 @@ describe("Jump to latest", () => {
     const { p, log } = await scrolledUp();
     messages.push(row(5));
     inboxChanged();
-    await waitFor(() => expect(dock(p).hidden).toBe(false));
+    await waitFor(() => expect(dock(p).hidden).toBe(false), PACED);
     type(p, "On it");
     fireEvent.keyDown(el(p, "draft"), { key: "Enter", metaKey: true });
     await waitFor(() => expect(dock(p).hidden).toBe(true));
@@ -4204,7 +4258,7 @@ it("applies the shipped Inbox recipe: fixed team, needs-you summaries, replies a
   expect(send[1].team).toEqual({ org: ORG, team: TEAM });
   messages.push(row(60, "Ori", "human", { kind: "needs-you", text: "A fresh decision" }));
   inboxChanged();
-  await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
+  await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2), PACED);
   expect(el(p, "conversations").textContent).toContain("A fresh decision");
   await waitFor(() => expect(el(p, "log").textContent).toContain("Use the first plan"));
 });
@@ -4486,7 +4540,7 @@ describe("Mark all read, the row menu, the toast and row keys", () => {
       const before = topLevelReads();
       // This refresh answers from the store while the unread write is still pending.
       inboxChanged();
-      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before));
+      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(before), PACED);
       await act(async () => releaseUnread());
       await waitFor(() => expect(calls("mark_inbox_messages_unread").length).toBeGreaterThan(0));
       await waitFor(() => expect(messages.filter((m) => m.unread)).toHaveLength(12));
@@ -4767,7 +4821,7 @@ describe("Mark all read, the row menu, the toast and row keys", () => {
       await waitFor(() => expect(usePaneStore.getState().badges[PANEL]?.count).toBe(2));
       const reads = topLevelReads();
       inboxChanged();
-      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(reads));
+      await waitFor(() => expect(topLevelReads()).toBeGreaterThan(reads), PACED);
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(order()).toEqual(before);
       await act(async () => release());
@@ -5273,7 +5327,7 @@ describe("cross-team Mark all read", () => {
     expect(rollup.find((m) => m.from === "Mia")?.unread).toBe(false);
     rollup.find((m) => m.from === "Ori")!.unread = false;
     inboxChanged();
-    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined());
+    await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined(), PACED);
     failIn("mark_inbox_messages_unread", "web");
     fireEvent.keyDown(list, { key: "u" });
     // A read role queue offers no Mark unread, so U does nothing on it.

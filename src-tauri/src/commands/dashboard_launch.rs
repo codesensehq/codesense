@@ -5729,6 +5729,33 @@ pub async fn dashboard_probe_sessions_alive(
     .await
 }
 
+/// Wait up to `timeout_ms` for the agent session `session_id` to be input-ready: its CLI's
+/// first lifecycle hook has been observed, so it is past every startup screen. Resolves
+/// `{ready:false, reason:"startup"}` at the timeout (the session is left running, nothing
+/// written to it) and `{ready:false, reason:"exited"}` when its process ends first. A
+/// session never seen by an activity owner never reads ready.
+#[tauri::command]
+pub async fn agent_session_await_ready(
+    app: tauri::AppHandle,
+    session_id: String,
+    timeout_ms: u64,
+) -> Result<AgentReadiness, String> {
+    let timeout = std::time::Duration::from_millis(timeout_ms.min(ready::MAX_READY_WAIT_MS));
+    Ok(
+        ready::await_ready_with(timeout, ready::READY_POLL, || {
+            let (app, session) = (app.clone(), session_id.clone());
+            async move {
+                await_blocking("agent_session_await_ready", move || {
+                    Ok(ready::probe_of(ready::session_snapshot(&app, &session).as_ref()))
+                })
+                .await
+                .unwrap_or(ready::ReadyProbe::Pending)
+            }
+        })
+        .await,
+    )
+}
+
 /// The order-preserving alive-subset filter, extracted pure so the "return only
 /// what the probe reported alive, in the caller's order" contract is regression-
 /// guarded without a real PTY. Unknown is not empty: while a terminal host cannot be
@@ -7072,6 +7099,8 @@ mod persistence;
 pub(crate) use persistence::registry_path as persistence_registry_path;
 
 pub(crate) mod deadline;
+mod ready;
+pub use ready::AgentReadiness;
 pub(crate) use deadline::{run_deadline_sweep, run_startup_sweep};
 
 #[cfg(test)]
@@ -9241,6 +9270,9 @@ mod tests {
     /// missing, with its reason.
     #[test]
     fn a_launch_record_carries_every_fact_preparation_held() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         let owner = SessionOwner { principal: None, org: "acme".into(), team: Some("dev".into()) };
         let (state, snapshot) = bound_launch(owner);
         let facts = launch_facts(&["--model=claude-opus-5-5", "--session-id", "native-1"]);
@@ -9297,6 +9329,9 @@ mod tests {
     /// other launch records the CLI's default home.
     #[test]
     fn a_launch_record_keeps_the_accounts_home_over_the_default() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         let owner = SessionOwner { principal: None, org: "acme".into(), team: Some("dev".into()) };
         let (state, mut snapshot) = bound_launch(owner);
         let owner = state.owner_for_session("sess-1");
@@ -9327,6 +9362,9 @@ mod tests {
 
     #[test]
     fn a_launch_records_the_home_its_environment_names_in_precedence_order() {
+        // Reads the default config home from the process env, which other tests point at a
+        // temp dir under this lock.
+        let _env = crate::content_engine::test_support::env_guard();
         use std::collections::BTreeMap;
         let claude = codesense_pty_core::agent_cli::AgentCli::Claude;
         let codex = codesense_pty_core::agent_cli::AgentCli::Codex;
