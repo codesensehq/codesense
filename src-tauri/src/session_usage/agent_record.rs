@@ -139,13 +139,13 @@ pub(crate) fn assemble(
         Some(timing) => Some(timing.wall_ms),
         None => first.zip(last).map(|(first, last)| last - first),
     };
-    let cost = if report.totals.unpriced_sessions > 0 || report.sessions.is_empty() {
+    let cost = if report.totals.unpriced_sessions > 0 || Vec::is_empty(&report.sessions) {
         None
     } else {
         Some(report.totals.cost_usd)
     };
     let mut unavailable = BTreeMap::new();
-    if report.sessions.is_empty() {
+    if Vec::is_empty(&report.sessions) {
         unavailable.insert("usage", "no usage has been reported for this session yet".to_owned());
     } else if cost.is_none() {
         unavailable.insert("cost", "a model of this session has no rate".to_owned());
@@ -161,7 +161,7 @@ pub(crate) fn assemble(
                     continue;
                 }
                 for path in paths {
-                    by_path.entry(path.as_str()).or_default().push(sha.as_str());
+                    by_path.entry(String::as_str(path)).or_default().push(String::as_str(sha));
                 }
             }
             by_path
