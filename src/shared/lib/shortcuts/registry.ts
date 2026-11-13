@@ -168,17 +168,22 @@ function resolvePaneNav(
 }
 
 /**
- * Close a tab's docked inbox. When focus is inside it (⌘I pressed in the composer), it goes
- * to that tab's terminal first, rather than falling to the page body as the rail unmounts.
+ * Close a tab's chat overlay. When focus is inside it (⌘I pressed in the composer), it goes
+ * to that tab's terminal first, rather than falling to the page body as the overlay unmounts.
  */
 function closeInboxRailKeepingFocus(sessionId: string): void {
   const active = typeof document === "undefined" ? null : document.activeElement;
-  const rail = active?.closest<HTMLElement>('[data-testid="inbox-rail"]');
-  if (rail && rail.dataset.sessionId === sessionId) {
-    const pane = rail.closest("[data-pane-id], [data-pane-active]");
-    pane?.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus();
-  }
+  const overlay = active?.closest<HTMLElement>('[data-testid="chat-overlay"]');
+  const pane =
+    overlay && overlay.dataset.sessionId === sessionId
+      ? overlay.closest("[data-pane-id], [data-pane-active]")
+      : null;
   closeAgentInboxRail(sessionId);
+  // A terminal the chat covered is inert until the chat is gone: focus it once that has rendered.
+  if (pane)
+    requestAnimationFrame(() =>
+      pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
+    );
 }
 
 export interface ShortcutAction {
