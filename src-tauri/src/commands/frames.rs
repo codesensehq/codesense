@@ -68,20 +68,28 @@ pub async fn mint_frame<R: tauri::Runtime>(
         // A story worktree's document, rooted at that registered worktree (the
         // worktree editor's Rendered view), takes the worktree gate instead.
         let content_root = PathBuf::from(&args.content_root);
-        let in_worktree = |p: &std::path::Path| {
-            crate::commands::files::path_in_frame_worktree(&app, &content_root, p)
-        };
-        let worktree_doc = in_worktree(&path);
+        let worktree = crate::commands::files::frame_worktree_root(&app, &content_root)
+            .filter(|roots| codesense_fs_core::gate::path_within_any_root(&path, roots));
+        let worktree_doc = worktree.is_some();
         if !worktree_doc {
             crate::commands::files::validate_context_path(&path, &app)?;
         }
         // Comparisons can show a committed file that has since been deleted.
         // Validate its existing ancestor instead; live documents must exist.
         let target = frame_document_target(&path, args.slot == "baseline")?;
-        if worktree_doc {
-            if !in_worktree(&target) {
+        if let Some(roots) = &worktree {
+            if !codesense_fs_core::gate::path_within_any_root(&target, roots) {
                 return Err("Access denied: document is outside its worktree".into());
             }
+            // The repo's own pages are its authors', not the team's: only a
+            // story file hydrated from the team's context (or an image, which
+            // runs nothing) renders here.
+            if !crate::commands::files::path_in_frame_worktree(&app, roots, &path, &path) {
+                return Err("Access denied: not a hydrated story file".into());
+            }
+            // Forced here: the caller's policy comes from the renderer.
+            args.policy.no_outside_network = true;
+            args.policy.allowed_hosts.clear();
         } else {
             crate::commands::files::validate_context_path(&target, &app)?;
             crate::commands::files::validate_context_path(&content_root, &app)?;
@@ -562,7 +570,7 @@ fn check_message_thread(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[test]
     fn builtin_frame_rejects_an_unknown_local_team() {
@@ -688,9 +696,29 @@ mod tests {
         }
     }
 
+    /// Record `files` as hydrated from the `sibling` team's context into the
+    /// worktree at `root`.
+    pub(crate) fn hydrate(
+        f: &crate::context_repo::caller_scope::tests::AppFixture,
+        root: &std::path::Path,
+        files: &[&str],
+    ) {
+        let files: Vec<_> = files
+            .iter()
+            .map(|p| (*p, "team:acme/ctx/sibling"))
+            .collect();
+        crate::agents::prepare::step3::tests::record_managed(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            root,
+            &files,
+        );
+    }
+
     /// A story worktree outside `~/.codesense/users/` with a dashboard at
-    /// `stories/board.html`, registered for a story of the `sibling` team.
-    fn story_worktree(
+    /// `stories/board.html` hydrated from the story's team context, registered
+    /// for a story of the `sibling` team.
+    pub(crate) fn story_worktree(
         f: &crate::context_repo::caller_scope::tests::AppFixture,
         at: &std::path::Path,
     ) -> PathBuf {
@@ -710,10 +738,11 @@ mod tests {
             &record,
         )
         .unwrap();
+        hydrate(f, at, &["stories/board.html"]);
         at.to_path_buf()
     }
 
-    fn document_args(
+    pub(crate) fn document_args(
         document: &std::path::Path,
         root: &std::path::Path,
         slot: &str,
@@ -724,7 +753,7 @@ mod tests {
         .unwrap()
     }
 
-    fn worktree_fixture() -> (
+    pub(crate) fn worktree_fixture() -> (
         crate::context_repo::caller_scope::tests::AppFixture,
         PathBuf,
     ) {
@@ -789,10 +818,59 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, "Access denied: document is outside its worktree");
-        // The same deleted baseline inside the worktree mints.
+        // The same deleted baseline of a hydrated story file mints.
+        hydrate(&f, &a, &["stories/gone.html"]);
         mint(a.join("stories/gone.html"), &a, "baseline")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_worktree_frame_has_no_outside_network() {
+        let (f, wt) = worktree_fixture();
+        let worktree = story_worktree(&f, &wt.join("feat-a"));
+        let mut args = document_args(&worktree.join("stories/board.html"), &worktree, "centre");
+        // The renderer asks for outside hosts; a worktree page gets none.
+        args.policy.no_outside_network = false;
+        args.policy.allowed_hosts = vec!["https://example.com".into()];
+        let frame = mint_frame(f.app.handle().clone(), args).await.unwrap();
+        assert!(frame.policy.no_outside_network);
+        assert!(frame.policy.allowed_hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn worktree_hydrated_files_lists_only_team_entries() {
+        let (f, wt) = worktree_fixture();
+        let worktree = story_worktree(&f, &wt.join("feat-a"));
+        crate::agents::prepare::step3::tests::record_managed(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+            &worktree,
+            &[
+                (".codex/config.toml", "generated"),
+                ("AGENTS.md", "repo:github.com/acme/api"),
+                ("design/SV-1/board.html", "team:acme/ctx/sibling"),
+            ],
+        );
+        let files = crate::commands::worktree_editor::worktree_hydrated_files(
+            f.app.handle().clone(),
+            worktree.to_string_lossy().into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(files, ["design/SV-1/board.html", "stories/board.html"]);
+        // A folder that isn't a registered worktree root is refused, even one
+        // inside a worktree.
+        for root in [wt.join("loose"), worktree.join("stories")] {
+            std::fs::create_dir_all(&root).unwrap();
+            let err = crate::commands::worktree_editor::worktree_hydrated_files(
+                f.app.handle().clone(),
+                root.to_string_lossy().into(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err, "Access denied: path is not a registered worktree root");
+        }
     }
 
     #[tokio::test]
@@ -801,11 +879,7 @@ mod tests {
         // Registered as a worktree, but it sits in `child`'s content: it is
         // context, scoped to the team that holds it, not the record's team.
         let inside = story_worktree(&f, &f.fixture.path("child", "content/wt"));
-        assert!(!crate::commands::files::path_in_frame_worktree(
-            f.app.handle(),
-            &inside,
-            &inside.join("stories/board.html"),
-        ));
+        assert!(crate::commands::files::frame_worktree_root(f.app.handle(), &inside).is_none());
         let frame = mint_frame(
             f.app.handle().clone(),
             document_args(&inside.join("stories/board.html"), &inside, "centre"),

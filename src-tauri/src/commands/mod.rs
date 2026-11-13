@@ -1076,7 +1076,8 @@ pub use async_helpers::await_blocking;
 // +1 `agent_inbox::unarchive_inbox_messages` (Inbox Undo for Archive). → 502.
 // -1 `reap_empty_scratch_notes`: listing notes no longer deletes blank notes. → 501.
 // +1 `write_binary_worktree_file` (a canvas drawn in a worktree writes its PNG render). → 502.
-pub const EXPECTED_COMMAND_COUNT: usize = 502;
+// +1 `worktree_hydrated_files` (the story files a worktree's Rendered view serves). → 503.
+pub const EXPECTED_COMMAND_COUNT: usize = 503;
 
 #[cfg(test)]
 mod tests {

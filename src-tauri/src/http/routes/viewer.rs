@@ -2813,13 +2813,19 @@ fn validate_frame_path<R: tauri::Runtime>(
     path: &std::path::Path,
 ) -> Result<(), StatusCode> {
     // A frame rooted in a registered story worktree (the worktree editor's
-    // Rendered view) reads inside that worktree only.
-    if crate::commands::files::path_in_frame_worktree(
-        app,
-        std::path::Path::new(&frame.content_root),
-        path,
-    ) {
-        return Ok(());
+    // Rendered view) reads that worktree's hydrated story files only, and is
+    // refused everything else rather than falling to the context gate.
+    if let Some(roots) =
+        crate::commands::files::frame_worktree_root(app, std::path::Path::new(&frame.content_root))
+    {
+        return crate::commands::files::path_in_frame_worktree(
+            app,
+            &roots,
+            std::path::Path::new(&frame.document_path),
+            path,
+        )
+        .then_some(())
+        .ok_or(StatusCode::FORBIDDEN);
     }
     let scope = crate::context_repo::caller_scope::for_page(
         app,
@@ -3061,6 +3067,12 @@ mod caller_scope_tests {
                 &record,
             )
             .unwrap();
+            crate::agents::prepare::step3::tests::record_managed(
+                &f.fixture.home,
+                &crate::domain::Principal::from(1u64),
+                &real,
+                &[("stories/board.html", "team:acme/sibling")],
+            );
         }
         let worktree = spelled(root);
         let page = worktree.join("stories/board.html");
@@ -3134,5 +3146,94 @@ mod caller_scope_tests {
             worktree_frame_request(Some(Spelling::Real), Spelling::Inner),
             StatusCode::FORBIDDEN
         );
+    }
+
+    /// A registered story worktree with `stories/board.html` hydrated from the
+    /// story's team context, on the port the frame routes serve.
+    fn registered_worktree() -> (AppFixture, std::path::PathBuf) {
+        let f = AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9321));
+        let base = f.fixture.temp.path().canonicalize().unwrap();
+        let worktree =
+            crate::commands::frames::tests::story_worktree(&f, &base.join("acme-wt/feat-a"));
+        (f, worktree)
+    }
+
+    /// A frame for `document`, minted the way the worktree editor's Rendered
+    /// view mints it.
+    fn mint_worktree_frame(
+        f: &AppFixture,
+        document: &std::path::Path,
+        root: &std::path::Path,
+    ) -> Result<FrameRecord, String> {
+        tauri::async_runtime::block_on(crate::commands::frames::mint_frame(
+            f.app.handle().clone(),
+            crate::commands::frames::tests::document_args(document, root, "centre"),
+        ))
+    }
+
+    /// GET `rel` in the worktree at `root` as `frame`.
+    fn worktree_get(
+        f: &AppFixture,
+        frame: &FrameRecord,
+        root: &std::path::Path,
+        rel: &str,
+    ) -> StatusCode {
+        let router = frame_routes(f);
+        let root = URL_SAFE_NO_PAD.encode(root.to_string_lossy().as_bytes());
+        tauri::async_runtime::block_on(frame_get(&router, frame, format!("/viewer/{root}/{rel}")))
+            .status()
+    }
+
+    #[test]
+    fn viewer_route_refuses_a_repo_file_in_a_registered_worktree() {
+        let (f, worktree) = registered_worktree();
+        std::fs::create_dir_all(worktree.join("design")).unwrap();
+        std::fs::write(worktree.join("design/page.html"), "<p>repo page</p>").unwrap();
+        std::fs::write(worktree.join(".env"), "not for frames").unwrap();
+        // A page the repo carries (or an agent wrote there) never mints.
+        let err =
+            mint_worktree_frame(&f, &worktree.join("design/page.html"), &worktree).unwrap_err();
+        assert_eq!(err, "Access denied: not a hydrated story file");
+        // A hydrated story page mints and reads itself, and is refused the
+        // repo's own files outright, not sent on to the context gate.
+        let frame =
+            mint_worktree_frame(&f, &worktree.join("stories/board.html"), &worktree).unwrap();
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "stories/board.html"),
+            StatusCode::OK
+        );
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, ".env"),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "design/page.html"),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn a_repo_image_frame_reads_only_itself() {
+        let (f, worktree) = registered_worktree();
+        std::fs::create_dir_all(worktree.join("design")).unwrap();
+        let png = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+        std::fs::write(worktree.join("design/shot.png"), png).unwrap();
+        std::fs::write(worktree.join("design/other.png"), png).unwrap();
+        std::fs::write(worktree.join("design/notes.md"), "repo notes").unwrap();
+        // Not hydrated, but an image: it still opens Rendered.
+        let frame = mint_worktree_frame(&f, &worktree.join("design/shot.png"), &worktree).unwrap();
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "design/shot.png"),
+            StatusCode::OK
+        );
+        // Its frame reads nothing else of the repo's.
+        for rel in ["design/other.png", "design/notes.md"] {
+            assert_eq!(
+                worktree_get(&f, &frame, &worktree, rel),
+                StatusCode::FORBIDDEN,
+                "{rel}"
+            );
+        }
     }
 }

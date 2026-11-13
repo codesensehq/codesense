@@ -307,6 +307,15 @@ export function worktreeEditorHandlers(base: HandlerRegistry, search = ""): Hand
       treeFor(at.root).set(at.rel, args.base64 as string);
       return undefined;
     },
+    // The mock world's hydrated team context: the story and design folders a
+    // launch copies in. Everything else is the repo's own.
+    worktree_hydrated_files: (args) => {
+      const at = split(args.root as string);
+      if (!at) throw new Error("Access denied: path is not a registered worktree root");
+      return [...treeFor(at.root).keys()]
+        .filter((rel) => ["stories/", "design/", "team-context/"].some((d) => rel.startsWith(d)))
+        .sort();
+    },
     worktree_list_files: (args) => {
       const at = split(args.root as string);
       const tree = treeFor(at?.root ?? (args.root as string));

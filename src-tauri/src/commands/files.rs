@@ -304,23 +304,21 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
     Err("Access denied: path is outside any registered worktree".to_string())
 }
 
-/// Is `path` inside `root`, where `root` is a registered worktree root and not
-/// in the context repo? The gate for a viewer frame rooted in a story worktree
-/// (the worktree editor's Rendered view): it reads its own worktree only, never
-/// another worktree, and context content keeps its team-scoped gate.
-/// Traversal-safe like [`validate_worktree_path`].
+/// The registered story worktree `root` names, as spelled and as its real
+/// path, when it is one and not in the context repo; `None` otherwise. A frame
+/// rooted there (the worktree editor's Rendered view) takes the worktree gate
+/// ([`path_in_frame_worktree`]); context content keeps its team-scoped gate.
 ///
-/// The root is taken both as spelled and as its real path: a worktree behind a
-/// symlink (`/var`, a linked `~/dev`) is requested by its spelling and then
-/// re-checked by its real path once the file is resolved. So the root must
-/// *be* a registered root, by either spelling, never merely lie inside one: a
-/// link committed in the worktree (`W/link → $HOME`) would otherwise admit
-/// everything under its target.
-pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
+/// The root is taken both ways because a worktree behind a symlink (`/var`, a
+/// linked `~/dev`) is requested by its spelling and then re-checked by its
+/// real path once the file is resolved. So the root must *be* a registered
+/// root, by either spelling, never merely lie inside one: a link committed in
+/// the worktree (`W/link → $HOME`) would otherwise admit everything under its
+/// target.
+pub(crate) fn frame_worktree_root<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     root: &Path,
-    path: &Path,
-) -> bool {
+) -> Option<[PathBuf; 2]> {
     let spelled = normalize_path_components(root);
     let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
     let registered = codesense_home_dir()
@@ -331,9 +329,73 @@ pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
         r == spelled || r.canonicalize().is_ok_and(|r| r == real)
     });
     let roots = [spelled, real];
-    is_root
-        && roots.iter().all(|root| !path_in_context_roots(root, app))
-        && path_within_any_root(path, &roots)
+    (is_root && roots.iter().all(|root| !path_in_context_roots(root, app))).then_some(roots)
+}
+
+/// May a frame rooted at the worktree `roots` (from [`frame_worktree_root`])
+/// with `document` read `path`? Only a hydrated story file: the repo's own
+/// files (its secrets, its source, a page an agent wrote there) are never
+/// served. The one exception is the frame's own document when it is an image,
+/// so a repo image still opens Rendered and its frame reads nothing else.
+/// Traversal-safe like [`validate_worktree_path`], and a link inside the
+/// worktree is judged by where it resolves.
+pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    roots: &[PathBuf; 2],
+    document: &Path,
+    path: &Path,
+) -> bool {
+    if !path_within_any_root(path, roots) {
+        return false;
+    }
+    let resolved = |p: &Path| {
+        p.canonicalize()
+            .unwrap_or_else(|_| normalize_path_components(p))
+    };
+    if is_image_path(document) && resolved(document) == resolved(path) {
+        return true;
+    }
+    let resolved = resolved(path);
+    let Some(rel) = roots
+        .iter()
+        .rev()
+        .find_map(|root| resolved.strip_prefix(root).ok())
+    else {
+        return false;
+    };
+    hydrated_worktree_files(app, roots).contains(&*rel.to_string_lossy())
+}
+
+/// The hydrated story files of the worktree at `roots`, by their path in it.
+fn hydrated_worktree_files<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    roots: &[PathBuf; 2],
+) -> std::collections::BTreeSet<String> {
+    let (Some(home), Ok(profile)) = (
+        codesense_home_dir(),
+        crate::commands::local_profile::active(app),
+    ) else {
+        return Default::default();
+    };
+    crate::agents::prepare::step3::hydrated_team_files(&home, &profile.principal, &roots[1])
+}
+
+/// The hydrated story files of the registered worktree `root` names: what its
+/// Rendered view serves, and opens Rendered.
+pub(crate) fn worktree_hydrated_files_at<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    let roots = frame_worktree_root(app, root)
+        .ok_or("Access denied: path is not a registered worktree root")?;
+    Ok(hydrated_worktree_files(app, &roots).into_iter().collect())
+}
+
+/// Whether `path` names an image by its extension (the viewer route's MIME).
+pub(crate) fn is_image_path(path: &Path) -> bool {
+    mime_guess::from_path(path)
+        .first()
+        .is_some_and(|mime| mime.type_() == mime_guess::mime::IMAGE)
 }
 
 /// Owned-`PathBuf` variant of `validate_context_path`. Builds the `PathBuf`

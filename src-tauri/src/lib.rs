@@ -1395,6 +1395,7 @@ pub fn run() {
             commands::files::write_binary_worktree_file,
             commands::worktree_editor::worktree_file_head,
             commands::worktree_editor::worktree_list_files,
+            commands::worktree_editor::worktree_hydrated_files,
             commands::files::write_binary_content_file,
             commands::files::delete_content_file,
             commands::files::move_content_file,
