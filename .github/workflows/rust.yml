@@ -326,9 +326,13 @@ jobs:
 
   rust-check-linux:
     name: Rust check (Linux)
-    # A compile check of the desktop app and its tests on every pull request, so a Rust break
-    # fails here in minutes instead of in the merge queue's macOS job. Check only: the tests
-    # themselves run on macOS.
+    # A compile check of the desktop app and its tests on pull requests, merge groups and the
+    # nightly run, so most Rust breaks fail here in minutes instead of in the merge queue's macOS
+    # job. Check only: the tests themselves run on macOS. It also builds the release-only
+    # `dashboard-publish` feature, which no other public job compiles.
+    # Gap: code behind `cfg(target_os = "macos")` and the macOS-only dependencies is not compiled
+    # on Linux. A change to that code still meets its first compile in the macOS job; add the
+    # `ci:macos` label to the pull request to run that job before the queue.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ubuntu-24.04
@@ -378,7 +382,7 @@ jobs:
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
       - name: Check the desktop app
-        run: cargo check --locked -p codesense --lib --tests
+        run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
 
   flaky-issues:
     name: Track flaky Rust tests
