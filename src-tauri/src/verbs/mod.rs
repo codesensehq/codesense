@@ -2,6 +2,7 @@
 pub mod capabilities;
 pub mod commands;
 mod dispatcher;
+pub mod foreman_launch;
 mod policy;
 mod registry;
 mod schema;

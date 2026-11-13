@@ -4605,3 +4605,90 @@ async fn a_person_names_the_org_of_a_legacy_story_open() {
     assert_eq!(error, "invalid: unknown org \"acme/../x\"");
     assert_eq!(port.story_orgs.lock().unwrap().len(), 2);
 }
+
+/// What a bundled page's `openWorkspace` sends for a team workspace.
+fn page_launch(args: serde_json::Value) -> OpenRequest {
+    serde_json::from_value::<UiLaunchArgs>(args).unwrap().into()
+}
+
+#[tokio::test]
+async fn a_page_launch_without_createworktree_is_refused_naming_the_missing_worktree() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 4);
+    let result = open_agent(
+        &host,
+        &active(),
+        &page_launch(serde_json::json!({"target": "team-workspace", "name": "Foreman", "worktree": "foreman"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, OpenStatus::Invalid);
+    assert!(
+        result.message.contains("no worktree named 'foreman'"),
+        "{}",
+        result.message
+    );
+    assert!(host.launches().is_empty(), "a refusal launches nothing");
+}
+
+#[tokio::test]
+async fn a_page_launch_with_createworktree_creates_it_and_a_repeat_is_already_live_there() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 4);
+    let args = serde_json::json!({"target": "team-workspace", "name": "Foreman", "worktree": "foreman", "createWorktree": true});
+    let opened = open_agent(&host, &active(), &page_launch(args.clone()))
+        .await
+        .unwrap();
+    assert_eq!(opened.status, OpenStatus::Opened, "{}", opened.message);
+    assert!(opened.worktree.as_ref().unwrap().created);
+    let launches = host.launches();
+    let [launch] = launches.as_slice() else {
+        panic!("one launch, got {launches:?}");
+    };
+    assert!(matches!(&launch.target, LaunchTarget::Dir { cwd, .. } if cwd == &host.worker("foreman")));
+
+    let again = open_agent(&host, &active(), &page_launch(args)).await.unwrap();
+    assert_eq!(again.status, OpenStatus::AlreadyLive);
+    assert_eq!(again.handle, opened.handle);
+    assert_eq!(host.launches().len(), 1, "a repeat launches nothing");
+}
+
+#[tokio::test]
+async fn a_launch_model_is_passed_after_the_agents_own_args() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 4);
+    let opened = open_agent(
+        &host,
+        &active(),
+        &OpenRequest {
+            model: Some("sonnet".into()),
+            ..team_workspace("Sprint 1", None)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened.status, OpenStatus::Opened, "{}", opened.message);
+    let launches = host.launches();
+    let args = &launches[0].agent.launch.args;
+    assert_eq!(&args[args.len() - 2..], ["--model", "sonnet"]);
+}
+
+#[tokio::test]
+async fn a_model_that_is_not_one_plain_word_is_invalid_and_launches_nothing() {
+    for model in ["--dangerously-skip-permissions", "opus; rm", "a b", &"m".repeat(65)] {
+        let home = tempfile::tempdir().unwrap();
+        let host = FakeHost::new(home.path(), 4);
+        let result = open_agent(
+            &host,
+            &active(),
+            &OpenRequest {
+                model: Some(model.to_string()),
+                ..team_workspace("Sprint 1", None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status, OpenStatus::Invalid, "{model}");
+        assert!(host.launches().is_empty(), "{model}");
+    }
+}

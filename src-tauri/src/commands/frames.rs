@@ -296,7 +296,7 @@ fn mint_record(
     team: Option<FrameTeam>,
     declared: &[String],
 ) -> FrameRecord {
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut args.policy,
         &args.slot,
@@ -304,6 +304,8 @@ fn mint_record(
         source_scope,
         declared,
     );
+    // Held only by a bundled page whose bytes match; never by declaration.
+    effective_grant.extend(crate::verbs::foreman_launch::grant_for(&args.document_path));
     let scope = grant_scope(args.policy.team_safe, source_scope);
     let kind = if args.slot == "message" || args.message.is_some() {
         FrameCallerKind::Message
@@ -394,7 +396,7 @@ fn rebind_record(
         FrameCallerKind::Message => "message",
     };
     let mut frame_policy = record.policy.clone();
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut frame_policy,
         &record.grant.slot,
@@ -402,6 +404,14 @@ fn rebind_record(
         source_scope,
         &record.declared,
     );
+    // A rebind keeps the page's own file, so it keeps what its bytes earned at mint.
+    if record
+        .effective_grant
+        .iter()
+        .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
+    {
+        effective_grant.push(crate::verbs::foreman_launch::CAPABILITY.to_owned());
+    }
     frames.rebind(
         frame_id,
         token,

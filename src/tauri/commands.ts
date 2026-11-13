@@ -6756,6 +6756,10 @@ export interface AgentLaunchOpenArgs {
   agent?: string;
   /** Its starting prompt (a /command works too); absent, the agent's own default prompt. */
   initialPrompt?: string;
+  /** The model the agent runs, passed to its CLI as `--model`; absent, the agent's own. */
+  model?: string;
+  /** How it surfaces: `headed` (the default), `visible-unfocused` or `headless`. */
+  mode?: "headed" | "visible-unfocused" | "headless";
   launchedBy?: string;
   role?: string;
   avatar?: string;
