@@ -3142,6 +3142,8 @@ pub(crate) mod agent_opens {
             team: None,
             worktree: None,
             create_worktree: None,
+            model: None,
+            mode: None,
         };
 
         let result = launch_from_ui(&port, args).await.unwrap();
@@ -3186,6 +3188,8 @@ pub(crate) mod agent_opens {
             team: None,
             worktree: None,
             create_worktree: None,
+            model: None,
+            mode: None,
         };
         let result = launch_from_ui(&port, args).await.unwrap();
         assert_eq!(result.status, OpenStatus::Opened, "{}", result.message);
