@@ -6,12 +6,18 @@ input:
     - "set me up with ~/code/demo"
 expected:
   launches: 1
-  launched_by: foreman
   prompt_includes: codesense-setup
+  # foreman.md "Not available to you": the setup tools and the terminal.
   forbidden_tools:
+    - create_team
+    - delete_team
+    - archive_team
     - add_source_repo
+    - remove_source_repo
     - attach_source_repo_path
     - attach_context_repository
-    - create_team
+    - detach_context_repository
+    - create_local_organization
+    - run_in_terminal_tab
     - records_create
 grader: script
