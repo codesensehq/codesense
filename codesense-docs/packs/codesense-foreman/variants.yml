@@ -1,0 +1,5 @@
+# The models the Foreman runs on. One agent, one launch argument: the page passes `model`.
+agent: foreman-claude
+models:
+  - { model: claude-opus-5-5, default: true }
+  - { model: claude-sonnet-5-5, setting: cheaper }

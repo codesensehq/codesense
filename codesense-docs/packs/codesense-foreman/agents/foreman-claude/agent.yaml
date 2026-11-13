@@ -1,0 +1,80 @@
+id: foreman-claude
+name: Foreman
+description: The one always-on agent. It shows what is going on, turns ideas into stories, starts sprint leads and messages any lead.
+runtime: claude
+launch: foreground
+# The queue role the Foreman claims its mail on. `foreman` is held by the Weft controller.
+role: codesense-foreman
+# The root prompt, generated from ../../foreman.md.
+startup:
+  - CLAUDE.md
+# Stage no project skills, commands, hooks or agents from the team's content.
+context: []
+args:
+  - --model
+  - claude-opus-5-5
+  # Read user and local settings only: the project's skills, commands and instructions stay off.
+  - --setting-sources
+  - user,local
+env:
+  MAX_MCP_OUTPUT_TOKENS: "8000"
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
+permissions:
+  claude:
+    defaultMode: default
+    allow:
+      - mcp__codesense__who_am_i
+      - mcp__codesense__read_messages
+      - mcp__codesense__session_read
+      - mcp__codesense__claim_role_messages
+      - mcp__codesense__ack_role_message
+      - mcp__codesense__codesense_overview
+      - mcp__codesense__describe_setup
+      - mcp__codesense__list_orgs_teams
+      - mcp__codesense__list_source_repos
+      - mcp__codesense__query_context
+      - mcp__codesense__read_content_file
+      - mcp__codesense__list_sessions
+      - mcp__codesense__session_usage
+      - mcp__codesense__inbox_list
+      - mcp__codesense__list_machines
+      - mcp__codesense__routine_list
+      - mcp__codesense__records_list
+      - mcp__codesense__agent_list
+      - mcp__codesense__get_story_format
+      - mcp__codesense__validate_story
+      - mcp__codesense__reply
+      - mcp__codesense__send_message
+      - mcp__codesense__signal_progress
+      - mcp__codesense__signal_done
+      - mcp__codesense__records_create
+      - mcp__codesense__open_workspace
+      - Bash(git fetch:*)
+      - Bash(git merge --ff-only:*)
+      - Bash(git worktree add:*)
+      - Bash(git worktree list:*)
+      - Bash(git worktree remove:*)
+      - Bash(git -C ../foreman-*:*)
+      - Bash(git push origin foreman/*:*)
+      - Bash(gh pr create:*)
+      - Bash(../foreman-*/stories/next-id.sh:*)
+      - Bash(../foreman-*/stories/new-story.sh:*)
+      - Edit(../foreman-*/**)
+      - Write(../foreman-*/**)
+    deny:
+      # The home worktree is read-only: it only fast-forwards.
+      - Edit(./**)
+      - Write(./**)
+      - NotebookEdit(./**)
+      - mcp__codesense__schedule_wakeup
+      - mcp__codesense__routine_create
+      - mcp__codesense__run_in_terminal_tab
+      - mcp__codesense__create_team
+      - mcp__codesense__delete_team
+      - mcp__codesense__archive_team
+      - mcp__codesense__add_source_repo
+      - mcp__codesense__remove_source_repo
+      - mcp__codesense__attach_context_repository
+      - mcp__codesense__detach_context_repository
+      - mcp__codesense__create_local_organization
+revision: 1

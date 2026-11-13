@@ -1,0 +1,16 @@
+pack_format: 1
+id: codesense-foreman
+name: CodeSense Foreman
+version: 0.1.0
+publisher: codesense
+summary: The one always-on agent that shows what is going on and runs CodeSense through its leads.
+license: MIT
+requires:
+  clis:
+    - { name: claude, optional: false }
+parts:
+  - { id: foreman-claude, kind: agent, file: agents/foreman-claude/agent.yaml }
+# Written by the pack build: sha256 of foreman.md plus its variant and the agent's own fields.
+# Empty until the build exists.
+spec_hash:
+  foreman-claude: null
