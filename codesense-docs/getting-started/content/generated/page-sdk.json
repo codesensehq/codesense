@@ -2582,7 +2582,7 @@
     {
       "name": "openWorkspace",
       "owner": "VerbMethods",
-      "signature": "openWorkspace(args?: {\n      headed?: boolean;\n      initialPrompt?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\";\n        path?: string;\n        storyId?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "openWorkspace(args?: {\n      agent?: string;\n      headed?: boolean;\n      initialPrompt?: string;\n      mode?: string;\n      model?: string;\n      role?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        createWorktree?: boolean;\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\" | \"team-workspace\";\n        name?: string;\n        org?: string;\n        path?: string;\n        storyId?: string;\n        team?: string;\n        worktree?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "spawn · launch · confirmable · MCP twin open_workspace",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "spawn",
@@ -13903,7 +13903,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "6380ffcc8e53f13de2ae36605e0816b46685c609b28e3bda5a9bb2175ad90a2e",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "e6df87f983e580a45b8b0599442abae7881398cf2aa42585b77352dbd4a7a458",
     "src-tauri/src/verbs/registry.generated.json": "6372301da09ca9496bceeb77427398df2d51b871af01221d163595fd348263a6",
     "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
