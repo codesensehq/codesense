@@ -552,7 +552,6 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
   throw new Error("inbox: kind, if present, must be 'needs-you' or 'update'");
 }
 
-/** A required inbox message id. */
 /** The agent thread a pins call names: a saved agent id and an optional story id. */
 function pinThread(
   a: Record<string, unknown>,
@@ -568,6 +567,7 @@ function pinThread(
   return { agentId: a.agentId.trim(), storyId: storyId ?? null };
 }
 
+/** A required inbox message id. */
 function messageId(value: unknown, verb: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${verb}: {messageId} must be a message id from inbox()`);
