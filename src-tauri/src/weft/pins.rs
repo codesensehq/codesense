@@ -20,7 +20,7 @@ pub const PIN_CAP: usize = 3;
 /// The largest preview, as stored JSON.
 const PREVIEW_MAX_BYTES: usize = 4096;
 
-/// The thread a pin list belongs to: the saved agent id and the story id (empty when the
+/// The thread a pin list belongs to: the saved agent id (without a revision) and the story id (empty when the
 /// session was launched with no story).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +31,8 @@ pub struct ThreadKey {
 
 impl ThreadKey {
     pub fn new(agent_id: &str, story_id: Option<&str>) -> WvWriteResult<Self> {
-        let agent_id = agent_id.trim();
+        // The saved agent is the id before `@`: a new revision of it continues its threads.
+        let agent_id = agent_id.split('@').next().unwrap_or(agent_id).trim();
         if str::is_empty(agent_id) {
             return Err(invalid("a pin thread needs a saved agent id"));
         }
@@ -481,6 +482,16 @@ mod tests {
             ThreadKey::new(" a ", Some(" DEMO-1 ")).unwrap().story_id,
             "DEMO-1"
         );
+    }
+
+    #[test]
+    fn a_threads_agent_is_the_saved_agent_without_its_revision() {
+        let key = |agent| ThreadKey::new(agent, Some("DEMO-1")).unwrap();
+        assert_eq!(key("team/dev@3"), key("team/dev@4"));
+        assert_eq!(key("team/dev@3"), key("team/dev"));
+        assert_eq!(key("team/dev@3").agent_id, "team/dev");
+        assert_ne!(key("team/dev@3"), key("team/qa@3"));
+        assert!(ThreadKey::new("@3", None).is_err());
     }
 
     #[test]
