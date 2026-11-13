@@ -52,6 +52,7 @@ import {
   initialViewMode,
   isViewToggleChord,
   rememberViewMode,
+  renderable,
   renderableType,
   type WorktreeViewMode,
 } from "./worktree-view-mode";
@@ -133,6 +134,9 @@ export interface WorktreeFilePaneProps {
   registerApi: (id: string, api: PaneApi | null) => void;
   /** Soft-wrap override from the status bar (`null` = the per-type default). */
   wrapOverride: boolean | null;
+  /** Whether the file is a story file hydrated from the team's context (only
+   *  then does html render); `null` until the worktree's set is known. */
+  hydrated: boolean | null;
 }
 
 /**
@@ -155,6 +159,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   onStatus,
   registerApi,
   wrapOverride,
+  hydrated,
 }: WorktreeFilePaneProps) {
   const editor = useFileEditor(file, changedNonce, {
     write: backend.write,
@@ -231,19 +236,31 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
 
   const [cursor, setCursor] = useState<CursorInfo | null>(null);
 
-  // Rendered | Source, for the types the viewer renders. The viewer reads this
-  // Mac's disk, so a remote worktree stays source only.
-  const canRender = backend.location === "local" && renderableType(file.path) != null;
-  const [viewMode, setViewModeState] = useState<WorktreeViewMode>(() =>
-    initialViewMode(file.path, backend.rootPath),
+  // Rendered | Source, for the types the viewer renders here. The viewer reads
+  // this Mac's disk, so a remote worktree stays source only, and html renders
+  // only when hydrated from the team's context. Until the worktree's hydrated
+  // files are known the pane is held at its loading state, so a story doc
+  // never shows Source first and then flips to Rendered.
+  const held = hydrated == null;
+  const type = renderableType(file.path);
+  const canRender =
+    backend.location === "local" && type != null && hydrated != null && renderable(type, hydrated);
+  const [viewModeState, setViewModeState] = useState<WorktreeViewMode | null>(() =>
+    hydrated == null ? null : initialViewMode(file.path, hydrated),
   );
+  let viewModeNow = viewModeState;
+  if (viewModeNow === null && hydrated != null) {
+    viewModeNow = initialViewMode(file.path, hydrated);
+    setViewModeState(viewModeNow);
+  }
+  const viewMode = viewModeNow ?? "source";
   const rendered = canRender && viewMode === "rendered";
   const setViewMode = useCallback(
     (mode: WorktreeViewMode) => {
       setViewModeState(mode);
-      rememberViewMode(file.path, backend.rootPath, mode);
+      if (hydrated != null) rememberViewMode(file.path, hydrated, mode);
     },
-    [file.path, backend.rootPath],
+    [file.path, hydrated],
   );
   // The viewer mounts the first time Rendered is shown and then stays mounted
   // (hidden under Source), so a save reaches it as a refresh, not a remount.
@@ -274,7 +291,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   // allocate a "changed" status object.
   useEffect(() => {
     onStatus(id, {
-      kind: state.kind,
+      kind: held ? "loading" : state.kind,
       dirty,
       saving,
       saveError,
@@ -291,6 +308,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   }, [
     onStatus,
     id,
+    held,
     state.kind,
     dirty,
     saving,
@@ -466,8 +484,8 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   // first time Source is shown, then kept (hidden under Rendered) so the undo
   // history, cursor and an open merge survive a toggle.
   const showRendered = rendered && !reconciling;
-  const [sourceShown, setSourceShown] = useState(!showRendered);
-  if (!showRendered && !sourceShown) setSourceShown(true);
+  const [sourceShown, setSourceShown] = useState(!showRendered && !held);
+  if (!showRendered && !held && !sourceShown) setSourceShown(true);
   useLayoutEffect(() => {
     sourceOnScreenRef.current = !showRendered;
     flushPending();
@@ -595,7 +613,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
         </div>
       )}
 
-      {backend.location === "remote" && renderableType(file.path) != null && (
+      {backend.location === "remote" && type != null && (
         <div
           data-testid="worktree-render-remote-hint"
           className="flex h-7 shrink-0 items-center border-b border-[var(--border)] px-3 text-[0.72rem] text-muted-foreground"
@@ -612,7 +630,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
           // A canvas is an editor itself, so drawing would race those edits.
           note={
             showRendered && dirty
-              ? renderableType(file.path) === "excalidraw"
+              ? type === "excalidraw"
                 ? "Unsaved edits in Source · save or undo them there before drawing"
                 : "Showing the saved version · ⌘S to update"
               : null
@@ -625,6 +643,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
       )}
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
+        {held && <EditorSkeleton />}
         {renderedShown && (
           <div
             className="absolute inset-0 flex flex-col"

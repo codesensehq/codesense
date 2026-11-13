@@ -96,6 +96,14 @@ const STORY = `${ROOT}/stories/epic/SV-1-story.md`;
 const DASHBOARD = `${ROOT}/stories/epic/SV-1-story.html`;
 const SOURCE_MD = `${ROOT}/src/notes.md`;
 
+/** The worktree's hydrated story files, as the inset reads them from Rust. */
+const HYDRATED = new Set([
+  STORY,
+  DASHBOARD,
+  `${ROOT}/stories/epic/SV-2-story.md`,
+  `${ROOT}/stories/epic/SV-2-story.html`,
+]);
+
 const MERMAID_DOC = "# Story\n\n```mermaid\ngraph TD; A-->B\n```\n";
 
 function backend(write = vi.fn().mockResolvedValue(undefined)): WorktreeEditorBackend {
@@ -114,13 +122,20 @@ const chrome = vi.hoisted(() => ({
   api: null as PaneApi | null,
 }));
 
-function pane(path: string, b: WorktreeEditorBackend, changedNonce = 0, size = 64) {
+function pane(
+  path: string,
+  b: WorktreeEditorBackend,
+  changedNonce = 0,
+  size = 64,
+  hydrated: boolean | null = HYDRATED.has(path),
+) {
   const rel = path.slice(ROOT.length + 1);
   return createElement(WorktreeFilePane, {
     id: rel,
     file: { path, size },
     active: true,
     backend: b,
+    hydrated,
     changedNonce,
     restore: null,
     onPersistDraft: () => {},
@@ -230,6 +245,35 @@ describe("WorktreeFilePane Rendered | Source", () => {
 
     render(pane(STORY, backend()));
     expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
+  });
+
+  it("opens repo html in Source only and never mounts HtmlViewer, even under stories/", async () => {
+    const REPO_HTML = `${ROOT}/stories/x.html`;
+    readFileMock.mockResolvedValue("<!doctype html><p>repo</p>");
+    render(pane(REPO_HTML, backend()));
+    expect(await screen.findByTestId("stub-editor")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "File view" })).toBeNull();
+
+    act(() => chrome.api?.toggleView());
+    expect(screen.queryByTestId("stub-html")).toBeNull();
+    expect(viewer.props.some((p) => p.kind === "html")).toBe(false);
+  });
+
+  it("shows nothing until the hydrated set arrives, so a story doc never flashes Source", async () => {
+    readFileMock.mockResolvedValue(MERMAID_DOC);
+    const b = backend();
+    const view = render(pane(STORY, b, 0, 64, null));
+    await waitFor(() => expect(readFileMock).toHaveBeenCalled());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(chrome.status?.kind).toBe("loading");
+    expect(screen.queryByTestId("stub-editor")).toBeNull();
+    expect(screen.queryByTestId("stub-markdown")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "File view" })).toBeNull();
+
+    view.rerender(pane(STORY, b, 0, 64, true));
+    expect(await screen.findByTestId("stub-markdown")).toBeInTheDocument();
+    expect(screen.queryByTestId("stub-editor")).toBeNull();
+    await waitFor(() => expect(chrome.status?.kind).toBe("editable"));
   });
 
   it("opens an image anywhere in the worktree Rendered", async () => {
