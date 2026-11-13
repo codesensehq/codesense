@@ -36,6 +36,23 @@ const COMMAND_SLOTS: readonly SlotId[] = ["right-pane", "dock", "file-nav"];
 
 /** Each dashboard's last `commands.register` set; absent means every declared command. */
 const activeSets = new Map<string, ReadonlySet<string>>();
+/** What a slot shows in place of a dashboard that failed to load: the fallback's own entry, or a
+ *  body with no commands of its own (`"native"`). Keyed by slot; `failed` is the dashboard it stands in for. */
+const displayedBodies = new Map<SlotId, { failed: string; body: PaneEntry | "native" }>();
+
+/** The slot host says what its slot shows while `failed` is down (`null`: the dashboard itself
+ *  shows again). A null for another dashboard than the one set leaves the override be. */
+export function setSlotDisplayedBody(
+  slot: SlotId,
+  failed: string,
+  body: PaneEntry | "native" | null,
+): void {
+  if (body) displayedBodies.set(slot, { failed, body });
+  else if (displayedBodies.get(slot)?.failed === failed) displayedBodies.delete(slot);
+  else return;
+  syncDashboardCommands();
+}
+
 interface SlotDashboard {
   slot: SlotId;
   pane: PaneEntry;
@@ -173,8 +190,16 @@ export function syncDashboardCommands(): void {
   const seen = new Set<string>();
   const dashboards: SlotDashboard[] = [];
   for (const slot of COMMAND_SLOTS) {
-    for (const pane of slotDashboards(slot)) {
-      const key = dashboardRefKey(pane.dashboardRef!);
+    const shown = displayedBodies.get(slot);
+    for (const slotPane of slotDashboards(slot)) {
+      let pane = slotPane;
+      let key = dashboardRefKey(pane.dashboardRef!);
+      // Commands follow the body on screen, not the dashboard that failed to load.
+      if (shown?.failed === key) {
+        if (shown.body === "native" || !shown.body.dashboardRef) continue;
+        pane = shown.body;
+        key = dashboardRefKey(pane.dashboardRef!);
+      }
       if (seen.has(key) || !pane.declaration?.commands?.length) continue;
       seen.add(key);
       dashboards.push({ slot, pane, key });

@@ -28,6 +28,7 @@ import {
 } from "@/features/dashboard/components/html-viewer";
 import { useDashboardPolicy } from "@/features/dashboard/lib/verb-policy";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
+import { setSlotDisplayedBody } from "@/features/dashboard/lib/dashboard-commands";
 import {
   captureReloadState,
   setFrameFrozen,
@@ -942,6 +943,14 @@ export function SlotDashboardHost({
     [presentationRef],
   );
   const showingEntryFallback = !!failure && !retained && !!fallbackConfig;
+  // The registry's commands follow the body on screen. A dock's entry fallback keeps its own path.
+  const failedKey = entry.dashboardRef ? dashboardRefKey(entry.dashboardRef) : null;
+  const shownInPlace = failure && !retained && !fallbackConfig ? (fallbackInbox ?? "native") : null;
+  useEffect(() => {
+    if (!failedKey || !shownInPlace) return;
+    setSlotDisplayedBody(slotId, failedKey, shownInPlace);
+    return () => setSlotDisplayedBody(slotId, failedKey, null);
+  }, [slotId, failedKey, shownInPlace]);
   const strip = failure && !showingEntryFallback && (
     <SlotFallbackStrip
       entry={entry}

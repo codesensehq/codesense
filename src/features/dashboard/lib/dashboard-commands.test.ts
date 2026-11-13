@@ -28,6 +28,7 @@ import { useDashboardProfileStore } from "./dashboard-profile";
 import {
   runDashboardCommand,
   setActiveDashboardCommands,
+  setSlotDisplayedBody,
   syncDashboardCommands,
 } from "./dashboard-commands";
 import {
@@ -175,6 +176,7 @@ beforeEach(() => {
   toastWarning.mockClear();
 });
 afterEach(() => {
+  setSlotDisplayedBody("right-pane", INBOX, null);
   usePaneStore.setState({ sourceRows: {} });
   frames.forEach((dispose) => dispose());
   frames = [];
@@ -1039,5 +1041,66 @@ describe("Notes built-in entry commands", () => {
     useViewerStore.setState({ rightPaneOpen: true, rightPaneLayout: { sections: [] } });
     findShortcutAction("viewer.toggle-pane-full-screen")!.run();
     expect(useViewerStore.getState().maximizedPanel).toEqual({});
+  });
+});
+
+describe("a slot showing a fallback body", () => {
+  const REPLY: DashboardCommand = {
+    id: "compose",
+    label: "New message",
+    icon: "pencil",
+    defaultChord: "CmdOrCtrl+Shift+N",
+    scope: "slot-focused",
+  };
+  const registered = () => allShortcutActions().filter((a) => a.command);
+
+  it("registers the fallback's commands and withdraws the failed dashboard's", () => {
+    const fallback = pane(boardRef, "Inbox", [REPLY]);
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", INBOX, fallback);
+    expect(registered().map((a) => a.id)).toEqual([id(BOARD, "compose")]);
+    expect(key("y", { metaKey: true, shiftKey: true })).toBeUndefined();
+  });
+
+  it("runs a fallback command in the fallback's live frame, with no \"didn't run\" toast", () => {
+    vi.useFakeTimers();
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    const post = mountFrame(BOARD);
+    markFrameReady("f1");
+    markFrameLive("f1");
+    runDashboardCommand(id(BOARD, "compose"));
+    expect(post).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "codesense:command", id: "compose" }),
+    );
+    vi.advanceTimersByTime(COMMAND_QUEUE_BACKSTOP_MS + 1);
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("offers a failed dashboard no command while a native body shows", () => {
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", INBOX, "native");
+    expect(registered()).toEqual([]);
+  });
+
+  it("brings the failed dashboard's commands back when the override clears", () => {
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", INBOX, pane(boardRef, "Inbox", [REPLY]));
+    setSlotDisplayedBody("right-pane", INBOX, null);
+    expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive")]);
+  });
+
+  it("ignores an override for a dashboard that is not the slot's", () => {
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", BOARD, "native");
+    expect(registered().map((a) => a.id)).toEqual([id(INBOX, "archive")]);
+  });
+
+  it("clears only the override it set", () => {
+    install([pane(inboxRef, "Inbox", [ARCHIVE])]);
+    setSlotDisplayedBody("right-pane", INBOX, "native");
+    setSlotDisplayedBody("right-pane", BOARD, null);
+    expect(registered()).toEqual([]);
+    setSlotDisplayedBody("right-pane", INBOX, null);
   });
 });

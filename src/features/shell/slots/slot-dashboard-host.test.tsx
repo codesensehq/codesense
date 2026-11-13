@@ -27,6 +27,10 @@ vi.mock("@/tauri/commands", async (original) => ({
     state.app = next;
   }),
 }));
+const displayedBody = vi.hoisted(() => vi.fn());
+vi.mock("@/features/dashboard/lib/dashboard-commands", () => ({
+  setSlotDisplayedBody: displayedBody,
+}));
 const props = vi.hoisted(() => ({
   current: null as any,
   primary: null as any,
@@ -1032,6 +1036,63 @@ it.each(["team", "private"] as const)(
     ).toBeTruthy();
   },
 );
+
+const keyedEntry = {
+  ...entry,
+  title: "Inbox",
+  dashboardRef: { scope: "team" as const, org: "acme", team: "dev", id: "inbox" },
+};
+
+it("tells the command registry the built-in Inbox shows while a failed Inbox falls back to it", async () => {
+  const builtin = {
+    ...entry,
+    title: "Inbox",
+    scope: "private" as const,
+    team: undefined,
+    panelId: "pane:private:acme/inbox",
+    path: "/builtin-panes/panes/inbox.html",
+    panesDir: "/builtin-panes/panes",
+    dashboardRef: { scope: "built-in" as const, org: "acme", id: "inbox" },
+  };
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "dev" });
+  vi.mocked(listBuiltinPanes).mockResolvedValue({
+    contentRoot: "/ctx",
+    chain: [],
+    panes: [builtin],
+    builtinInbox: builtin,
+  });
+  displayedBody.mockClear();
+  const view = render(
+    <SlotDashboardHost slotId="right-pane" entry={keyedEntry} contentRoot="/ctx" visible />,
+  );
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", expect.any(String), builtin),
+  );
+  const failedKey = displayedBody.mock.calls.at(-1)![1];
+  view.unmount();
+  expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, null);
+});
+
+it("withdraws a failed dashboard's commands while a native body shows, and gives them back on recovery", () => {
+  vi.useFakeTimers();
+  displayedBody.mockClear();
+  render(
+    <SlotDashboardHost
+      slotId="dock"
+      entry={keyedEntry}
+      contentRoot="/ctx"
+      visible
+      renderNative={() => <div>Agents list</div>}
+    />,
+  );
+  act(() => vi.advanceTimersByTime(30000));
+  expect(screen.getByText("Agents list")).toBeTruthy();
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", expect.any(String), "native");
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  act(() => props.current.onDocLive());
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", expect.any(String), null);
+});
 
 it("keeps dock retry activity while its native fallback is on screen", () => {
   vi.useFakeTimers();
