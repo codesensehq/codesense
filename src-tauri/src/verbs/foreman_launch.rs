@@ -4,7 +4,7 @@
 //! so no preset, declaration or per-dashboard override can hand it out; it is minted from the
 //! page file's own bytes, at its own place in the placed docs checkout.
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Component, Path};
 
 pub const CAPABILITY: &str = "foreman.launch";
 
@@ -25,25 +25,28 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
     grant_in(PAGES, docs_root, document_path)
 }
 
-/// The document must be a regular file (not a link) inside `docs_root`, at a page's path, with
-/// that page's bytes. The path is checked before the file is read.
+/// The document must sit at a page's path under `docs_root`, reached through plain segments
+/// with no link or `..` below the root (a link could alias another file, and the viewer
+/// re-resolves the path on every request), and carry that page's bytes. The path is checked
+/// before the file is read.
 pub fn grant_in(pages: &[Page], docs_root: &Path, document_path: &str) -> Option<String> {
     if pages.is_empty() {
         return None;
     }
-    let document = Path::new(document_path);
-    if std::fs::symlink_metadata(document)
-        .ok()?
-        .file_type()
-        .is_symlink()
+    let relative = Path::new(document_path).strip_prefix(docs_root).ok()?;
+    if !relative
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
     {
         return None;
     }
-    let root = std::fs::canonicalize(docs_root).ok()?;
-    let document = std::fs::canonicalize(document).ok()?;
-    let relative = document.strip_prefix(&root).ok()?;
-    let relative = relative.to_string_lossy().replace('\\', "/");
-    let page = pages.iter().find(|page| page.path == relative)?;
+    let page = pages
+        .iter()
+        .find(|page| relative.to_string_lossy().replace('\\', "/") == page.path)?;
+    let document = std::fs::canonicalize(document_path).ok()?;
+    if document != std::fs::canonicalize(docs_root).ok()?.join(relative) {
+        return None;
+    }
     let digest = format!("{:x}", Sha256::digest(std::fs::read(&document).ok()?));
     (page.sha256 == digest).then(|| CAPABILITY.to_owned())
 }
@@ -111,6 +114,32 @@ mod tests {
         let link = dir.path().join("team").join("index.html");
         std::os::unix::fs::symlink(&page, &link).unwrap();
         assert_eq!(grant_in(&pages(), &docs, &link.to_string_lossy()), None);
+        // A linked folder that reaches the page's folder from a team's content.
+        let folder = dir.path().join("team").join("foreman");
+        std::os::unix::fs::symlink(page.parent().unwrap(), &folder).unwrap();
+        let aliased = folder.join("index.html");
+        assert_eq!(grant_in(&pages(), &docs, &aliased.to_string_lossy()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_docs_root_is_refused() {
+        let (dir, docs, page) = placed(BODY);
+        // The page's folder replaced by a link to a folder elsewhere with the same bytes.
+        let elsewhere = dir.path().join("team").join("foreman");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("index.html"), BODY).unwrap();
+        std::fs::remove_dir_all(page.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, page.parent().unwrap()).unwrap();
+        assert_eq!(grant_in(&pages(), &docs, &page.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn a_path_with_dot_segments_is_refused() {
+        let (_dir, docs, _) = placed(BODY);
+        let dotted = docs.join("getting-started/content/other/../foreman/index.html");
+        std::fs::create_dir_all(docs.join("getting-started/content/other")).unwrap();
+        assert_eq!(grant_in(&pages(), &docs, &dotted.to_string_lossy()), None);
     }
 
     #[test]
