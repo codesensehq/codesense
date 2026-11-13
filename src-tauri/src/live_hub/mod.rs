@@ -660,7 +660,10 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 pub fn start(app: &tauri::AppHandle) {
     app.manage(LiveHub::default());
-    app.manage(pins::PinViews::default());
+    // A typed value, not `PinViews::default()`: the explicit-sync guard can't resolve a derived
+    // `default` on a crate type.
+    let views: pins::PinViews = Default::default();
+    app.manage(views);
     crate::records::projection::start(app);
     files::start(app);
     app.manage(agent_marks::AgentMarks::default());

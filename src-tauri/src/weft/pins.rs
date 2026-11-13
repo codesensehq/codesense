@@ -32,7 +32,7 @@ pub struct ThreadKey {
 impl ThreadKey {
     pub fn new(agent_id: &str, story_id: Option<&str>) -> WvWriteResult<Self> {
         let agent_id = agent_id.trim();
-        if agent_id.is_empty() {
+        if str::is_empty(agent_id) {
             return Err(invalid("a pin thread needs a saved agent id"));
         }
         Ok(Self {
@@ -259,12 +259,12 @@ pub fn pin_add(
     preview: Option<&PinPreview>,
 ) -> WvWriteResult<PinOutcome> {
     let pinned_by = pinned_by.trim();
-    if pinned_by.is_empty() {
+    if str::is_empty(pinned_by) {
         return Err(invalid("pinned_by is blank"));
     }
     let preview = preview.map(PinPreview::stored).transpose()?;
     let now = chrono::Utc::now().timestamp_millis();
-    let mut conn = store.conn()?;
+    let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let live = tx
         .query_row(
@@ -292,7 +292,7 @@ pub fn pin_add(
             params![id, preview, now],
         )?;
         write_audit_public(&tx, PINS, "mutate", id)?;
-        tx.commit()?;
+        rusqlite::Transaction::commit(tx)?;
         return Ok(PinOutcome::Updated);
     }
     if order.len() >= PIN_CAP {
@@ -321,7 +321,7 @@ pub fn pin_add(
     order.insert(at, message_id);
     order.extend(gone);
     renumber(&tx, thread, &order)?;
-    tx.commit()?;
+    rusqlite::Transaction::commit(tx)?;
     Ok(PinOutcome::Pinned)
 }
 
@@ -331,7 +331,7 @@ pub fn pin_remove(
     thread: &ThreadKey,
     message_id: i64,
 ) -> WvWriteResult<PinOutcome> {
-    let mut conn = store.conn()?;
+    let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let id: Option<i64> = tx
         .query_row(
@@ -348,7 +348,7 @@ pub fn pin_remove(
     let (mut order, gone) = ordered(&tx, thread)?;
     order.extend(gone);
     renumber(&tx, thread, &order)?;
-    tx.commit()?;
+    rusqlite::Transaction::commit(tx)?;
     Ok(PinOutcome::Unpinned)
 }
 
@@ -359,7 +359,7 @@ pub fn pins_reorder(
     thread: &ThreadKey,
     message_ids: &[i64],
 ) -> WvWriteResult<()> {
-    let mut conn = store.conn()?;
+    let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (live, gone) = ordered(&tx, thread)?;
     let mut asked = message_ids.to_vec();
@@ -374,13 +374,13 @@ pub fn pins_reorder(
     let mut order = message_ids.to_vec();
     order.extend(gone);
     renumber(&tx, thread, &order)?;
-    tx.commit()?;
+    rusqlite::Transaction::commit(tx)?;
     Ok(())
 }
 
 /// `thread`'s shown pins (live, at most [`PIN_CAP`]) in list order, numbered from 0.
 pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin>> {
-    let conn = store.conn()?;
+    let conn = WeftStore::conn(store)?;
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT p.message_id, p.pinned_by, p.created_at, p.preview, p.preview_at \
          FROM wv_pins p WHERE p.agent_id = ?1 AND p.story_id = ?2 AND {LIVE} \
@@ -409,7 +409,7 @@ pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin
                 position: position as u32,
                 pinned_by,
                 pinned_at_ms,
-                preview: preview.and_then(|json| serde_json::from_str(&json).ok()),
+                preview: preview.and_then(|json| Result::ok(serde_json::from_str(&json))),
                 preview_at_ms,
             },
         )
@@ -420,13 +420,16 @@ pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin
 /// refresh their lists.
 pub fn pin_threads_for(store: &WeftStore, message_ids: &[i64]) -> WvWriteResult<Vec<ThreadKey>> {
     const CHUNK: usize = 500;
-    let conn = store.conn()?;
+    let conn = WeftStore::conn(store)?;
     let mut found = std::collections::BTreeSet::new();
     for ids in message_ids.chunks(CHUNK) {
         let marks = vec!["?"; ids.len()].join(",");
-        let mut stmt = conn.prepare(&format!(
-            "SELECT DISTINCT agent_id, story_id FROM wv_pins WHERE message_id IN ({marks})"
-        ))?;
+        let mut stmt = rusqlite::Connection::prepare(
+            &conn,
+            &format!(
+                "SELECT DISTINCT agent_id, story_id FROM wv_pins WHERE message_id IN ({marks})"
+            ),
+        )?;
         let rows = stmt.query_map(rusqlite::params_from_iter(ids), |r| {
             Ok(ThreadKey {
                 agent_id: r.get(0)?,

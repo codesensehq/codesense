@@ -64,7 +64,7 @@ async fn read(
     thread: &ThreadKey,
 ) -> Result<Vec<Pin>, String> {
     let host = AppInboxHost { app: app.clone() };
-    let story = (!thread.story_id.is_empty()).then_some(thread.story_id.as_str());
+    let story = (!String::is_empty(&thread.story_id)).then_some(String::as_str(&thread.story_id));
     match pins_from_human(&host, team, &thread.agent_id, story, PinOp::Read).await? {
         PinResult::Pins { list, .. } => Ok(list.pins),
         PinResult::Invalid { message } => Err(message),
@@ -113,7 +113,7 @@ pub fn refresh(app: &tauri::AppHandle, team: LaunchTeam, thread: Option<ThreadKe
                 .collect()
         })
         .unwrap_or_default();
-    if due.is_empty() {
+    if Vec::is_empty(&due) {
         return;
     }
     let app = app.clone();

@@ -111,7 +111,7 @@ async fn pins_in(
                     m.role.is_some()
                         || m.from == by
                         || m.to == by
-                        || m.reply_to.as_deref() == Some(by.as_str())
+                        || m.reply_to.as_deref() == Some(String::as_str(&by))
                 });
                 if !held {
                     return Ok(Err(format!("no message {message_id}")));
@@ -189,7 +189,7 @@ pub(crate) async fn pin_request<'a>(
     preview: Option<PinPreview>,
     remove: bool,
 ) -> Result<PinResult, String> {
-    let sessions = host.sessions().await?;
+    let sessions = InboxHost::sessions(host).await?;
     let handle = match caller_handle(&sessions, session_id) {
         Ok(Some(handle)) => handle,
         Ok(None) => return Ok(PinResult::invalid("pinning needs a running session")),
@@ -233,7 +233,7 @@ pub async fn agent_pins(
     preview: Option<PinPreview>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
-    let op = match op.as_str() {
+    let op = match String::as_str(&op) {
         "read" => PinOp::Read,
         "pin" => PinOp::Pin {
             message_id: need_id()?,
