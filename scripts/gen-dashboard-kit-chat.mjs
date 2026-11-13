@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Bundles the chat modules (dashboard_kit/chat/*.js, ES modules) into the one classic script a live doc loads,
 // dashboard_kit/chat.js, which defines window.codesense.kit.chat. The modules are the source: chat-core.js is also served
-// and imported as it is (DOM-free), and the context repo's story-view keeps a generated copy of the module folder.
+// and imported as it is (DOM-free), and a page that vendors the chat keeps a generated copy of the module folder.
 //   node scripts/gen-dashboard-kit-chat.mjs          rewrite chat.js
 //   node scripts/gen-dashboard-kit-chat.mjs --check  fail if chat.js is stale
 import { readFileSync, writeFileSync } from "node:fs";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The chat-core cases the dashboard kit and the context repo's story-view both run (their copy is chat-core.test.mjs):
+// The chat-core cases the dashboard kit and any page that vendors the chat both run:
 // the marks rule and the card parser, through the overlay's import.
 import { describe, expect, it } from "vitest";
 
@@ -122,9 +122,9 @@ describe("parseCard", () => {
 
   it("keeps the text before Options as the question, over several lines", () => {
     const parsed = parseCard(
-      "Merge SV-X-1?\n**PR:** link\n\nOptions: `merge` or `hold`. My pick: merge, because green.",
+      "Merge the release branch?\n**PR:** link\n\nOptions: `merge` or `hold`. My pick: merge, because green.",
     );
-    expect(parsed?.question).toBe("Merge SV-X-1?\n**PR:** link");
+    expect(parsed?.question).toBe("Merge the release branch?\n**PR:** link");
     expect(parsed?.options).toEqual(["merge", "hold"]);
   });
 
