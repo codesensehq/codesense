@@ -2386,6 +2386,14 @@ virtualList?: <Row extends HubRow = HubRow>(
 `/kit/v1/virtual-list.js`, when the page loads it.
 Rows keep their node by id and layoutKey; update patches reused rows in place.
 
+## Kit: kit.chat
+
+```ts
+chat?: KitChat;
+```
+
+`/kit/v1/chat.js`, when the page loads it (after kit.js): the one chat.
+
 ## Kit: kit.[helper: string]
 
 ```ts

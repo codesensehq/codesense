@@ -581,6 +581,14 @@
       "feature": null
     },
     {
+      "name": "kit.chat",
+      "owner": "Kit",
+      "signature": "chat?: KitChat;",
+      "description": "`/kit/v1/chat.js`, when the page loads it (after kit.js): the one chat.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
       "name": "kit.[helper: string]",
       "owner": "Kit",
       "signature": "[helper: string]: unknown;",
@@ -6031,6 +6039,14 @@
       "owner": "Kit",
       "signature": "virtualList?: <Row extends HubRow = HubRow>(\n      options: VirtualListOptions<Row>,\n    ) => VirtualList<Row>;",
       "description": "`/kit/v1/virtual-list.js`, when the page loads it.\nRows keep their node by id and layoutKey; update patches reused rows in place.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "kit.chat",
+      "owner": "Kit",
+      "signature": "chat?: KitChat;",
+      "description": "`/kit/v1/chat.js`, when the page loads it (after kit.js): the one chat.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -13847,7 +13863,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "6380ffcc8e53f13de2ae36605e0816b46685c609b28e3bda5a9bb2175ad90a2e",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "a52537becb6d8da582b8c2bcf80eea86e137ac7c700f04877c492ff9f120e1ae",
     "src-tauri/src/verbs/registry.generated.json": "e80d878c6e9007af20d746241f9fdc384d05ab1e67efa115af3f997e5fc16487",
     "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
