@@ -182,6 +182,11 @@ export interface LaunchParams {
 export interface LaunchResult {
   workspaceId: string;
   sessionId: string;
+  /** Whether the launch line ran under the activity wrapper, so the host observes the agent
+   *  (its first lifecycle hook marks it input-ready). False: the line was typed raw and the
+   *  agent can never be observed. Absent: not a shell launch of this call (an adopted tab, or
+   *  an exec launch the host observes natively). */
+  activityWrapped?: boolean;
 }
 
 /**
@@ -248,6 +253,7 @@ async function connectAgentSessionInner(
   const minted = { ...createTerminalTab(title), role };
   let tab = minted;
   let tabOpened = false;
+  let activityWrapped: boolean | undefined;
 
   // End the owned tab on ANY failure, so the next connect attempt relaunches
   // instead of `findExisting` re-binding a dead or bare-shell orphan (the
@@ -312,7 +318,9 @@ async function connectAgentSessionInner(
     const line = execution
       ? buildAgentLaunchCommand(execution.argv[0], execution.argv.slice(1))
       : agentLaunchLine(spec, extraArgs);
-    const launched = execution ? { ok: true } : await deps.launchAgentLine(tab.sessionId, line);
+    const launched: InjectOutcome = execution
+      ? { ok: true }
+      : await deps.launchAgentLine(tab.sessionId, line);
     if (!launched.ok) {
       throw new Error(
         `Agent launch: the shell never reached its prompt to start the agent (session ${tab.sessionId}).`,
@@ -322,6 +330,7 @@ async function connectAgentSessionInner(
       ? { ...spec, agentPath: execution.argv[0], args: execution.argv.slice(1) }
       : spec;
     recordAgentLaunch(tab.sessionId, recorded, line);
+    activityWrapped = launched.activityWrapped;
   } catch (err) {
     try {
       await deps.closeTab(tab.sessionId);
@@ -335,7 +344,9 @@ async function connectAgentSessionInner(
     throw err;
   }
 
-  return { workspaceId, sessionId: tab.sessionId };
+  return activityWrapped === undefined
+    ? { workspaceId, sessionId: tab.sessionId }
+    : { workspaceId, sessionId: tab.sessionId, activityWrapped };
 }
 
 /**

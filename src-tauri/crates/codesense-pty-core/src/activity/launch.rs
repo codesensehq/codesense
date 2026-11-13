@@ -1178,6 +1178,49 @@ mod tests {
         );
     }
 
+    /// A page launch types `--settings <file>` with the status hooks in that file. Run under
+    /// the activity wrapper, the file's status hooks survive and the observer (which sees the
+    /// session start, the signal that the CLI is input-ready) is folded in beside them.
+    #[test]
+    fn a_page_launch_settings_file_keeps_its_status_hooks_and_gains_the_observer() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("page.json");
+        let status = r#"[ -x "$HOST/notify" ] && "$HOST/notify" || true"#;
+        let hooks: serde_json::Value = ["Stop", "UserPromptSubmit", "PreToolUse"]
+            .iter()
+            .map(|event| {
+                (
+                    (*event).to_owned(),
+                    serde_json::json!([{"hooks": [{"type": "command", "command": status}]}]),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        std::fs::write(&source, serde_json::json!({"hooks": hooks}).to_string()).unwrap();
+        let generated = directory.path().join("private");
+        std::fs::create_dir(&generated).unwrap();
+        let arguments = vec![
+            OsString::from("--model"),
+            OsString::from("m"),
+            OsString::from("--settings"),
+            source.clone().into_os_string(),
+        ];
+        let composed = claude_arguments(&arguments, &generated).unwrap();
+        let at = composed.iter().position(|a| a == "--settings").unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_reader(std::fs::File::open(&composed[at + 1]).unwrap()).unwrap();
+        for event in ["Stop", "UserPromptSubmit", "PreToolUse"] {
+            assert_eq!(
+                settings["hooks"][event][0]["hooks"][0]["command"], status,
+                "{event}: the page's status hook is kept first"
+            );
+        }
+        assert!(
+            settings["hooks"]["SessionStart"].is_array(),
+            "the observer hears the session start"
+        );
+    }
+
     /// A starting prompt after `--` is an operand: an added `--settings` goes before the
     /// separator, and a prompt that reads `--settings` is never taken for the flag.
     #[test]

@@ -567,7 +567,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "review-session" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -622,7 +622,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
   });
 
   it("closes a newly bound session when cancellation wins during readiness", async () => {
-    let releaseLive!: (live: boolean) => void;
+    let releaseLive!: (readiness: { ready: true }) => void;
     const branchDeps = {
       resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),
       begin: vi.fn(async () => true),
@@ -633,9 +633,9 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "bound-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(
+      waitReady: vi.fn(
         () =>
-          new Promise<boolean>((resolve) => {
+          new Promise<{ ready: true }>((resolve) => {
             releaseLive = resolve;
           }),
       ),
@@ -662,16 +662,20 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       {} as DirLaunchDeps,
       stubHeadless().launchers,
     );
-    await vi.waitFor(() => expect(branchDeps.waitLive).toHaveBeenCalledWith("bound-review"));
+    await vi.waitFor(() =>
+      expect(branchDeps.waitReady).toHaveBeenCalledWith("bound-review", expect.any(Number), {
+        activityWrapped: undefined,
+      }),
+    );
     cancelWorkspaceOpen("bound-cancel-op");
-    releaseLive(true);
+    releaseLive({ ready: true });
     await expect(opening).rejects.toThrow(/^canceled:/);
     expect(dashboardDeps.resolveSession).toHaveBeenCalledWith("acme/app::feature/x");
     expect(dashboardDeps.evictStaleTab).toHaveBeenCalledWith("bound-review");
     expect(dashboardDeps.closeByHandle).toHaveBeenCalledWith("acme/app::feature/x");
   });
 
-  it("closes a newly bound session when readiness fails naturally", async () => {
+  it("leaves a review agent stuck on a startup screen running, reports launchFailed and types nothing", async () => {
     const branchDeps = {
       resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),
       begin: vi.fn(async () => true),
@@ -682,7 +686,114 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "unready-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => false),
+      waitReady: vi.fn(async () => ({ ready: false, reason: "startup" })),
+      focus: vi.fn(),
+      isSessionParked: vi.fn(() => false),
+      probeAlive: vi.fn(async () => true),
+      evictStaleTab: vi.fn(),
+    } as unknown as BranchLaunchDeps;
+    const dashboardDeps = {
+      injectLine: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => "unready-review"),
+      evictStaleTab: vi.fn(),
+      closeByHandle: vi.fn(async () => undefined),
+    } as unknown as DashboardLaunchDeps;
+    const result = await dispatchOpenWorkspace(
+      {
+        target: { kind: "branch", repo: "acme/app", branch: "feature/x" },
+        headed: false,
+        reviewPrompt: "/review it",
+        operationId: "unready-op",
+      },
+      DOC,
+      dashboardDeps,
+      branchDeps,
+      {} as DirLaunchDeps,
+      stubHeadless().launchers,
+    );
+    expect(result).toMatchObject({
+      sessionId: "unready-review",
+      promptDelivered: false,
+      launchFailed: { reason: "startup", needsYouKind: "startup" },
+    });
+    // The agent stays where it is for a person; the review prompt is never typed into it.
+    expect(dashboardDeps.injectLine).not.toHaveBeenCalled();
+    expect(dashboardDeps.closeByHandle).not.toHaveBeenCalled();
+    expect(branchDeps.killSession).not.toHaveBeenCalled();
+  });
+
+  it("a re-open of a review left on its startup screen reuses it, still fails and types nothing", async () => {
+    // One registry across both opens: the first reserves, binds and leaves its agent on
+    // its screen; the second finds that live bound session and reuses it.
+    let bound: string | null = null;
+    const branchDeps = {
+      resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),
+      begin: vi.fn(async () => bound === null),
+      abort: vi.fn(async () => undefined),
+      killSession: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => bound),
+      ensureBranchWorktree: vi.fn(async () => "/wt"),
+      reconcileStory: vi.fn(async () => true),
+      connect: vi.fn(async () => ({ sessionId: "stuck-review" })),
+      bind: vi.fn(async (_handle: string, sessionId: string) => {
+        bound = sessionId;
+      }),
+      waitReady: vi.fn(async () => ({ ready: false, reason: "startup" })),
+      focus: vi.fn(),
+      isSessionParked: vi.fn(() => false),
+      probeAlive: vi.fn(async () => true),
+      evictStaleTab: vi.fn(),
+    } as unknown as BranchLaunchDeps;
+    const dashboardDeps = {
+      injectLine: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => bound),
+      evictStaleTab: vi.fn(),
+      closeByHandle: vi.fn(async () => undefined),
+    } as unknown as DashboardLaunchDeps;
+    const reopen = (operationId: string) =>
+      dispatchOpenWorkspace(
+        {
+          target: { kind: "branch", repo: "acme/app", branch: "feature/stuck" },
+          headed: false,
+          reviewPrompt: "/review it",
+          operationId,
+        },
+        DOC,
+        dashboardDeps,
+        branchDeps,
+        {} as DirLaunchDeps,
+        stubHeadless().launchers,
+      );
+    const failed = {
+      sessionId: "stuck-review",
+      promptDelivered: false,
+      launchFailed: { reason: "startup" },
+    };
+    await expect(reopen("stuck-op-1")).resolves.toMatchObject(failed);
+    await expect(reopen("stuck-op-2")).resolves.toMatchObject(failed);
+    // The second open reused the session and asked its readiness again, before any write.
+    expect(branchDeps.connect).toHaveBeenCalledOnce();
+    expect(branchDeps.waitReady).toHaveBeenCalledTimes(2);
+    expect(dashboardDeps.injectLine).not.toHaveBeenCalled();
+    expect(dashboardDeps.closeByHandle).not.toHaveBeenCalled();
+    expect(branchDeps.killSession).not.toHaveBeenCalled();
+    expect(branchDeps.abort).not.toHaveBeenCalled();
+  });
+
+  it("closes a newly bound session when the readiness wait itself fails", async () => {
+    const branchDeps = {
+      resolveBranch: vi.fn(async () => ({ teamKey: "acme:team" })),
+      begin: vi.fn(async () => true),
+      abort: vi.fn(async () => undefined),
+      killSession: vi.fn(async () => undefined),
+      resolveSession: vi.fn(async () => null),
+      ensureBranchWorktree: vi.fn(async () => "/wt"),
+      reconcileStory: vi.fn(async () => true),
+      connect: vi.fn(async () => ({ sessionId: "unready-review" })),
+      bind: vi.fn(async () => undefined),
+      waitReady: vi.fn(async () => {
+        throw new Error("host unreachable");
+      }),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -707,7 +818,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
         {} as DirLaunchDeps,
         stubHeadless().launchers,
       ),
-    ).rejects.toThrow("review agent did not become ready");
+    ).rejects.toThrow("review agent readiness failed");
     expect(dashboardDeps.resolveSession).toHaveBeenCalledWith("acme/app::feature/x");
     expect(dashboardDeps.evictStaleTab).toHaveBeenCalledWith("unready-review");
     expect(dashboardDeps.closeByHandle).toHaveBeenCalledWith("acme/app::feature/x");
@@ -726,7 +837,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "prompt-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -776,7 +887,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "owned-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -820,7 +931,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(),
       bind: vi.fn(),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -872,7 +983,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "joined-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),
@@ -920,7 +1031,7 @@ describe("dispatchOpenWorkspace — headless routing (SW-GW-7)", () => {
       reconcileStory: vi.fn(async () => true),
       connect: vi.fn(async () => ({ sessionId: "transferred-review" })),
       bind: vi.fn(async () => undefined),
-      waitLive: vi.fn(async () => true),
+      waitReady: vi.fn(async () => ({ ready: true })),
       focus: vi.fn(),
       isSessionParked: vi.fn(() => false),
       probeAlive: vi.fn(async () => true),

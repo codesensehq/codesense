@@ -364,7 +364,8 @@ declare namespace CodesenseSdk {
     onAgentsChanged(cb: () => void): Unsubscribe;
     /** The change, when the host knows it: `changes` names, per team, the messages a committed
      * inbox update re-read (stored, read, archived, reacted to). It names only the frame's own
-     * team when the frame is team-scoped. Absent for session refreshes. */
+     * team when the frame is team-scoped. A session refresh passes an empty `changes`, which
+     * names no inbox rows. */
     onInboxChanged(
       cb: (change?: {
         changes?: Array<{

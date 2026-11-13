@@ -149,6 +149,23 @@ fn live_snapshot(
     Ok((backend, snapshot))
 }
 
+/// `session`'s activity snapshot as its own host's owner reports it now, an exited one
+/// included; `None` when the host cannot be read or does not know the session.
+pub(crate) fn session_snapshot(app: &AppHandle, session: &str) -> Option<Snapshot> {
+    use crate::commands::machines::RuntimeSessionReference;
+    let backend = crate::commands::pty_backend::resolve_session_reference(
+        app,
+        &RuntimeSessionReference::Legacy(session.into()),
+        false,
+    )
+    .ok()?;
+    let snapshots = backend.domain().activity_snapshot().ok()?;
+    backend.revalidate(app).ok()?;
+    snapshots
+        .into_iter()
+        .find(|snapshot| snapshot.session == session)
+}
+
 pub(crate) fn capture_blocking(app: &AppHandle, session: &str) -> Capture {
     match live_snapshot(app, session) {
         Ok((backend, snapshot)) => Capture::Owner {

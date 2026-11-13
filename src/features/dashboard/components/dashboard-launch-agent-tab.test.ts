@@ -18,6 +18,7 @@ const { invoke, bindCalls, prepareCalls } = vi.hoisted(() => ({
 vi.mock("@/tauri/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/tauri/commands")>()),
   saveAppState: vi.fn(async () => undefined),
+  agentSessionAwaitReady: vi.fn(async () => ({ ready: true })),
   dashboardRegisterSession: vi.fn(async () => undefined),
   dashboardLaunchBegin: vi.fn(async () => true),
   dashboardLaunchAbort: vi.fn(async () => undefined),

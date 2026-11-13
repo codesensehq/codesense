@@ -2087,9 +2087,61 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(post)).toEqual([
     { type: "codesense:inbox-changed", changes: [{ team, messageIds: [5] }] },
   ]);
-  expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
+  // Only another team's rows changed, so the ops frame hears nothing.
+  expect(inboxChanges(other)).toEqual([]);
   events.get("agent-inbox-changed")!({ payload: null });
   expect(inboxChanges(post).at(-1)).toEqual({ type: "codesense:inbox-changed" });
+  expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
+});
+
+it.each(["before", "after"])(
+  "a hidden live team frame keeps broad changes arriving %s named rows on its timed flush",
+  async (order) => {
+    const post = vi.fn();
+    const frame = hub.attach("ops", "team:acme/ops", post, true, false, undefined, {
+      badge: "live",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    frame.visible(false);
+    post.mockClear();
+    const backend = { org: "acme", team: "backend" };
+    events.get("agent-inbox-changed")!({
+      payload: { changes: [{ team: backend, messageIds: [5] }] },
+    });
+    // Nothing is held, so no flush is scheduled.
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(post).not.toHaveBeenCalled();
+    const ops = { org: "acme", team: "ops" };
+    const named = { changes: [{ team: ops, messageIds: [9] }] };
+    for (const payload of order === "before" ? [null, named] : [named, null])
+      events.get("agent-inbox-changed")!({ payload });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inboxChanges(post)).toHaveLength(2);
+    expect(inboxChanges(post)).toEqual(
+      expect.arrayContaining([
+        { type: "codesense:inbox-changed" },
+        { type: "codesense:inbox-changed", changes: [{ team: ops, messageIds: [9] }] },
+      ]),
+    );
+    frame.dispose();
+  },
+);
+
+it("holds nothing to post for a hidden team frame when only another team's rows changed", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("ops", "team:acme/ops", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  frame.visible(false);
+  post.mockClear();
+  const backend = { org: "acme", team: "backend" };
+  events.get("agent-inbox-changed")!({
+    payload: { changes: [{ team: backend, messageIds: [5] }] },
+  });
+  // Not marked stale either, so showing it re-reads nothing.
+  expect(post).not.toHaveBeenCalled();
+  frame.visible(true);
+  expect(inboxChanges(post)).toEqual([]);
 });
 
 it("unions the committed ids per team while a frame is hidden and delivers them when it shows", async () => {
@@ -2102,7 +2154,6 @@ it("unions the committed ids per team while a frame is hidden and delivers them 
   post.mockClear();
   const committed = events.get("agent-inbox-changed")!;
   committed({ payload: { changes: [{ team, messageIds: [5, 6] }] } });
-  committed({ payload: null });
   committed({
     payload: {
       changes: [
@@ -2124,6 +2175,32 @@ it("unions the committed ids per team while a frame is hidden and delivers them 
   ]);
 });
 
+it.each([
+  ["before", [null, { changes: [{ team: { org: "acme", team: "backend" }, messageIds: [5] }] }]],
+  ["after", [{ changes: [{ team: { org: "acme", team: "backend" }, messageIds: [5] }] }, null]],
+])(
+  "keeps broad and named inbox changes when an unnamed change lands %s a named one",
+  async (_order, payloads) => {
+    const post = vi.fn();
+    const frame = hub.attach("inbox", "all", post, true);
+    await vi.advanceTimersByTimeAsync(0);
+    frame.visible(false);
+    post.mockClear();
+    for (const payload of payloads) events.get("agent-inbox-changed")!({ payload });
+    frame.visible(true);
+    expect(inboxChanges(post)).toHaveLength(2);
+    expect(inboxChanges(post)).toEqual(
+      expect.arrayContaining([
+        { type: "codesense:inbox-changed" },
+        {
+          type: "codesense:inbox-changed",
+          changes: [{ team: { org: "acme", team: "backend" }, messageIds: [5] }],
+        },
+      ]),
+    );
+  },
+);
+
 it("drops held ids for another team when the frame is rekeyed before it shows", async () => {
   const post = vi.fn();
   const frame = hub.attach("inbox", "team:acme/backend", post, true);
@@ -2140,8 +2217,10 @@ it("drops held ids for another team when the frame is rekeyed before it shows", 
       ],
     },
   });
+  events.get("agent-inbox-changed")!({ payload: null });
   frame.rekey("team:acme/ops");
   frame.visible(true);
   const delivered = inboxChanges(post).flatMap((m) => m.changes ?? []);
   expect(delivered).toEqual([{ team: ops, messageIds: [9] }]);
+  expect(inboxChanges(post)).toContainEqual({ type: "codesense:inbox-changed" });
 });

@@ -21,6 +21,7 @@
  */
 
 import { agentCliName, missingCliRow } from "@/shared/lib/agent-cli-names";
+import type { LaunchFailed } from "@/shared/lib/launch-target";
 import {
   openStoryWorkspace,
   type DashboardLaunchDeps,
@@ -229,7 +230,7 @@ export async function launchAgentInStoryWorktree(
   target: StoryLaunchTarget,
   agent: StoryLaunchAgent,
   seams: StoryLaunchSeams = {},
-): Promise<{ sessionId: string; promptDelivered?: boolean }> {
+): Promise<{ sessionId: string; promptDelivered?: boolean; launchFailed?: LaunchFailed }> {
   if (agent.availability === "missing") {
     throw new Error(`unavailable: ${missingCliHint(agent)}`);
   }
