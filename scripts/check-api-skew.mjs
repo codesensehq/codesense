@@ -662,8 +662,18 @@ export function scanFile(path, surface, text = readFileSync(path, "utf8")) {
   );
 }
 
+// Pages bundled with the app and pinned to its version: a hash in `PAGES` (foreman_launch.rs) that
+// only the app's own bundled copy matches, so an older app never reads one. Each is left out of the
+// scan with its reason; `foreman-page.node-test.mjs` checks that every one is a `PAGES` entry.
+export const PINNED_PAGES = new Map([
+  [
+    "codesense-docs/getting-started/content/foreman/index.html",
+    "the Foreman page is the running app's own bundled copy; a copy from another version is refused its launch grant by hash, so it never runs against an app that lacks a member it reads",
+  ],
+]);
+
 function walk(path, out) {
-  if (SKIPPED.test(path)) return;
+  if (SKIPPED.test(path) || PINNED_PAGES.has(relative(ROOT, path))) return;
   const st = statSync(path);
   if (st.isDirectory()) for (const name of readdirSync(path).sort()) walk(join(path, name), out);
   else if (SCANNED.has(extname(path).toLowerCase())) out.push(path);

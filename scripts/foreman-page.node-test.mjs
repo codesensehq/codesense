@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { PINNED_PAGES } from "./check-api-skew.mjs";
 import { applyMetadata } from "./generate-docs-metadata.mjs";
 import {
   CAPABILITIES,
@@ -112,6 +113,14 @@ test("the docs bundle step leaves the page's bytes alone, and still edits an ord
   applyMetadata(files);
   assert.ok(files.get(PAGE).equals(page));
   assert.ok(!files.get("getting-started/content/arc-a-first-touch/other.html").equals(ordinary));
+});
+
+test("every page the API-skew check leaves out is a PAGES entry", () => {
+  const entries = launchPages(readFileSync(join(ROOT, LAUNCH_RS), "utf8")).map(
+    (entry) => `${DOCS_ROOT}/${entry.path}`,
+  );
+  for (const path of PINNED_PAGES.keys()) assert.ok(entries.includes(path), path);
+  assert.ok(PINNED_PAGES.has(`${DOCS_ROOT}/${PAGE}`));
 });
 
 test("a planted byte in the vendored kit fails the drift check", () => {
