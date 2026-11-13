@@ -187,7 +187,10 @@ mod tests {
 
     #[test]
     fn the_bundled_foreman_page_holds_it_at_its_place_and_nothing_else_does() {
-        assert_eq!(PAGE, PAGES[0].path, "placed() writes at the bundled page's path");
+        assert_eq!(
+            PAGE, PAGES[0].path,
+            "placed() writes at the bundled page's path"
+        );
         // The shipped page, copied to its place in a placed docs root, holds the grant.
         let bytes =
             std::fs::read(shipped_page()).expect("the bundled Foreman page ships in the docs tree");
