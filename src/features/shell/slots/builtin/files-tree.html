@@ -687,13 +687,15 @@
           !query || texts.some((text) => !!text && String(text).toLocaleLowerCase().includes(query));
         // The team's story index (stories and epics with their paths). It answers a story-id
         // filter for folders that are not listed yet, so the match never waits on a directory read.
+        // Only a query that can be a story id (it holds a digit or a dash) reads it, so a plain
+        // name filter costs no extra subscription.
         let storyIndex = null;
         function dropStoryIndex() {
           if (storyIndex) cs.unsubscribe?.("stories", storyIndex.changed);
           storyIndex = null;
         }
         function syncStoryIndex() {
-          if (!filter || state.scope !== "team") return dropStoryIndex();
+          if (!filter || state.scope !== "team" || !/[\d-]/.test(filter)) return dropStoryIndex();
           if (storyIndex) return;
           const entry = (storyIndex = { rows: new Map() }),
             epoch = generation;

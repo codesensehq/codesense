@@ -491,6 +491,16 @@ it("a story id narrows to the story through the story index while its folder is 
   );
 });
 
+it("a plain name filter does not subscribe to the story index", async () => {
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("files", expect.anything()));
+  type("meeting");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(pane.subscribe).not.toHaveBeenCalledWith("stories", expect.anything());
+  type("DEMO-1");
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("stories", expect.anything()));
+});
+
 it("a folder row whose label carries the story id stays when the id is typed", async () => {
   await boot(false, {}, false, [
     folderRow("epic-a", { storyId: "DEMO-7", title: "Epic" }),
