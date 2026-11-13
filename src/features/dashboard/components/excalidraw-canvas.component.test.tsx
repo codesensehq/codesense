@@ -58,7 +58,8 @@ vi.mock("next-themes", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // Imported after the mocks so the canvas binds to them.
-import ExcalidrawCanvas from "./excalidraw-canvas";
+import { toast } from "sonner";
+import ExcalidrawCanvas, { type CanvasWriter } from "./excalidraw-canvas";
 import type { ExcalidrawScene } from "./excalidraw-viewer";
 
 const scene = (ids: string[], appState: Record<string, unknown> = {}): ExcalidrawScene => ({
@@ -72,6 +73,7 @@ beforeEach(() => {
   addFiles.mockReset();
   writeContentFileMock.mockReset();
   writeContentFileMock.mockResolvedValue(undefined);
+  vi.mocked(toast.error).mockClear();
   appliedElements = [];
   appliedAppState = {};
   appliedFiles = {};
@@ -150,6 +152,252 @@ describe("ExcalidrawCanvas hot-reload apply/nudge", () => {
     expect(updateScene).toHaveBeenCalledTimes(1);
     expect(updateScene.mock.calls[0][0].elements).toEqual(sceneB.elements);
     expect(screen.queryByText(/canvas updated on disk/i)).not.toBeInTheDocument();
+  });
+
+  describe("save lock: the version the canvas adopted", () => {
+    // A worktree-like writer: it holds the disk text and refuses a write whose
+    // base isn't what's on disk (the backend's sha lock, compared as text).
+    function lockingWriter(initial: string) {
+      const state = { disk: initial };
+      const writeText = vi.fn(async (_path: string, content: string, base: string | null) => {
+        if (base !== state.disk) throw new Error("The file changed on disk.");
+        state.disk = content;
+      });
+      const writer: CanvasWriter = { writeText, writeBinary: vi.fn().mockResolvedValue(undefined) };
+      return { state, writeText, writer };
+    }
+    const json = (ids: string[]) => JSON.stringify(ids.map((id) => ({ id })));
+    const V1 = json(["a"]);
+    const V2 = json(["b"]);
+
+    it("a dirty canvas keeps its lock across a nudged reload, so its save is refused", async () => {
+      vi.useFakeTimers();
+      try {
+        const { state, writeText, writer } = lockingWriter(V1);
+        const { rerender } = render(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={null}
+            reloadNonce={0}
+            writer={writer}
+          />,
+        );
+        act(() => latestOnChange?.([{ id: "a" }, { id: "c" }], {}, {}));
+        // An agent writes v2 while the canvas is dirty: nudge, nothing applied.
+        state.disk = V2;
+        rerender(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={scene(["b"])}
+            externalText={V2}
+            reloadNonce={1}
+            writer={writer}
+          />,
+        );
+        expect(screen.getByText(/canvas updated on disk/i)).toBeInTheDocument();
+
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+
+        expect(writeText).toHaveBeenCalledWith("/x.excalidraw", json(["a", "c"]), V1);
+        expect(state.disk).toBe(V2);
+        expect(toast.error).toHaveBeenCalledWith(
+          "Couldn't save canvas changes to disk.",
+          expect.anything(),
+        );
+        expect(screen.getByText(/canvas updated on disk/i)).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("after Reload, the next save is locked to the version reloaded", async () => {
+      vi.useFakeTimers();
+      try {
+        const { state, writeText, writer } = lockingWriter(V1);
+        const { rerender } = render(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={null}
+            reloadNonce={0}
+            writer={writer}
+          />,
+        );
+        act(() => latestOnChange?.([{ id: "a" }, { id: "c" }], {}, {}));
+        state.disk = V2;
+        rerender(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={scene(["b"])}
+            externalText={V2}
+            reloadNonce={1}
+            writer={writer}
+          />,
+        );
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: /reload/i }));
+        });
+        act(() => latestOnChange?.([{ id: "b" }, { id: "d" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+
+        expect(writeText).toHaveBeenLastCalledWith("/x.excalidraw", json(["b", "d"]), V2);
+        expect(state.disk).toBe(json(["b", "d"]));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an edit made while a write is in flight still saves, locked to the content written", async () => {
+      vi.useFakeTimers();
+      try {
+        const { state, writeText, writer } = lockingWriter(V1);
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const inner = writeText.getMockImplementation()!;
+        writeText.mockImplementationOnce(async (path, content, base) => {
+          await gate;
+          return inner(path, content, base);
+        });
+        render(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={null}
+            reloadNonce={0}
+            writer={writer}
+          />,
+        );
+        act(() => latestOnChange?.([{ id: "a" }, { id: "b" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(1100));
+        expect(writeText).toHaveBeenCalledTimes(1);
+        // Still drawing while the first write is in flight.
+        act(() => latestOnChange?.([{ id: "a" }, { id: "b" }, { id: "c" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(1100));
+        await act(async () => {
+          release();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(writeText).toHaveBeenCalledTimes(2);
+        expect(writeText).toHaveBeenLastCalledWith(
+          "/x.excalidraw",
+          json(["a", "b", "c"]),
+          json(["a", "b"]),
+        );
+        expect(state.disk).toBe(json(["a", "b", "c"]));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a reload adopted while a write is in flight keeps its lock when that write lands", async () => {
+      vi.useFakeTimers();
+      try {
+        const { state, writeText, writer } = lockingWriter(V1);
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const inner = writeText.getMockImplementation()!;
+        // The write reaches disk at once; only its answer comes back late.
+        writeText.mockImplementationOnce(async (path, content, base) => {
+          await inner(path, content, base);
+          await gate;
+        });
+        const { rerender } = render(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={null}
+            reloadNonce={0}
+            writer={writer}
+          />,
+        );
+        act(() => latestOnChange?.([{ id: "a" }, { id: "b" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(1100));
+        expect(state.disk).toBe(json(["a", "b"]));
+
+        // An agent writes v2 over it, and the user takes it before the
+        // canvas hears back from its own write.
+        state.disk = V2;
+        rerender(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={scene(["b"])}
+            externalText={V2}
+            reloadNonce={1}
+            writer={writer}
+          />,
+        );
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: /reload/i }));
+        });
+        await act(async () => {
+          release();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        act(() => latestOnChange?.([{ id: "b" }, { id: "d" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+
+        expect(writeText).toHaveBeenLastCalledWith("/x.excalidraw", json(["b", "d"]), V2);
+        expect(state.disk).toBe(json(["b", "d"]));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a no-op reload in other bytes moves the lock to those bytes", async () => {
+      vi.useFakeTimers();
+      try {
+        const reformatted = JSON.stringify([{ id: "a" }], null, 2);
+        const { state, writeText, writer } = lockingWriter(V1);
+        const { rerender } = render(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={null}
+            reloadNonce={0}
+            writer={writer}
+          />,
+        );
+        // The same drawing, rewritten in other bytes.
+        state.disk = reformatted;
+        rerender(
+          <ExcalidrawCanvas
+            filePath="/x.excalidraw"
+            scene={scene(["a"])}
+            sourceText={V1}
+            externalScene={scene(["a"])}
+            externalText={reformatted}
+            reloadNonce={1}
+            writer={writer}
+          />,
+        );
+        expect(updateScene).not.toHaveBeenCalled();
+        act(() => latestOnChange?.([{ id: "a" }, { id: "c" }], {}, {}));
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+
+        expect(writeText).toHaveBeenLastCalledWith("/x.excalidraw", json(["a", "c"]), reformatted);
+        expect(state.disk).toBe(json(["a", "c"]));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("is a no-op when the external write matches what's already on disk (AC-4 echo)", () => {

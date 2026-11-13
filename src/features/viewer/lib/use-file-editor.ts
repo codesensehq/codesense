@@ -737,14 +737,18 @@ async function lockToken(lock: Lock, remote: boolean): Promise<string | undefine
       return lock.hash;
     case "absent":
       return remote ? undefined : LOCAL_ABSENT_TOKEN;
-    case "text": {
+    case "text":
       if (remote) throw new Error("No remote lock for this version — reload the file to save.");
-      const hash = await sha256Hex(lock.text);
-      // Never an unlocked write.
-      if (hash == null) throw new Error("Can't lock the save (no SHA-256 available).");
-      return hash;
-    }
+      return localTextLock(lock.text);
   }
+}
+
+/** The local writer's lock for a save based on `text`: its SHA-256. Never an
+ *  unlocked write: throws where WebCrypto is unavailable. */
+export async function localTextLock(text: string): Promise<string> {
+  const hash = await sha256Hex(text);
+  if (hash == null) throw new Error("Can't lock the save (no SHA-256 available).");
+  return hash;
 }
 
 /** The local writer's token for "the file must not exist yet". */

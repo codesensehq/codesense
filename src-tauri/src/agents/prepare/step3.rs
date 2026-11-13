@@ -391,6 +391,28 @@ pub fn record_hydrated_epics(
     Ok(())
 }
 
+/// The story files hydrated into the local worktree at `root`, by their path
+/// in it: the managed entries copied from a team's context. A repo-tracked
+/// file, a generated config and a new file nobody has published are not among
+/// them. A record that can't be read hydrates nothing.
+pub(crate) fn hydrated_team_files(
+    home: &Path,
+    principal: &Principal,
+    root: &Path,
+) -> BTreeSet<String> {
+    let identity = crate::content_engine::context_lifecycle::local_identity(root);
+    super::ManagedRecord::read(home, principal, &identity)
+        .map(|record| {
+            record
+                .entries
+                .into_iter()
+                .filter(|(_, entry)| entry.source_layer.starts_with("team:"))
+                .map(|(path, _)| path)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 #[path = "step3_tests.rs"]
 pub(crate) mod tests;

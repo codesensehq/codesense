@@ -1323,3 +1323,34 @@ test("baseline frames suppress row menus and still show the text menu", async ({
   await before.locator("#second").click({ button: "right" });
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
+
+test("a worktree dashboard frame is minted at the worktree root and window.codesense answers", async ({
+  page,
+}) => {
+  // A source worktree's Rendered view mounts HtmlViewer with the worktree as the content root.
+  const root = "/Users/me/dev/acme-wt/feat-story";
+  const dashboard = `${root}/stories/epic/SV-1-story.html`;
+  await page.evaluate(
+    ({ filePath, teamContentPath }) => (window as any).mountViewer({ filePath, teamContentPath }),
+    { filePath: dashboard, teamContentPath: root },
+  );
+  const mintFor = (documentPath: string) =>
+    page.evaluate(
+      (path) =>
+        (window as any).calls.find(
+          ([c, a]: [string, any]) => c === "mint_frame" && a.args.documentPath === path,
+        )?.[1].args,
+      documentPath,
+    );
+  await expect.poll(() => mintFor(dashboard)).toBeTruthy();
+  const mint = await mintFor(dashboard);
+  expect(mint.documentPath).toBe(dashboard);
+  expect(mint.contentRoot).toBe(root);
+  // The frame loads through the viewer route, rooted at the worktree.
+  const served = `/viewer/${Buffer.from(root).toString("base64url")}/stories/epic/SV-1-story.html`;
+  await expect.poll(() => page.frames().some((f) => f.url().includes(served))).toBe(true);
+  const frame = page.frames().find((f) => f.url().includes(served))!;
+  // The doc's codesense.getNavSelection() round-trips through the host bridge.
+  await expect.poll(() => frame.evaluate(() => (window as any).navSettled)).toBe(true);
+  expect(await frame.evaluate(() => typeof (window as any).codesense?.ready)).toBe("function");
+});
