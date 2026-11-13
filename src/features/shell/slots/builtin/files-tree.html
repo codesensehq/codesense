@@ -752,7 +752,9 @@
               entry.pending.splice(0).forEach(([later, delta]) => apply(later, delta));
             })
             .catch(() => {
-              // Forget the failed read, so the next keystroke tries again.
+              // Forget the failed read, so the next keystroke tries again. A paint that throws
+              // after the subscription resolved lands here too: detach it before forgetting.
+              if (entry.subscribed) cs.unsubscribe?.("stories", entry.changed);
               if (storyIndex === entry) storyIndex = null;
               entry.active = false;
             });

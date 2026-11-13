@@ -528,6 +528,16 @@ it("a failed story-index read is retried by the next keystroke", async () => {
   await waitFor(() => expect(storyReads()).toHaveLength(2));
 });
 
+it("a story index whose first paint throws is unsubscribed before it is forgotten", async () => {
+  // A null row makes the paint's bucketing throw after the subscription resolved.
+  subscribeHook = (topic) => (topic === "stories" ? { snapshot: [null], rev: 1 } : undefined);
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  const storyUnsubscribes = () =>
+    pane.unsubscribe.mock.calls.filter(([topic]) => topic === "stories");
+  type("DEMO-12");
+  await waitFor(() => expect(storyUnsubscribes()).toHaveLength(1));
+});
+
 it("a story index that resolves after the filter was cleared is unsubscribed", async () => {
   let resolveStories!: (snapshot: any) => void;
   subscribeHook = (topic) =>
