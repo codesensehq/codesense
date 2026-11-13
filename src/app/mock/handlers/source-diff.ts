@@ -323,6 +323,9 @@ function redline(search: string, args: Record<string, unknown>): FileRedline {
 
 export function sourceDiffHandlers(search: string): HandlerRegistry {
   return {
+    // Every local tab reads as the root of the fixture worktree.
+    resolve_tab_source_repo: (args) =>
+      typeof args.cwd === "string" && args.cwd ? { root: args.cwd, isRoot: true } : null,
     source_worktree_changeset: (args) => changeset(search, args.baseRef),
     source_file_redline: (args) => redline(search, args),
     source_remote_changeset: (args) => changeset(search, args.baseRef, true),
