@@ -38,6 +38,7 @@ import { extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { builtInPaneFiles } from "./lib/builtin-panes.mjs";
+import { DOCS_ROOT, pinnedPages } from "./lib/pinned-pages.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 export const SURFACE_DIR = "scripts/api-surface";
@@ -662,15 +663,10 @@ export function scanFile(path, surface, text = readFileSync(path, "utf8")) {
   );
 }
 
-// Pages bundled with the app and pinned to its version: a hash in `PAGES` (foreman_launch.rs) that
-// only the app's own bundled copy matches, so an older app never reads one. Each is left out of the
-// scan with its reason; `foreman-page.node-test.mjs` checks that every one is a `PAGES` entry.
-export const PINNED_PAGES = new Map([
-  [
-    "codesense-docs/getting-started/content/foreman/index.html",
-    "the Foreman page is the running app's own bundled copy; a copy from another version is refused its launch grant by hash, so it never runs against an app that lacks a member it reads",
-  ],
-]);
+// Pages the app hashes (`PAGES` in foreman_launch.rs) are left out: only the running app's own
+// bundled copy matches its hash, so a copy from another version gets no launch grant and never runs
+// against an app that lacks a member it reads.
+export const PINNED_PAGES = new Set([...pinnedPages()].map((path) => `${DOCS_ROOT}/${path}`));
 
 function walk(path, out) {
   if (SKIPPED.test(path) || PINNED_PAGES.has(relative(ROOT, path))) return;

@@ -20,20 +20,24 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { parse } from "yaml";
 import { buildTree } from "./build-codesense-docs.mjs";
+import { isMain } from "./lib/is-main.mjs";
+import { DOCS_ROOT, LAUNCH_RS, launchPages } from "./lib/pinned-pages.mjs";
+
+export { DOCS_ROOT, LAUNCH_RS, launchPages };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const PACK = "codesense-docs/packs/codesense-foreman";
+const PACK = "codesense-docs/packs/codesense-foreman";
 export const VENDORED = `${PACK}/vendor/story-view.js`;
 export const CONFIG = `${PACK}/story-view.yml`;
 export const PACK_YML = `${PACK}/pack.yml`;
-export const DOCS_ROOT = "codesense-docs";
 // The page's path inside the placed docs checkout: the key of its `PAGES` entry.
 export const PAGE = "getting-started/content/foreman/index.html";
-export const LAUNCH_RS = "src-tauri/src/verbs/foreman_launch.rs";
+// Every file the drift check reads.
+export const FILES = [VENDORED, CONFIG, PACK_YML, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS];
 
 // What the page declares. `foreman.launch` is not here: the app mints it from the page's bytes.
 export const CAPABILITIES = [
@@ -62,14 +66,14 @@ const PRIVATE_TEXT = [
 // The two comments the kit's config is found between (`bakedConfig`); every other one goes.
 const KEPT_COMMENTS = new Set(["/* CONFIG:begin */", "/* CONFIG:end */"]);
 
-const parsed = (body) =>
+const sourceFile = (body) =>
   ts.createSourceFile("kit.js", body, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 // The parser's own nodes, without the JSDoc it hangs on them (that is comment text).
 const children = (node, file) => node.getChildren(file).filter((child) => !ts.isJSDoc(child));
 
 /** Every comment in a script, as `[start, end]`, read by a parser so strings and regexes are never mistaken for one. */
 export function comments(body) {
-  const file = parsed(body);
+  const file = sourceFile(body);
   const out = [];
   const trivia = (pos) => {
     for (const read of [ts.getLeadingCommentRanges, ts.getTrailingCommentRanges])
@@ -91,7 +95,7 @@ export function comments(body) {
  * depend on that), which a change to comments alone leaves equal.
  */
 function tokens(body) {
-  const file = parsed(body);
+  const file = sourceFile(body);
   if (file.parseDiagnostics.length)
     throw new Error(`the kit build does not parse: ${file.parseDiagnostics[0].messageText}`);
   const out = [];
@@ -207,49 +211,34 @@ ${vendored}</script>
 `;
 }
 
-/** The `PAGES` entries of `foreman_launch.rs`, as `{path, sha256}`. */
-export function launchPages(source) {
-  const block = /pub const PAGES: &\[Page\] = &\[([\s\S]*?)\];/.exec(source);
-  if (!block) throw new Error(`${LAUNCH_RS}: no PAGES list`);
-  return [
-    ...block[1].matchAll(/Page\s*\{\s*path:\s*"([^"]+)",\s*sha256:\s*"([0-9a-f]{64})",?\s*\}/g),
-  ].map((m) => ({ path: m[1], sha256: m[2] }));
-}
-
 /**
  * Every drift problem as a message; empty when the vendored kit, config, page and grant agree.
  * `bundled` gives the page's bytes as the docs bundle ships them.
  */
 export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
-  const out = [];
-  const file = (rel) => existsSync(join(root, rel));
-  for (const rel of [VENDORED, CONFIG, PACK_YML, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS]) {
-    if (!file(rel)) out.push(`${rel}: missing`);
-  }
+  const out = FILES.filter((rel) => !existsSync(join(root, rel))).map((rel) => `${rel}: missing`);
   if (out.length) return out;
   const vendored = read(VENDORED, root);
-  const parsed = parseVendored(vendored);
-  if (!parsed)
+  const kit = parseVendored(vendored);
+  if (!kit)
     return [
       `${VENDORED}: the first line must be "// vendored story-view build kit-rev:<n> sha256:<hex>"`,
     ];
-  if (parsed.actualSha !== parsed.headerSha)
-    out.push(
-      `${VENDORED}: header sha256 ${parsed.headerSha} is not the file's ${parsed.actualSha}`,
-    );
-  const kit = parse(read(PACK_YML, root))?.kit;
-  if (!kit || kit.file !== "vendor/story-view.js")
+  if (kit.actualSha !== kit.headerSha)
+    out.push(`${VENDORED}: header sha256 ${kit.headerSha} is not the file's ${kit.actualSha}`);
+  const recorded = parse(read(PACK_YML, root))?.kit;
+  if (!recorded || recorded.file !== "vendor/story-view.js")
     out.push(`${PACK_YML}: no kit entry for vendor/story-view.js`);
   else {
-    if (kit.sha256 !== parsed.actualSha)
+    if (recorded.sha256 !== kit.actualSha)
       out.push(
-        `${PACK_YML}: kit sha256 ${kit.sha256} is not the vendored file's ${parsed.actualSha}`,
+        `${PACK_YML}: kit sha256 ${recorded.sha256} is not the vendored file's ${kit.actualSha}`,
       );
-    if (kit.kit_rev !== parsed.kitRev)
-      out.push(`${PACK_YML}: kit_rev ${kit.kit_rev} is not the header's ${parsed.kitRev}`);
+    if (recorded.kit_rev !== kit.kitRev)
+      out.push(`${PACK_YML}: kit_rev ${recorded.kit_rev} is not the header's ${kit.kitRev}`);
   }
   const config = parse(read(CONFIG, root));
-  const baked = bakedConfig(parsed.body);
+  const baked = bakedConfig(kit.body);
   if (JSON.stringify(baked) !== JSON.stringify(config))
     out.push(
       `${VENDORED}: the baked-in config differs from ${CONFIG}; rebuild the kit with that config`,
@@ -261,11 +250,12 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
     out.push(
       `${CONFIG}: team "${config.team}" is not the docs team "${config.foreman?.docs?.team}"; the config names no team of its own`,
     );
-  let kept;
+  let kept, expected;
   try {
-    kept = comments(parsed.body).filter(
-      ([start, end]) => !KEPT_COMMENTS.has(parsed.body.slice(start, end)),
+    kept = comments(kit.body).filter(
+      ([start, end]) => !KEPT_COMMENTS.has(kit.body.slice(start, end)),
     );
+    expected = pageText(vendored);
   } catch (error) {
     return [...out, `${VENDORED}: ${error.message}`];
   }
@@ -274,18 +264,11 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
       `${VENDORED}: keeps ${kept.length} of the kit's comments; vendor it with --vendor, which drops them`,
     );
   for (const [pattern, what] of PRIVATE_TEXT)
-    if (pattern.test(parsed.body)) out.push(`${VENDORED}: names ${what}`);
-  let expected;
-  try {
-    expected = pageText(vendored);
-  } catch (error) {
-    return [...out, `${VENDORED}: ${error.message}`];
-  }
-  const page = readFileSync(join(root, DOCS_ROOT, PAGE), "utf8");
-  if (page !== expected)
+    if (pattern.test(kit.body)) out.push(`${VENDORED}: names ${what}`);
+  const pageBytes = readFileSync(join(root, DOCS_ROOT, PAGE));
+  if (pageBytes.toString("utf8") !== expected)
     out.push(`${DOCS_ROOT}/${PAGE}: not the template with the vendored kit inlined; run --write`);
   // The archive's docs bundle step may edit a page's bytes; the page the app places is what must hash to PAGES.
-  const pageBytes = readFileSync(join(root, DOCS_ROOT, PAGE));
   if (!bundled().equals(pageBytes))
     out.push(
       `${DOCS_ROOT}/${PAGE}: the docs bundle ships other bytes than this file, so its PAGES hash would never match`,
@@ -302,7 +285,7 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
 }
 
 /** Update the pack's `kit:` block; it sits at the end of `pack.yml`'s kit marker. */
-export function packWithKit(text, kitRev, sha) {
+function packWithKit(text, kitRev, sha) {
   const block = `kit:\n  file: vendor/story-view.js\n  kit_rev: ${kitRev}\n  sha256: ${sha}\n`;
   const marker = /^kit:\n(?: {2}.*\n)*/m;
   return marker.test(text) ? text.replace(marker, block) : `${text.replace(/\n*$/, "\n")}${block}`;
@@ -330,14 +313,14 @@ function main(argv) {
     writeFileSync(join(ROOT, PACK_YML), packWithKit(read(PACK_YML), kitRev, sha256(body)));
   } else if (mode !== "--write")
     throw new Error("usage: foreman-page.mjs --check | --write | --vendor <file> --kit-rev <n>");
-  writeFileSync(join(ROOT, DOCS_ROOT, PAGE), pageText(read(VENDORED)));
-  const sha = sha256(readFileSync(join(ROOT, DOCS_ROOT, PAGE)));
-  const entry = new RegExp(`(path:\\s*"${PAGE}",\\s*sha256:\\s*")[0-9a-f]{64}(")`);
+  const page = pageText(read(VENDORED));
+  writeFileSync(join(ROOT, DOCS_ROOT, PAGE), page);
+  const sha = sha256(page);
   const launch = read(LAUNCH_RS);
-  if (!entry.test(launch)) throw new Error(`${LAUNCH_RS}: no PAGES entry for ${PAGE} to update`);
-  writeFileSync(join(ROOT, LAUNCH_RS), launch.replace(entry, `$1${sha}$2`));
+  const entry = launchPages(launch).find((p) => p.path === PAGE);
+  if (!entry) throw new Error(`${LAUNCH_RS}: no PAGES entry for ${PAGE} to update`);
+  writeFileSync(join(ROOT, LAUNCH_RS), launch.replace(`"${entry.sha256}"`, `"${sha}"`));
   console.log(`${PAGE} sha256:${sha}, written to its PAGES entry in ${LAUNCH_RS}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href)
-  main(process.argv.slice(2));
+if (isMain(import.meta.url)) main(process.argv.slice(2));

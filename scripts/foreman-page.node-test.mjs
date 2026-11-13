@@ -14,6 +14,7 @@ import {
   CAPABILITIES,
   CONFIG,
   DOCS_ROOT,
+  FILES,
   LAUNCH_RS,
   PACK_YML,
   PAGE,
@@ -31,7 +32,12 @@ import {
 } from "./foreman-page.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FILES = [VENDORED, CONFIG, PACK_YML, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS];
+/** Assert that a drift report has a line naming `text`. */
+const reports = (found, text) =>
+  assert.ok(
+    found.some((line) => line.includes(text)),
+    found.join("\n"),
+  );
 
 /** A scratch copy of the five files the drift check reads, so a test can plant a change. */
 function scratch(edit) {
@@ -114,17 +120,10 @@ test("the docs bundle ships the page byte for byte, and a bundle that edits it f
   const page = readFileSync(join(ROOT, DOCS_ROOT, PAGE));
   assert.ok(buildTree().get(PAGE).equals(page));
   const edited = problems(ROOT, () => Buffer.concat([page, Buffer.from(" ")]));
-  assert.ok(
-    edited.some((line) => line.includes("docs bundle ships other bytes")),
-    edited.join("\n"),
-  );
+  reports(edited, "docs bundle ships other bytes");
 });
 
-test("every page the API-skew check leaves out is a PAGES entry", () => {
-  const entries = launchPages(readFileSync(join(ROOT, LAUNCH_RS), "utf8")).map(
-    (entry) => `${DOCS_ROOT}/${entry.path}`,
-  );
-  for (const path of PINNED_PAGES.keys()) assert.ok(entries.includes(path), path);
+test("the API-skew scan leaves out the pages PAGES pins", () => {
   assert.ok(PINNED_PAGES.has(`${DOCS_ROOT}/${PAGE}`));
 });
 
@@ -132,25 +131,19 @@ test("a planted byte in the vendored kit fails the drift check", () => {
   scratch((change, root) => {
     change(VENDORED, (text) => text.replace("'use strict';", "'use  strict';"));
     const found = check(root);
-    assert.ok(
-      found.some((line) => line.includes("header sha256")),
-      found.join("\n"),
-    );
-    assert.ok(
-      found.some((line) => line.includes("kit sha256")),
-      found.join("\n"),
-    );
+    reports(found, "header sha256");
+    reports(found, "kit sha256");
   });
 });
 
 test("a pack.yml that records another hash or kit-rev fails", () => {
   scratch((change, root) => {
     change(PACK_YML, (text) => text.replace(/sha256: [0-9a-f]{64}/, `sha256: ${"0".repeat(64)}`));
-    assert.ok(check(root).some((line) => line.includes("kit sha256")));
+    reports(check(root), "kit sha256");
   });
   scratch((change, root) => {
     change(PACK_YML, (text) => text.replace("kit_rev: 1", "kit_rev: 2"));
-    assert.ok(check(root).some((line) => line.includes("kit_rev")));
+    reports(check(root), "kit_rev");
   });
 });
 
@@ -160,14 +153,8 @@ test("a page edited without a matching PAGES entry fails, which would drop the g
       text.replace("<title>Foreman</title>", "<title>Foreman </title>"),
     );
     const found = check(root);
-    assert.ok(
-      found.some((line) => line.includes("not the template")),
-      found.join("\n"),
-    );
-    assert.ok(
-      found.some((line) => line.includes("PAGES hash")),
-      found.join("\n"),
-    );
+    reports(found, "not the template");
+    reports(found, "PAGES hash");
   });
 });
 
@@ -176,7 +163,7 @@ test("a PAGES hash that is not the page's, or a missing entry, fails", () => {
     change(LAUNCH_RS, (text) =>
       text.replace(/sha256: "[0-9a-f]{64}"/, `sha256: "${"1".repeat(64)}"`),
     );
-    assert.ok(check(root).some((line) => line.includes("PAGES hash")));
+    reports(check(root), "PAGES hash");
   });
   scratch((change, root) => {
     change(LAUNCH_RS, (text) =>
@@ -185,7 +172,7 @@ test("a PAGES hash that is not the page's, or a missing entry, fails", () => {
         "pub const PAGES: &[Page] = &[];",
       ),
     );
-    assert.ok(check(root).some((line) => line.includes("no PAGES entry")));
+    reports(check(root), "no PAGES entry");
   });
 });
 
@@ -193,18 +180,12 @@ test("a config with a team id, a budget key, or one that differs from the baked 
   scratch((change, root) => {
     change(CONFIG, (text) => text.replace("team: getting-started", "team: acme-team"));
     const found = check(root);
-    assert.ok(
-      found.some((line) => line.includes("names no team of its own")),
-      found.join("\n"),
-    );
-    assert.ok(
-      found.some((line) => line.includes("baked-in config differs")),
-      found.join("\n"),
-    );
+    reports(found, "names no team of its own");
+    reports(found, "baked-in config differs");
   });
   scratch((change, root) => {
     change(CONFIG, (text) => `${text}budget: 5\n`);
-    assert.ok(check(root).some((line) => line.includes("budget or point key")));
+    reports(check(root), "budget or point key");
   });
 });
 
@@ -265,11 +246,7 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
   for (const [line, message] of cases)
     scratch((change, root) => {
       change(VENDORED, (text) => `${text}${line}`);
-      const found = check(root);
-      assert.ok(
-        found.some((problem) => problem.includes(message)),
-        `${line}: ${found.join("\n")}`,
-      );
+      reports(check(root), message);
     });
   // A team's own design file, built from an id at run time, is the kit's job, not a leak.
   scratch((change, root) => {
@@ -281,7 +258,7 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
 test("a kit that names a local path fails; a script-ending sequence is refused", () => {
   scratch((change, root) => {
     change(VENDORED, (text) => `${text}const s='/Users/someone/work';\n`);
-    assert.ok(check(root).some((line) => line.includes("local path")));
+    reports(check(root), "local path");
   });
   const body =
     "// kit\n/* CONFIG:begin */\nconst CONFIG={};\n/* CONFIG:end */\nconst s='</script>';\n";
