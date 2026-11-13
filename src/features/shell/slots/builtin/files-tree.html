@@ -628,7 +628,10 @@
               entry.detached = cs.unsubscribe?.("files", entry.changed, entry.options);
             }
           });
-          if (!filterOnly) subscriptions.clear();
+          if (!filterOnly) {
+            subscriptions.clear();
+            dropStoryIndex();
+          }
         }
         function restart(preserve = false) {
           generation++;
@@ -679,8 +682,66 @@
             ? "Loading " + scopeName() + "'s files…"
             : "Loading team context…";
         }
+        // The nav filter's matching rule: any of the texts holds the query (already lower-cased).
+        const textMatches = (query, ...texts) =>
+          !query || texts.some((text) => !!text && String(text).toLocaleLowerCase().includes(query));
+        // The team's story index (stories and epics with their paths). It answers a story-id
+        // filter for folders that are not listed yet, so the match never waits on a directory read.
+        let storyIndex = null;
+        function dropStoryIndex() {
+          if (storyIndex) cs.unsubscribe?.("stories", storyIndex.changed);
+          storyIndex = null;
+        }
+        function syncStoryIndex() {
+          if (!filter || state.scope !== "team") return dropStoryIndex();
+          if (storyIndex) return;
+          const entry = (storyIndex = { rows: new Map() }),
+            epoch = generation;
+          entry.changed = (snapshot, delta) => {
+            if (disposed || storyIndex !== entry || epoch !== generation) return;
+            if (!delta) entry.rows = new Map((snapshot.snapshot || []).map((row) => [row.id, row]));
+            else {
+              (delta.removes || []).forEach((id) => entry.rows.delete(id));
+              (delta.upserts || []).forEach((row) => entry.rows.set(row.id, row));
+            }
+            paint();
+          };
+          Promise.resolve(cs.subscribe?.("stories", { window: [0, 2000], onChange: entry.changed }))
+            .then((snapshot) => snapshot && entry.changed(snapshot, null))
+            .catch(() => {});
+        }
+        // Listed rows of a directory, plus (while filtering) the indexed stories and epics that
+        // match the query and live under it, whether or not their folder has been listed.
         function rootsFor(dir) {
-          return subscriptions.get(dir)?.rows || [];
+          const rows = subscriptions.get(dir)?.rows || [];
+          if (!filter || !storyIndex) return rows;
+          const base = dir || root,
+            query = filter.toLocaleLowerCase(),
+            have = new Set(rows.map((row) => row.path)),
+            added = [];
+          if (!base) return rows;
+          for (const entry of storyIndex.rows.values()) {
+            if (
+              (entry.kind !== "story" && entry.kind !== "epic") ||
+              !entry.path.startsWith(base + "/") ||
+              !textMatches(query, entry.storyId, entry.title, entry.name)
+            )
+              continue;
+            const [first, ...rest] = entry.path.slice(base.length + 1).split("/"),
+              path = rest.length ? base + "/" + first : entry.path,
+              direct = !rest.length;
+            if (have.has(path)) continue;
+            have.add(path);
+            added.push({
+              id: path,
+              path,
+              name: direct ? entry.name : first,
+              kind: direct && entry.kind === "story" ? "file" : "dir",
+              ...(direct ? { storyId: entry.storyId, title: entry.title } : {}),
+              root,
+            });
+          }
+          return added.length ? [...rows, ...added] : rows;
         }
         function rowTree(rows, ancestors = new Set()) {
           const expanded = new Set(state.expanded),
@@ -706,8 +767,7 @@
                 if (query && value.children.length) expanded.add(row.id);
                 if (
                   query &&
-                  !row.name.toLocaleLowerCase().includes(query) &&
-                  !row.path.toLocaleLowerCase().includes(query) &&
+                  !textMatches(query, row.name, row.path, value.label) &&
                   !value.children.length
                 )
                   return [];
@@ -734,11 +794,7 @@
                       ariaHidden: true,
                     },
                   ];
-              } else if (
-                query &&
-                !(value.label + " " + row.path).toLocaleLowerCase().includes(query)
-              )
-                return [];
+              } else if (query && !textMatches(query, value.label, row.path)) return [];
               value.selected = row.path === selection;
               value.highlight = filter;
               return [value];
@@ -1043,6 +1099,7 @@
             }
             state.expanded = [...expanded];
           }
+          syncStoryIndex();
           const rows = rowTree(rootsFor(drill));
           const expanded = new Set(state.expanded);
           if (filter) {

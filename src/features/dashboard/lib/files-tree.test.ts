@@ -19,6 +19,7 @@ async function boot(
   pagination?: { first: any; page: () => Promise<any> },
   directoryRows?: any[],
   deferFiles = false,
+  storyRows: any[] = [],
 ) {
   document.body.innerHTML = html.slice(html.indexOf("<body>") + 6, html.indexOf("<script>"));
   const folder = {
@@ -54,6 +55,7 @@ async function boot(
         ],
       };
     }
+    if (topic === "stories") return { snapshot: storyRows, rev: 1 };
     if (pendingFiles) return new Promise(() => {});
     if (filesSnapshot) return filesSnapshot;
     if (pagination && !options.dir) return pagination.first;
@@ -429,3 +431,99 @@ it.each(["save", "legacy replay"])(
     ]);
   },
 );
+
+const folderRow = (name: string, extra: Record<string, unknown> = {}) => ({
+  id: `/content/${name}`,
+  path: `/content/${name}`,
+  name,
+  kind: "dir",
+  root: "/content",
+  ...extra,
+});
+const type = (value: string) => {
+  const field = document.getElementById("filter") as HTMLInputElement;
+  field.value = value;
+  field.dispatchEvent(new Event("input"));
+};
+
+it("a story id narrows to the story through the story index while its folder is unlisted", async () => {
+  const storyRows = [
+    {
+      id: "/content/epic-a/deep/story.md",
+      path: "/content/epic-a/deep/story.md",
+      name: "story.md",
+      kind: "story",
+      storyId: "DEMO-12",
+      title: "Wire the thing",
+      ownerPath: "/content/epic-a/deep",
+    },
+    {
+      id: "/content/epic-a/other.md",
+      path: "/content/epic-a/other.md",
+      name: "other.md",
+      kind: "story",
+      storyId: "DEMO-13",
+      ownerPath: "/content/epic-a",
+    },
+  ];
+  // Listing a folder never resolves, so only the index can answer.
+  const pane = await boot(
+    false,
+    {},
+    false,
+    [folderRow("epic-a"), folderRow("epic-b")],
+    undefined,
+    undefined,
+    false,
+    storyRows,
+  );
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("files", expect.anything()));
+  type("DEMO-12");
+  await waitFor(() =>
+    expect(document.querySelector('[data-path="/content/epic-a/deep/story.md"]')).toBeTruthy(),
+  );
+  expect(document.querySelector('[data-path="/content/epic-a/deep"]')).toBeTruthy();
+  expect(document.querySelector('[data-path="/content/epic-b"]')).toBeNull();
+  expect(document.querySelector('[data-path="/content/epic-a/other.md"]')).toBeNull();
+  type("");
+  await waitFor(() =>
+    expect(pane.unsubscribe).toHaveBeenCalledWith("stories", expect.any(Function)),
+  );
+});
+
+it("a folder row whose label carries the story id stays when the id is typed", async () => {
+  await boot(false, {}, false, [
+    folderRow("epic-a", { storyId: "DEMO-7", title: "Epic" }),
+    folderRow("epic-b"),
+  ]);
+  type("DEMO-7");
+  await waitFor(() => expect(document.querySelector('[data-path="/content/epic-b"]')).toBeNull());
+  expect(document.querySelector('[data-path="/content/epic-a"]')).toBeTruthy();
+});
+
+it("typing a story id right after a team switch still narrows the tree", async () => {
+  const story = {
+    id: "/content/epic-a/story.md",
+    path: "/content/epic-a/story.md",
+    name: "story.md",
+    kind: "file",
+    storyId: "DEMO-12",
+    root: "/content",
+  };
+  const pane = await boot(false, {}, false, [folderRow("epic-a"), folderRow("epic-b")], undefined, [
+    story,
+    {
+      ...story,
+      id: "/content/epic-a/other.md",
+      path: "/content/epic-a/other.md",
+      storyId: "DEMO-99",
+    },
+  ]);
+  pane.rebind();
+  type("DEMO-12");
+  await waitFor(() =>
+    expect(document.querySelector('[data-path="/content/epic-a/story.md"]')).toBeTruthy(),
+  );
+  expect(document.querySelector('[data-path="/content/epic-a/other.md"]')).toBeNull();
+  expect(document.querySelectorAll("#filter")).toHaveLength(1);
+});

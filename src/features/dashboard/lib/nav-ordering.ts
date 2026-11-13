@@ -14,6 +14,14 @@ export const NAV_NAME_COLLATOR_OPTIONS: Intl.CollatorOptions = {
 const navCollator = new Intl.Collator(undefined, NAV_NAME_COLLATOR_OPTIONS);
 export const compareNavNames = navCollator.compare;
 
+/** The nav filter's one matching rule: the trimmed query is a case-insensitive substring of
+ *  any of the given texts (a name, a story id, a title). An empty query matches everything.
+ *  The dashboard kit carries the same rule as `navTextMatches`. */
+export function navTextMatches(query: string, ...texts: (string | null | undefined)[]): boolean {
+  const q = query.trim().toLowerCase();
+  return !q || texts.some((text) => !!text && text.toLowerCase().includes(q));
+}
+
 /** Order sub-epics alphabetically by dirName. */
 export function orderSubEpics(subEpics: DerivedPipelineTree[]): DerivedPipelineTree[] {
   return [...subEpics].sort((a, b) => compareNavNames(a.dirName, b.dirName));
