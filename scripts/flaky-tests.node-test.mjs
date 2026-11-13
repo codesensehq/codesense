@@ -10,6 +10,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   LABEL,
+  failedMarkdown,
+  failedTests,
   flakyTests,
   marker,
   readReports,
@@ -107,6 +109,55 @@ test("summaryMarkdown lists every flaky test, an unexpected name sanitized", () 
   assert.match(markdown, /- `demo-fs::watch` `watch_survives_rename`/);
   assert.match(markdown, /- `x` `_bad___img_`/);
   assert.doesNotMatch(markdown, /<|`bad`/);
+});
+
+test("failedTests keeps only tests that failed every attempt", () => {
+  assert.deepEqual(
+    failedTests(junit).map((t) => t.key),
+    ["cargo:demo-proto#frame::tests::broken"],
+  );
+  assert.deepEqual(
+    failedTests('<testcase classname="x" name="y"><error message="crashed"/></testcase>').map(
+      (t) => t.key,
+    ),
+    ["cargo:x#y"],
+  );
+  assert.deepEqual(failedTests(junit.replace(/<failure\b/, "<rerunFailure")), []);
+});
+
+test("failedMarkdown names the run and each failed test, or says why there are none", () => {
+  const runUrl = "https://github.com/example/project/actions/runs/7";
+  const red = failedMarkdown(failedTests(junit + unsafe.replace("flakyFailure", "failure")), {
+    report: true,
+    runUrl,
+  });
+  assert.match(red, /^### Red on main: file a hardening item\n\nRun: https:\/\/github\.com\//);
+  assert.match(red, /2 failed tests:\n\n- `demo-proto` `frame::tests::broken`\n- `a_b` `t_1__--_`/);
+  assert.doesNotMatch(red, /-->|</);
+  assert.match(failedMarkdown([], { report: false, runUrl }), /No JUnit report: a build or setup/);
+  assert.match(failedMarkdown([], { report: true, runUrl }), /No failed test in the JUnit report/);
+});
+
+test("failed appends to the job summary with an error each, and tolerates no report", (t) => {
+  const dir = tmp(t);
+  const report = path.join(dir, "junit.xml");
+  const summary = path.join(dir, "summary.md");
+  fs.writeFileSync(report, junit);
+  fs.writeFileSync(summary, "earlier step\n");
+  const run = (file) =>
+    spawnSync(process.execPath, [script, "failed", file, "--run-url", "https://example.test/7"], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_STEP_SUMMARY: summary },
+    });
+  let result = run(report);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "::error title=Failed test::cargo:demo-proto#frame::tests::broken\n");
+  assert.match(fs.readFileSync(summary, "utf8"), /^earlier step\n### Red on main[\s\S]*broken/);
+  result = run(path.join(dir, "missing.xml"));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(fs.readFileSync(summary, "utf8"), /No JUnit report/);
+  const usage = spawnSync(process.execPath, [script, "failed", report], { encoding: "utf8" });
+  assert.equal(usage.status, 1);
 });
 
 test("summary appends to the job summary with a warning each, and tolerates no report", (t) => {

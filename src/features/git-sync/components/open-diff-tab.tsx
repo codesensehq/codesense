@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CodeDiffReview } from "@/shared/components/code-editor/CodeDiffReview";
+import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
+import { renderFileDiff } from "@/shared/lib/render-file-diff";
+import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { createIntentReader } from "../../../../src-tauri/assets/dashboards/story-trail/intent-reader.mjs";
 import { readOpenDiff } from "../lib/source-redline-source";
 import { diffTabAddress, openDiffTab, type DiffTabAddress } from "../lib/open-diff-route";
@@ -21,6 +23,15 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
   const [result, setResult] = useState<OpenDiffRead | null>(null);
   const [error, setError] = useState("");
   const readerRef = useRef<ReturnType<typeof createIntentReader> | null>(null);
+  const { modes, setMode } = useFileDiffModes();
+  // A link to lines of a markdown file opens it as source, where the lines are
+  // highlighted, without changing anyone's default; choosing a mode ends that.
+  const [rangeAsSource, setRangeAsSource] = useState(!!params.range);
+  const tabModes = rangeAsSource ? { ...modes, markdown: "source" as const } : modes;
+  const onModeChange: typeof setMode = (kind, mode) => {
+    setRangeAsSource(false);
+    setMode(kind, mode);
+  };
   useEffect(() => {
     setResult(null);
     setError("");
@@ -111,17 +122,25 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
             </label>
           )}
         </div>
-      ) : result.redline.binary ? (
-        <p className="p-3">Binary file — a text diff is unavailable.</p>
       ) : (
         <div className="min-h-0 flex-1">
-          <CodeDiffReview
-            before={result.redline.before}
-            after={result.redline.after}
-            path={params.path}
-            afterRange={params.range}
-            collapseUnchanged={!params.range}
-          />
+          {renderFileDiff({
+            fileType: getViewerFileType(params.path),
+            filePath: params.path,
+            sides: {
+              before: result.redline.before,
+              after: result.redline.after,
+              status: result.redline.status,
+            },
+            state: result.redline.binary ? { kind: "binary" } : { kind: "ready" },
+            prefs: {
+              modes: tabModes,
+              onModeChange,
+              testIdPrefix: "open-diff",
+              binary: <p className="p-3">Binary file — a text diff is unavailable.</p>,
+              code: { afterRange: params.range, collapseUnchanged: !params.range },
+            },
+          })}
         </div>
       )}
     </section>

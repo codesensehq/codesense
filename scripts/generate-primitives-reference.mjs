@@ -39,10 +39,9 @@
 //
 // Modes:
 //   write (default) — regenerate `generated/primitives.json` from the shared sources.
-//   --check          — exit non-zero if the committed JSON differs from a fresh
-//                      render. Error message names (i) the drifted entity (invoke
-//                      verb / kit method / cs-* class / token / event), (ii) the
-//                      file to edit, (iii) `pnpm gen:docs`.
+//   The output is a build artifact, not committed (.gitignore): cargo's build script
+//   and `pnpm gen:docs` write it, and `gen:docs:check` writes it too, so a
+//   generator error still fails the check. --check is accepted and writes as well.
 
 import ts from "typescript";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -2172,52 +2171,6 @@ function serialize(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-/**
- * Walk two generated manifests and name the first entity that differs. The
- * `--check` error message points at THIS entity (plus the source file to
- * edit) so a developer doesn't have to diff by hand.
- */
-function firstDrift(got, want) {
-  const sections = ["invoke", "kit", "classes", "tokens", "events", "contexts"];
-  for (const section of sections) {
-    const a = Array.isArray(got?.[section]) ? got[section] : [];
-    const b = Array.isArray(want?.[section]) ? want[section] : [];
-    const have = new Map(a.map((r) => [r.name, r]));
-    for (const r of b) {
-      const prev = have.get(r.name);
-      if (!prev) return { entity: `${section}: ${r.name} (new)`, section };
-      if (JSON.stringify(prev) !== JSON.stringify(r)) {
-        return { entity: `${section}: ${r.name}`, section };
-      }
-    }
-    for (const prev of a) {
-      if (!b.some((r) => r.name === prev.name)) {
-        return { entity: `${section}: ${prev.name} (removed)`, section };
-      }
-    }
-  }
-  return { entity: "primitives.json", section: null };
-}
-
-function sourceFileFor(section) {
-  switch (section) {
-    case "invoke":
-      return "src-tauri/src/verbs/registry.generated.json + scripts/generate-primitives-reference.mjs INVOKE_META";
-    case "kit":
-      return "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts + scripts/generate-primitives-reference.mjs KIT";
-    case "classes":
-      return "src/styles/viewer-themes.css + scripts/generate-primitives-reference.mjs CLASSES";
-    case "tokens":
-      return "src/features/dashboard/components/doc-theme.ts (TOKEN_SOURCES)";
-    case "events":
-      return "src-tauri/src/http/routes/viewer.rs + scripts/generate-primitives-reference.mjs EVENT_META";
-    case "contexts":
-      return "src/features/dashboard/components/html-viewer.tsx + scripts/generate-primitives-reference.mjs CONTEXTS";
-    default:
-      return "codesense-docs/getting-started/content/generated/primitives.json";
-  }
-}
-
 export function buildInputs(root = ROOT) {
   const inputs = new Set();
   const tree = sourceTree(root);
@@ -2242,40 +2195,12 @@ function main() {
     for (const input of buildInputs()) console.log(input);
     return;
   }
-  const check = process.argv.includes("--check");
   const rootArg = process.argv.indexOf("--root");
   const root = rootArg < 0 ? ROOT : resolve(process.argv[rootArg + 1]);
   const output = join(root, "codesense-docs/getting-started/content/generated/primitives.json");
   const { doc, warnings } = buildManifest(root);
   for (const w of warnings) console.warn(w);
   const fresh = serialize(doc);
-  if (check) {
-    const existing = existsSync(output) ? readFileSync(output, "utf8") : "";
-    if (existing !== fresh) {
-      let culprit = "primitives.json";
-      let section = null;
-      try {
-        const got = existing ? JSON.parse(existing) : {};
-        const drift = firstDrift(got, doc);
-        culprit = drift.entity;
-        section = drift.section;
-      } catch {
-        /* corrupt JSON — the generic message still gets the dev there. */
-      }
-      console.error(
-        [
-          "generate-primitives-reference: committed primitives.json is stale.",
-          `  entity:    ${culprit}`,
-          `  file:      ${sourceFileFor(section)}`,
-          `  generator: scripts/generate-primitives-reference.mjs`,
-          `  fix:       pnpm gen:docs`,
-        ].join("\n"),
-      );
-      process.exit(1);
-    }
-    console.log("generate-primitives-reference: ok");
-    return;
-  }
   mkdirSync(dirname(output), { recursive: true });
   if (!existsSync(output) || readFileSync(output, "utf8") !== fresh) writeFileSync(output, fresh);
   console.log(`generate-primitives-reference: wrote ${output}`);

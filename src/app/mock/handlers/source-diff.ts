@@ -203,6 +203,12 @@ const FIXTURE: FixtureFile[] = [
     uncommitted: true,
   },
   {
+    // HTML in the source diff reads as its source; rendering it here is later work.
+    file: { path: "docs/diff-card.html", status: "modified", added: 1, removed: 1 },
+    before: `<section class="card">\n  <h2>Changes</h2>\n</section>\n`,
+    after: `<section class="card">\n  <h2>Changes in this worktree</h2>\n</section>\n`,
+  },
+  {
     file: { path: "assets/diff-hero.png", status: "added" },
     before: null,
     after: null,
@@ -317,10 +323,23 @@ function redline(search: string, args: Record<string, unknown>): FileRedline {
 
 export function sourceDiffHandlers(search: string): HandlerRegistry {
   return {
+    // Every local tab reads as the root of the fixture worktree.
+    resolve_tab_source_repo: (args) =>
+      typeof args.cwd === "string" && args.cwd ? { root: args.cwd, isRoot: true } : null,
     source_worktree_changeset: (args) => changeset(search, args.baseRef),
     source_file_redline: (args) => redline(search, args),
     source_remote_changeset: (args) => changeset(search, args.baseRef, true),
     source_remote_file_redline: (args) => redline(search, args),
+    // The open-diff tab reads the same worktree at a rev.
+    open_diff_read: (args) => {
+      const params = args.params as { path: string; rev: string };
+      return {
+        status: "opened",
+        redline: redline(search, { filePath: params.path }),
+        files: fixtureFor(search).map((f) => f.file),
+        resolvedRev: params.rev,
+      };
+    },
     source_remote_watch_start: () => 1,
     source_remote_watch_stop: () => undefined,
     source_remote_tracked_count: () => 1200,

@@ -7,6 +7,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// @ts-expect-error -- plain Node ESM build script, no type declarations.
+import { buildManifest as buildSchemas } from "../../../../scripts/generate-yaml-schemas.mjs";
 import { NAV_MENU_ITEMS, SHORTCUT_ACTIONS } from "./registry";
 
 type Entry = { id: string; label: string; mac: string; winLinux: string; menu: string };
@@ -107,7 +109,8 @@ describe("shortcuts manifest", () => {
   });
 
   it("matches the static counts the reference pages show before they load", () => {
-    const schemas = readJson<{ schemas: unknown[] }>(join(CONTENT, "generated/schemas.json"));
+    // generated/schemas.json is a build artifact, so count what the generator renders.
+    const schemas = (buildSchemas() as { doc: { schemas: unknown[] } }).doc;
     expect(readFileSync(join(CONTENT, "arc-n-reference/index.html"), "utf8")).toContain(
       `<data-count id="schemas">${schemas.schemas.length}</data-count>`,
     );

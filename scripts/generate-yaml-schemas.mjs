@@ -44,9 +44,9 @@
 //
 // Modes:
 //   write (default) — regenerate schemas.json.
-//   --check          — exit non-zero if the committed JSON differs from a fresh
-//                      render. Error names (i) the drifted schema + field,
-//                      (ii) the file to edit, (iii) `npm run gen:docs`.
+//   --check          — exit non-zero if the committed factory-phase schema's trigger
+//                      enum is stale. schemas.json is a build artifact, not committed
+//                      (.gitignore); both modes write it.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -696,69 +696,6 @@ function main() {
   const { doc, warnings } = buildManifest();
   for (const w of warnings) console.warn(w);
   const fresh = serialize(doc);
-  if (check) {
-    const existing = existsSync(OUTPUT) ? readFileSync(OUTPUT, "utf8") : "";
-    if (existing !== fresh) {
-      // Name the first drifted schema + field so the error points at the
-      // actual culprit, not just "the whole file."
-      let culprit = "schemas.json";
-      let field = null;
-      try {
-        const got = existing ? JSON.parse(existing) : { schemas: [] };
-        const have = new Map((got.schemas || []).map((s) => [s.slug, s]));
-        for (const s of doc.schemas) {
-          const prev = have.get(s.slug);
-          if (!prev) {
-            culprit = `${s.slug} (added)`;
-            break;
-          }
-          if (JSON.stringify(prev) !== JSON.stringify(s)) {
-            culprit = s.slug;
-            // Find the first drifted field for a sharper pointer.
-            const prevFields = new Map((prev.fields || []).map((f) => [f.name, f]));
-            for (const f of s.fields) {
-              const p = prevFields.get(f.name);
-              if (!p || JSON.stringify(p) !== JSON.stringify(f)) {
-                field = f.name;
-                break;
-              }
-            }
-            if (!field) {
-              for (const p of prev.fields || []) {
-                if (!s.fields.some((f) => f.name === p.name)) {
-                  field = `${p.name} (removed)`;
-                  break;
-                }
-              }
-            }
-            break;
-          }
-        }
-        if (culprit === "schemas.json") {
-          for (const prev of got.schemas || []) {
-            if (!doc.schemas.some((s) => s.slug === prev.slug)) {
-              culprit = `${prev.slug} (removed)`;
-              break;
-            }
-          }
-        }
-      } catch {
-        /* corrupt JSON — the generic message is still useful. */
-      }
-      console.error(
-        [
-          "generate-yaml-schemas: committed schemas.json is stale.",
-          `  schema:    ${culprit}${field ? ` · field: ${field}` : ""}`,
-          `  file:      codesense-docs/getting-started/content/generated/schemas.json`,
-          `  generator: scripts/generate-yaml-schemas.mjs`,
-          `  fix:       npm run gen:docs`,
-        ].join("\n"),
-      );
-      process.exit(1);
-    }
-    console.log("generate-yaml-schemas: ok");
-    return;
-  }
   mkdirSync(dirname(OUTPUT), { recursive: true });
   if (!existsSync(OUTPUT) || readFileSync(OUTPUT, "utf8") !== fresh) writeFileSync(OUTPUT, fresh);
   console.log(`generate-yaml-schemas: wrote ${OUTPUT}`);

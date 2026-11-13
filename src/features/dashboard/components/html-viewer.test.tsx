@@ -241,6 +241,18 @@ describe("HtmlViewer", () => {
     });
   });
 
+  it("draws the Snapshot band on a live doc unless the host turns it off", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    const { unmount } = render(<HtmlViewer filePath="/repo/page.html" teamContentPath="/repo" />);
+    expect(
+      await screen.findByRole("button", { name: "Snapshot this dashboard to context" }),
+    ).toBeInTheDocument();
+    unmount();
+    render(<HtmlViewer filePath="/repo/page.html" teamContentPath="/repo" snapshot={false} />);
+    await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Snapshot this dashboard to context" })).toBeNull();
+  });
+
   it("renders iframe with correct src URL", async () => {
     mockGetHttpApiPort.mockResolvedValue(9123);
     render(<HtmlViewer filePath="/repo/docs/page.html" refreshKey={5} teamContentPath="/repo" />);
