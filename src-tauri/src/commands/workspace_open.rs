@@ -46,6 +46,9 @@ pub(crate) struct OpenRequest {
     /// The agent to launch: a rendered key, or a bare id in the target team, then the
     /// caller's personal space, then the starters. None is the preferred built-in.
     pub agent: Option<String>,
+    /// The model the launch runs, passed to the agent's CLI as `--model <model>` after the
+    /// agent's own args. None leaves the agent's own choice.
+    pub model: Option<String>,
     pub initial_prompt: Option<String>,
     pub launched_by: Option<String>,
     /// The role the launcher assigns the session; display only.
@@ -450,7 +453,28 @@ async fn resolve_agent_launch(
                 .to_string()
         });
     let prompt = non_blank(req.initial_prompt.as_deref());
-    host.prepare_agent(&reference, &team, prompt, mode).await
+    let mut launch = host.prepare_agent(&reference, &team, prompt, mode).await?;
+    if let Some(model) = non_blank(req.model.as_deref()) {
+        // After the agent's own options (before any `--` operands), so the caller's model
+        // wins over a saved `--model` and is never read as prompt text.
+        let args = &mut launch.launch.args;
+        let at = codesense_pty_core::agent_cli::operands_at(&args[..]);
+        args.insert(at, model.to_string());
+        args.insert(at, "--model".to_string());
+    }
+    Ok(launch)
+}
+
+/// A model name is passed as one argv word: letters, digits and `.`, `_`, `-`, `[`, `]`, and
+/// the `/` and `:` of provider and tag ids (`anthropic/claude-sonnet-4`, `llama3:8b`).
+fn invalid_model(req: &OpenRequest) -> Option<String> {
+    let model = non_blank(req.model.as_deref())?;
+    let word = model.len() <= 64
+        && model.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | '/' | ':')
+        })
+        && !model.starts_with('-');
+    (!word).then(|| format!("unknown model {model:?}"))
 }
 
 /// The mode an open runs its agent in: the caller's explicit `mode` (or legacy `headed`)
@@ -772,6 +796,9 @@ async fn open_agent_as(
         Ok(mode) => mode,
         Err(refusal) => return Ok(OpenResult::invalid(&mode_error(refusal))),
     };
+    if let Some(reason) = invalid_model(req) {
+        return Ok(OpenResult::invalid(&reason));
+    }
     // The team names a dir under the user's home: one plain segment, never a path.
     if let Some(team) = non_blank(req.team.as_deref()) {
         if !is_single_path_segment(team) {
@@ -1192,6 +1219,7 @@ pub(crate) async fn open_workspace_call_for(
             worktree: params.worktree,
             create_worktree: params.create_worktree.unwrap_or(false),
             agent: params.agent,
+            model: params.model,
             initial_prompt: params.initial_prompt,
             launched_by: params.launched_by,
             role: params.role,
@@ -1373,7 +1401,12 @@ pub struct UiLaunchArgs {
     pub story_id: Option<String>,
     pub name: Option<String>,
     pub agent: Option<String>,
+    /// The model to run, as for [`OpenRequest::model`].
+    pub model: Option<String>,
     pub initial_prompt: Option<String>,
+    /// How it surfaces: `headed` (the default, since the person is watching),
+    /// `visible-unfocused` or `headless`.
+    pub mode: Option<String>,
     /// The manager the person put it under: that session's handle. Display only.
     pub launched_by: Option<String>,
     pub role: Option<String>,
@@ -1399,13 +1432,14 @@ impl From<UiLaunchArgs> for OpenRequest {
             worktree: args.worktree,
             create_worktree: args.create_worktree.unwrap_or(false),
             agent: args.agent,
+            model: args.model,
             initial_prompt: args.initial_prompt,
             launched_by: args.launched_by,
             role: args.role,
             queue_role: args.queue_role,
             avatar: args.avatar,
             reviews: None,
-            mode: Some("headed".to_string()),
+            mode: args.mode.or_else(|| Some("headed".to_string())),
             headed: None,
             machine_id: args.machine_id,
             // The UI launch sheet does not expose a budget today; the
