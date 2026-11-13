@@ -205,6 +205,7 @@ test("a merge_group workflow saves no cache on merge groups", () => {
 // pull requests.
 const macosOptIn =
   "github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))";
+const pathFilter = "!cancelled() && needs.changes.outputs.rust != 'false'";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
 test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
@@ -268,7 +269,11 @@ test("rust.yml runs nightly instead of on push, and only the nightly run saves o
     "workflow_dispatch",
   ]);
   assert.deepEqual(workflow.on.schedule, [{ cron: "17 6 * * *" }]);
-  assert.ok(workflow.jobs["rust-macos"].if.startsWith("github.event_name != 'pull_request' ||"));
+  assert.ok(
+    workflow.jobs["rust-macos"].if.startsWith(
+      `\${{ ${pathFilter} && (github.event_name != 'pull_request' ||`,
+    ),
+  );
   const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
   for (const name of ["rust-macos", "rust-linux"]) {
     const steps = workflow.jobs[name].steps;
@@ -312,13 +317,68 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   ]);
   for (const trigger of ["merge_group", "schedule", "workflow_dispatch"])
     assert.ok(Object.hasOwn(workflow.on, trigger), trigger);
-  assert.equal(workflow.jobs["rust-macos"].if, macosOptIn);
+  assert.equal(workflow.jobs["rust-macos"].if, `\${{ ${pathFilter} && (${macosOptIn}) }}`);
   // Another label's run has a group of its own, so it cannot cancel the pull request's run.
   assert.equal(
     workflow.concurrency.group,
     "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
-  assert.equal(workflow.jobs["rust-linux"].if, undefined);
+  assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+// A Rust-free change skips the Rust jobs. Scheduled and manual runs always test, and the jobs
+// run unless the changes job says rust=false, so its failure runs them too.
+test("rust.yml skips its test jobs only when the changes job finds nothing Rust-relevant", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const changes = workflow.jobs.changes;
+  assert.equal(changes.if, undefined);
+  assert.equal(changes.needs, undefined);
+  assert.equal(changes.outputs.rust, "${{ steps.filter.outputs.rust }}");
+  const filter = changes.steps.find((step) => step.id === "filter");
+  assert.match(filter.run, /^\s*\*\) echo "rust=true" >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m);
+  assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
+  for (const name of ["rust-macos", "rust-linux"])
+    assert.equal(workflow.jobs[name].needs, "changes");
+});
+
+test("only rust.yml's test jobs may skip a merge group on the changes job's output", () => {
+  // queued()'s static job, renamed and gated on a changes job of its own.
+  const filtered = (condition, file = "rust.yml", job = "rust-linux", needs = "changes") =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: ${needs}\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  for (const condition of [`\${{ ${pathFilter} }}`, `\${{ ${pathFilter} && (${macosOptIn}) }}`])
+    assert.equal(filtered(condition), "", condition);
+  for (const [condition, file, job, needs] of [
+    [`\${{ ${pathFilter} }}`, "ci.yml", "rust-linux", "changes"],
+    [`\${{ ${pathFilter} }}`, "rust.yml", "static", "changes"],
+    [`\${{ ${pathFilter} }}`, "rust.yml", "rust-linux", "[]"],
+    ["${{ needs.changes.outputs.rust != 'false' }}", "rust.yml", "rust-linux", "changes"],
+    [
+      "${{ !cancelled() && needs.changes.outputs.rust == 'true' }}",
+      "rust.yml",
+      "rust-linux",
+      "changes",
+    ],
+    [
+      `\${{ ${pathFilter} && github.event.pull_request.draft == false }}`,
+      "rust.yml",
+      "rust-linux",
+      "changes",
+    ],
+    [`\${{ ${pathFilter} && (${macosOptIn}) && true }}`, "rust.yml", "rust-linux", "changes"],
+    [`\${{ ${pathFilter} || true }}`, "rust.yml", "rust-linux", "changes"],
+  ])
+    assert.match(
+      filtered(condition, file, job, needs),
+      /if must begin with/,
+      `${file} ${job}: ${condition}`,
+    );
 });
 
 test("pull-requests read is limited to the DCO job", () => {
