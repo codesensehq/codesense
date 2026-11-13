@@ -53,8 +53,12 @@ beforeEach(() => {
   void _mode;
   useViewerStore.setState({ settings });
 });
-function tabFor(file: string) {
-  return "virtual://source-diff/" + encodeURIComponent(JSON.stringify({ ...params, path: file }));
+function tabFor(file: string, range?: { start: number; end: number }) {
+  const { range: _range, ...rest } = params;
+  void _range;
+  return (
+    "virtual://source-diff/" + encodeURIComponent(JSON.stringify({ ...rest, path: file, range }))
+  );
 }
 it("revalidates on mount and Refresh, discards superseded replies and passes the after range", async () => {
   const replies: ((v: unknown) => void)[] = [];
@@ -166,4 +170,18 @@ it("a binary file keeps its note", async () => {
   render(<OpenDiffTab filePath={path} />);
   expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
   expect(mocks.review).not.toHaveBeenCalled();
+});
+it("a line range into a markdown file opens it as source, highlighted, without changing the default", async () => {
+  mocks.read.mockResolvedValue({ ...opened, files: [{ path: "doc.md" }] });
+  render(<OpenDiffTab filePath={tabFor("doc.md", { start: 2, end: 3 })} />);
+  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(mocks.review.mock.calls.at(-1)?.[0]).toMatchObject({
+    afterRange: { start: 2, end: 3 },
+    collapseUnchanged: false,
+  });
+  expect(screen.queryByTestId("redline")).toBeNull();
+  expect(useViewerStore.getState().settings.defaultFileDiffMode).toBeUndefined();
+  // The reader can still go to the redline.
+  fireEvent.click(screen.getByRole("button", { name: "Redline" }));
+  expect(await screen.findByTestId("redline")).toBeInTheDocument();
 });

@@ -24,6 +24,14 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
   const [error, setError] = useState("");
   const readerRef = useRef<ReturnType<typeof createIntentReader> | null>(null);
   const { modes, setMode } = useFileDiffModes();
+  // A link to lines of a markdown file opens it as source, where the lines are
+  // highlighted, without changing anyone's default; choosing a mode ends that.
+  const [rangeAsSource, setRangeAsSource] = useState(!!params.range);
+  const tabModes = rangeAsSource ? { ...modes, markdown: "source" as const } : modes;
+  const onModeChange: typeof setMode = (kind, mode) => {
+    setRangeAsSource(false);
+    setMode(kind, mode);
+  };
   useEffect(() => {
     setResult(null);
     setError("");
@@ -126,8 +134,8 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
             },
             state: result.redline.binary ? { kind: "binary" } : { kind: "ready" },
             prefs: {
-              modes,
-              onModeChange: setMode,
+              modes: tabModes,
+              onModeChange,
               testIdPrefix: "open-diff",
               binary: <p className="p-3">Binary file — a text diff is unavailable.</p>,
               code: { afterRange: params.range, collapseUnchanged: !params.range },
