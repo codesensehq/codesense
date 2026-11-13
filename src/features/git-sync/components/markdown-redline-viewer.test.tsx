@@ -14,6 +14,10 @@ vi.mock("@/shared/lib/markdown-worker/client", () => ({
   parseToRedline: (before: string, after: string) => parseToRedlineMock(before, after),
 }));
 
+vi.mock("./rendered-markdown", () => ({
+  RenderedMarkdown: ({ text }: { text: string }) => <div data-testid="rendered-md">{text}</div>,
+}));
+
 vi.mock("./changed-binary-affordance", () => ({
   ChangedBinaryAffordance: ({ status }: { status: string }) => (
     <div data-testid="cba">{status}</div>
@@ -287,5 +291,79 @@ describe("Files diff: every type through the shared dispatch", () => {
     );
     expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
     expect(screen.getByTestId("code-diff")).toHaveTextContent("old→new");
+  });
+});
+
+describe("Files diff header: labels and the Private row on every type and mode", () => {
+  let ro: ReturnType<typeof stubResizeObserver> | null = null;
+  beforeEach(() => {
+    getFileRedlineMock.mockReset();
+    parseToRedlineMock.mockReset();
+    parseToRedlineMock.mockReturnValue({
+      promise: Promise.resolve({ hast: pHast("redline-ok"), perf: {}, receiveAt: 0 }),
+      cancel: vi.fn(),
+    });
+    resetModes();
+  });
+  afterEach(() => {
+    ro?.restore();
+    ro = null;
+  });
+
+  const labelled = {
+    ...redline("modified", "old", "new"),
+    beforeLabel: "main · aaaaaaa",
+    afterLabel: "PR #7 · bbbbbbb",
+  };
+
+  it("a .ts in a PR shows its base and head labels above the code diff", async () => {
+    getFileRedlineMock.mockResolvedValue(labelled);
+    render(<MarkdownRedlineViewer {...baseProps} absPath="/ctx/x.ts" prNumber={7} />);
+    await screen.findByTestId("code-diff");
+    expect(screen.getByTestId("context-redline-labels")).toHaveTextContent(
+      "main · aaaaaaaPR #7 · bbbbbbb",
+    );
+  });
+
+  it("markdown in Source mode keeps its labels", async () => {
+    useViewerStore.getState().setFileDiffMode("markdown", "source");
+    getFileRedlineMock.mockResolvedValue(labelled);
+    render(<MarkdownRedlineViewer {...baseProps} commitSha="bbbbbbb" />);
+    await screen.findByTestId("code-diff");
+    expect(screen.getByTestId("context-redline-labels")).toBeInTheDocument();
+  });
+
+  it("a private file shows the Private row on a code diff", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("modified", "a", "b"));
+    render(
+      <MarkdownRedlineViewer
+        {...baseProps}
+        orgRoot="/home/users/42/scratch"
+        navRepoPath="/home/users/42/scratch"
+        absPath="/home/users/42/scratch/orgs/acme/plans/content/secret.ts"
+      />,
+    );
+    await screen.findByTestId("code-diff");
+    expect(screen.getAllByText(/^Private ·/)).toHaveLength(2);
+  });
+
+  it("markdown side by side draws the labels once, not once per pane", async () => {
+    ro = stubResizeObserver(1200);
+    useViewerStore.getState().setFileDiffMode("markdown", "side-by-side");
+    getFileRedlineMock.mockResolvedValue(labelled);
+    render(<MarkdownRedlineViewer {...baseProps} />);
+    expect(await screen.findAllByTestId("rendered-md")).toHaveLength(2);
+    expect(screen.getAllByTestId("context-redline-labels")).toHaveLength(1);
+  });
+
+  it("scroll keys bind to the visible prose pane in side by side", async () => {
+    ro = stubResizeObserver(1200);
+    useViewerStore.getState().setFileDiffMode("markdown", "side-by-side");
+    getFileRedlineMock.mockResolvedValue(labelled);
+    render(<MarkdownRedlineViewer {...baseProps} />);
+    const panes = await screen.findAllByTestId("rendered-md");
+    // The After pane's scroll container is the one the keys move.
+    expect(panes[1].closest("[data-scroll-keys]")).not.toBeNull();
+    expect(panes[0].closest("[data-scroll-keys]")).toBeNull();
   });
 });

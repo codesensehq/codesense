@@ -108,17 +108,18 @@ export function MarkdownRedlineViewer({
         ? { kind: "binary" }
         : { kind: "ready" };
 
-  const header = (
+  const isPrivate = privateFile(absPath) != null;
+  const header = (isPrivate || redline?.beforeLabel) && (
     <>
-      {privateFile(absPath) && (
-        <div className="mb-4 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+      {isPrivate && (
+        <div className="flex flex-wrap justify-between gap-2">
           <span>Private · {redline?.baselineSha ?? "last commit"}</span>
           <span>Private · {commitSha ? commitSha.slice(0, 7) : "uncommitted"}</span>
         </div>
       )}
       {redline?.beforeLabel && (
         <div
-          className="mb-4 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground"
+          className="flex flex-wrap justify-between gap-x-4 gap-y-1"
           data-testid="context-redline-labels"
         >
           <span>{redline.beforeLabel}</span>
@@ -166,8 +167,8 @@ export function MarkdownRedlineViewer({
             frameClassName: `mx-auto px-8 py-6 ${widthClass}`,
             className: "md-viewer-prose cs-redline-prose prose prose-sm max-w-none",
             style: { fontSize },
-            header,
           },
+          header,
           binary: redline ? (
             <ChangedBinaryAffordance
               absPath={absPath}

@@ -85,9 +85,9 @@ export interface FileDiffPrefs {
     scrollRef?: Ref<HTMLDivElement>;
     /** Wraps the prose inside the scroll container (width, padding). */
     frameClassName?: string;
-    /** Above the prose, inside the scroll container (labels, notes). */
-    header?: ReactNode;
   };
+  /** Drawn once under the strip for every type and mode (labels, notes). */
+  header?: ReactNode;
   /** The surface's binary affordance. */
   binary?: ReactNode;
   /** Test ids read `<prefix>-large-gate`, `<prefix>-code-skeleton`, … */
@@ -230,14 +230,17 @@ function DiffStrip<K extends FileDiffKind>({
   );
 }
 
-/** The frame every type shares: strip on top, measured body below. */
+/** The frame every type shares: strip and the surface's header on top, measured
+ *  body below. */
 function DiffFrame({
   strip,
+  header,
   bodyRef,
   children,
   testId,
 }: {
   strip: ReactNode;
+  header?: ReactNode;
   bodyRef: (node: HTMLDivElement | null) => void;
   children: ReactNode;
   testId: string;
@@ -245,6 +248,11 @@ function DiffFrame({
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid={testId}>
       {strip}
+      {header && (
+        <div className="flex-none space-y-1 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+          {header}
+        </div>
+      )}
       <div ref={bodyRef} className="min-h-0 flex-1">
         {children}
       </div>
@@ -308,7 +316,8 @@ function SideBySide({
   sides: FileDiffSides;
   width: number | null;
   prefix: string;
-  renderSide: (side: "before" | "after") => ReactNode;
+  /** `active` marks the pane the reader is on (scroll keys bind to it). */
+  renderSide: (side: "before" | "after", active: boolean) => ReactNode;
 }) {
   const [picked, setPicked] = useState<"before" | "after">("after");
   const { hasBefore, hasAfter } = sideAvailability(sides);
@@ -323,7 +332,7 @@ function SideBySide({
         <div className={labelRow} data-testid={`${prefix}-one-side`}>
           {label(only)}
         </div>
-        <div className="min-h-0 flex-1">{renderSide(only)}</div>
+        <div className="min-h-0 flex-1">{renderSide(only, true)}</div>
       </div>
     );
   }
@@ -340,7 +349,7 @@ function SideBySide({
             )}
           >
             <div className={labelRow}>{label(side)}</div>
-            <div className="min-h-0 flex-1">{renderSide(side)}</div>
+            <div className="min-h-0 flex-1">{renderSide(side, side === "after")}</div>
           </div>
         ))}
       </div>
@@ -367,7 +376,7 @@ function SideBySide({
           ))}
         </div>
       </div>
-      <div className="min-h-0 flex-1">{renderSide(picked)}</div>
+      <div className="min-h-0 flex-1">{renderSide(picked, true)}</div>
     </div>
   );
 }
@@ -447,11 +456,12 @@ function ProseScroll({
   children: ReactNode;
 }) {
   return (
-    <div ref={scrollRef} className="h-full overflow-y-auto">
-      <div className={prefs.prose?.frameClassName ?? "px-6 py-5"}>
-        {prefs.prose?.header}
-        {children}
-      </div>
+    <div
+      ref={scrollRef}
+      data-scroll-keys={scrollRef ? "" : undefined}
+      className="h-full overflow-y-auto"
+    >
+      <div className={prefs.prose?.frameClassName ?? "px-6 py-5"}>{children}</div>
     </div>
   );
 }
@@ -501,8 +511,8 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
           sides={sides}
           width={width}
           prefix={prefix}
-          renderSide={(side) => (
-            <ProseScroll prefs={prefs}>
+          renderSide={(side, active) => (
+            <ProseScroll prefs={prefs} scrollRef={active ? prefs.prose?.scrollRef : undefined}>
               <RenderedMarkdown
                 key={`${filePath}:${side}`}
                 text={text[side]}
@@ -520,6 +530,7 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
     <DiffFrame
       testId={`${prefix}-markdown`}
       bodyRef={bodyRef}
+      header={prefs.header}
       strip={<DiffStrip sides={sides} kind="markdown" mode={mode} prefs={prefs} showSwitch />}
     >
       {body}
@@ -564,6 +575,7 @@ function RenderedFileDiff({
     <DiffFrame
       testId={`${prefix}-rendered`}
       bodyRef={bodyRef}
+      header={prefs.header}
       strip={
         rendered ? (
           <DiffStrip sides={sides} kind="html" mode={mode} prefs={prefs} showSwitch />
@@ -645,6 +657,7 @@ function CodeFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
     <DiffFrame
       testId={`${prefix}-code`}
       bodyRef={bodyRef}
+      header={prefs.header}
       strip={
         <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
       }
