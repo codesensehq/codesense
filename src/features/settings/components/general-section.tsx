@@ -77,7 +77,7 @@ import {
 import { runUpdateCheck } from "@/app/update-toast";
 import { useSummaryHeadings } from "@/shared/hooks/use-summary-headings";
 
-import { PUBLIC_DOWNLOAD_URL, isBetaChannel, readBuildChannel } from "@/features/license/channel";
+import { downloadUrl, isBetaChannel, readBuildChannel } from "@/features/license/channel";
 import { UpdatesSection } from "@/features/license/UpdatesSection";
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
@@ -1969,7 +1969,7 @@ function AboutRow() {
       const err = e as UpdateError | string;
       const action = {
         label: "Download manually",
-        onClick: () => openUrl(PUBLIC_DOWNLOAD_URL),
+        onClick: () => openUrl(downloadUrl()),
       };
       // A build with no update source says so; trying again would not change that.
       manualToastIdRef.current =

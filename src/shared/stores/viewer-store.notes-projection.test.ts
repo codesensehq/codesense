@@ -21,7 +21,6 @@ vi.mock("@/tauri/commands", () => ({
     disk.body = content;
     return content;
   }),
-  reapEmptyScratchNotes: vi.fn(async () => null),
   createNote: vi.fn(),
   updateNoteMeta: vi.fn(),
   deleteNote: vi.fn(async () => []),
@@ -52,7 +51,6 @@ describe("the native notes list on the records projection", () => {
       activeNoteId: null,
       scratchNoteContent: "",
       notesLoadedScope: null,
-      emptyScratchReapDone: true,
     });
     await useViewerStore.getState().loadNotes();
     vi.mocked(listNotes).mockClear();

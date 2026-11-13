@@ -10,9 +10,11 @@
 .cs-agent-identity {
   --ag-bg: var(--cs-sidebar-bg, var(--card));
   --ag-text: var(--cs-sidebar-text, var(--foreground));
-  --ag-muted: color-mix(in oklab, var(--ag-text) 68%, var(--ag-bg));
-  /* 58%: line two and section labels hold about 4.5:1 on dark and light panels alike. */
-  --ag-faint: color-mix(in oklab, var(--ag-text) 58%, var(--ag-bg));
+  --ag-muted: color-mix(in oklab, var(--ag-text) 76%, var(--ag-bg));
+  /* Muted (76%) and faint (70%) hold 4.5:1 or better on every row fill. Lowest, on the current
+     row: faint 5.01 light / 5.63 dark, muted 6.04 light / 6.57 dark. Read by row line two,
+     hints and section labels. */
+  --ag-faint: color-mix(in oklab, var(--ag-text) 70%, var(--ag-bg));
   --ag-line: color-mix(in oklab, var(--ag-text) 13%, var(--ag-bg));
   --ag-guide: color-mix(in oklab, var(--ag-text) 16%, var(--ag-bg));
   --ag-hover: color-mix(in oklab, var(--ag-text) 6%, var(--ag-bg));

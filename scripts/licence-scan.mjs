@@ -237,6 +237,20 @@ export function needsDecision(packages, allowed, decisions = {}) {
 
 const LICENCE_FILE = /^(?:licen[cs]e|copying|notice|unlicense)(?:[-_.].*)?$/i;
 
+// pnpm can report virtual-store paths even for a hoisted install. Never borrow another version's
+// licence when resolving a missing inventory path to the root node_modules directory.
+function npmDirectory(p, root) {
+  if (existsSync(p.dir)) return p.dir;
+  const hoisted = join(root, "node_modules", p.name);
+  try {
+    const pkg = JSON.parse(readFileSync(join(hoisted, "package.json"), "utf8"));
+    if (pkg.name === p.name && pkg.version === p.version) return hoisted;
+  } catch {
+    // No installed package manifest: retain the existing missing-file fallback.
+  }
+  return p.dir;
+}
+
 export function licenceTexts(dir, read = readFileSync, list = readdirSync) {
   let names;
   try {
@@ -819,7 +833,7 @@ export function main(argv, { root = ROOT, run: exec = run, spawn = spawnSync } =
       return existsSync(join(root, p.licenceFile))
         ? [readFileSync(join(root, p.licenceFile), "utf8").replace(/\r\n/g, "\n").trim()]
         : [];
-    const texts = licenceTexts(p.dir);
+    const texts = licenceTexts(p.ecosystem === "npm" ? npmDirectory(p, root) : p.dir);
     if (texts.length) return texts;
     noFile.push(p);
     return [fallbackText(p)];

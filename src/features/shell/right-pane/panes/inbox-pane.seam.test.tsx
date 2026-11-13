@@ -153,6 +153,8 @@ function setPreview(enabled: boolean) {
   useDashboardProfileStore.setState({ org: ORG, profile: profileChoice() });
 }
 let crossTeam = false;
+// Newest rows per team the rollup returns up front; the pane pages the rest 50 at a time.
+let rollupWindow = 500;
 let teamScopedCrossTeam = false;
 let narrowedInboxGrant = false;
 let crossSurface = "human-inbox";
@@ -411,7 +413,11 @@ function inboxIpc(cmd: string, args: Record<string, any> | undefined): unknown {
         humanUnread: projectedCounts().humanUnread,
         messages: [...new Set(rollup.map((m) => JSON.stringify(m.team)))]
           .flatMap(
-            (team) => inboxView(rollup.filter((m) => JSON.stringify(m.team) === team)).messages,
+            (team) =>
+              inboxView(
+                rollup.filter((m) => JSON.stringify(m.team) === team),
+                { limit: rollupWindow },
+              ).messages,
           )
           .map(({ messageId: _id, toHuman: _human, ...message }) => message),
         conversations: inboxView(rollup).conversations,
@@ -573,6 +579,7 @@ beforeEach(() => {
   sendInvalid = false;
   panePresent = true;
   crossTeam = false;
+  rollupWindow = 500;
   teamScopedCrossTeam = false;
   narrowedInboxGrant = false;
   crossSurface = "human-inbox";
@@ -2861,12 +2868,14 @@ it("loads 50 older rows, suppresses auto retry, and retries with one status outs
 
 it("pages cross-team role history team by team until every team ends", async () => {
   crossTeam = true;
+  // A 5-row window leaves 50 older rows for one team and 120 for the other: pages of 100, 50, 20.
+  rollupWindow = 5;
   const teams = [
     { org: ORG, team: TEAM },
     { org: ORG, team: "web" },
   ];
   rollup = teams.flatMap((team, index) =>
-    Array.from({ length: index ? 620 : 550 }, (_, n) => ({
+    Array.from({ length: index ? 125 : 55 }, (_, n) => ({
       id: n + 1,
       team,
       from: "human",
@@ -2902,7 +2911,7 @@ it("pages cross-team role history team by team until every team ends", async () 
     "web",
     "web",
   ]);
-  expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(1170);
+  expect(el(p, "log").querySelectorAll(".ib-msg")).toHaveLength(180);
 });
 
 it("honors Mark unread while opening is still scanning older unread history", async () => {

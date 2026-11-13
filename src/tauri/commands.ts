@@ -650,18 +650,6 @@ export const notesRestore = async (
     })
   ).note;
 
-/** SW-SN-13 AC-4: one-shot, guarded reap of the empty duplicate "Scratch" notes
- *  the SN-12 null-active-note lazy-create minted. `bootIds` is the snapshot of
- *  note ids present at session start — only those are reap-eligible, so a note
- *  created concurrently (e.g. via the panel's 3s editable hatch) is never reaped.
- *  Preserves `activeId`; never deletes a note with body content, a user-renamed
- *  title, a pinned note, or the sole survivor. Idempotent. Returns the survivors. */
-export const reapEmptyScratchNotes = (
-  scope: NotesScope,
-  activeId: string | undefined,
-  bootIds: string[],
-) => invoke<NoteMeta[]>("reap_empty_scratch_notes", { ...scopeArgs(scope), activeId, bootIds });
-
 /** The absolute notes directory (each note is `{dir}/notes/{id}.md`); the path is
  *  derived in Rust, so it must come from a command. A note handed to an agent
  *  names its file from here. */

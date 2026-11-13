@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import { PUBLIC_DOWNLOAD_URL } from "./channel";
 import { COPY } from "./copy";
 
 const { mockInvoke, mockListen, mockOpenUrl } = vi.hoisted(() => ({
@@ -44,6 +43,7 @@ describe("UpdatesSection", () => {
     cleanup();
     vi.resetModules();
     delete window.__CODESENSE_CHANNEL__;
+    delete window.__CODESENSE_PUBLIC_HOST__;
     mockInvoke.mockReset();
     mockListen.mockReset();
     mockListen.mockResolvedValue(() => {});
@@ -96,8 +96,15 @@ describe("UpdatesSection", () => {
     expect(line.textContent).toContain(COPY.downloadLatest);
     expect(line.textContent).not.toMatch(/download link|fresh links/);
     fireEvent.click(screen.getByTestId("settings-updates-update-download"));
-    expect(mockOpenUrl).toHaveBeenCalledWith(PUBLIC_DOWNLOAD_URL);
-    expect(PUBLIC_DOWNLOAD_URL).not.toContain("/beta/");
+    expect(mockOpenUrl).toHaveBeenCalledWith("https://codesense.ai/download");
+  });
+
+  it("opens this build's download page when a staging update needs installing by hand", async () => {
+    window.__CODESENSE_PUBLIC_HOST__ = "preview.example.invalid";
+    await renderSection("beta-staging", view({ update_attention: "not_writable" }));
+    await screen.findByTestId("settings-updates-update-by-hand");
+    fireEvent.click(screen.getByRole("button", { name: "Download the latest CodeSense" }));
+    expect(mockOpenUrl).toHaveBeenCalledWith("https://preview.example.invalid/download");
   });
 
   it("shows a staged build that can't restart without the Restart to update button", async () => {

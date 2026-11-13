@@ -1238,7 +1238,6 @@ pub fn run() {
             commands::scratch::notes_history,
             commands::scratch::notes_read_at,
             commands::scratch::notes_restore,
-            commands::scratch::reap_empty_scratch_notes,
             commands::scratch::notes_dir_path,
             commands::system::ensure_directory,
             commands::pty::admitted_commands::write_pty,
