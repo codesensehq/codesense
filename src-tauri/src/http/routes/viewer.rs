@@ -1826,7 +1826,9 @@ mod tests {
             "if(d.type==='codesense:hello'){if(!window.__csSlotSeen)window.parent.postMessage("
         ));
         assert!(LINK_INTERCEPTOR_JS.contains("type:'codesense:ready',retry:true"));
-        assert!(LINK_INTERCEPTOR_JS.contains("d.type==='codesense:theme'){window.__csSlotSeen=true;"));
+        assert!(
+            LINK_INTERCEPTOR_JS.contains("d.type==='codesense:theme'){window.__csSlotSeen=true;")
+        );
         assert!(LINK_INTERCEPTOR_JS.contains("onVisibility:function(cb)"));
         assert!(LINK_INTERCEPTOR_JS.contains("onIntent:function(cb)"));
         assert!(LINK_INTERCEPTOR_JS.contains("codesense:intent"));
@@ -2810,6 +2812,21 @@ fn validate_frame_path<R: tauri::Runtime>(
     frame: &FrameRecord,
     path: &std::path::Path,
 ) -> Result<(), StatusCode> {
+    // A frame rooted in a registered story worktree (the worktree editor's
+    // Rendered view) reads that worktree's hydrated story files only, and is
+    // refused everything else rather than falling to the context gate.
+    if let Some(roots) =
+        crate::commands::files::frame_worktree_root(app, std::path::Path::new(&frame.content_root))
+    {
+        return crate::commands::files::path_in_frame_worktree(
+            app,
+            &roots,
+            std::path::Path::new(&frame.document_path),
+            path,
+        )
+        .then_some(())
+        .ok_or(StatusCode::FORBIDDEN);
+    }
     let scope = crate::context_repo::caller_scope::for_page(
         app,
         Some(&frame.document_path),
@@ -2874,6 +2891,66 @@ mod caller_scope_tests {
             .unwrap();
         repo.reference("refs/remotes/origin/main", commit, true, "fixture")
             .unwrap();
+        let router = frame_routes(&f);
+        tauri::async_runtime::block_on(async {
+            for (frame, active, own) in [(&child, "parent", false), (&parent, "child", true)] {
+                f.app.state::<crate::mcp::state::ActiveTeamState>().update(
+                    crate::mcp::state::ActiveTeam {
+                        org_slug: "acme/ctx".into(),
+                        team_name: active.into(),
+                    },
+                );
+                let encode =
+                    |p: &std::path::Path| URL_SAFE_NO_PAD.encode(p.to_string_lossy().as_bytes());
+                let prefixes = [
+                    format!("/viewer/{}", encode(shared.parent().unwrap())),
+                    format!(
+                        "/pane/{}/{}",
+                        encode(std::path::Path::new(&frame.content_root)),
+                        encode(shared.parent().unwrap())
+                    ),
+                    format!("/viewer-baseline/{}/parent/panes", encode(&f.fixture.root)),
+                ];
+                for prefix in prefixes {
+                    let read = |name: &str| frame_get(&router, frame, format!("{prefix}/{name}"));
+                    let denied = read("secret.json").await;
+                    if own {
+                        assert_eq!(denied.status(), StatusCode::OK);
+                        assert_eq!(
+                            axum::body::to_bytes(denied.into_body(), 1024)
+                                .await
+                                .unwrap(),
+                            "hidden asset sentinel"
+                        );
+                    } else {
+                        let missing = read("missing.json").await;
+                        assert_eq!(denied.status(), missing.status());
+                        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+                        assert_eq!(
+                            axum::body::to_bytes(denied.into_body(), 1024)
+                                .await
+                                .unwrap(),
+                            axum::body::to_bytes(missing.into_body(), 1024)
+                                .await
+                                .unwrap()
+                        );
+                    }
+                    let positive = read("shared.json").await;
+                    assert_eq!(positive.status(), StatusCode::OK);
+                    assert_eq!(
+                        axum::body::to_bytes(positive.into_body(), 1024)
+                            .await
+                            .unwrap(),
+                        "shared asset bytes"
+                    );
+                }
+            }
+        });
+    }
+
+    /// The authenticated byte routes (`/viewer`, `/pane`, `/viewer-baseline`)
+    /// behind the frame boundary, as the HTTP server mounts them.
+    fn frame_routes(f: &AppFixture) -> Router {
         type App = tauri::AppHandle<tauri::test::MockRuntime>;
         async fn file(
             State(app): State<App>,
@@ -2905,82 +2982,258 @@ mod caller_scope_tests {
             )
             .await
         }
-        let boundary = crate::http::frame_boundary::FrameBoundary {
-            frames,
-            port: 9321,
-            app_origins: crate::http::app_origins::AppOrigins::default(),
-        };
-        let router = crate::http::frame_boundary::with_boundary(
+        let frames = f
+            .app
+            .state::<std::sync::Arc<crate::dashboard_stream::frame::FrameStore>>()
+            .inner()
+            .clone();
+        crate::http::frame_boundary::with_boundary(
             Router::new()
                 .route("/viewer/{root}/{*path}", get(file))
                 .route("/pane/{content}/{root}/{*path}", get(pane))
                 .route("/viewer-baseline/{root}/{*path}", get(baseline))
                 .with_state(f.app.handle().clone()),
-            boundary,
+            crate::http::frame_boundary::FrameBoundary {
+                frames,
+                port: 9321,
+                app_origins: crate::http::app_origins::AppOrigins::default(),
+            },
+        )
+    }
+
+    /// GET `uri` as `frame`: its origin and its token.
+    async fn frame_get(router: &Router, frame: &FrameRecord, uri: String) -> Response {
+        router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(uri)
+                    .header(header::HOST, frame.origin.trim_start_matches("http://"))
+                    .header(header::ORIGIN, &frame.origin)
+                    .header("x-codesense-proxy-token", &frame.token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    /// How a story worktree is named: its real path, or a symlink to it.
+    /// `Inner` is no worktree: a link committed inside it that points out.
+    #[derive(Clone, Copy)]
+    enum Spelling {
+        Real,
+        Link,
+        Inner,
+    }
+
+    /// A frame whose content root is a source worktree outside `~/.codesense/users/`
+    /// (a sibling clone's story worktree), requesting `stories/board.html` from it.
+    /// `registered` is the spelling the worktree index records (`None`: not
+    /// registered); `root` is the one the frame is minted with.
+    fn worktree_frame_request(registered: Option<Spelling>, root: Spelling) -> StatusCode {
+        let f = AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9321));
+        let base = f.fixture.temp.path().canonicalize().unwrap();
+        let real = base.join("acme-wt/feat-story");
+        std::fs::create_dir_all(real.join("stories")).unwrap();
+        std::fs::write(real.join("stories/board.html"), "<p>worktree board</p>").unwrap();
+        let link = base.join("linked-wt");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Outside every worktree and context root, with the same page.
+        let outside = base.join("outside");
+        std::fs::create_dir_all(outside.join("stories")).unwrap();
+        std::fs::write(outside.join("stories/board.html"), "<p>outside</p>").unwrap();
+        let inner = real.join("link");
+        std::os::unix::fs::symlink(&outside, &inner).unwrap();
+        let spelled = |s: Spelling| match s {
+            Spelling::Real => real.clone(),
+            Spelling::Link => link.clone(),
+            Spelling::Inner => inner.clone(),
+        };
+        if let Some(spelling) = registered {
+            use crate::install::worktree_index::{self, WorktreeStoryRecord};
+            let worktree = spelled(spelling);
+            let record = WorktreeStoryRecord::new(
+                &worktree,
+                "acme",
+                worktree_index::slug_from_source_repo("acme/api").unwrap(),
+                "SV-1",
+                worktree.join("stories/story.md"),
+            );
+            worktree_index::write_record(
+                &f.fixture.home,
+                &crate::domain::Principal::from(1u64),
+                &record,
+            )
+            .unwrap();
+            crate::agents::prepare::step3::tests::record_managed(
+                &f.fixture.home,
+                &crate::domain::Principal::from(1u64),
+                &real,
+                &[("stories/board.html", "team:acme/sibling")],
+            );
+        }
+        let worktree = spelled(root);
+        let page = worktree.join("stories/board.html");
+        let frame = f
+            .app
+            .state::<std::sync::Arc<crate::dashboard_stream::frame::FrameStore>>()
+            .mint(
+                9321,
+                crate::dashboard_stream::frame::FrameGrant {
+                    frame_id: String::new(),
+                    principal: "1".into(),
+                    dashboard: page.to_string_lossy().into(),
+                    slot: "centre".into(),
+                    team: None,
+                    scope: "private".into(),
+                },
+                worktree.to_string_lossy().into(),
+                page.to_string_lossy().into(),
+                page.parent().unwrap().to_string_lossy().into(),
+                crate::dashboard_stream::frame::FramePolicy::default(),
+                None,
+            );
+        let router = frame_routes(&f);
+        let root = URL_SAFE_NO_PAD.encode(worktree.to_string_lossy().as_bytes());
+        tauri::async_runtime::block_on(frame_get(
+            &router,
+            &frame,
+            format!("/viewer/{root}/stories/board.html"),
+        ))
+        .status()
+    }
+
+    #[test]
+    fn viewer_route_serves_a_registered_story_worktree_outside_the_users_dir() {
+        assert_eq!(
+            worktree_frame_request(Some(Spelling::Real), Spelling::Real),
+            StatusCode::OK
         );
-        tauri::async_runtime::block_on(async {
-            for (frame, active, own) in [(&child, "parent", false), (&parent, "child", true)] {
-                f.app.state::<crate::mcp::state::ActiveTeamState>().update(
-                    crate::mcp::state::ActiveTeam {
-                        org_slug: "acme/ctx".into(),
-                        team_name: active.into(),
-                    },
-                );
-                let encode =
-                    |p: &std::path::Path| URL_SAFE_NO_PAD.encode(p.to_string_lossy().as_bytes());
-                let prefixes = [
-                    format!("/viewer/{}", encode(shared.parent().unwrap())),
-                    format!(
-                        "/pane/{}/{}",
-                        encode(std::path::Path::new(&frame.content_root)),
-                        encode(shared.parent().unwrap())
-                    ),
-                    format!("/viewer-baseline/{}/parent/panes", encode(&f.fixture.root)),
-                ];
-                for prefix in prefixes {
-                    let read = |name: &str| {
-                        router.clone().oneshot(
-                            axum::http::Request::builder()
-                                .uri(format!("{prefix}/{name}"))
-                                .header(header::HOST, frame.origin.trim_start_matches("http://"))
-                                .header(header::ORIGIN, &frame.origin)
-                                .header("x-codesense-proxy-token", &frame.token)
-                                .body(Body::empty())
-                                .unwrap(),
-                        )
-                    };
-                    let denied = read("secret.json").await.unwrap();
-                    if own {
-                        assert_eq!(denied.status(), StatusCode::OK);
-                        assert_eq!(
-                            axum::body::to_bytes(denied.into_body(), 1024)
-                                .await
-                                .unwrap(),
-                            "hidden asset sentinel"
-                        );
-                    } else {
-                        let missing = read("missing.json").await.unwrap();
-                        assert_eq!(denied.status(), missing.status());
-                        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
-                        assert_eq!(
-                            axum::body::to_bytes(denied.into_body(), 1024)
-                                .await
-                                .unwrap(),
-                            axum::body::to_bytes(missing.into_body(), 1024)
-                                .await
-                                .unwrap()
-                        );
-                    }
-                    let positive = read("shared.json").await.unwrap();
-                    assert_eq!(positive.status(), StatusCode::OK);
-                    assert_eq!(
-                        axum::body::to_bytes(positive.into_body(), 1024)
-                            .await
-                            .unwrap(),
-                        "shared asset bytes"
-                    );
-                }
-            }
-        });
+    }
+
+    #[test]
+    fn viewer_route_refuses_an_unregistered_worktree_path() {
+        // Not a worktree, so the context gate answers: the path is outside
+        // every context root.
+        assert_eq!(
+            worktree_frame_request(None, Spelling::Real),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn viewer_route_serves_a_worktree_reached_through_a_symlink() {
+        // Named by the link and registered by the link: the file resolves to
+        // the real path, which is re-checked against the same worktree.
+        assert_eq!(
+            worktree_frame_request(Some(Spelling::Link), Spelling::Link),
+            StatusCode::OK
+        );
+        // Registered by its real path, opened by the link.
+        assert_eq!(
+            worktree_frame_request(Some(Spelling::Real), Spelling::Link),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn viewer_route_refuses_a_root_that_is_a_link_inside_the_worktree() {
+        // `W/link → outside`, used as the content root: it lies in a registered
+        // worktree but isn't one, so its target is never served as worktree.
+        assert_eq!(
+            worktree_frame_request(Some(Spelling::Real), Spelling::Inner),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// A registered story worktree with `stories/board.html` hydrated from the
+    /// story's team context, on the port the frame routes serve.
+    fn registered_worktree() -> (AppFixture, std::path::PathBuf) {
+        let f = AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9321));
+        let base = f.fixture.temp.path().canonicalize().unwrap();
+        let worktree =
+            crate::commands::frames::tests::story_worktree(&f, &base.join("acme-wt/feat-a"));
+        (f, worktree)
+    }
+
+    /// A frame for `document`, minted the way the worktree editor's Rendered
+    /// view mints it.
+    fn mint_worktree_frame(
+        f: &AppFixture,
+        document: &std::path::Path,
+        root: &std::path::Path,
+    ) -> Result<FrameRecord, String> {
+        tauri::async_runtime::block_on(crate::commands::frames::mint_frame(
+            f.app.handle().clone(),
+            crate::commands::frames::tests::document_args(document, root, "centre"),
+        ))
+    }
+
+    /// GET `rel` in the worktree at `root` as `frame`.
+    fn worktree_get(
+        f: &AppFixture,
+        frame: &FrameRecord,
+        root: &std::path::Path,
+        rel: &str,
+    ) -> StatusCode {
+        let router = frame_routes(f);
+        let root = URL_SAFE_NO_PAD.encode(root.to_string_lossy().as_bytes());
+        tauri::async_runtime::block_on(frame_get(&router, frame, format!("/viewer/{root}/{rel}")))
+            .status()
+    }
+
+    #[test]
+    fn viewer_route_refuses_a_repo_file_in_a_registered_worktree() {
+        let (f, worktree) = registered_worktree();
+        std::fs::create_dir_all(worktree.join("design")).unwrap();
+        std::fs::write(worktree.join("design/page.html"), "<p>repo page</p>").unwrap();
+        std::fs::write(worktree.join(".env"), "not for frames").unwrap();
+        // A page the repo carries (or an agent wrote there) never mints.
+        let err =
+            mint_worktree_frame(&f, &worktree.join("design/page.html"), &worktree).unwrap_err();
+        assert_eq!(err, "Access denied: not a hydrated story file");
+        // A hydrated story page mints and reads itself, and is refused the
+        // repo's own files outright, not sent on to the context gate.
+        let frame =
+            mint_worktree_frame(&f, &worktree.join("stories/board.html"), &worktree).unwrap();
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "stories/board.html"),
+            StatusCode::OK
+        );
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, ".env"),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "design/page.html"),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn a_repo_image_frame_reads_only_itself() {
+        let (f, worktree) = registered_worktree();
+        std::fs::create_dir_all(worktree.join("design")).unwrap();
+        let png = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+        std::fs::write(worktree.join("design/shot.png"), png).unwrap();
+        std::fs::write(worktree.join("design/other.png"), png).unwrap();
+        std::fs::write(worktree.join("design/notes.md"), "repo notes").unwrap();
+        // Not hydrated, but an image: it still opens Rendered.
+        let frame = mint_worktree_frame(&f, &worktree.join("design/shot.png"), &worktree).unwrap();
+        assert_eq!(
+            worktree_get(&f, &frame, &worktree, "design/shot.png"),
+            StatusCode::OK
+        );
+        // Its frame reads nothing else of the repo's.
+        for rel in ["design/other.png", "design/notes.md"] {
+            assert_eq!(
+                worktree_get(&f, &frame, &worktree, rel),
+                StatusCode::FORBIDDEN,
+                "{rel}"
+            );
+        }
     }
 }
