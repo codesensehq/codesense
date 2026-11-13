@@ -230,10 +230,12 @@ export function ChatOverlay({
 
   // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
   // its composer once that shows (or on the chat itself while it loads), unless it is already
-  // inside.
+  // inside it (the chat itself, held while it loads, gives way to the composer).
   useEffect(() => {
     const root = rootRef.current;
-    if (placement !== "cover" || !visible || !root || root.contains(document.activeElement)) return;
+    const held = document.activeElement;
+    if (placement !== "cover" || !visible || !root || (held !== root && root.contains(held)))
+      return;
     const composer = root.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
     (composer ?? root).focus({ preventScroll: true });
   }, [placement, visible, loaded, groupShown]);
