@@ -79,6 +79,13 @@ version.json
 !codesense-docs/**/.claude/
 # Generated at build time by scripts/build-codesense-docs.mjs (src-tauri/build.rs).
 src-tauri/resources/codesense-docs.tar.gz
+# Docs data generated at build time (src-tauri/build.rs, pnpm gen:docs). Not committed, so
+# pull requests that change the docs never conflict on it.
+/codesense-docs/getting-started/content/generated/search-index.json
+/codesense-docs/getting-started/content/generated/recipes.json
+/codesense-docs/getting-started/content/generated/primitives.json
+/codesense-docs/getting-started/content/generated/ui-mcp.json
+/codesense-docs/getting-started/content/generated/schemas.json
 
 tsconfig.node.tsbuildinfo
 
