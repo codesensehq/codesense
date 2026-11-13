@@ -113,6 +113,13 @@ export function ExcalidrawViewer({
   // persist the team bag (SW-SC-8).
   const libraryCtx = useReadyResolverContext();
 
+  // The writer hears each version read (it may lock its saves to it); read
+  // through a ref so a new writer never re-reads the file.
+  const writerRef = useRef(writer);
+  useEffect(() => {
+    writerRef.current = writer;
+  });
+
   useEffect(() => {
     if (!filePath) return;
     let cancelled = false;
@@ -143,6 +150,7 @@ export function ExcalidrawViewer({
     readFile(filePath)
       .then((text) => {
         if (cancelled) return;
+        writerRef.current?.onRead?.(filePath, text);
         try {
           setScene(parseExcalidrawScene(text));
         } catch {
@@ -186,6 +194,7 @@ export function ExcalidrawViewer({
     readFile(filePath)
       .then((text) => {
         if (cancelled) return;
+        writerRef.current?.onRead?.(filePath, text);
         let parsed: ExcalidrawScene;
         try {
           parsed = parseExcalidrawScene(text);

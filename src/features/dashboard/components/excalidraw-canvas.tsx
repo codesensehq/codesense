@@ -96,6 +96,9 @@ function persistedAppState(appState: unknown): Record<string, unknown> {
 export type CanvasWriter = {
   writeText: (path: string, content: string) => Promise<void>;
   writeBinary: (path: string, base64: string) => Promise<void>;
+  /** Each version of the file the viewer reads, so a writer can lock its
+   *  next save to the version the canvas was drawn over. */
+  onRead?: (path: string, text: string) => void;
 };
 
 const CONTEXT_WRITER: CanvasWriter = {

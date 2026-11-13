@@ -36,7 +36,7 @@ import {
 
 import {
   TOO_LARGE_MESSAGE,
-  sha256Hex,
+  localTextLock,
   useFileEditor,
   type FileDraft,
   type SelectedFile,
@@ -264,7 +264,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   }
   const changedPaths = useMemo(() => new Set([file.path]), [file.path]);
   // A canvas drawn in Rendered saves into the worktree, locked to the disk
-  // version it was drawn over.
+  // version it was drawn over (see worktreeCanvasWriter).
   const canvasWriter = useMemo(() => worktreeCanvasWriter(backend), [backend]);
   useEffect(() => {
     canvasWriter.drawnOver(editable ? diskText : null);
@@ -724,22 +724,27 @@ function ViewModeToggle({
 }
 
 /** Where a canvas in a local worktree saves: the editor's write, under the
- *  same lock as a save in Source (the version on disk it was drawn over, the
- *  last one read or its own last write), so it never overwrites an agent's
- *  write; and the worktree's binary writer for its PNG render. */
+ *  same lock as a save in Source, so it never overwrites an agent's write; and
+ *  the worktree's binary writer for its PNG render. The lock is the version on
+ *  disk the canvas was drawn over: the editor's text when it holds the file,
+ *  else the version the canvas read (a canvas over the editor's size limit, or
+ *  one it couldn't read), then the canvas's own last write. */
 function worktreeCanvasWriter(
   backend: WorktreeEditorBackend,
 ): CanvasWriter & { drawnOver: (text: string | null) => void } {
   let base: string | null = null;
+  let editorHolds = false;
   return {
     drawnOver: (text) => {
-      base = text;
+      editorHolds = text != null;
+      if (text != null) base = text;
+    },
+    onRead: (_path, text) => {
+      if (!editorHolds) base = text;
     },
     writeText: async (path, content) => {
       if (base == null) throw new Error("The file hasn’t been read yet.");
-      const lock = await sha256Hex(base);
-      if (lock == null) throw new Error("Can’t lock the save (no SHA-256 available).");
-      await backend.write(path, content, lock);
+      await backend.write(path, content, await localTextLock(base));
       base = content;
     },
     writeBinary: writeBinaryWorktreeFile,

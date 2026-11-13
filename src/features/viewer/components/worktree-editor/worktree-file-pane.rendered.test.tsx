@@ -114,11 +114,11 @@ const chrome = vi.hoisted(() => ({
   api: null as PaneApi | null,
 }));
 
-function pane(path: string, b: WorktreeEditorBackend, changedNonce = 0) {
+function pane(path: string, b: WorktreeEditorBackend, changedNonce = 0, size = 64) {
   const rel = path.slice(ROOT.length + 1);
   return createElement(WorktreeFilePane, {
     id: rel,
-    file: { path, size: 64 },
+    file: { path, size },
     active: true,
     backend: b,
     changedNonce,
@@ -467,5 +467,23 @@ describe("WorktreeFilePane Rendered | Source", () => {
 
     await writer!.writeBinary(`${CANVAS}.png`, "AQID");
     expect(writeBinaryWorktreeFileMock).toHaveBeenCalledWith(`${CANVAS}.png`, "AQID");
+  });
+  it("a canvas too large for the editor saves from Rendered, locked to the version the canvas read", async () => {
+    const CANVAS = `${ROOT}/docs/screenshots.excalidraw`;
+    const v1 = '{"type":"excalidraw","elements":[],"files":{"big":"..."}}';
+    const v2 = '{"type":"excalidraw","elements":[{"id":"a"}],"files":{"big":"..."}}';
+    const write = vi.fn().mockResolvedValue(undefined);
+    render(pane(CANVAS, backend(write), 0, 2_000_000));
+    await screen.findByTestId("stub-excalidraw");
+    // The editor holds no text for it: Source is a placeholder.
+    await waitFor(() => expect(chrome.status?.kind).toBe("placeholder"));
+
+    const writer = viewer.props.filter((p) => p.kind === "excalidraw").at(-1)?.writer as
+      | CanvasWriter
+      | undefined;
+    // The canvas read the file itself.
+    writer!.onRead?.(CANVAS, v1);
+    await writer!.writeText(CANVAS, v2);
+    expect(write).toHaveBeenLastCalledWith(CANVAS, v2, await sha256Hex(v1));
   });
 });

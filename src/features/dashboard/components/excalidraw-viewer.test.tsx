@@ -181,6 +181,29 @@ describe("ExcalidrawViewer", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
+  it("tells its writer each version it reads, so a save can be locked to it", async () => {
+    readFileMock.mockResolvedValue(VALID_SCENE);
+    const writer = { writeText: vi.fn(), writeBinary: vi.fn(), onRead: vi.fn() };
+    const { rerender } = render(
+      <ExcalidrawViewer {...BASE_PROPS} refreshKey={1} changedPaths={null} writer={writer} />,
+    );
+    await screen.findByTestId("excalidraw-canvas");
+    expect(writer.onRead).toHaveBeenLastCalledWith(BASE_PROPS.filePath, VALID_SCENE);
+
+    readFileMock.mockResolvedValue(ONE_ELEMENT_SCENE);
+    rerender(
+      <ExcalidrawViewer
+        {...BASE_PROPS}
+        refreshKey={2}
+        changedPaths={new Set([BASE_PROPS.filePath])}
+        writer={writer}
+      />,
+    );
+    await waitFor(() =>
+      expect(writer.onRead).toHaveBeenLastCalledWith(BASE_PROPS.filePath, ONE_ELEMENT_SCENE),
+    );
+  });
+
   it("renders a placeholder when no file is selected", () => {
     render(<ExcalidrawViewer filePath={null} teamContentPath="/x" />);
     expect(screen.getByText(/select a file to view/i)).toBeInTheDocument();
