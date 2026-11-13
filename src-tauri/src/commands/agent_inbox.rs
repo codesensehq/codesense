@@ -3329,19 +3329,11 @@ pub async fn load_inbox_media(
     message_id: i64,
 ) -> Result<(), String> {
     let host = AppInboxHost::port(app);
-    let location = team_inbox(&*host, team.into()).await?;
+    let (location, attachments) = message_attachments(&*host, team.into(), message_id).await?;
     if host.media_config(&location.team).remote == crate::media::Remote::Off {
         return Err("media is off in team config".into());
     }
-    let mut row = with_store("media.load", location.path.clone(), move |s| {
-        inbox::inbox_get(s, message_id)
-    })
-    .await?
-    .map_err(|e| e.to_string())?
-    .ok_or("message unavailable")?;
-    host.present_media(&location.team, &mut row.attachments);
-    let a = row
-        .attachments
+    let a = attachments
         .into_iter()
         .next()
         .ok_or("message has no media")?;
@@ -3349,4 +3341,74 @@ pub async fn load_inbox_media(
         return Err("media cannot be loaded".into());
     }
     finish_media_fetch(&host, location, message_id, a, false).await
+}
+
+/// Message `message_id`'s attachments in `team`'s inbox, as the team's media config
+/// presents them.
+async fn message_attachments(
+    host: &dyn InboxHost,
+    team: LaunchTeam,
+    message_id: i64,
+) -> Result<(InboxLocation, Vec<crate::media::Attachment>), String> {
+    let location = team_inbox(host, team).await?;
+    let mut row = with_store("media.message", location.path.clone(), move |s| {
+        inbox::inbox_get(s, message_id)
+    })
+    .await?
+    .map_err(|e| e.to_string())?
+    .ok_or("message unavailable")?;
+    host.present_media(&location.team, &mut row.attachments);
+    Ok((location, row.attachments))
+}
+
+/// One message's cached image, for the app window, which has no frame to reach the
+/// `/media/v1` route with.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct InboxMediaBytes {
+    /// The type `media::inspect` reads from the bytes, as the route serves it.
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+impl InboxMediaBytes {
+    /// The IPC body: the MIME, a newline, then the bytes, so the image reaches the
+    /// renderer as one ArrayBuffer rather than base64 JSON.
+    pub(crate) fn into_frame(self) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(self.mime.len() + 1 + self.bytes.len());
+        frame.extend_from_slice(self.mime.as_bytes());
+        frame.push(b'\n');
+        frame.extend_from_slice(&self.bytes);
+        frame
+    }
+}
+
+/// The bytes of image `sha256` on message `message_id` in `team`'s inbox, served by the
+/// route's rule: the message must carry it as a cached attachment.
+pub(crate) async fn read_media(
+    host: &Arc<dyn InboxHost>,
+    team: LaunchTeam,
+    message_id: i64,
+    sha256: String,
+) -> Result<InboxMediaBytes, String> {
+    if !crate::media::valid_sha(&sha256) {
+        return Err("invalid media hash".into());
+    }
+    let (_, attachments) = message_attachments(&**host, team, message_id).await?;
+    crate::media::cached_attachment(&attachments, &sha256).ok_or("media unavailable")?;
+    let host = host.clone();
+    let bytes = await_blocking("media.read", move || host.cached_media(&sha256)).await?;
+    let (mime, _, _) =
+        crate::media::inspect(&bytes).map_err(|_| "media unavailable".to_string())?;
+    Ok(InboxMediaBytes { mime, bytes })
+}
+
+#[tauri::command]
+pub async fn read_inbox_media(
+    app: tauri::AppHandle,
+    team: InboxTeam,
+    message_id: i64,
+    sha256: String,
+) -> Result<tauri::ipc::Response, String> {
+    let media = read_media(&AppInboxHost::port(app), team.into(), message_id, sha256).await?;
+    Ok(tauri::ipc::Response::new(media.into_frame()))
 }

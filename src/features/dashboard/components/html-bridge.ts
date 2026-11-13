@@ -100,6 +100,7 @@ import {
 } from "@/tauri/commands";
 import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
 import { readDashboardPrefs, writeDashboardPrefs } from "../lib/dashboard-prefs";
 import { setActiveDashboardCommands } from "../lib/dashboard-commands";
 import { FRAME_PRESENTATION_UNAVAILABLE } from "../lib/frame-presentation";
@@ -2075,17 +2076,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
           })
         : await bridgeResolveOpenTarget(page, path, team, frame?.frameId);
     };
-    let target: { path: string; org: string; team: string }, hash: string | undefined;
-    // An admitted, existing literal path wins; only otherwise interpret '#'
-    // as a fragment, with the path part passing through the same admission.
-    try {
-      target = await resolvePath(a.path);
-    } catch (error) {
-      const fragmentAt = a.path.indexOf("#");
-      if (fragmentAt < 0) throw error;
-      target = await resolvePath(a.path.slice(0, fragmentAt));
-      hash = a.path.slice(fragmentAt);
-    }
+    const { target, hash } = await resolveOpenPath(a.path, resolvePath);
     openFileInTeam(target, {
       newTab: a.preview === false || a.newTab === true,
       navigate: ctx?.navigate,
