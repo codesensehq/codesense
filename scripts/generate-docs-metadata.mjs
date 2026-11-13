@@ -33,6 +33,9 @@ function isMetadataPage(path) {
     /\.(html|md)$/i.test(path) &&
     // Golden runnable pane copies are executable source artifacts, kept byte-exact.
     !path.startsWith("examples/panes/") &&
+    // The bundled Foreman page is hashed by the app (`PAGES` in foreman_launch.rs); a page whose
+    // bytes the bundle step edits would never hold the launch grant.
+    path !== "foreman/index.html" &&
     !path.split("/").some((p) => ["_shared", "assets", "templates", "data"].includes(p))
   );
 }

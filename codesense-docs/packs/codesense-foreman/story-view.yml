@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# Public config for the bundled Foreman page. It names only product ids: the Foreman and its setup guide.
+# Every other key is the kit's neutral default; the kit's other pages are not shipped with the app.
+template: 1
+team: getting-started
+lead:
+  agent: story-lead
+  role: lead
+  queue: story-lead
+sprint:
+  agent: sprint-lead
+  role: sprint-lead
+  queue: sprint-lead
+  launch: /sprint-lead
+foreman:
+  role: codesense-foreman
+  runtime: claude
+  agents:
+    - foreman-claude
+  guides:
+    - guide-claude
+  name: Foreman
+  worktree: foreman
+  docs:
+    org: codesense/docs
+    team: getting-started
+  senders: 20
+  history: 5
+storyTypes:
+  - story
+  - bug
+  - spike
+variants:
+  lead: story
+  sprint-lead: sprint
+  codesense-foreman: foreman
+owners:
+  pause: null
+  transcript: null
+  detail: null
+phases:
+  todo: todo
+  in-progress: in-progress
+  review: review
+  qa: qa
+  done: done
+rail:
+  - todo
+  - in-progress
+  - review
+  - qa
+  - done
+timers:
+  slowMs: 20000
+  failMs: 120000
+  debounceMs: 500
+limits:
+  needsYou: 200
+  answers: 500
+panel:
+  tabs: null

@@ -14,3 +14,7 @@ parts:
 # Empty until the build exists.
 spec_hash:
   foreman-claude: null
+kit:
+  file: vendor/story-view.js
+  kit_rev: 1
+  sha256: 91c80090e34f156cb03fad0a0cda58fdc431202201014020a006d69c43173aa1
