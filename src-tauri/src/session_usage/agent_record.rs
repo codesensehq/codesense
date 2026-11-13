@@ -139,13 +139,13 @@ pub(crate) fn assemble(
         Some(timing) => Some(timing.wall_ms),
         None => first.zip(last).map(|(first, last)| last - first),
     };
-    let cost = if report.totals.unpriced_sessions > 0 || Vec::is_empty(&report.sessions) {
+    let cost = if report.totals.unpriced_sessions > 0 || report.sessions.first().is_none() {
         None
     } else {
         Some(report.totals.cost_usd)
     };
     let mut unavailable = BTreeMap::new();
-    if Vec::is_empty(&report.sessions) {
+    if report.sessions.first().is_none() {
         unavailable.insert("usage", "no usage has been reported for this session yet".to_owned());
     } else if cost.is_none() {
         unavailable.insert("cost", "a model of this session has no rate".to_owned());
