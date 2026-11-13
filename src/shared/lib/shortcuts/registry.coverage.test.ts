@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import inboxPane from "@/features/shell/right-pane/__fixtures__/inbox-pane.html?raw";
+import notesPane from "@/features/shell/right-pane/__fixtures__/notes-pane.html?raw";
+import agentListPane from "@/features/shell/slots/__fixtures__/agent-list-pane.html?raw";
 
 import { isReservedKeystroke, matchesKeystroke, parseKeystroke } from "./keystroke";
 import {
   findConflict,
   resolveBindings,
+  setDynamicShortcutActions,
   NAV_AXES,
   NAV_MENU_ITEMS,
   SHORTCUT_ACTIONS,
@@ -614,5 +618,42 @@ describe("NAV_MENU_ITEMS", () => {
     for (const hardcoded of ["nav.switch-org", "nav.switch-team"]) {
       expect(ids).not.toContain(hardcoded);
     }
+  });
+});
+
+describe("shipped default shortcuts", () => {
+  afterEach(() => setDynamicShortcutActions([]));
+
+  // The built-in panes' `codesense:commands` declarations, as the app registers them.
+  const builtinPanes = { inbox: inboxPane, notes: notesPane, "agent-list": agentListPane };
+  const declared = (pane: string, html: string): ShortcutAction[] => {
+    const raw = /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1];
+    const commands = JSON.parse(raw ?? "[]") as {
+      id: string;
+      label: string;
+      defaultChord?: string;
+    }[];
+    return commands.map((c) => ({
+      id: `${pane}/${c.id}`,
+      label: c.label,
+      defaultKeystroke: c.defaultChord ?? "",
+      scope: "global",
+      command: {
+        dashboard: pane,
+        dashboardTitle: pane,
+        dashboardScope: "built-in",
+        humanOnly: false,
+        active: true,
+      },
+      run: () => {},
+    }));
+  };
+
+  it("never resolves to a conflict on a fresh install", () => {
+    const actions = Object.entries(builtinPanes).flatMap(([pane, html]) => declared(pane, html));
+    expect(actions.some((a) => a.defaultKeystroke)).toBe(true);
+    setDynamicShortcutActions(actions);
+    const conflicts = [...resolveBindings({})].filter(([, b]) => b.unbound?.kind === "conflict");
+    expect(conflicts).toEqual([]);
   });
 });
