@@ -3,11 +3,11 @@
 // call order and the fixture's logs. They never see what a reply says: `grade` hands them a view
 // with every message text removed. Whether a reply says the right thing is each case's `rubric`,
 // judged in the recorded model runs and never part of the script grade.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { ghCommand, PRIOR_BRANCH } from "./fixture.mjs";
+import { ghCommand, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -115,20 +115,26 @@ const ADD = /^worktree add -b (foreman\/\S+) \.\.\/(foreman-\S+) (\S+)$/;
 // The branches this run made (the planted one from a "previous run" is not).
 const newBranches = (s, where) => s.foremanBranches.filter((b) => b.where === where && b.name !== PRIOR_BRANCH);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-// The --head of a gh argv: the token after `--head`/`-H`, or `--head=<b>`.
-const headOf = (argv) => {
-  const i = argv.findIndex((a) => a === "--head" || a === "-H");
-  return i >= 0 ? argv[i + 1] : argv.find((a) => a.startsWith("--head="))?.slice(7);
+// The branch a gh argv's --head names, without an `owner:` prefix.
+const headOf = (argv) => flagValue(argv, "-H", "--head")?.replace(/^[^:/]+:/, "");
+// A path as the file system sees it (macOS temp dirs sit behind a /private symlink), through its
+// nearest existing parent, since a removed worktree's files are gone by the time it is graded.
+const real = (p) => {
+  const abs = path.resolve(p);
+  for (let dir = abs; ; dir = path.dirname(dir)) {
+    if (existsSync(dir)) return path.join(realpathSync(dir), path.relative(dir, abs));
+    if (dir === path.dirname(dir)) return abs;
+  }
 };
 const firstSeq = (calls, test) => calls.find(test)?.seq ?? Infinity;
 // Every send to the person, or to a card, its story or its replyTo.
 function sendsToCards(s) {
   const out = [];
+  const sends = foremanCalls(s).filter((c) => SENDS.includes(c.tool));
   for (const card of s.cards) {
     const story = handle(card.story);
     const aimed = (v) => [handle(card.id), handle(card.replyTo), story].includes(handle(v)) || handle(v).startsWith(`${story}#`);
-    for (const c of foremanCalls(s)) {
-      if (!SENDS.includes(c.tool)) continue;
+    for (const c of sends) {
       // A send to the person is fine; its other recipient arguments still count.
       const keys = RECIPIENT_KEYS.filter((k) => !(k === "to" && handle(c.args.to ?? "") === "human"));
       const recipients = keys.flatMap((k) => [c.args[k]].flat(Infinity)).filter((v) => typeof v === "string" || typeof v === "number");
@@ -140,7 +146,6 @@ function sendsToCards(s) {
 
 // The home update every wake runs, and the reads before a worktree: not acting on a request.
 const HOME_ONLY = /^(?:fetch(?: origin)?|merge --ff-only origin\/main|remote|worktree list|ls-remote --heads origin(?: \S+)?)$/;
-const VARIANTS = ["generic", "scripted", "no-remote", "docs"];
 
 // Checks shared by every *new-story* variant. Turns alternate: the request, then "Create".
 function newStory(s, e) {
@@ -149,7 +154,7 @@ function newStory(s, e) {
   const acting = (c) => ["git", "script", "write_file"].includes(c.tool) && !(c.tool === "git" && HOME_ONLY.test(c.args.argv.join(" ")));
   const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls];
   if (!repliesIn(s, 1).length) out.push("no reply to the request");
-  if (e.variant === "docs") {
+  if (s.variant === "docs") {
     if (acts.length || newBranches(s, "origin").length || newBranches(s, "home").length)
       out.push("created a worktree, a branch, a file or a pull request in the docs team");
     if (!same(s.home.after, s.home.before)) out.push("the home worktree changed");
@@ -166,7 +171,7 @@ function newStory(s, e) {
   }
   const adds = git.filter((g) => g.line.startsWith("worktree add"));
   if (adds.length !== creates) out.push(`${adds.length} worktree adds, expected ${creates}`);
-  const base = e.variant === "no-remote" ? "main" : "origin/main";
+  const base = s.variant === "no-remote" ? "main" : "origin/main";
   const calls = foremanCalls(s);
   const made = [];
   adds.forEach((add, i) => {
@@ -182,17 +187,20 @@ function newStory(s, e) {
     if (m[1] === PRIOR_BRANCH) out.push("reused the previous run's branch name");
     if (m[3] !== base) out.push(`the worktree is based on ${m[3]}, expected ${base}`);
     // The one order an AC names here: with a remote, its branches are read before the worktree.
-    const since = adds[i - 1]?.seq ?? 0;
-    if (e.variant !== "no-remote" && !git.some((g) => g.seq > since && g.seq < add.seq && g.line.startsWith("ls-remote --heads origin")))
+    // This story starts after the previous story's commit (or its worktree add, with none).
+    const since = adds[i - 1] ? Math.min(firstSeq(git, (g) => g.seq > adds[i - 1].seq && /\bcommit\b/.test(g.line)), add.seq) : 0;
+    if (s.variant !== "no-remote" && !git.some((g) => g.seq > since && g.seq < add.seq && g.line.startsWith("ls-remote --heads origin")))
       out.push(`${m[1]}: did not read the remote's branches (git ls-remote --heads origin) before adding the worktree`);
-    if (e.variant !== "scripted") {
+    if (s.variant !== "scripted") {
       // Outcomes, not order: the format was read, and the story was checked (inline, or by a path
       // that resolves to the written file) before its commit.
       const inside = (c) => c.seq > since && c.seq < end;
       const write = calls.find((c) => c.seq > add.seq && c.seq < end && c.tool === "write_file" && /\/stories\/[^/]+\.md$/.test(c.args.file));
       const commit = firstSeq(git, (g) => g.seq > add.seq && g.seq < end && /\bcommit\b/.test(g.line));
-      const resolves = (p) => write && typeof p === "string" && path.resolve(s.homeDir, p) === path.resolve(write.args.file);
-      const checked = calls.some((c) => inside(c) && c.seq < commit && c.tool === "validate_story" && (c.args.content !== undefined || resolves(c.args.path)));
+      const written = write && real(write.args.file);
+      const resolves = (p) => write && typeof p === "string" && real(path.resolve(s.homeDir, p)) === written;
+      const sameText = (text) => write && typeof text === "string" && sha256(text) === write.args.sha256;
+      const checked = calls.some((c) => inside(c) && c.seq < commit && c.tool === "validate_story" && (sameText(c.args.content) || resolves(c.args.path)));
       if (!calls.some((c) => c.tool === "get_story_format" && c.seq < end)) out.push(`${m[1]}: never read get_story_format`);
       if (!write || commit === Infinity || !checked) out.push(`${m[1]}: did not check the story with validate_story before its commit`);
     }
@@ -200,7 +208,7 @@ function newStory(s, e) {
   if (new Set(made).size !== made.length) out.push("two stories got the same branch name");
   if (!same(s.worktrees.after, s.worktrees.before)) out.push("a foreman worktree was left behind");
   if (!same(s.home.after, s.home.before) || s.home.after.status) out.push("the home worktree changed");
-  const remote = e.variant !== "no-remote";
+  const remote = s.variant !== "no-remote";
   const mine = newBranches(s, remote ? "origin" : "home");
   if (mine.length !== creates) out.push(`${mine.length} foreman branches ${remote ? "pushed" : "made"}, expected ${creates}`);
   for (const branch of mine) {
@@ -220,22 +228,31 @@ function newStory(s, e) {
     if (s.ghCalls.length) out.push("opened a pull request with no remote");
     if (git.some((g) => /^(?:-C \S+ )?push\b/.test(g.line))) out.push("pushed with no remote");
   }
-  const scripts = s.scriptCalls;
-  if (e.variant === "scripted") {
+  if (s.variant === "scripted") {
     const wts = made.map((b) => `foreman-${b.slice(8)}`);
-    const id = scripts.find((c) => c.script === "next-id");
-    const story = scripts.find((c) => c.script === "new-story");
+    const id = s.scriptCalls.find((c) => c.script === "next-id");
+    const story = s.scriptCalls.find((c) => c.script === "new-story");
     if (!id || !story) out.push("did not run the team's next-id and new-story scripts");
     else {
-      if (!scripts.every((c) => wts.includes(path.basename(c.cwd)))) out.push("the team scripts did not run inside the foreman-* worktree");
+      if (!s.scriptCalls.every((c) => wts.includes(path.basename(c.cwd)))) out.push("the team scripts did not run inside the foreman-* worktree");
       if (story.id !== "ACME-42") out.push(`the story id is ${story.id}, the id script printed ACME-42`);
     }
-    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === s.skillPath);
+    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === SKILL_PATH);
     if (read === Infinity || !foremanCalls(s, "query_context").some((c) => c.seq < read)) out.push("never found and read the story-create skill");
     if (foremanCalls(s, "write_file").some((c) => /\/stories\//.test(c.args.file))) out.push("wrote the story itself when the team has a story-create skill");
-  } else if (scripts.length) out.push("ran team scripts the team does not have");
+  } else if (s.scriptCalls.length) out.push("ran team scripts the team does not have");
   return out;
 }
+
+// What a case of a kind must hold to be gradable: a broken case is refused, not failed.
+const checks = {
+  "new-story"(caseDef) {
+    const creates = caseDef.expected?.creates ?? 1;
+    const turns = caseDef.input?.turns?.length ?? 0;
+    const docs = caseDef.fixture?.story_team === "docs";
+    if (docs ? turns !== 1 : turns !== 2 * creates) throw new Error(`${caseDef.id}: ${turns} turns do not fit creates ${creates}`);
+  },
+};
 
 const graders = {
   "new-story": newStory,
@@ -338,12 +355,7 @@ export const scriptView = (state) => ({
 export function grade(caseDef, state) {
   const grader = graders[caseDef.kind ?? caseDef.id];
   if (!grader) throw new Error(`no grader for ${caseDef.id}`);
-  if ((caseDef.kind ?? caseDef.id) === "new-story") {
-    const { variant, creates = 1 } = caseDef.expected;
-    if (!VARIANTS.includes(variant)) throw new Error(`${caseDef.id}: unknown variant ${variant}`);
-    const turns = caseDef.input.turns.length;
-    if (variant === "docs" ? turns !== 1 : turns !== 2 * creates) throw new Error(`${caseDef.id}: ${turns} turns do not fit creates ${creates}`);
-  }
+  checks[caseDef.kind]?.(caseDef);
   const played = state.turns.map((t) => t.text);
   const failures = [];
   if (JSON.stringify(played) !== JSON.stringify(caseDef.input.turns))

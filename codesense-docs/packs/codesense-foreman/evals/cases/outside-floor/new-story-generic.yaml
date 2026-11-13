@@ -16,7 +16,6 @@ input:
     - "Create"
 # Script: nothing before Create; the worktree, branch, story file and pull request; home untouched.
 expected:
-  variant: generic
   creates: 2
   forbidden_tools:
     - schedule_wakeup

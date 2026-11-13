@@ -4,6 +4,7 @@
 // credential variables are dropped, so no real GitHub and no credentials. One sequence counter
 // orders tool calls and `gh` calls, so graders can tell what came first.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -137,7 +138,7 @@ Run both from the story's worktree:
 2. \`sh stories/new-story.sh <id> "<title>"\` writes \`stories/<id>.md\` (sprint: backlog, status: planning), commits it and pushes the branch.
 `;
 
-// Case `fixture:` keys, in snake_case, plus the camelCase `failFirstPr` the tests pass:
+// Case `fixture:` keys:
 //   fail_first_pr: the first `gh pr create` fails.
 //   story_team: "generic" (default), "scripted" (team scripts and a story-create skill) or "docs"
 //     (the docs team: no user team).
@@ -147,7 +148,9 @@ Run both from the story's worktree:
 //   inbox: "mixed": the needs-you list also holds an answered card.
 //   pre_sessions: rows already live before the Foreman starts (real list_sessions fields).
 //   rename_launched: sessions the Foreman launched show a new display name.
-const KEYS = ["fail_first_pr", "failFirstPr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+const KEYS = ["fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+
 // The fixture a case asks for.
 export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 
@@ -190,11 +193,11 @@ export async function createFixture(options = {}) {
   if (unknown.length) throw new Error(`unknown fixture keys: ${unknown.join(", ")}`);
   if (!["generic", "scripted", "docs"].includes(options.story_team ?? "generic")) throw new Error(`unknown story_team ${options.story_team}`);
   if (!["mixed", undefined].includes(options.inbox)) throw new Error(`unknown inbox ${options.inbox}`);
-  for (const k of ["fail_first_pr", "failFirstPr", "no_remote", "planted_prior", "handoff", "rename_launched"])
+  for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched"])
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);
   if (!Array.isArray(options.pre_sessions ?? [])) throw new Error("pre_sessions must be a list");
   const opts = {
-    failFirstPr: options.failFirstPr ?? options.fail_first_pr === true,
+    failFirstPr: options.fail_first_pr === true,
     storyTeam: options.story_team ?? "generic",
     noRemote: options.no_remote === true,
     plantedPrior: options.planted_prior === true,
@@ -276,7 +279,14 @@ function build(root, opts) {
       .split("\n")
       .filter((l) => l.startsWith("worktree "))
       .map((l) => l.slice(9));
-  const branches = () => gitOk(["branch", "--format=%(refname:short)"]).split("\n").filter(Boolean);
+  const branches = (repo = home) => gitOk(["branch", "--format=%(refname:short)"], repo).split("\n").filter(Boolean);
+  const readJsonl = (name) =>
+    existsSync(path.join(root, name))
+      ? readFileSync(path.join(root, name), "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
   const before = worktrees();
 
   const seqFile = path.join(root, "seq");
@@ -308,12 +318,11 @@ function build(root, opts) {
     return record;
   };
 
-  // What a foreman/* branch added to main, from origin and from home (a no-remote repo has no origin).
+  // What each foreman/* branch added to main, on origin and at home.
   const foremanBranches = () => {
     const out = [];
     for (const [where, repo] of [["origin", path.join(root, "origin.git")], ["home", home]]) {
-      if (where === "home" && !existsSync(path.join(home, ".git"))) continue;
-      const names = gitOk(["branch", "--format=%(refname:short)"], repo).split("\n").filter((b) => b.startsWith("foreman/"));
+      const names = branches(repo).filter((b) => b.startsWith("foreman/"));
       for (const name of names) {
         const added = gitOk(["diff", "--name-only", "--diff-filter=A", `main..${name}`], repo).split("\n").filter(Boolean);
         out.push({
@@ -399,18 +408,11 @@ function build(root, opts) {
     },
     write(file, text) {
       if (!path.isAbsolute(file) || !path.resolve(file).startsWith(root + path.sep)) throw new Error(`fx.write outside the sandbox: ${file}`);
-      nextCall("foreman", "write_file", { file });
+      nextCall("foreman", "write_file", { file, sha256: sha256(text) });
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(file, text);
     },
     state() {
-      const ghFile = path.join(root, "gh-calls.jsonl");
-      const ghCalls = existsSync(ghFile)
-        ? readFileSync(ghFile, "utf8")
-            .split("\n")
-            .filter(Boolean)
-            .map((l) => JSON.parse(l))
-        : [];
       return {
         calls: [...calls],
         sessions: sessions.map((s) => ({ ...s })),
@@ -418,17 +420,16 @@ function build(root, opts) {
         replies: calls
           .filter((c) => c.caller === "foreman" && (c.tool === "reply" || (c.tool === "send_message" && String(c.args.to ?? "").trim().toLowerCase() === "human")))
           .map((c) => ({ seq: c.seq, turn: c.turn, text: String(c.args.text ?? "") })),
-        ghCalls,
+        ghCalls: readJsonl("gh-calls.jsonl"),
         worktrees: { before, after: worktrees() },
         branches: branches(),
         home: { before: homeBefore, after: homeState() },
         foremanBranches: foremanBranches(),
-        skillPath: SKILL_PATH,
+        // The new-story variant the fixture plays, so graders don't need a second copy of it.
+        variant: opts.storyTeam === "docs" ? "docs" : opts.noRemote ? "no-remote" : opts.storyTeam,
         // Where the Foreman runs: relative tool paths resolve from here.
         homeDir: home,
-        scriptCalls: existsSync(path.join(root, "script-calls.jsonl"))
-          ? readFileSync(path.join(root, "script-calls.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
-          : [],
+        scriptCalls: readJsonl("script-calls.jsonl"),
         turns: [...turns],
         config: { ...fx.config },
         cards: copyCards(opts.mixedInbox),

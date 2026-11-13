@@ -24,12 +24,14 @@ import { stubs } from "./stubs.mjs";
 export const BUDGET_USD = 12;
 
 export class InfraError extends Error {}
+// The floor's four cases, or the behaviour cases outside it.
+const SUITES = ["floor", "extra"];
 
 export async function runEval({ variant, model, k = 3, driver, driverName, out, budget = BUDGET_USD, date = new Date(), suite = "floor" }) {
   // The name decides whether the report can ever count (floor.mjs), so there is no default.
   if (typeof driverName !== "string" || !driverName) throw new Error("runEval needs a driverName");
   const specHash = parse(readFileSync(path.join(packDir, "pack.yml"), "utf8")).spec_hash?.[variant] ?? null;
-  if (!["floor", "extra"].includes(suite)) throw new Error(`unknown suite ${suite}`);
+  if (!SUITES.includes(suite)) throw new Error(`unknown suite ${suite}`);
   const cases = suite === "floor" ? loadCases() : loadExtraCases();
   const ids = cases.map((c) => c.id).sort();
   if (!ids.length || new Set(ids).size !== ids.length) throw new Error(`the ${suite} suite needs cases with unique ids, got ${ids.join(", ") || "none"}`);
@@ -106,7 +108,7 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
   for (let n = 2; existsSync(reportPath); n += 1) reportPath = `${stem}-${n}.md`;
   const body = notes.length ? `\n## Failures\n\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
   writeFileSync(reportPath, `---\n${stringify(report)}---\n\n# ${variant} eval, ${report.at}\n${body}`);
-  const allPass = (suite === "floor" ? CASE_IDS : ids).every((id) => results[id]?.length && results[id].every((r) => r === "pass"));
+  const allPass = ids.every((id) => results[id]?.length && results[id].every((r) => r === "pass"));
   return { exitCode: complete && allPass ? 0 : 1, report, reportPath };
 }
 
@@ -139,7 +141,7 @@ async function main(argv) {
   // A stub's report is never evidence, so by default it goes to a temp dir, not evals/reports.
   const out = flags.out ?? mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-"));
   const suite = flags.suite ?? "floor";
-  if (!["floor", "extra"].includes(suite)) return console.error("--suite must be floor or extra") ?? 2;
+  if (!SUITES.includes(suite)) return refuse(`--suite must be one of ${SUITES.join(", ")}`);
   const { exitCode, reportPath, report } = await runEval({ variant, model, driver, driverName: flags.driver, k, budget, out, suite });
   console.log(`${reportPath}: ${report.complete ? "complete" : `incomplete (${report.reason})`}`);
   return exitCode;

@@ -10,7 +10,6 @@ input:
     - "make a story for dark mode in the settings page"
 # Script: a reply, and no worktree, branch, file, script, pull request, launch or record.
 expected:
-  variant: docs
   forbidden_tools:
     - schedule_wakeup
     - run_in_terminal_tab

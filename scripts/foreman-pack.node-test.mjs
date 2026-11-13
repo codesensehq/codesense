@@ -61,9 +61,10 @@ const FORBIDDEN = [
 const mcp = (name) => `mcp__codesense__${name}`;
 
 // Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
-// system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 2,044 for 5,601, about
-// 2.74 bytes a token. Four bytes a token undercounted by a third.
-const tokens = (s) => Math.ceil(Buffer.byteLength(s) / 2.7);
+// system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
+// 2.69 bytes a token. Four bytes a token undercounted by a third.
+const BYTES_PER_TOKEN = 2.65;
+const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
 const ROOT_CAP = 2000;
 
 test("the root prompt is the spec, under 2k tokens, passed as the agent's system prompt", () => {
@@ -173,14 +174,9 @@ function bashMatches(rule, command) {
 const HOME = "/work/acme/home";
 const workDirs = () => {
   const dirs = [HOME];
-  agent.args.forEach((a, i) => {
-    const dir = a.startsWith("--add-dir=")
-      ? a.slice(10)
-      : a === "--add-dir"
-        ? agent.args[i + 1]
-        : null;
-    if (dir && !dir.startsWith("-")) dirs.push(path.resolve(HOME, dir));
-  });
+  agent.args.forEach(
+    (a, i) => a === "--add-dir" && dirs.push(path.resolve(HOME, agent.args[i + 1])),
+  );
   return dirs;
 };
 function parts(command) {
@@ -561,4 +557,9 @@ test("the Foreman can list remote foreman branches before it names a new one", (
     assert.ok(runs(command), `runs: ${command}`);
   }
   assert.ok(spec.includes("`git ls-remote --heads origin`"), "the spec names the read");
+});
+
+test("the size estimate never undercounts the measured root prompt", () => {
+  // claude -p on Opus 5.5 (2026-11-13): 5,347 bytes of foreman.md were 1,986 tokens.
+  assert.ok(Math.ceil(5347 / BYTES_PER_TOKEN) >= 1986, `${BYTES_PER_TOKEN} bytes a token`);
 });

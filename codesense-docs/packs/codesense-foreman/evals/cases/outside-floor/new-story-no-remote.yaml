@@ -12,7 +12,6 @@ input:
     - "Create"
 # Script: the branch in home, no push and no pull request, the worktree removed.
 expected:
-  variant: no-remote
   forbidden_tools:
     - schedule_wakeup
     - run_in_terminal_tab

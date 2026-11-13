@@ -21,7 +21,7 @@ import { stringify } from "yaml";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, CARDS, CONFIG } = await lib("fixture");
+const { createFixture, fixtureFor, CARDS, CONFIG } = await lib("fixture");
 const { loadCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
@@ -41,10 +41,7 @@ const tmp = (t) => {
 
 async function play(driver, id, fixtureOptions = {}) {
   const caseDef = caseOf(id);
-  const fx = await createFixture({
-    failFirstPr: caseDef.fixture?.fail_first_pr === true,
-    ...fixtureOptions,
-  });
+  const fx = await createFixture({ ...caseDef.fixture, ...fixtureOptions });
   try {
     await driver({ caseDef, fx });
     return grade(caseDef, fx.state());
@@ -77,7 +74,7 @@ test("fixture: creates and tears down a sandbox with a bare origin and a gh shim
 });
 
 test("fixture: the shim logs every gh call and fails only the first pr create", async () => {
-  const fx = await createFixture({ failFirstPr: true });
+  const fx = await createFixture({ fail_first_pr: true });
   try {
     assert.equal(fx.gh(["api", "-X", "POST", "repos/acme/demo/pulls"]).status, 0);
     const first = fx.gh(["pr", "create", "--title", "x"]);
@@ -101,7 +98,7 @@ test("fixture: the shim logs every gh call and fails only the first pr create", 
 });
 
 test("fixture: the shim finds pr create after a repo flag, and --help spends no failure", async () => {
-  const fx = await createFixture({ failFirstPr: true });
+  const fx = await createFixture({ fail_first_pr: true });
   try {
     assert.equal(fx.gh(["pr", "create", "--help"]).status, 0);
     assert.notEqual(fx.gh(["pr", "-R", "acme/demo", "create", "--title", "t"]).status, 0);
@@ -906,7 +903,7 @@ test("no script grader reads what a reply says: any wording grades the same", as
   ];
   for (const caseDef of cases) {
     for (const driver of drivers) {
-      const fx = await createFixture({ failFirstPr: caseDef.fixture?.fail_first_pr === true });
+      const fx = await fixtureFor(caseDef);
       try {
         await driver({ caseDef, fx });
         const state = fx.state();

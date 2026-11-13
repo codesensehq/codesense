@@ -4,14 +4,14 @@
 // suite runs and reports without ever setting a floor row.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, PRIOR_BRANCH, CONFIG } = await lib("fixture");
+const { createFixture, fixtureFor, PRIOR_BRANCH, CONFIG } = await lib("fixture");
 const { loadCases, loadExtraCases, grade } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval } = await lib("runner");
@@ -40,7 +40,7 @@ const tmp = (t) => {
 
 async function play(driver, id) {
   const caseDef = caseOf(id);
-  const fx = await createFixture(caseDef.fixture ?? {});
+  const fx = await fixtureFor(caseDef);
   try {
     await driver({ caseDef, fx });
     return grade(caseDef, fx.state());
@@ -52,15 +52,8 @@ const redFor = (result, reason) => {
   assert.equal(result.pass, false, "expected a fail");
   assert.match(result.failures.join("\n"), reason);
 };
-// The good agent, with a change to the fixture it plays in.
-const goodWith =
-  (id, before) =>
-  async ({ caseDef, fx }) => {
-    await before?.(fx);
-    await stubs.good({ caseDef, fx });
-  };
 const goodThen =
-  (id, after) =>
+  (after) =>
   async ({ caseDef, fx }) => {
     await stubs.good({ caseDef, fx });
     await after(fx);
@@ -75,12 +68,34 @@ test("the outside-floor cases are separate from the floor's four", () => {
   }
 });
 
+// Every case: red on the do-nothing stub, green on the good agent, and the same grade whatever
+// the replies say (wording is the rubric's, never the script's).
 for (const id of EXTRA) {
-  test(`${id}: red on the do-nothing stub, green on the good agent`, async () => {
+  test(`${id}: red on the do-nothing stub, green on the good agent, whatever the replies say`, async () => {
     const red = await play(stubs.doNothing, id);
     assert.equal(red.pass, false, "do-nothing must fail");
-    const green = await play(stubs.good, id);
-    assert.deepEqual(green.failures, []);
+    const caseDef = caseOf(id);
+    assert.ok(Array.isArray(caseDef.rubric) && caseDef.rubric.length, `${id} has a rubric`);
+    const fx = await fixtureFor(caseDef);
+    try {
+      await stubs.good({ caseDef, fx });
+      const state = fx.state();
+      for (const text of [undefined, "", "x", "I answered it for you. Done!"]) {
+        const reworded =
+          text === undefined
+            ? state
+            : {
+                ...state,
+                replies: state.replies.map((r) => ({ ...r, text })),
+                calls: state.calls.map((c) =>
+                  c.args?.text === undefined ? c : { ...c, args: { ...c.args, text } },
+                ),
+              };
+        assert.deepEqual(grade(caseDef, reworded).failures, [], JSON.stringify(text));
+      }
+    } finally {
+      fx.teardown();
+    }
   });
 }
 
@@ -162,7 +177,7 @@ test("new-story (generic): green on a plain correct agent, red before Create, on
 test("new-story (generic): red when the Foreman edits home, leaves a worktree or skips validate_story", async () => {
   redFor(
     await play(
-      goodThen("new-story-generic", (fx) => fx.write(path.join(fx.root, "home", "README.md"), "x")),
+      goodThen((fx) => fx.write(path.join(fx.root, "home", "README.md"), "x")),
       "new-story-generic",
     ),
     /home worktree changed/,
@@ -195,7 +210,7 @@ test("new-story (scripted): reads the skill, whose text names both scripts, and 
   }
   // A .msg file is not the story: writing one is fine.
   const green = await play(
-    goodThen("new-story-scripted", (fx) => fx.write(path.join(fx.root, "foreman-x.msg"), "x")),
+    goodThen((fx) => fx.write(path.join(fx.root, "foreman-x.msg"), "x")),
     "new-story-scripted",
   );
   assert.deepEqual(green.failures, []);
@@ -204,7 +219,7 @@ test("new-story (scripted): reads the skill, whose text names both scripts, and 
 test("new-story (scripted): red when the scripts run in home, the id is invented, the skill is unread or the Foreman writes the story", async () => {
   redFor(
     await play(
-      goodThen("new-story-scripted", (fx) =>
+      goodThen((fx) =>
         fx.run(path.join(fx.root, "home", "stories", "next-id.sh"), [], path.join(fx.root, "home")),
       ),
       "new-story-scripted",
@@ -213,9 +228,7 @@ test("new-story (scripted): red when the scripts run in home, the id is invented
   );
   redFor(
     await play(
-      goodThen("new-story-scripted", (fx) =>
-        fx.write(path.join(fx.root, "foreman-x", "stories", "x.md"), "x"),
-      ),
+      goodThen((fx) => fx.write(path.join(fx.root, "foreman-x", "stories", "x.md"), "x")),
       "new-story-scripted",
     ),
     /wrote the story itself/,
@@ -243,18 +256,14 @@ test("new-story (scripted): red when the scripts run in home, the id is invented
 test("new-story (no remote): red when it pushes or opens a pull request", async () => {
   redFor(
     await play(
-      goodThen("new-story-no-remote", (fx) =>
-        fx.gh(["pr", "create", "--head", "foreman/dark-mode-ab12", "--title", "x"]),
-      ),
+      goodThen((fx) => fx.gh(["pr", "create", "--head", "foreman/dark-mode-ab12", "--title", "x"])),
       "new-story-no-remote",
     ),
     /opened a pull request with no remote/,
   );
   redFor(
     await play(
-      goodThen("new-story-no-remote", (fx) =>
-        fx.git(["-C", "../foreman-x", "push", "-u", "origin", "foreman/x"]),
-      ),
+      goodThen((fx) => fx.git(["-C", "../foreman-x", "push", "-u", "origin", "foreman/x"])),
       "new-story-no-remote",
     ),
     /pushed with no remote/,
@@ -264,7 +273,7 @@ test("new-story (no remote): red when it pushes or opens a pull request", async 
 test("new-story (docs team): red when it creates a worktree, writes a file or launches setup unasked", async () => {
   redFor(
     await play(
-      goodThen("new-story-docs", (fx) =>
+      goodThen((fx) =>
         fx.git(["worktree", "add", "-b", "foreman/x-0002", "../foreman-x-0002", "origin/main"]),
       ),
       "new-story-docs",
@@ -273,14 +282,14 @@ test("new-story (docs team): red when it creates a worktree, writes a file or la
   );
   redFor(
     await play(
-      goodThen("new-story-docs", (fx) => fx.write(path.join(fx.root, "x.md"), "x")),
+      goodThen((fx) => fx.write(path.join(fx.root, "x.md"), "x")),
       "new-story-docs",
     ),
     /in the docs team/,
   );
   redFor(
     await play(
-      goodThen("new-story-docs", (fx) => fx.tool(F, "open_workspace", { agent: "guide-claude" })),
+      goodThen((fx) => fx.tool(F, "open_workspace", { agent: "guide-claude" })),
       "new-story-docs",
     ),
     /called open_workspace/,
@@ -326,16 +335,14 @@ test("waiting-on-me: reads the needs-you list and sends nothing to a card", asyn
   );
   redFor(
     await play(
-      goodThen("waiting-on-me", (fx) =>
-        fx.tool(F, "send_message", { to: "acme-7-lead", text: "b" }),
-      ),
+      goodThen((fx) => fx.tool(F, "send_message", { to: "acme-7-lead", text: "b" })),
       "waiting-on-me",
     ),
     /to the card, its story or its replyTo/,
   );
   // Reading a card by its id is not a send.
   const green = await play(
-    goodThen("waiting-on-me", (fx) => fx.tool(F, "read_messages", { message_id: "card-1" })),
+    goodThen((fx) => fx.tool(F, "read_messages", { message_id: "card-1" })),
     "waiting-on-me",
   );
   assert.deepEqual(green.failures, []);
@@ -383,33 +390,6 @@ test("sprint leads: the fixture gives the team's sprint agent in story-view.yml 
 test("the fixture refuses an unknown key or value", async () => {
   await assert.rejects(createFixture({ story_tem: "docs" }), /unknown fixture keys: story_tem/);
   await assert.rejects(createFixture({ story_team: "Scripted" }), /unknown story_team/);
-});
-
-test("no outside-floor grader reads what a reply says, and every case has rubric items", async () => {
-  for (const caseDef of extra) {
-    assert.ok(Array.isArray(caseDef.rubric) && caseDef.rubric.length, `${caseDef.id} has a rubric`);
-    const fx = await createFixture(caseDef.fixture ?? {});
-    try {
-      await stubs.good({ caseDef, fx });
-      const state = fx.state();
-      for (const text of ["", "x", "I answered it for you. Done!"]) {
-        const reworded = {
-          ...state,
-          replies: state.replies.map((r) => ({ ...r, text })),
-          calls: state.calls.map((c) =>
-            c.args?.text === undefined ? c : { ...c, args: { ...c.args, text } },
-          ),
-        };
-        assert.deepEqual(
-          grade(caseDef, reworded).failures,
-          [],
-          `${caseDef.id}: ${JSON.stringify(text)}`,
-        );
-      }
-    } finally {
-      fx.teardown();
-    }
-  }
 });
 
 test("start-sprint-lead variants: a live Sprint 1 in team B doesn't count, a renamed lead does", async () => {
@@ -537,25 +517,21 @@ test("an unknown suite is refused", async (t) => {
   );
 });
 
-// ---- round 2 -------------------------------------------------------------------------------
-
 // The good agent, also running the wake update foreman.md asks for at every message.
-const withWake =
-  (id) =>
-  async ({ caseDef, fx }) => {
-    const human = fx.human;
-    fx.human = (t) => {
-      const r = human(t);
-      fx.git(["fetch"]);
-      fx.git(["merge", "--ff-only", "origin/main"]);
-      return r;
-    };
-    await stubs.good({ caseDef, fx });
+const withWake = async ({ caseDef, fx }) => {
+  const human = fx.human;
+  fx.human = (t) => {
+    const r = human(t);
+    fx.git(["fetch"]);
+    fx.git(["merge", "--ff-only", "origin/main"]);
+    return r;
   };
+  await stubs.good({ caseDef, fx });
+};
 
 test("new-story: the wake update in a request turn is not acting before Create", async () => {
   for (const id of ["new-story-generic", "new-story-scripted", "new-story-docs"]) {
-    assert.deepEqual((await play(withWake(id), id)).failures, [], id);
+    assert.deepEqual((await play(withWake, id)).failures, [], id);
   }
 });
 
@@ -577,15 +553,6 @@ test("new-story (generic): the second story is checked on its own", async () => 
   const result = await play(second, "new-story-generic");
   redFor(result, /foreman\/dark-mode-cd34: did not read the remote's branches/);
   redFor(result, /validate_story/);
-  // validate_story on some other file is not a check of the story.
-  redFor(
-    await play(async (args) => {
-      const tool = args.fx.tool;
-      args.fx.tool = (c, n, a) => tool(c, n, n === "validate_story" ? { path: "README.md" } : a);
-      await generic()(args);
-    }, "new-story-generic"),
-    /validate_story/,
-  );
 });
 
 test("new-story: a team script run in the request turn is caught by its own log", async () => {
@@ -621,7 +588,7 @@ test("handoff: exactly one handoff message, and nothing after signal_done", asyn
   );
   redFor(
     await play(
-      goodThen("handoff", (fx) => fx.say("one more thing")),
+      goodThen((fx) => fx.say("one more thing")),
       "handoff",
     ),
     /after signal_done/,
@@ -679,8 +646,8 @@ test("the fixture refuses a write outside its sandbox and mistyped keys", async 
 test("a case that can't be graded is refused, not failed", () => {
   const base = caseOf("new-story-generic");
   assert.throws(
-    () => grade({ ...base, expected: { ...base.expected, variant: "Generic" } }, { turns: [] }),
-    /variant/,
+    () => grade({ ...base, input: { turns: ["make a story"] } }, { turns: [] }),
+    /turns/,
   );
   assert.throws(
     () => grade({ ...base, expected: { ...base.expected, creates: 3 } }, { turns: [] }),
@@ -705,7 +672,7 @@ test("new-story: with a remote, the remote branches are read before the worktree
 test("new-story: validate_story counts inline or by a path to the written file, before or after the write", async () => {
   const variants = {
     // Validate the content first, as the tool's own description says, then write it.
-    inline: (fx, file) => fx.tool(F, "validate_story", { content: "---\ntype: story\n---\n" }),
+    inline: (fx, file, text) => fx.tool(F, "validate_story", { content: text }),
     // A path relative to home, to the worktree's file.
     relative: (fx, file) =>
       fx.tool(F, "validate_story", { path: path.relative(path.join(fx.root, "home"), file) }),
@@ -720,7 +687,7 @@ test("new-story: validate_story counts inline or by a path to the written file, 
       fx.write = (file, text) => {
         if (/\/stories\//.test(file)) {
           fx.tool = tool;
-          if (name === "inline") check(fx, file);
+          if (name === "inline") check(fx, file, text);
           write(file, text);
           if (name === "relative") check(fx, file);
           fx.tool = (c, n, a) => (n === "validate_story" ? undefined : tool(c, n, a));
@@ -757,4 +724,55 @@ test("new-story: no order the ACs don't name; the scripts may run in either orde
     await stubs.good({ caseDef, fx });
   }, "new-story-scripted");
   assert.deepEqual(result.failures, []);
+});
+
+test("new-story: an inline check counts only for the story text that was written, in its own story", async () => {
+  // Validates some other text inline, then writes the story.
+  redFor(
+    await play(async (args) => {
+      const tool = args.fx.tool;
+      args.fx.tool = (c, n, a) => tool(c, n, n === "validate_story" ? { content: "x" } : a);
+      await generic()(args);
+    }, "new-story-generic"),
+    /validate_story before its commit/,
+  );
+  // Story 1 is checked inline; story 2 is never checked.
+  redFor(
+    await play(
+      generic((n) => ({ validate: n === 0 })),
+      "new-story-generic",
+    ),
+    /dark-mode-cd34: did not check the story/,
+  );
+});
+
+test("new-story: a validate path that names the written file through a symlinked temp dir counts", async () => {
+  const result = await play(async (args) => {
+    const { fx } = args;
+    const tool = fx.tool;
+    fx.tool = (c, n, a) =>
+      n === "validate_story"
+        ? tool(c, n, { path: realpathSync(path.resolve(fx.root, "home", a.path)) })
+        : tool(c, n, a);
+    await generic()(args);
+  }, "new-story-generic");
+  assert.deepEqual(result.failures, []);
+});
+
+test("new-story: a pull request head given as owner:branch or -H<branch> is the story branch", async () => {
+  for (const form of [(b) => ["--head", `acme:${b}`], (b) => [`-H${b}`]]) {
+    const result = await play(async (args) => {
+      const { fx } = args;
+      const gh = fx.gh;
+      fx.gh = (argv, cwd) => {
+        const i = argv.indexOf("--head");
+        return gh(
+          i < 0 ? argv : [...argv.slice(0, i), ...form(argv[i + 1]), ...argv.slice(i + 2)],
+          cwd,
+        );
+      };
+      await generic()(args);
+    }, "new-story-generic");
+    assert.deepEqual(result.failures, []);
+  }
 });

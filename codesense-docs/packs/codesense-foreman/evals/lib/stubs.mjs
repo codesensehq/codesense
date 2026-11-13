@@ -47,12 +47,13 @@ const good = {
     }
   },
   // Each "make a story" turn is followed by its "Create" turn; every story gets a fresh name.
-  "new-story"({ fx, turns, expected }) {
+  "new-story"({ fx, turns }) {
     const title = "Add dark mode to the settings page";
     for (let at = 0; at < turns.length; at += 2) {
       fx.human(turns[at]);
-      fx.tool(F, "describe_setup");
-      if (expected.variant === "docs") {
+      // Homed in the docs team: no org but the docs.
+      const setup = fx.tool(F, "describe_setup");
+      if (setup.orgs.every((o) => o.slug === "codesense/docs")) {
         fx.say("Stories live in a team, and you don't have one yet. Want me to start setup?");
         return;
       }
@@ -133,7 +134,7 @@ const good = {
 export const stubs = {
   doNothing: async () => ({ cost_usd: 0, tokens: 0 }),
   good: async ({ caseDef, fx }) => {
-    await good[caseDef.kind ?? caseDef.id]({ fx, turns: caseDef.input.turns, expected: caseDef.expected });
+    await good[caseDef.kind ?? caseDef.id]({ fx, turns: caseDef.input.turns });
     return { cost_usd: 0, tokens: 0 };
   },
 };

@@ -12,7 +12,6 @@ input:
     - "Create"
 # Script: the skill read, its scripts in order inside the worktree, the pushed branch and the PR.
 expected:
-  variant: scripted
   forbidden_tools:
     - schedule_wakeup
     - run_in_terminal_tab
