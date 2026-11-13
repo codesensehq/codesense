@@ -8,7 +8,9 @@
 //! is not in the set (or is past Unicode) is kept as written. A numeric
 //! reference to a character no title may carry (NUL, a control other than tab,
 //! newline or carriage return, a surrogate, or a bidi embedding, override or
-//! isolate) decodes to U+FFFD, as HTML replaces NUL, C1 controls and surrogates.
+//! isolate) decodes to U+FFFD. HTML also replaces NUL and surrogates, but it
+//! remaps `&#128;`–`&#159;` through windows-1252 (`&#146;` is `’`); this
+//! decoder replaces those C1 controls instead.
 
 use regex::{Captures, Regex};
 use std::sync::LazyLock;
