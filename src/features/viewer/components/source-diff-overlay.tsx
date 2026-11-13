@@ -1614,7 +1614,8 @@ function CommitDetailPane({
   workingError: string | null;
 }) {
   const commit = useSourceCommitChangeset(effectiveCwd, sha);
-  const markdownMode = useFileDiffModes().modes.markdown;
+  const { modes: fileDiffModes, setMode: setFileDiffMode } = useFileDiffModes();
+  const markdownMode = fileDiffModes.markdown;
   const files = sha === null ? workingFiles : commit.files;
   const loading = sha === null ? workingLoading : commit.loading;
   const error = sha === null ? workingError : commit.error;
@@ -1662,28 +1663,38 @@ function CommitDetailPane({
         }
         stats={<CommitTotals files={files} />}
         actions={
-          redline != null &&
-          !redline.binary &&
-          // A mode-only change renders a sentence and an error its message:
-          // neither has a diff for these controls to change.
-          redline.before !== redline.after &&
-          redlineError == null &&
-          selectedFile &&
-          readsAsCode(selectedFile, markdownMode) && (
-            <DiffCodeControls
-              wsId={ws.id}
-              idPrefix="commit-diff"
-              inline={inline}
-              wordWrap={wordWrap}
-              expandAll={expandAll}
-              mode={diffMode}
-              structuralAvailable={isStructuralLanguage(detectLanguageId(selectedFile))}
-              onToggleInline={onToggleInline}
-              onToggleWordWrap={onToggleWordWrap}
-              onToggleExpandAll={onToggleExpandAll}
-              onSetMode={onSetDiffMode}
-            />
-          )
+          <div className="flex shrink-0 items-center gap-0.5">
+            {selectedFile && getViewerFileType(selectedFile) === "markdown" && (
+              <FileDiffModeSwitch
+                kind="markdown"
+                mode={markdownMode}
+                onChange={(m) => setFileDiffMode("markdown", m)}
+                testId={`commit-diff-markdown-mode-${ws.id}`}
+              />
+            )}
+            {redline != null &&
+              !redline.binary &&
+              // A mode-only change renders a sentence and an error its message:
+              // neither has a diff for these controls to change.
+              redline.before !== redline.after &&
+              redlineError == null &&
+              selectedFile &&
+              readsAsCode(selectedFile, markdownMode) && (
+                <DiffCodeControls
+                  wsId={ws.id}
+                  idPrefix="commit-diff"
+                  inline={inline}
+                  wordWrap={wordWrap}
+                  expandAll={expandAll}
+                  mode={diffMode}
+                  structuralAvailable={isStructuralLanguage(detectLanguageId(selectedFile))}
+                  onToggleInline={onToggleInline}
+                  onToggleWordWrap={onToggleWordWrap}
+                  onToggleExpandAll={onToggleExpandAll}
+                  onSetMode={onSetDiffMode}
+                />
+              )}
+          </div>
         }
       />
       <div className="max-h-[38%] shrink-0 overflow-y-auto border-b border-[var(--border)] px-2 py-1">

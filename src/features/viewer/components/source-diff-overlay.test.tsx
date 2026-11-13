@@ -794,6 +794,10 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
     expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("old→new");
     expect(screen.queryByTestId("mock-redline-prose")).not.toBeInTheDocument();
+    // Markdown shown as source is a code diff: its code controls come with it.
+    expect(screen.getByTestId("source-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-view-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-wrap-toggle-w1")).toBeInTheDocument();
   });
 
   it("an HTML file is its source diff, with no rendered mode offered", () => {
@@ -2432,6 +2436,29 @@ describe("SourceDiffOverlay — History mode (SLW-WD-9)", () => {
     const flipped = screen.getByTestId("mock-code-diff-review");
     expect(flipped).toHaveAttribute("data-wrap", "wrap");
     expect(flipped).toHaveAttribute("data-collapse", "expand");
+  });
+
+  it("the commit pane offers the markdown modes, and Source brings the code controls", () => {
+    stubChangeset({ files: [{ path: "docs/readme.md", status: "modified" }] });
+    useViewerStore.setState({
+      sourceDiffHistoryMode: { "sid-ws": true },
+      sourceDiffSelectedSha: { "sid-ws": null },
+    });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-redline-prose")).toBeInTheDocument();
+    expect(screen.queryByTestId("commit-diff-wrap-toggle-w1")).toBeNull();
+    const modes = screen.getByTestId("commit-diff-markdown-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
+    expect(screen.getByTestId("commit-diff-wrap-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("commit-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
   });
 
   it("hides the commit-diff controls for a mode-only change and for a redline error", () => {
