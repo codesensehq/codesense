@@ -115,14 +115,6 @@ impl SkillTarget {
         SkillTarget::Opencode,
     ];
 
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SkillTarget::Claude => "claude",
-            SkillTarget::Codex => "codex",
-            SkillTarget::Opencode => "opencode",
-        }
-    }
-
     // Where the built copy of skill `name` lives, relative to the pack root.
     pub fn built_path(self, name: &str) -> String {
         match self {

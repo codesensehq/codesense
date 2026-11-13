@@ -2362,7 +2362,7 @@
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "cd51bd703684d6eee2bb3f67382d5acb39bf84af726cafaa4a0f44cd9c63a714",
-    "src-tauri/src/packs/manifest.rs": "3a8ed7f4e102b1e28587fe5520b3cbdd31309d98679645c5f4ebeeeffe20e370",
+    "src-tauri/src/packs/manifest.rs": "3080119a1d0e02e071ee578cdaeee1c7e080ca0d4b21b699d4c617fab2ae6fd1",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
     "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
     "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"
