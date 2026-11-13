@@ -4640,7 +4640,7 @@ async fn a_page_launch_with_createworktree_creates_it_and_a_repeat_is_already_li
     let home = tempfile::tempdir().unwrap();
     let host = FakeHost::new(home.path(), 4);
     let args = serde_json::json!({"target": "team-workspace", "name": "Foreman", "worktree": "foreman", "createWorktree": true});
-    let opened = open_agent(&host, &active(), &page_launch(args.clone()))
+    let opened = open_agent(&host, &active(), &page_launch(args))
         .await
         .unwrap();
     assert_eq!(opened.status, OpenStatus::Opened, "{}", opened.message);
@@ -4651,7 +4651,11 @@ async fn a_page_launch_with_createworktree_creates_it_and_a_repeat_is_already_li
     };
     assert!(matches!(&launch.target, LaunchTarget::Dir { cwd, .. } if cwd == &host.worker("foreman")));
 
-    let again = open_agent(&host, &active(), &page_launch(args)).await.unwrap();
+    // The page repeats without createWorktree once the worktree exists: the app refuses a
+    // second create under a live name (AppHost::live_context), so that is what it sends.
+    let repeat =
+        serde_json::json!({"target": "team-workspace", "name": "Foreman", "worktree": "foreman"});
+    let again = open_agent(&host, &active(), &page_launch(repeat)).await.unwrap();
     assert_eq!(again.status, OpenStatus::AlreadyLive);
     assert_eq!(again.handle, opened.handle);
     assert_eq!(host.launches().len(), 1, "a repeat launches nothing");
