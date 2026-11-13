@@ -367,3 +367,43 @@ describe("Files diff header: labels and the Private row on every type and mode",
     expect(panes[0].closest("[data-scroll-keys]")).toBeNull();
   });
 });
+
+describe("Files History: a landed commit's diff through the shared dispatch", () => {
+  beforeEach(() => {
+    getFileRedlineMock.mockReset();
+    parseToRedlineMock.mockReset();
+    resetModes();
+  });
+
+  it("a markdown file in a commit is the redline, read across that commit", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("modified", "old", "new"));
+    parseToRedlineMock.mockReturnValue({
+      promise: Promise.resolve({ hast: pHast("commit-redline"), perf: {}, receiveAt: 0 }),
+      cancel: vi.fn(),
+    });
+    render(<MarkdownRedlineViewer {...baseProps} commitSha="abc1234" />);
+    expect(await screen.findByText("commit-redline")).toBeInTheDocument();
+    expect(getFileRedlineMock).toHaveBeenCalledWith(
+      "/ctx",
+      "a.md",
+      undefined,
+      undefined,
+      "abc1234",
+    );
+    expect(screen.queryByTestId("code-diff")).toBeNull();
+  });
+
+  it("a .ts file in a commit is a code diff, never a redline", async () => {
+    getFileRedlineMock.mockResolvedValue(redline("modified", "x", "y"));
+    render(<MarkdownRedlineViewer {...baseProps} absPath="/ctx/x.ts" commitSha="abc1234" />);
+    expect(await screen.findByTestId("code-diff")).toHaveTextContent("x→y");
+    expect(getFileRedlineMock).toHaveBeenCalledWith(
+      "/ctx",
+      "x.ts",
+      undefined,
+      undefined,
+      "abc1234",
+    );
+    expect(parseToRedlineMock).not.toHaveBeenCalled();
+  });
+});
