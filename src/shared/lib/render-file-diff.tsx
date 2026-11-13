@@ -10,7 +10,12 @@ import { RenderedMarkdown } from "@/features/git-sync/components/rendered-markdo
 import type { PublishFileStatus } from "@/features/git-sync/lib/types";
 import { OverlayCenteredState } from "@/features/viewer/components/overlay-shell";
 import { cn } from "@/lib/utils";
-import { CodeDiffReview, type CodeDiffReviewProps } from "@/shared/components/code-editor";
+import {
+  CodeDiffReview,
+  detectLanguageId,
+  isStructuralLanguage,
+  type CodeDiffReviewProps,
+} from "@/shared/components/code-editor";
 import { useContainerWidth } from "@/shared/hooks/use-container-width";
 
 import type { FileDiffKind, FileDiffModes } from "./file-diff-mode";
@@ -162,11 +167,14 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
   mode,
   onChange,
   testId,
+  unavailable,
 }: {
   kind: K;
   mode: FileDiffModes[K];
   onChange: (mode: FileDiffModes[K]) => void;
   testId?: string;
+  /** Modes that can't apply here, each with the reason shown as its tooltip. */
+  unavailable?: Partial<Record<FileDiffModes[K], string>>;
 }) {
   const options = MODE_LABELS[kind] as [FileDiffModes[K], string][];
   return (
@@ -181,10 +189,12 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
           key={value}
           type="button"
           aria-pressed={mode === value}
+          disabled={unavailable?.[value] != null}
+          title={unavailable?.[value]}
           onClick={() => onChange(value)}
           className={cn(
-            "px-2 py-0.5",
-            mode === value ? "bg-accent font-medium" : "hover:bg-accent/60",
+            "px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-50",
+            mode === value ? "bg-accent font-medium" : "enabled:hover:bg-accent/60",
           )}
         >
           {label}
@@ -277,15 +287,24 @@ function DiffStrip<K extends FileDiffKind>({
   prefs,
   showSwitch,
   sideToggle,
+  filePath,
 }: {
   sides: FileDiffSides;
   kind: K;
   mode: FileDiffModes[K];
   prefs: FileDiffPrefs;
+  /** False over a body no mode changes (a binary file's affordance). */
   showSwitch: boolean;
   sideToggle?: ReactNode;
+  filePath: string;
 }) {
   const onModeChange = showSwitch ? prefs.onModeChange : undefined;
+  const unavailable =
+    kind === "code" && !isStructuralLanguage(detectLanguageId(filePath))
+      ? ({ structural: "No structural diff for this language" } as Partial<
+          Record<FileDiffModes[K], string>
+        >)
+      : undefined;
   if (!onModeChange && !sideToggle) return null;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
@@ -304,6 +323,7 @@ function DiffStrip<K extends FileDiffKind>({
             mode={mode}
             onChange={(next) => onModeChange(kind, next)}
             testId={`${prefix}-mode-switch`}
+            unavailable={unavailable}
           />
         </div>
       )}
@@ -616,7 +636,8 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
           kind="markdown"
           mode={mode}
           prefs={prefs}
-          showSwitch
+          filePath={filePath}
+          showSwitch={state.kind !== "binary"}
           sideToggle={
             showToggle && (
               <SideToggle sides={sides} picked={frame.picked} onPick={frame.setPicked} />
@@ -690,6 +711,7 @@ function RenderedFileDiff({
             kind="html"
             mode={mode}
             prefs={prefs}
+            filePath={filePath}
             showSwitch
             sideToggle={
               showToggle && (
@@ -699,7 +721,14 @@ function RenderedFileDiff({
           />
         ) : (
           // Off Files the body is a code diff, so it takes the code modes.
-          <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
+          <DiffStrip
+            sides={sides}
+            kind="code"
+            mode={prefs.modes.code}
+            prefs={prefs}
+            filePath={filePath}
+            showSwitch={state.kind !== "binary"}
+          />
         )
       }
     >
@@ -777,7 +806,14 @@ function CodeFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
       bodyRef={frame.bodyRef}
       header={prefs.header}
       strip={
-        <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
+        <DiffStrip
+          sides={sides}
+          kind="code"
+          mode={prefs.modes.code}
+          prefs={prefs}
+          filePath={filePath}
+          showSwitch={state.kind !== "binary"}
+        />
       }
     >
       <SourceBody

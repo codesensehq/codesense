@@ -381,3 +381,23 @@ describe("renderFileDiff — frame-level layout state", () => {
     expect(screen.getByTestId("code-diff")).toBeInTheDocument();
   });
 });
+
+describe("renderFileDiff — the code mode switch only where it applies", () => {
+  it("is not drawn over a binary body", () => {
+    render(
+      renderFileDiff(args("/repo/a.ts", { state: { kind: "binary" } }, { onModeChange: vi.fn() })),
+    );
+    expect(screen.queryByRole("button", { name: "Structural" })).toBeNull();
+  });
+
+  it("disables Structural for a language without a parse tree", () => {
+    render(renderFileDiff(args("/repo/main.rs", {}, { onModeChange: vi.fn() })));
+    expect(screen.getByRole("button", { name: "Structural" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ignore whitespace" })).toBeEnabled();
+  });
+
+  it("keeps Structural for a supported language", () => {
+    render(renderFileDiff(args("/repo/a.ts", {}, { onModeChange: vi.fn() })));
+    expect(screen.getByRole("button", { name: "Structural" })).toBeEnabled();
+  });
+});
