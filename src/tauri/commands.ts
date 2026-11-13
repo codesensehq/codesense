@@ -3211,6 +3211,12 @@ export const writeContentFile = (path: string, content: string, expectedSha256?:
 export const writeWorktreeFile = (path: string, content: string, expectedSha256?: string) =>
   invoke<void>("write_worktree_file", { path, content, expectedSha256 });
 
+/** The binary companion to {@link writeWorktreeFile}: base64 bytes to a file in
+ *  a registered worktree, by the same gate and the same unsuppressed atomic
+ *  write. A canvas drawn in the worktree editor writes its PNG render here. */
+export const writeBinaryWorktreeFile = (path: string, base64: string) =>
+  invoke<void>("write_binary_worktree_file", { path, base64 });
+
 /** Prefix of the `writeWorktreeFile` error for a save whose baseline moved. */
 export const WORKTREE_WRITE_CONFLICT_PREFIX = "conflict:";
 
@@ -3231,6 +3237,11 @@ export interface WorktreeFileList {
 /** Quick-open's file list for a local worktree root. */
 export const worktreeListFiles = (root: string) =>
   invoke<WorktreeFileList>("worktree_list_files", { root });
+
+/** The story files hydrated into a registered local worktree, by their path in
+ *  it: the only files its Rendered view serves, and the ones that open Rendered. */
+export const worktreeHydratedFiles = (root: string) =>
+  invoke<string[]>("worktree_hydrated_files", { root });
 
 /**
  * Atomically write base64-decoded binary bytes back to a context-repo file —

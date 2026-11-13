@@ -1078,8 +1078,10 @@ pub use async_helpers::await_blocking;
 // +1 `agent_inbox::unarchive_inbox_messages` (Inbox Undo for Archive). → 502.
 // -1 `reap_empty_scratch_notes`: listing notes no longer deletes blank notes. → 501.
 // +1 `dashboard_launch::agent_session_await_ready` (a page launch waits for its agent to be input-ready). → 502.
-// +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 504.
-pub const EXPECTED_COMMAND_COUNT: usize = 504;
+// +1 `write_binary_worktree_file` (a canvas drawn in a worktree writes its PNG render). → 503.
+// +1 `worktree_hydrated_files` (the story files a worktree's Rendered view serves). → 504.
+// +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 506.
+pub const EXPECTED_COMMAND_COUNT: usize = 506;
 
 #[cfg(test)]
 mod tests {
