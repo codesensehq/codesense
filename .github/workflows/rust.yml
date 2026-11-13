@@ -60,7 +60,41 @@ jobs:
             merge_group) range="$GROUP_BASE..$GROUP_HEAD" ;;
             *) echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
+          # The filter never judges a change to itself.
+          if git diff --name-only "$range" | grep -qE '^(scripts/rust-changes[^/]*|\.github/workflows/rust\.yml)$'; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           node scripts/rust-changes.mjs "$range" >> "$GITHUB_OUTPUT"
+
+  rust-guards:
+    name: Rust guards
+    # The source guards also scan the frontend (src/), so they run on every change, path filter or
+    # not. They need no Tauri build: a small crate whose tests read source files.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-guards
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Test source guards
+        run: cargo test --locked -p codesense-guards
 
   rust-macos:
     name: Rust (macOS arm64)

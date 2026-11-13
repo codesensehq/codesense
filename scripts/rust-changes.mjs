@@ -20,6 +20,7 @@ export const RUST_PATHS = [
   ".config/nextest.toml",
   ".github/workflows/rust.yml",
   ".nvmrc",
+  ".npmrc",
   "package.json",
   "pnpm-lock.yaml",
   "patches/",
