@@ -31,7 +31,6 @@ vi.mock("@/tauri/commands", () => ({
     disk.bodies.delete(id);
     return [...disk.bodies.keys()].map((n, i) => meta(n, i + 1));
   }),
-  reapEmptyScratchNotes: vi.fn(async () => null),
   createNote: vi.fn(),
   updateNoteMeta: vi.fn(async (_scope: unknown, id: string) => meta(id, 1)),
   saveAppState: vi.fn(async () => undefined),
@@ -51,7 +50,6 @@ describe("deleting a note right after typing in it", () => {
       activeNoteId: null,
       scratchNoteContent: "",
       notesLoadedScope: null,
-      emptyScratchReapDone: true,
     });
   });
 

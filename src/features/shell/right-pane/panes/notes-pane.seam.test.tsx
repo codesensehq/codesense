@@ -102,6 +102,7 @@ const NOTES_REF = { scope: "private", org: ORG, id: "notes" } as const;
 const BASE = "# Alpha\n\nFirst\n\nLast";
 let handlers: HandlerRegistry, appState: string, failWrites: boolean, teamSafe: boolean;
 let seed: FrameRecord, p: PaneDoc | undefined;
+let observeEditorChange: (() => void) | undefined;
 let agentCommits: Map<string, string>;
 let sessionRows: Record<string, unknown>[], allowSend: boolean, sendResult: Record<string, unknown>;
 let contextQuery: (query: Record<string, unknown>) => unknown;
@@ -123,6 +124,7 @@ const calls = (operation: string) =>
 
 beforeEach(async () => {
   liveHub.dispose();
+  observeEditorChange = undefined;
   vi.stubGlobal("IntersectionObserver", undefined);
   listeners.clear();
   ipc.mockReset();
@@ -235,7 +237,18 @@ function bootNotesFrame(frame: HTMLIFrameElement, source = SOURCE) {
   const pane = bootPaneDoc(frame, html, undefined, false, {
     shim: shimSource(),
     beforeScripts: (win) => {
-      Object.assign(win, { createEditor, TextEncoder, ResizeObserver });
+      Object.assign(win, {
+        createEditor: (element: HTMLElement, options: Parameters<typeof createEditor>[1]) =>
+          createEditor(element, {
+            ...options,
+            onChange: (markdown) => {
+              options?.onChange?.(markdown);
+              observeEditorChange?.();
+            },
+          }),
+        TextEncoder,
+        ResizeObserver,
+      });
       Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
         value: () => {},
         configurable: true,
@@ -469,6 +482,453 @@ it("creates a note, selects its title, types and autosaves through the real shim
   await waitFor(() => expect(el(p!, "save-state").textContent).toBe("Saved"));
   expect(p!.doc.querySelector(".nt-meta")!.textContent!.trim()).toBe("PrivateSaved just now");
 });
+it("reuses the open blank note from the button and the host New note command", async () => {
+  installNotesCommands();
+  await open();
+  const arrived = vi.fn();
+  p!.win.addEventListener("message", (event) => {
+    if (!("data" in event)) return;
+    const data = event.data as { type?: string; id?: string };
+    if (data.type === "codesense:command") arrived(data.id);
+  });
+  await click("new-note");
+  await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+  expect(calls("create")).toHaveLength(1);
+  await click("new-note");
+  await act(async () => {
+    runDashboardCommand(dashboardCommandActionId(dashboardRefKey(NOTES_REF), "new"));
+  });
+  act(() => {
+    runDashboardCommand(dashboardCommandActionId(dashboardRefKey(NOTES_REF), "toggle-list"));
+  });
+  await waitFor(() => expect(el(p!, "notes").dataset.drawer).toBe("true"));
+  expect(arrived.mock.calls).toEqual([["new"], ["toggle-list"]]);
+  expect(calls("create")).toHaveLength(1);
+  usePaneStore.setState({ listing: null, knownEntries: {} });
+  syncDashboardCommands();
+  setDynamicShortcutActions([]);
+});
+
+it.each(["create", "activation read"])("joins New note through its %s", async (phase) => {
+  await open();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const invoke = ipc.getMockImplementation()!;
+  let waiting = false;
+  ipc.mockImplementation(async (command, args) => {
+    const result = await invoke(command, args);
+    if (
+      command === "records_call" &&
+      (phase === "create"
+        ? args.operation === "create"
+        : args.operation === "read" && !["alpha", "beta"].includes(args.args.id))
+    ) {
+      waiting = true;
+      await held;
+    }
+    return result;
+  });
+  await click("new-note");
+  await waitFor(() => expect(waiting).toBe(true));
+  await click("new-note");
+  await act(async () => release());
+  await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+  expect(calls("create")).toHaveLength(1);
+  expect(p!.doc.querySelector(".scratch-note-editor")?.getAttribute("contenteditable")).toBe(
+    "true",
+  );
+});
+
+it("lets an actual selection supersede a creating note and start a current New note", async () => {
+  const { frame } = await open();
+  const invoke = ipc.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let heldId: string | undefined;
+  ipc.mockImplementation(async (command, args) => {
+    const result = await invoke(command, args);
+    if (
+      command === "records_call" &&
+      args.operation === "read" &&
+      !["alpha", "beta"].includes(args.args.id) &&
+      !heldId
+    ) {
+      heldId = args.args.id;
+      await gate;
+    }
+    return result;
+  });
+  await click("new-note");
+  await waitFor(() => expect(heldId).toBeDefined());
+  await deliver(frame, { type: "codesense:intent", intent: { noteId: "beta" } });
+  await waitFor(() => expect((el(p!, "note-title") as HTMLInputElement).value).toBe("Beta"));
+  await click("new-note");
+  await waitFor(() => expect(calls("create")).toHaveLength(2));
+  await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+  typeField(p!, "Current draft", "note-title");
+  await act(async () => release());
+  await waitFor(() =>
+    expect((el(p!, "note-title") as HTMLInputElement).value).toBe("Current draft"),
+  );
+  expect(p!.doc.activeElement?.id).toBe("note-title");
+  expect(calls("create")).toHaveLength(2);
+});
+
+it.each(["selection read", "history"])(
+  "completes blank reuse with an editable body and closed drawer during a pending %s",
+  async (phase) => {
+    const { frame } = await open();
+    const invoke = ipc.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let waiting = false;
+    ipc.mockImplementation(async (command, args) => {
+      const result = await invoke(command, args);
+      if (
+        command === "records_call" &&
+        (phase === "selection read"
+          ? args.operation === "read" && args.args.id === "beta"
+          : args.operation === "history" && !["alpha", "beta"].includes(args.args.id))
+      ) {
+        waiting = true;
+        await gate;
+      }
+      return result;
+    });
+    await click("new-note");
+    if (phase === "selection read") {
+      await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+      await deliver(frame, { type: "codesense:intent", intent: { noteId: "beta" } });
+    }
+    await waitFor(() => expect(waiting).toBe(true));
+    await click("toggle-list");
+    expect(el(p!, "notes").dataset.drawer).toBe("true");
+    await click("new-note");
+    await waitFor(() => expect(el(p!, "notes").dataset.drawer).toBe("false"));
+    expect(p!.doc.querySelector(".scratch-note-editor")?.getAttribute("contenteditable")).toBe(
+      "true",
+    );
+    expect(p!.doc.activeElement?.id).toBe("note-title");
+    expect(calls("create")).toHaveLength(1);
+    await act(async () => release());
+    // The replacement refresh may save immediately after onChange. Observe the
+    // actual edit boundary so the Unsaved assertion cannot miss that transition.
+    let stateAtChange: string | null | undefined;
+    observeEditorChange = () => (stateAtChange = el(p!, "save-state").textContent);
+    try {
+      await edit("Reusable body", false);
+      await waitFor(() => expect(stateAtChange).toBe("Unsaved"));
+    } finally {
+      observeEditorChange = undefined;
+    }
+    await act(async () => fireEvent.focusOut(p!.doc.querySelector(".scratch-note-editor")!));
+    const id = raw("list", {}).rows.find(
+      (row: { id: string }) => !["alpha", "beta"].includes(row.id),
+    ).id;
+    await waitFor(() => expect(raw("read", { id }).body).toContain("Reusable body"));
+  },
+);
+
+it("ends the create join before history settles so later typing can create separately", async () => {
+  await open();
+  const invoke = ipc.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let waiting = false;
+  ipc.mockImplementation(async (command, args) => {
+    const result = await invoke(command, args);
+    if (command === "records_call" && args.operation === "history" && args.args.id !== "alpha") {
+      waiting = true;
+      await gate;
+    }
+    return result;
+  });
+  await click("new-note");
+  await waitFor(() => expect(waiting).toBe(true));
+  expect(p!.doc.querySelector(".scratch-note-editor")?.getAttribute("contenteditable")).toBe(
+    "true",
+  );
+  await edit("Keep this note");
+  await click("new-note");
+  await waitFor(() => expect(calls("create")).toHaveLength(2));
+  await act(async () => release());
+});
+
+it.each(["read", "body save", "metadata save"])(
+  "releases editing after a failed %s",
+  async (phase) => {
+    const { frame } = await open();
+    const invoke = ipc.getMockImplementation()!;
+    if (phase === "read") {
+      ipc.mockImplementation((command, args) => {
+        if (command === "records_call" && args.operation === "read" && args.args.id === "beta")
+          throw new Error("Read unavailable");
+        return invoke(command, args);
+      });
+      await deliver(frame, { type: "codesense:intent", intent: { noteId: "beta" } });
+      await waitFor(() => expect(el(p!, "notice").textContent).toContain("Read unavailable"));
+    } else if (phase === "body save") {
+      failWrites = true;
+      await edit("Keep failed draft");
+      await click("new-note");
+      await waitFor(() => expect(el(p!, "save-state").textContent).toBe("Not saved"));
+    } else {
+      ipc.mockImplementation((command, args) => {
+        if (command === "records_call" && args.operation === "setFields")
+          throw new Error("Metadata unavailable");
+        return invoke(command, args);
+      });
+      typeField(p!, "Keep title draft", "note-title");
+      await click("new-note");
+      await waitFor(() => expect(el(p!, "notice").textContent).toContain("Metadata unavailable"));
+    }
+    expect(calls("create")).toHaveLength(0);
+    expect((el(p!, "note-title") as HTMLInputElement).value).toBe(
+      phase === "metadata save" ? "Keep title draft" : "Alpha",
+    );
+    expect(p!.doc.querySelector(".scratch-note-editor")?.getAttribute("contenteditable")).toBe(
+      "true",
+    );
+  },
+);
+
+it.each(["title draft", "pin", "body"] as const)(
+  "creates separately and preserves the open note's %s",
+  async (protectedState) => {
+    await open();
+    await click("new-note");
+    await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+    const id = raw("list", {}).rows.find(
+      (row: { id: string }) => !["alpha", "beta"].includes(row.id),
+    ).id;
+    if (protectedState === "title draft") {
+      typeField(p!, "Plans", "note-title");
+    } else if (protectedState === "pin") {
+      await click("note-menu");
+      await act(async () =>
+        [...p!.doc.querySelectorAll<HTMLButtonElement>("#float button")]
+          .find((row) => row.textContent === "Pin")!
+          .click(),
+      );
+      await waitFor(() => expect(raw("read", { id }).fields.pinned).toBe(true));
+    } else {
+      await edit("Keep these words");
+    }
+    await click("new-note");
+    await waitFor(() => expect(calls("create")).toHaveLength(2));
+    const kept = raw("read", { id });
+    if (protectedState === "title draft") expect(kept.fields.title).toBe("Plans");
+    else if (protectedState === "pin") expect(kept.fields.pinned).toBe(true);
+    else expect(kept.body).toContain("Keep these words");
+  },
+);
+
+it.each(["title", "pin"] as const)(
+  "waits for the open note's pending %s before deciding whether to reuse it",
+  async (field) => {
+    await open();
+    await click("new-note");
+    await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+    const id = raw("list", {}).rows.find(
+      (row: { id: string }) => !["alpha", "beta"].includes(row.id),
+    ).id;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const invoke = ipc.getMockImplementation()!;
+    let waiting = false;
+    ipc.mockImplementation(async (command, args) => {
+      if (command === "records_call" && args.operation === "setFields" && args.args.id === id) {
+        waiting = true;
+        await held;
+      }
+      return invoke(command, args);
+    });
+    if (field === "title") {
+      typeField(p!, "Plans", "note-title");
+      fireEvent.keyDown(el(p!, "note-title"), { key: "Enter" });
+    } else {
+      await click("note-menu");
+      await act(async () =>
+        [...p!.doc.querySelectorAll<HTMLButtonElement>("#float button")]
+          .find((row) => row.textContent === "Pin")!
+          .click(),
+      );
+    }
+    await waitFor(() => expect(waiting).toBe(true));
+    await click("new-note");
+    expect(calls("create")).toHaveLength(1);
+    await act(async () => release());
+    await waitFor(() => expect(calls("create")).toHaveLength(2));
+    expect(raw("read", { id }).fields).toMatchObject(
+      field === "title" ? { title: "Plans" } : { pinned: true },
+    );
+  },
+);
+
+it("keeps a pin started while New note is saving the cleared body", async () => {
+  await open();
+  await click("new-note");
+  await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+  await edit("Draft");
+  await waitFor(() => expect(calls("write")).toHaveLength(1), { timeout: 2500 });
+  await waitFor(() => expect(el(p!, "save-state").textContent).toBe("Saved"));
+  let releaseBody!: () => void;
+  let releasePin!: () => void;
+  const bodyGate = new Promise<void>((resolve) => (releaseBody = resolve));
+  const pinGate = new Promise<void>((resolve) => (releasePin = resolve));
+  const invoke = ipc.getMockImplementation()!;
+  let writingBody = false;
+  let writingPin = false;
+  ipc.mockImplementation(async (command, args) => {
+    if (command === "records_call" && args.operation === "write") {
+      writingBody = true;
+      await bodyGate;
+    }
+    if (command === "records_call" && args.operation === "setFields" && args.args.fields.pinned) {
+      writingPin = true;
+      await pinGate;
+    }
+    return invoke(command, args);
+  });
+  await edit("");
+  await click("new-note");
+  await waitFor(() => expect(writingBody).toBe(true));
+  await click("note-menu");
+  await act(async () =>
+    [...p!.doc.querySelectorAll<HTMLButtonElement>("#float button")]
+      .find((row) => row.textContent === "Pin")!
+      .click(),
+  );
+  await waitFor(() => expect(writingPin).toBe(true));
+  await act(async () => releaseBody());
+  expect(calls("create")).toHaveLength(1);
+  await act(async () => releasePin());
+  await waitFor(() => expect(calls("create")).toHaveLength(2));
+});
+
+it("preserves a completed Pin when the earlier cleared-body reply arrives last", async () => {
+  await open();
+  await click("new-note");
+  await waitFor(() => expect(p!.doc.activeElement?.id).toBe("note-title"));
+  const id = raw("list", {}).rows.find(
+    (row: { id: string }) => !["alpha", "beta"].includes(row.id),
+  ).id;
+  await edit("Draft");
+  await act(async () => fireEvent.focusOut(p!.doc.querySelector(".scratch-note-editor")!));
+  await waitFor(() => expect(el(p!, "save-state").textContent).toBe("Saved"));
+  const invoke = ipc.getMockImplementation()!;
+  let release!: () => void;
+  let releasePin!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const pinGate = new Promise<void>((resolve) => (releasePin = resolve));
+  let captured = false;
+  let pinCaptured = false;
+  ipc.mockImplementation(async (command, args) => {
+    const result = await invoke(command, args);
+    if (
+      command === "records_call" &&
+      args.operation === "write" &&
+      args.args.id === id &&
+      !captured
+    ) {
+      captured = true;
+      // Newly created records omit the optional pin field until it is set.
+      expect(result.fields.pinned).toBeUndefined();
+      await gate;
+    }
+    if (command === "records_call" && args.operation === "setFields" && args.args.fields.pinned) {
+      pinCaptured = true;
+      await pinGate;
+    }
+    return result;
+  });
+  await edit("");
+  await click("new-note");
+  await waitFor(() => expect(captured).toBe(true));
+  await click("note-menu");
+  await act(async () =>
+    [...p!.doc.querySelectorAll<HTMLButtonElement>("#float button")]
+      .find((row) => row.textContent === "Pin")!
+      .click(),
+  );
+  await waitFor(() => expect(pinCaptured).toBe(true));
+  const pinReply = replyFor("records.setFields");
+  await act(async () => {
+    releasePin();
+    await pinReply;
+  });
+  await click("note-menu");
+  await waitFor(() => expect(el(p!, "float").textContent).toContain("Unpin"));
+  expect(raw("read", { id }).fields.pinned).toBe(true);
+  expect(calls("create")).toHaveLength(1);
+  await act(async () => release());
+  await waitFor(() => expect(calls("create")).toHaveLength(2));
+  expect(raw("read", { id }).fields.pinned).toBe(true);
+});
+
+it.each([false, true])(
+  "replaces invalidated reads after metadata completes and converges agent body and fields (focused draft %s)",
+  async (draft) => {
+    await open();
+    const invoke = ipc.getMockImplementation()!;
+    let releaseReads!: () => void;
+    let releaseMeta!: () => void;
+    const readGate = new Promise<void>((resolve) => (releaseReads = resolve));
+    const metaGate = new Promise<void>((resolve) => (releaseMeta = resolve));
+    let metadataCaptured = false;
+    let metadataReleased = false;
+    let replacementReads = 0;
+    let oldReads = 0;
+    ipc.mockImplementation(async (command, args) => {
+      const result = await invoke(command, args);
+      if (command === "records_call" && args.operation === "setFields" && !metadataCaptured) {
+        metadataCaptured = true;
+        await metaGate;
+        metadataReleased = true;
+      }
+      if (command === "records_call" && args.operation === "read" && args.args.id === "alpha") {
+        if (metadataReleased) replacementReads++;
+        else oldReads++;
+        await readGate;
+      }
+      return result;
+    });
+    await click("note-menu");
+    await act(async () =>
+      [...p!.doc.querySelectorAll<HTMLButtonElement>("#float button")]
+        .find((row) => row.textContent === "Unpin")!
+        .click(),
+    );
+    await waitFor(() => expect(metadataCaptured).toBe(true));
+    if (draft) {
+      el(p!, "note-title").focus();
+      typeField(p!, "Unfinished title", "note-title");
+    }
+    await act(async () => {
+      raw("write", { id: "alpha", body: "Agent's replacement body" });
+      raw("setFields", { id: "alpha", fields: { title: "Agent title" } });
+    });
+    await waitFor(() =>
+      expect(p!.doc.querySelector('[data-note-id="alpha"]')?.textContent).toContain("Agent title"),
+    );
+    await waitFor(() => expect(oldReads).toBeGreaterThan(0));
+    await act(async () => releaseMeta());
+    await waitFor(() => expect(replacementReads).toBeGreaterThan(0));
+    await act(async () => releaseReads());
+    await waitFor(() =>
+      expect(p!.doc.querySelector(".scratch-note-editor")?.textContent).toContain(
+        "Agent's replacement body",
+      ),
+    );
+    await waitFor(() =>
+      expect((el(p!, "note-title") as HTMLInputElement).value).toBe(
+        draft ? "Unfinished title" : "Agent title",
+      ),
+    );
+    expect(raw("read", { id: "alpha" }).fields.pinned).toBe(false);
+  },
+);
+
 it.each([
   { by: { kind: "human", name: "You" }, state: "Saved" },
   { by: { kind: "agent", name: "Ada" }, state: "Ada edited" },
@@ -1526,44 +1986,45 @@ it.each(["Keep yours", "Keep theirs"])(
   },
 );
 
+function installNotesCommands() {
+  const base = listing({
+    org: ORG,
+    team: TEAM,
+    root: "/ctx",
+    id: "notes",
+    title: "Notes",
+    privateCopy: true,
+    surface: "notes",
+  });
+  const meta = /name="codesense:commands"\s+content='([^']*)'/.exec(SOURCE);
+  const capabilities = /name="codesense:capabilities"\s+content="([^"]*)"/
+    .exec(SOURCE)![1]
+    .split(/\s+/);
+  base.panes[0].declaration = {
+    slots: ["right-pane"],
+    capabilities,
+    commands: meta ? JSON.parse(meta[1]) : [],
+  };
+  usePaneStore.setState({ teamKey: `${ORG}:${TEAM}`, listing: base, knownEntries: {} });
+  useDashboardProfileStore.setState({
+    org: ORG,
+    profile: {
+      id: "default",
+      name: "Default",
+      posture: "",
+      slots: { "right-pane": [NOTES_REF] },
+      cliLayout: "default",
+      chrome: {},
+    },
+  });
+  syncDashboardCommands();
+}
+
 describe("notes commands", () => {
   const commandId = (id: string) => dashboardCommandActionId(dashboardRefKey(NOTES_REF), id);
-  function install() {
-    const base = listing({
-      org: ORG,
-      team: TEAM,
-      root: "/ctx",
-      id: "notes",
-      title: "Notes",
-      privateCopy: true,
-      surface: "notes",
-    });
-    const meta = /name="codesense:commands"\s+content='([^']*)'/.exec(SOURCE);
-    const capabilities = /name="codesense:capabilities"\s+content="([^"]*)"/
-      .exec(SOURCE)![1]
-      .split(/\s+/);
-    base.panes[0].declaration = {
-      slots: ["right-pane"],
-      capabilities,
-      commands: meta ? JSON.parse(meta[1]) : [],
-    };
-    usePaneStore.setState({ teamKey: `${ORG}:${TEAM}`, listing: base, knownEntries: {} });
-    useDashboardProfileStore.setState({
-      org: ORG,
-      profile: {
-        id: "default",
-        name: "Default",
-        posture: "",
-        slots: { "right-pane": [NOTES_REF] },
-        cliLayout: "default",
-        chrome: {},
-      },
-    });
-    syncDashboardCommands();
-  }
   beforeEach(() => {
     useShortcutsStore.setState({ shortcuts: {}, stateLoaded: true });
-    install();
+    installNotesCommands();
   });
   afterEach(() => {
     usePaneStore.setState({ listing: null, knownEntries: {} });
@@ -1916,12 +2377,19 @@ it("does not publish a selection after teardown interrupts a note open", async (
   const { frame } = await open({ noteId: "beta" }, false);
   await waitFor(() => expect(waiting).toBe(true));
   const tornDown = vi.fn();
-  p!.win.codesense.onTeardown(tornDown);
+  let publicationsAtTeardown: Record<string, unknown>[] = [];
+  p!.win.codesense.onTeardown(() => {
+    publicationsAtTeardown = p!.sent.filter((m) => m.command === "setUiState");
+    tornDown();
+  });
+  const historyReply = replyFor("records.history");
   await deliver(frame, { type: "codesense:teardown" });
   await waitFor(() => expect(tornDown).toHaveBeenCalledTimes(1));
-  release();
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  expect(p!.sent.filter((m) => m.command === "setUiState")).toHaveLength(0);
+  await act(async () => {
+    release();
+    await historyReply;
+  });
+  expect(p!.sent.filter((m) => m.command === "setUiState")).toEqual(publicationsAtTeardown);
 });
 
 it("keeps the reveal intent ahead of the initial shared callback while Beta history is pending", async () => {

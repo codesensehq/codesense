@@ -13,7 +13,6 @@ import {
   notesReadAt,
   notesRestore,
   readNote,
-  reapEmptyScratchNotes,
   searchNotes,
   updateNoteMeta,
   writeNote,
@@ -140,7 +139,7 @@ describe("Notes wrappers against the mock handlers", () => {
     ]);
   });
 
-  it("keeps list, search, reap, directory and history read contracts", async () => {
+  it("keeps list, search, directory and history read contracts", async () => {
     const note = await createNote(scope, "Plan");
     await writeNote(scope, note.id, "Buy milk");
     expect(await listNotes(scope)).toEqual(
@@ -151,8 +150,6 @@ describe("Notes wrappers against the mock handlers", () => {
     expect(await searchNotes(scope, " MILK ")).toEqual([
       { id: note.id, title: "Plan", matched: "text", snippet: "Buy milk" },
     ]);
-    const rows = await reapEmptyScratchNotes(scope, note.id, [note.id]);
-    expect(rows.map((r) => r.id).sort()).toEqual((await listNotes(scope)).map((r) => r.id).sort());
     expect(await notesDirPath(scope)).toBe("/mock/users/1/scratch/notes");
     const revisions = await notesHistory(scope, note.id);
     expect(revisions).toHaveLength(1);
@@ -162,6 +159,14 @@ describe("Notes wrappers against the mock handlers", () => {
       title: "Plan",
       content: "Buy milk",
     });
+  });
+
+  it("listing never removes a blank note", async () => {
+    const blanks = [await createNote(scope, "Untitled"), await createNote(scope, "Note")];
+    for (let i = 0; i < 2; i++) {
+      const ids = (await listNotes(scope)).map((n) => n.id);
+      for (const blank of blanks) expect(ids).toContain(blank.id);
+    }
   });
 
   it("creates a note with its body and pinned flag in one call", async () => {

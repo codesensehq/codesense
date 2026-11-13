@@ -24,7 +24,6 @@ vi.mock("@/tauri/commands", () => ({
     }
     return disk.body;
   }),
-  reapEmptyScratchNotes: vi.fn(async () => null),
   createNote: vi.fn(),
   updateNoteMeta: vi.fn(async () => ({ id: "n1", title: "Plan", pinned: false, lastOpenedAt: 1 })),
   deleteNote: vi.fn(async () => []),
@@ -41,7 +40,6 @@ describe("an agent's write to the open note while the person types", () => {
       activeNoteId: null,
       scratchNoteContent: "",
       notesLoadedScope: null,
-      emptyScratchReapDone: true,
     });
   });
 

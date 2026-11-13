@@ -21,9 +21,6 @@ vi.mock("@/tauri/commands", () => ({
     .fn()
     .mockResolvedValue({ id: "n1", title: "Note", pinned: false, lastOpenedAt: 0 }),
   deleteNote: vi.fn().mockResolvedValue([]),
-  // SW-SN-13 AC-4: default no-op (returns undefined → loadNotes keeps its
-  // listNotes result). Reap-specific tests override this per case.
-  reapEmptyScratchNotes: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/shared/lib/logger", () => ({
@@ -50,7 +47,6 @@ beforeEach(() => {
     notes: [],
     activeNoteId: null,
     scratchNoteLoadStatus: "pending",
-    emptyScratchReapDone: false,
     rightPaneOpen: false,
     rightPaneRatio: 0.33,
   });
@@ -720,90 +716,5 @@ describe("scratchNote (F-6 global model)", () => {
     expect(createCmd).toHaveBeenCalledWith(LOCAL_SCOPE, "Note", {});
     expect(useViewerStore.getState().activeNoteId).toBe("seed");
     expect(useViewerStore.getState().scratchNoteLoadStatus).toBe("loaded");
-  });
-
-  // AC-4: the empty-duplicate reap runs ONCE per session on load, uses the
-  // reaper's survivor list, and does NOT re-run on a subsequent (hot-reload) load.
-  it("loadNotes reaps empty duplicates once per session and uses the survivor list (SW-SN-13 AC-4)", async () => {
-    const {
-      listNotes: listCmd,
-      readNote: readCmd,
-      reapEmptyScratchNotes: reapCmd,
-    } = await import("@/tauri/commands");
-    vi.mocked(listCmd).mockResolvedValue([
-      { id: "keep", title: "Note", pinned: false, lastOpenedAt: 5, preview: "" },
-      { id: "dupe", title: "Note", pinned: false, lastOpenedAt: 3, preview: "" },
-    ]);
-    // The reaper drops the empty dupe and returns only the survivor.
-    vi.mocked(reapCmd).mockResolvedValue([
-      { id: "keep", title: "Note", pinned: false, lastOpenedAt: 5 },
-    ]);
-    vi.mocked(readCmd).mockResolvedValue({
-      id: "keep",
-      title: "Note",
-      pinned: false,
-      lastOpenedAt: 5,
-      content: "body",
-    });
-    useViewerStore.setState({
-      activeNoteId: null,
-      notes: [],
-      scratchNoteLoadStatus: "pending",
-      emptyScratchReapDone: false,
-    });
-
-    await useViewerStore.getState().loadNotes();
-    expect(reapCmd).toHaveBeenCalledTimes(1);
-    // Called with the active id + the BOOT SNAPSHOT of note ids (the reap-eligible
-    // set), so a concurrently-created note is never reaped.
-    expect(reapCmd).toHaveBeenCalledWith(LOCAL_SCOPE, undefined, ["keep", "dupe"]);
-    expect(useViewerStore.getState().notes.map((n) => n.id)).toEqual(["keep"]);
-    expect(useViewerStore.getState().activeNoteId).toBe("keep");
-
-    // A second load (e.g. SN-7 hot-reload) must NOT reap again — it would police a
-    // note the user just emptied.
-    await useViewerStore.getState().loadNotes();
-    expect(reapCmd).toHaveBeenCalledTimes(1);
-
-    // Reset the reaper override so it can't leak into later suites (default is a
-    // no-op: undefined → loadNotes keeps its listNotes result).
-    vi.mocked(reapCmd).mockResolvedValue(undefined as never);
-  });
-
-  // AC-4 (review r1): a transient reap failure must NOT burn the one-shot — the
-  // flag resets so the next load retries, and the failure never breaks the load.
-  it("loadNotes retries the reap on a later load if it failed transiently (SW-SN-13 r1)", async () => {
-    const {
-      listNotes: listCmd,
-      readNote: readCmd,
-      reapEmptyScratchNotes: reapCmd,
-    } = await import("@/tauri/commands");
-    vi.mocked(listCmd).mockResolvedValue([
-      { id: "keep", title: "Note", pinned: false, lastOpenedAt: 5, preview: "" },
-    ]);
-    vi.mocked(readCmd).mockResolvedValue({
-      id: "keep",
-      title: "Note",
-      pinned: false,
-      lastOpenedAt: 5,
-      content: "body",
-    });
-
-    // First load: reap throws → caught, load still succeeds, flag reset.
-    vi.mocked(reapCmd).mockRejectedValueOnce(new Error("ipc stalled"));
-    useViewerStore.setState({ activeNoteId: null, notes: [], emptyScratchReapDone: false });
-    await useViewerStore.getState().loadNotes();
-    expect(useViewerStore.getState().activeNoteId).toBe("keep"); // load not broken
-    expect(useViewerStore.getState().emptyScratchReapDone).toBe(false); // one-shot NOT burned
-
-    // Second load: reap is retried (not skipped).
-    vi.mocked(reapCmd).mockResolvedValue([
-      { id: "keep", title: "Note", pinned: false, lastOpenedAt: 5 },
-    ]);
-    await useViewerStore.getState().loadNotes();
-    expect(reapCmd).toHaveBeenCalledTimes(2);
-    expect(useViewerStore.getState().emptyScratchReapDone).toBe(true);
-
-    vi.mocked(reapCmd).mockResolvedValue(undefined as never);
   });
 });
