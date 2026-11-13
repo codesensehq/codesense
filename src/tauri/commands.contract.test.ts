@@ -1320,7 +1320,7 @@ describe("Tauri IPC Contract", () => {
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):
-    // 19 today, so 525 − 19 = 506.
+    // 19 today, so 544 − 19 = 525.
     expect(tsCommands.length).toBe(EXPECTED_TS_COMMAND_COUNT);
     expect(rustHandlers.length).toBe(EXPECTED_RUST_COMMAND_COUNT);
   });

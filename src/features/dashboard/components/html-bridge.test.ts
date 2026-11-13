@@ -2501,8 +2501,11 @@ describe("routine, run, worktree and machine read verbs", () => {
             {
               name: "docs",
               archived: false,
+              parentTeam: null,
               synced: true,
-              sourceRepos: [{ slug: "acme/web", attachment: "attached" }],
+              sourceRepos: [
+                { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+              ],
             },
           ],
         },

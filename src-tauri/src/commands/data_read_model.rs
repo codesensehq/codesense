@@ -313,12 +313,25 @@ fn setup_state_value(orgs: &[crate::mcp::setup_tools::SetupOrg]) -> serde_json::
             serde_json::json!({
                 "slug": org.slug,
                 "displayName": org.display_name,
-                "loadErrors": org.load_errors,
+                "loadErrors": org
+                    .load_errors
+                    .iter()
+                    .map(|error| org_relative(&org.org_root, error))
+                    .collect::<Vec<_>>(),
                 "teams": teams,
             })
         })
         .collect();
     serde_json::json!({ "orgs": orgs })
+}
+
+/// A registry load error (`<path>: <message>`) with its path made relative to the org, so no
+/// local path reaches a page.
+fn org_relative(org_root: &str, error: &str) -> String {
+    error
+        .strip_prefix(org_root)
+        .map(|rest| rest.trim_start_matches(['/', '\\']).to_string())
+        .unwrap_or_else(|| error.to_string())
 }
 
 /// One joined session, from the same backend as the MCP session_read verb.
@@ -390,20 +403,30 @@ mod tests {
             display_name: "Acme".into(),
             org_root: "/private/ctx".into(),
             remote_url: Some("git@example.com:acme/ctx.git".into()),
-            load_errors: vec![],
-            teams: vec![SetupTeam {
-                name: "docs".into(),
-                archived: false,
-                parent_team: None,
-                starter_page: Some("README.md".into()),
-                synced: true,
-                source_repos: vec![SetupRepo {
-                    slug: "acme/web".into(),
-                    remote_key: "github.com/acme/web".into(),
-                    attachment: AttachmentStatus::Attached,
-                    local_path: Some("/private/web".into()),
-                }],
-            }],
+            load_errors: vec!["/private/ctx/teams.yml: invalid YAML at line 3".into()],
+            teams: vec![
+                SetupTeam {
+                    name: "docs".into(),
+                    archived: false,
+                    parent_team: None,
+                    starter_page: Some("README.md".into()),
+                    synced: true,
+                    source_repos: vec![SetupRepo {
+                        slug: "acme/web".into(),
+                        remote_key: "github.com/acme/web".into(),
+                        attachment: AttachmentStatus::Attached,
+                        local_path: Some("/private/web".into()),
+                    }],
+                },
+                SetupTeam {
+                    name: "ops".into(),
+                    archived: true,
+                    parent_team: Some("docs".into()),
+                    starter_page: None,
+                    synced: false,
+                    source_repos: vec![],
+                },
+            ],
         };
         let value = setup_state_value(&[org]);
         assert_eq!(
@@ -411,7 +434,7 @@ mod tests {
             serde_json::json!({"orgs": [{
                 "slug": "acme/ctx",
                 "displayName": "Acme",
-                "loadErrors": [],
+                "loadErrors": ["teams.yml: invalid YAML at line 3"],
                 "teams": [{
                     "name": "docs",
                     "archived": false,
@@ -423,6 +446,12 @@ mod tests {
                         "remoteKey": "github.com/acme/web",
                         "attachment": "attached",
                     }],
+                }, {
+                    "name": "ops",
+                    "archived": true,
+                    "parentTeam": "docs",
+                    "synced": false,
+                    "sourceRepos": [],
                 }],
             }]})
         );

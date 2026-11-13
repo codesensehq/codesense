@@ -2226,26 +2226,34 @@ it("drops held ids for another team when the frame is rekeyed before it shows", 
 });
 
 // A setup write tells every page once, whichever native events the write raises. Each case
-// fires the events its write emits, in order, then lets the burst settle.
+// fires the events its write emits, in order, as far apart as a git commit or a bind's
+// reconcile can put them, then lets the burst settle.
 const setupWrites: [string, string[]][] = [
-  ["create_team in an existing org", ["org-registry-changed"]],
-  ["create_team in a new org", ["context-attachments-changed", "org-registry-changed"]],
+  ["create_team", ["org-registry-changed"]],
+  // CreateTeam, then SetTeamParent: two registry commits.
+  ["create_team with a parent", ["org-registry-changed", "org-registry-changed"]],
   ["delete_team", ["org-registry-changed"]],
   ["attach_context_repository", ["context-attachments-changed"]],
-  ["add_source_repo", ["org-registry-changed", "source-attachments-changed"]],
+  // The registry commit, then the folder's binding after its reconcile.
+  ["add_source_repo with a local folder", ["org-registry-changed", "source-attachments-changed"]],
 ];
+const setupChanges = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed");
 for (const [write, emitted] of setupWrites)
   it(`raises one codesense:setup-changed for ${write}`, async () => {
     const post = vi.fn();
     const frame = hub.attach("setup", "all", post, true);
     await frame.subscribe("sessions");
-    for (const event of emitted) events.get(event)!({ payload: null });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed")).toHaveLength(1);
+    for (const event of emitted) {
+      events.get(event)!({ payload: null });
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    await vi.advanceTimersByTimeAsync(500);
+    expect(setupChanges(post)).toHaveLength(1);
     // A later write is a new change.
     events.get(emitted[0])!({ payload: null });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(setupChanges(post)).toHaveLength(2);
   });
 it("holds a setup change for a hidden page and replays it once on show", async () => {
   const post = vi.fn();
@@ -2253,9 +2261,9 @@ it("holds a setup change for a hidden page and replays it once on show", async (
   const subscribed = frame.subscribe("sessions");
   events.get("org-registry-changed")!({ payload: null });
   events.get("source-attachments-changed")!({ payload: null });
-  await vi.advanceTimersByTimeAsync(200);
-  expect(post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed")).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(post)).toHaveLength(0);
   frame.visible(true);
   await subscribed;
-  expect(post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed")).toHaveLength(1);
+  expect(setupChanges(post)).toHaveLength(1);
 });

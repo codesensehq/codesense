@@ -1839,7 +1839,7 @@ const EVENT_META = {
     direction: "parent-to-doc",
     payload: "N/A",
     timing:
-      "After a team is created or deleted, a context repo is attached or a source repo is added",
+      "After any change to orgs, teams or source repos: a team created or deleted, a context repo attached or a source repo added, among others",
     description: "Nudge for `setupState()` re-reads. A burst of changes arrives as one message.",
     example:
       'window.addEventListener("message", (e) => {\n  if (e.data?.type === "codesense:setup-changed") codesense.setupState().then(render);\n});',

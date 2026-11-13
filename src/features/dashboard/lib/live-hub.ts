@@ -21,8 +21,9 @@ export const MAX_LIVE_HIDDEN_FRAMES = 4;
 type BadgeDelivery = { badge?: "live"; owner?: string };
 
 const RUN_REVIEW_TOPICS = ["runEndorsements", "runEvidence"] as const;
-/** Native events from one setup write arrive within this long of each other. */
-const SETUP_CHANGED_SETTLE_MS = 50;
+/** One setup write's native events (a registry commit, then a checkout bind after its
+ *  reconcile) can be this far apart; the page hears once they have been quiet this long. */
+const SETUP_CHANGED_SETTLE_MS = 500;
 export type RunReviewTopic = (typeof RUN_REVIEW_TOPICS)[number];
 const isRunReviewTopic = (topic: string) =>
   (RUN_REVIEW_TOPICS as readonly string[]).includes(topic);
@@ -333,8 +334,9 @@ export class LiveHub {
       ["mcp:agent-progress", "agent-activity-changed"],
     ])
       this.listen(event, ({ payload }) => this.invalidate(type, payload));
-    // Creating or deleting a team, attaching a context repo and adding a source repo each
-    // raise one or two of these, so a burst folds into one page event.
+    // Any change to orgs, teams or source repos (creating or deleting a team, attaching a
+    // context repo, adding a source repo) raises one or more of these; a burst folds into one
+    // page event.
     for (const event of [
       "org-registry-changed",
       "context-attachments-changed",
@@ -348,10 +350,10 @@ export class LiveHub {
     this.ready = Promise.all(this.unlisteners).then(() => {});
     return this.ready;
   }
-  /** Tells every page the setup (orgs, teams, source repos) changed, once per burst of
-   *  native events; a page rereads `setupState()`. */
+  /** Tells every page the setup (orgs, teams, source repos) changed, once the burst of
+   *  native events has settled; a page rereads `setupState()`. */
   private setupChanged() {
-    if (this.setupTimer) return;
+    if (this.setupTimer) clearTimeout(this.setupTimer);
     this.setupTimer = setTimeout(() => {
       this.setupTimer = null;
       this.invalidate("setup-changed");
