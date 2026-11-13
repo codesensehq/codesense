@@ -17,3 +17,4 @@ CodeSense has a single maintainer.
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
 There is no paid support.
+
