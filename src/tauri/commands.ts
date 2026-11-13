@@ -4045,6 +4045,31 @@ export const whyLine = (params: WhyLineParams, frameId?: string, page?: string) 
 /** This machine's attribution and capture status, as MCP describe_setup reports it. */
 export const setupStatus = () => invoke<unknown>("setup");
 
+/** One source repo of a team, with whether a local checkout is bound to it. */
+export interface SetupStateRepo {
+  slug: string;
+  remoteKey: string;
+  attachment: "attached" | "missing" | "unattached";
+}
+export interface SetupStateTeam {
+  name: string;
+  archived: boolean;
+  parentTeam: string | null;
+  starterPage?: string;
+  /** Whether the team's content is present on this Mac. */
+  synced: boolean;
+  sourceRepos: SetupStateRepo[];
+}
+export interface SetupStateOrg {
+  slug: string;
+  displayName: string;
+  /** Registry files that failed to load; when non-empty, `teams` is empty. */
+  loadErrors: string[];
+  teams: SetupStateTeam[];
+}
+/** `setup_state`: this Mac's orgs, teams and source repos, read-only (the page's `setupState()`). */
+export const setupState = () => invoke<{ orgs: SetupStateOrg[] }>("setup_state");
+
 /** `session_read_usage`: token use and spend per session. Times are epoch milliseconds; a
  *  counts by whole local day: `sinceMs`'s day is included, `untilMs`'s day is excluded. */
 export const sessionReadUsage = (

@@ -578,7 +578,8 @@
       "messageSafe": true,
       "verbs": [
         "getDependencyStatus",
-        "machines"
+        "machines",
+        "setupState"
       ],
       "conditionalVerbs": []
     },
@@ -777,8 +778,8 @@
   },
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/registry.generated.json": "6372301da09ca9496bceeb77427398df2d51b871af01221d163595fd348263a6",
-    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
+    "src-tauri/src/verbs/registry.generated.json": "9ca0e89edfa86d1ea1acbd68682224a82e2db8291e4097af0e0a1e867b00a035",
+    "src-tauri/src/verbs/registry.rs": "cf974e31fcabf851da86c45ba5e8ee828d061fd3806e52bff19b12b8fe4107d6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }

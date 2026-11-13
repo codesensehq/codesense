@@ -1319,6 +1319,7 @@ pub fn run() {
             commands::data_read_model::run_read_work_product,
             commands::data_read_model::session_read_usage,
             commands::data_read_model::session_read,
+            commands::data_read_model::setup_state,
             commands::data_read_model::why_line,
             commands::data_read_model::open_diff_read,
             commands::data_read_model::setup,

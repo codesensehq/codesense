@@ -77,6 +77,7 @@ import {
   listMachines,
   sessionReadUsage,
   sessionRead,
+  setupState,
   setupStatus,
   whyLine,
   type WhyLineParams,
@@ -1092,6 +1093,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     ),
   // [describe_setup] this Mac's attribution and capture status: {attribution}.
   setup: () => setupStatus(),
+  // [describe_setup] this Mac's orgs, teams and source repos, read-only: {orgs}. The page
+  // hears `codesense:setup-changed` after any change to them.
+  setupState: () => setupState(),
   // [list_worktrees] this Mac's managed worktrees: {rows, reaped}.
   worktrees: () => listManagedWorktrees(),
   // [session_read_usage] token use and spend per agent session on this Mac, read from its
