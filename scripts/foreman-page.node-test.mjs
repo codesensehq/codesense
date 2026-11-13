@@ -27,6 +27,7 @@ import {
   publicBuild,
   sha256,
   vendoredText,
+  withoutCssComments,
 } from "./foreman-page.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -242,6 +243,11 @@ test("vendoring drops the kit's comments but its config markers, and leaves its 
   assert.deepEqual(
     comments(out).map(([start, end]) => out.slice(start, end)),
     ["/* CONFIG:begin */", "/* CONFIG:end */"],
+  );
+  // A quoted comment opener in the style sheet is text, not a comment.
+  assert.equal(
+    withoutCssComments("a{content:\"/* x */\"}\n/* note */\nb{content:'\\'/*'}"),
+    "a{content:\"/* x */\"}\nb{content:'\\'/*'}",
   );
   // A comment whose removal would join two lines (and so change where semicolons go) keeps the break.
   assert.equal(publicBuild("a\n/* x */ b\n"), "a\nb\n");

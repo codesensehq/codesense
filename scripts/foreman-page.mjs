@@ -108,6 +108,24 @@ function tokens(body) {
   return out;
 }
 
+/** A style sheet without its comments (and the line break after one); a quoted `/*` is text and stays. */
+export function withoutCssComments(css) {
+  let out = "";
+  for (let i = 0; i < css.length; ) {
+    if (css[i] === '"' || css[i] === "'") {
+      let j = i + 1;
+      while (j < css.length && css[j] !== css[i] && css[j] !== "\n") j += css[j] === "\\" ? 2 : 1;
+      out += css.slice(i, j + 1);
+      i = j + 1;
+    } else if (css.startsWith("/*", i)) {
+      const end = css.indexOf("*/", i + 2);
+      i = end < 0 ? css.length : end + 2;
+      if (css[i] === "\n") i++;
+    } else out += css[i++];
+  }
+  return out;
+}
+
 /**
  * The kit build as the public page carries it: its comments are about the kit's own source tree,
  * so they go (but the config markers), and so do the comments in its inlined style sheet. The code
@@ -116,8 +134,7 @@ function tokens(body) {
 export function publicBuild(body) {
   const styled = body.replace(
     /^const STYLE=(".*");$/m,
-    (_, css) =>
-      `const STYLE=${JSON.stringify(JSON.parse(css).replace(/\/\*[\s\S]*?\*\/\n?/g, ""))};`,
+    (_, css) => `const STYLE=${JSON.stringify(withoutCssComments(JSON.parse(css)))};`,
   );
   let out = styled;
   for (const [start, end] of comments(styled).reverse()) {
