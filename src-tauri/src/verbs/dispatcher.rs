@@ -255,10 +255,12 @@ fn check_capability(
     {
         return Err("denied: grant");
     }
-    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds.
+    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds, and
+    // it may start only the agents that grant names.
     if spec.name == "openWorkspace"
         && args["target"]["kind"] == "team-workspace"
-        && !grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
+        && (!grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
+            || !super::foreman_launch::agent_allowed(args["agent"].as_str()))
     {
         return Err("denied: grant");
     }

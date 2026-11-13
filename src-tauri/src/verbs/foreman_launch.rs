@@ -10,15 +10,30 @@ pub const CAPABILITY: &str = "foreman.launch";
 
 /// A bundled page that holds the capability: its path inside the placed docs checkout
 /// (`/`-separated), and the lowercase hex SHA-256 of its bytes. A page edited by one byte, or
-/// a copy anywhere else, loses the grant. The page's sibling files are covered by its place:
-/// the docs checkout is app-managed, so a copy elsewhere cannot bring its own scripts.
+/// a copy anywhere else, loses the grant. A page is one self-contained file (its kit and
+/// config are inlined, and `foreman-page.node-test.mjs` refuses a sibling script or style), so
+/// its hash covers everything it runs.
 pub struct Page {
     pub path: &'static str,
     pub sha256: &'static str,
 }
 
-/// The pages that hold it. Empty until the Foreman page ships in the docs bundle.
-pub const PAGES: &[Page] = &[];
+/// The pages that hold it. `scripts/foreman-page.mjs --check` (in `gen:docs:check`) fails the
+/// build when a page here is not the bundled file, so a docs update cannot drop the grant.
+pub const PAGES: &[Page] = &[Page {
+    path: "getting-started/content/foreman/index.html",
+    sha256: "5bdb8e8667b5a06c9cd4afd8be34416d3aeeee31cfa290af83ce5a8961f92c0a",
+}];
+
+/// The agents a page holding the capability may launch: the Foreman and its setup guide. The
+/// grant is defence in depth beside the page's hash, so a page cannot start any other agent.
+pub const AGENTS: &[&str] = &["foreman-claude", "guide-claude"];
+
+/// Whether a `team-workspace` open names an agent the page may launch. An open with no agent
+/// would run the team's default agent, so it is refused too.
+pub fn agent_allowed(agent: Option<&str>) -> bool {
+    agent.is_some_and(|agent| AGENTS.contains(&agent))
+}
 
 /// The grant a freshly minted frame holds, given the placed docs root.
 pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
@@ -163,10 +178,39 @@ mod tests {
     }
 
     #[test]
-    fn no_pages_are_bundled_yet_so_nothing_holds_it() {
-        let (_dir, docs, page) = placed(BODY);
-        assert!(PAGES.is_empty());
-        assert_eq!(grant_for(&docs, &page.to_string_lossy()), None);
+    fn the_bundled_foreman_page_holds_it_at_its_place_and_nothing_else_does() {
+        let (_dir, docs, _) = placed(BODY);
+        // The shipped page, copied to its place in a placed docs root, holds the grant.
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../codesense-docs")
+            .join(PAGES[0].path);
+        let bytes =
+            std::fs::read(&shipped).expect("the bundled Foreman page ships in the docs tree");
+        let target = docs.join(PAGES[0].path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, &bytes).unwrap();
+        assert_eq!(
+            grant_for(&docs, &target.to_string_lossy()).as_deref(),
+            Some(CAPABILITY)
+        );
+        // The same bytes at another place hold nothing, and neither does one more byte.
+        let other = docs.join("getting-started/content/other/index.html");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, &bytes).unwrap();
+        assert_eq!(grant_for(&docs, &other.to_string_lossy()), None);
+        std::fs::write(&target, [bytes.as_slice(), b" "].concat()).unwrap();
+        assert_eq!(grant_for(&docs, &target.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn only_the_foreman_and_its_guide_may_be_launched() {
+        assert!(agent_allowed(Some("foreman-claude")));
+        assert!(agent_allowed(Some("guide-claude")));
+        assert!(!agent_allowed(Some("dev-worker-claude")));
+        assert!(!agent_allowed(Some("builtin/foreman-claude")));
+        assert!(!agent_allowed(Some("")));
+        // No agent would run the team's default agent.
+        assert!(!agent_allowed(None));
     }
 
     #[test]

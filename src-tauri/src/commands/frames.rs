@@ -418,11 +418,21 @@ pub async fn rebind_frame_team(
     org: String,
     team: String,
 ) -> Result<FrameRecord, String> {
-    let (_, local_principal) = crate::commands::route_to_context::resolve_ambient(&app).await?;
+    let (records_home, local_principal) =
+        crate::commands::route_to_context::resolve_ambient(&app).await?;
+    let docs_root =
+        crate::context_repo::codesense_docs::docs_root(&records_home, &local_principal.into());
     let policy =
         crate::verbs::commands::read_policy(app.clone(), &local_principal.to_string()).await?;
     let frames = app.state::<std::sync::Arc<FrameStore>>();
-    let record = rebind_record(&frames, &policy, &frame_id, &token, FrameTeam { org, team })?;
+    let record = rebind_record_in(
+        &frames,
+        &policy,
+        &frame_id,
+        &token,
+        FrameTeam { org, team },
+        Some(&docs_root),
+    )?;
     if let Some(binding) = record.records_binding.clone() {
         let scope =
             crate::context_repo::caller_scope::for_page(&app, None, Some(&record.frame_id))?;
@@ -431,12 +441,25 @@ pub async fn rebind_frame_team(
     Ok(record)
 }
 
+/// A rebind with no placed docs checkout: no page can hold `foreman.launch`.
+#[cfg(test)]
 fn rebind_record(
     frames: &FrameStore,
     policy: &crate::verbs::Policy,
     frame_id: &str,
     token: &str,
     active: FrameTeam,
+) -> Result<FrameRecord, String> {
+    rebind_record_in(frames, policy, frame_id, token, active, None)
+}
+
+fn rebind_record_in(
+    frames: &FrameStore,
+    policy: &crate::verbs::Policy,
+    frame_id: &str,
+    token: &str,
+    active: FrameTeam,
+    docs_root: Option<&std::path::Path>,
 ) -> Result<FrameRecord, String> {
     let record = frames.by_id(frame_id).ok_or("denied: frame identity")?;
     if !matches!(record.grant.slot.as_str(), "dock" | "file-nav") {
@@ -457,13 +480,13 @@ fn rebind_record(
         source_scope,
         &record.declared,
     );
-    // A rebind keeps the page's own file, so it keeps what its bytes earned at mint.
-    if record
-        .effective_grant
-        .iter()
-        .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
-    {
-        effective_grant.push(crate::verbs::foreman_launch::CAPABILITY.to_owned());
+    // A rebind keeps the page's own file but not what its bytes earned at mint: the page is read
+    // and hashed again, so a file replaced since then loses the grant.
+    if let Some(docs_root) = docs_root {
+        effective_grant.extend(crate::verbs::foreman_launch::grant_for(
+            docs_root,
+            &record.document_path,
+        ));
     }
     frames.rebind(
         frame_id,
@@ -1165,6 +1188,95 @@ pub(crate) mod tests {
             ),
             crate::verbs::Decision::Admit { .. }
         ));
+    }
+
+    #[test]
+    fn a_rebind_hashes_the_page_again_so_a_page_changed_since_mint_loses_foreman_launch() {
+        let docs = tempfile::tempdir().unwrap();
+        let page_path = crate::verbs::foreman_launch::PAGES[0].path;
+        let page = docs.path().join(page_path);
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../codesense-docs")
+            .join(page_path);
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        std::fs::copy(shipped, &page).unwrap();
+        let policy = crate::verbs::Policy::default();
+        let store = FrameStore::default();
+        let team = |name: &str| FrameTeam {
+            org: "acme".into(),
+            team: name.into(),
+        };
+        let mint = || {
+            let mut args: MintFrameArgs = serde_json::from_value(serde_json::json!({
+                "documentPath": page.to_string_lossy(),
+                "contentRoot": "/a/content",
+                "slot": "dock"
+            }))
+            .unwrap();
+            args.docs_root = Some(docs.path().to_path_buf());
+            mint_record(
+                &store,
+                9321,
+                &policy,
+                args,
+                "human".into(),
+                "foreman".into(),
+                "team",
+                Some(team("a")),
+                &crate::verbs::capabilities::full(),
+            )
+        };
+        let holds = |record: &FrameRecord| {
+            record
+                .effective_grant
+                .iter()
+                .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
+        };
+        // The unchanged page keeps the grant through a rebind...
+        let first = mint();
+        assert!(holds(&first));
+        let kept = rebind_record_in(
+            &store,
+            &policy,
+            &first.frame_id,
+            &first.token,
+            team("b"),
+            Some(docs.path()),
+        )
+        .unwrap();
+        assert!(holds(&kept));
+        // ...a page whose bytes changed after mint loses it...
+        let mut changed = std::fs::read(&page).unwrap();
+        changed.push(b' ');
+        std::fs::write(&page, changed).unwrap();
+        let dropped = rebind_record_in(
+            &store,
+            &policy,
+            &kept.frame_id,
+            &kept.token,
+            team("c"),
+            Some(docs.path()),
+        )
+        .unwrap();
+        assert!(!holds(&dropped));
+        // ...and so does a rebind with no docs checkout to read it from.
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codesense-docs")
+                .join(page_path),
+            &page,
+        )
+        .unwrap();
+        let again = rebind_record_in(
+            &store,
+            &policy,
+            &dropped.frame_id,
+            &dropped.token,
+            team("d"),
+            None,
+        )
+        .unwrap();
+        assert!(!holds(&again));
     }
 
     #[test]
