@@ -1308,12 +1308,13 @@ describe("Tauri IPC Contract", () => {
     // feedbackSend/feedback_send (the dead feedback form), so 521/540.
     // SV-LUC-17: +1 on both sides for unarchiveInboxMessages/unarchive_inbox_messages, so 522/541.
     // -1 on both sides for reapEmptyScratchNotes/reap_empty_scratch_notes, which is gone, so 521/540.
+    // +1 on both sides for agentSessionAwaitReady/agent_session_await_ready, so 522/541.
     // +1 on both sides for writeBinaryWorktreeFile/write_binary_worktree_file (a canvas drawn
-    // in a worktree writes its PNG render), so 522/541.
+    // in a worktree writes its PNG render), so 523/542.
     // +1 on both sides for worktreeHydratedFiles/worktree_hydrated_files (the story files a
-    // worktree's Rendered view serves), so 523/542.
-    const EXPECTED_TS_COMMAND_COUNT = 523;
-    const EXPECTED_RUST_COMMAND_COUNT = 542;
+    // worktree's Rendered view serves), so 524/543.
+    const EXPECTED_TS_COMMAND_COUNT = 524;
+    const EXPECTED_RUST_COMMAND_COUNT = 543;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

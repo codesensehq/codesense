@@ -65,6 +65,9 @@ pub struct PreparedAgentLaunch {
     pub default_prompt: Option<String>,
     pub default_role: Option<String>,
     pub prompt_in_argv: bool,
+    /// A starting task (the launch's own or the agent's default) rides argv. Role startup
+    /// sets `prompt_in_argv` with or without one.
+    pub task_in_argv: bool,
     /// The agent's display name: the title its terminal tab gets when the
     /// launcher names none.
     pub name: String,
@@ -154,6 +157,7 @@ fn apply_for_session_with_cli(
         default_prompt: launch.default_prompt.clone(),
         default_role: launch.queue_role.clone(),
         prompt_in_argv: false,
+        task_in_argv: false,
         name: launch.name.clone(),
         scope,
     };
@@ -435,6 +439,8 @@ pub async fn agent_launch_prepare(
     } else {
         true
     };
+    // Kept for the trust step: the product session consumes the launch.
+    let trust_launch = prepared.clone();
     let (mut prepared, creation, settings) = prepare_product_session(
         prepared,
         agent_path,
@@ -445,9 +451,16 @@ pub async fn agent_launch_prepare(
         attribution_hook_trust,
     )
     .await?;
+    let recorded = recorded_launch_dir(&prepared, &launch_cwd);
+    // The page spawns this argv in a shell, so the folder-trust state is written here,
+    // as the managed launch spine does before its spawn: the CLI must not open on its
+    // trust dialog, which a typed prompt and Enter would answer with "No, exit". It
+    // trusts the recorded launch dir, not the raw requested cwd, and is best-effort.
+    let trust_flags =
+        crate::agents::workspace_trust::pretrust_flags(&trust_launch, &recorded, &session_id).await;
+    crate::agents::workspace_trust::splice_trust_flags(&mut prepared.launch.args, trust_flags);
     // Attended Starts in the same directory share one flight. Local routine
     // wakes have their own identity and never adopt an untagged Start.
-    let recorded = recorded_launch_dir(&prepared, &launch_cwd);
     let flight = if interactive {
         start_flight(&app, &agent_key, &recorded, new_instance.unwrap_or(false))?
     } else {
@@ -584,6 +597,7 @@ pub(crate) async fn prepare_role_startup(
     let prompt = initial_prompt
         .filter(|p| !p.trim().is_empty())
         .or(prepared.default_prompt.as_deref());
+    let task_in_argv = prompt.is_some();
     let args = super::mcp_scope::compose_args(
         prepared.launch.args.clone(),
         prepared.scope.extra_args.clone(),
@@ -603,6 +617,7 @@ pub(crate) async fn prepare_role_startup(
     prepared.scope.extra_args.clear();
     prepared.default_prompt = None;
     prepared.prompt_in_argv = true;
+    prepared.task_in_argv = task_in_argv;
     Ok(())
 }
 

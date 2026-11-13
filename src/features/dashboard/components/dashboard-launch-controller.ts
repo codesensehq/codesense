@@ -34,7 +34,9 @@ import {
   sessionHasLiveAgent,
   sessionsRunningProcesses,
   AGENT_PROVIDERS,
+  agentSessionAwaitReady,
   type AgentLaunchWarning,
+  type AgentSessionReadiness,
   type RunningJobs,
   type LaunchBindScope,
   type PreparedAgentLaunch,
@@ -51,7 +53,8 @@ import {
   type PreparedShellLaunch,
 } from "@/shared/lib/agent-session-launcher";
 import { resolveAgentCliPath } from "@/shared/lib/default-agent";
-import { injectAgentLine } from "@/shared/lib/agent-session-injection";
+import type { LaunchFailed } from "@/shared/lib/launch-target";
+import { injectAgentLine, isActivityWrappedCli } from "@/shared/lib/agent-session-injection";
 import { awaitWorktreeEstablished } from "@/shared/lib/worktree/pending-establish";
 import { awaitContextForLaunch } from "@/features/viewer/lib/await-worktree-context";
 import {
@@ -105,6 +108,7 @@ import {
   type AgentSessionDeps,
   type AgentLaunchRequest,
   type ConnectedSession,
+  type ReadyWaitOptions,
   type RunPromptParams,
   type SendToSessionParams,
   type OpenWorkspaceArg,
@@ -567,6 +571,8 @@ export async function connectNamedAgent(
     agentRevision: prepared.agent,
     warnings: prepared.warnings,
     promptInArgv: prepared.promptInArgv,
+    taskInArgv: prepared.taskInArgv,
+    activityWrapped: result.activityWrapped,
     defaultPrompt: agent.prompt ? undefined : (prepared.defaultPrompt ?? undefined),
   };
 }
@@ -630,12 +636,49 @@ async function waitAgentLive(
   return waitForAgentLive(sessionId, agentBasename(agentPath));
 }
 
+/** Wait for the launched agent to be input-ready: the host's observed bit for a CLI whose
+ *  launch line runs under the activity wrapper. Any other CLI, and a launch line typed raw
+ *  (no layout target yet, so no wrapper: the host can never observe it), takes the process
+ *  wait instead: there is no observed bit to gate on, and failing on it would report a
+ *  false startup screen for a launch that worked. A CLI that never comes up in that wait is
+ *  reported `exited`, so nothing is typed into the bare shell it left.
+ *
+ *  An adopted tab whose wrapping is unknown was not launched here: its CLI is not on
+ *  record (the probe falls back to the built-in CLI's name), so neither the observed bit
+ *  nor a missed process probe says anything about it. It reads ready after the process
+ *  wait, as before the gate. */
+async function awaitAgentReady(
+  getAgentPath: () => Promise<string | null>,
+  sessionId: string,
+  timeoutMs: number,
+  opts?: ReadyWaitOptions,
+): Promise<AgentSessionReadiness> {
+  if (opts?.adopted && opts.activityWrapped === undefined) {
+    await waitAgentLive(getAgentPath, sessionId);
+    return { ready: true };
+  }
+  const launched = useAgentStateStore.getState().launchBySession[sessionId]?.agent;
+  const cli = launched ?? agentBasename((await getAgentPath()) ?? "");
+  if (opts?.activityWrapped !== false && isActivityWrappedCli(cli)) {
+    const readiness = await agentSessionAwaitReady(sessionId, timeoutMs);
+    // A CLI that quit back to the shell it was typed into leaves that shell running, so
+    // the host never records an exit: ask the process tree before naming a startup screen.
+    // A probe the host can't answer keeps the startup answer.
+    if (readiness.ready || readiness.reason !== "startup") return readiness;
+    const alive = await sessionHasLiveAgent(sessionId, cli).catch(() => true);
+    return alive ? readiness : { ready: false, reason: "exited" };
+  }
+  return (await waitAgentLive(getAgentPath, sessionId))
+    ? { ready: true }
+    : { ready: false, reason: "exited" };
+}
+
 /**
  * The kind-AGNOSTIC session seams every launch spine shares — the handle-keyed Rust
  * registry commands (`begin`/`abort`/`bind`/`resolveSession`), the reap choke
  * (`killSession`), and the SW-GW-5 liveness/reap probes
- * (`isSessionParked`/`probeAlive`/`evictStaleTab`) + the process liveness wait
- * (`waitLive`). Every seam is byte-identical across the story (SW-DX-7), branch
+ * (`isSessionParked`/`probeAlive`/`evictStaleTab`) + the input-readiness wait
+ * (`waitReady`). Every seam is byte-identical across the story, branch
  * (SW-DX-18), and epic/dir-headless (SW-GW-7) builders — they differ ONLY in the
  * per-kind `resolve`/`ensureCwd`/`connect`/`focus`. Wired ONCE here so the three
  * builders can't drift; each spreads this and adds its own kind-specific seams.
@@ -660,7 +703,7 @@ function sharedManagedSessionSeams(
   | "isSessionParked"
   | "probeAlive"
   | "evictStaleTab"
-  | "waitLive"
+  | "waitReady"
 > & { bind: DashboardLaunchDeps["bind"] } {
   return {
     begin: (h) => dashboardLaunchBegin(h),
@@ -673,7 +716,8 @@ function sharedManagedSessionSeams(
     // SW-GW-8: every session launched through the dashboard controller records
     // its host `docPath` as provenance (the panel's "which surface opened this").
     bind: (h, sessionId, scope) => bindAndArm(h, sessionId, launcher, scope),
-    waitLive: (sessionId) => waitAgentLive(getAgentPath, sessionId),
+    waitReady: (sessionId, timeoutMs, opts) =>
+      awaitAgentReady(getAgentPath, sessionId, timeoutMs, opts),
   };
 }
 
@@ -779,7 +823,10 @@ export interface HeadlessSessionLaunchers {
   /** Background a first-class agent session in the resolved epic workspace dir —
    *  NOT the visible N-tile assembly. `ensureEpicWorkspace` materializes the dir;
    *  the agent gets its MCP bridge per session. `agent` is the agent it runs. */
-  openEpicHeadless: (target: EpicOpenTarget, agent: string) => Promise<{ sessionId: string }>;
+  openEpicHeadless: (
+    target: EpicOpenTarget,
+    agent: string,
+  ) => Promise<{ sessionId: string; launchFailed?: LaunchFailed }>;
   /** Background a first-class agent session in an existing `path` (an agent tab,
    *  NOT the SW-GW-1 shell tile). The dir is NOT written to (materialize-safety
    *  invariant): the agent gets its MCP bridge per session. `opts.agent` is the agent it
@@ -789,7 +836,12 @@ export interface HeadlessSessionLaunchers {
   openDirHeadless: (
     path: string,
     opts: { agent: string; prompt?: string; headed?: boolean; session?: string },
-  ) => Promise<{ sessionId: string; promptDelivered?: boolean; warnings?: AgentLaunchWarning[] }>;
+  ) => Promise<{
+    sessionId: string;
+    promptDelivered?: boolean;
+    launchFailed?: LaunchFailed;
+    warnings?: AgentLaunchWarning[];
+  }>;
 }
 
 /** SW-GW-7: the live epic/dir headless launchers (mirrors
@@ -878,7 +930,7 @@ export function makeRealDashboardLaunchDeps(
   const getAgentPath = askAgentPathPerLaunch;
 
   return {
-    // SW-GW-7: the handle-keyed session seams (begin/abort/bind/reap/probe/waitLive)
+    // The handle-keyed session seams (begin/abort/bind/reap/probe/waitReady)
     // shared with the branch + epic/dir-headless spines — see the helper.
     // SW-GW-8: `docPath` is the session's launcher provenance.
     ...sharedManagedSessionSeams(getAgentPath, docPath),
@@ -1002,7 +1054,7 @@ export function makeRealBranchLaunchDeps(docPath: string, frameId?: string): Bra
 
   return {
     // SW-GW-7: the SAME handle-keyed session seams the story + epic/dir-headless
-    // spines use (begin/abort/bind/reap/probe/waitLive) — see the helper.
+    // spines use (begin/abort/bind/reap/probe/waitReady) — see the helper.
     // SW-GW-8: `docPath` is the session's launcher provenance.
     ...sharedManagedSessionSeams(getAgentPath, docPath),
     resolveBranch: async (repo) => {
@@ -1306,6 +1358,7 @@ export async function dispatchOpenWorkspace(
 ): Promise<{
   sessionId?: string;
   promptDelivered?: boolean;
+  launchFailed?: LaunchFailed;
   reconcileStatus?: "reconciled" | "skipped";
   warnings?: AgentLaunchWarning[];
 }> {
@@ -1373,7 +1426,9 @@ export async function dispatchOpenWorkspace(
         },
       });
       throwIfCanceled();
-      if (reviewPrompt) {
+      // An agent that never became input-ready is left at its startup screen, and the
+      // review prompt is not typed into it.
+      if (reviewPrompt && !opened.launchFailed) {
         await injectReviewPromptSingleFlight(opened.sessionId, reviewPrompt, deps.injectLine);
         // Prompt delivery is the commit point for a reused session: we do not
         // own that pre-existing run and must not report Canceled while leaving
@@ -1384,7 +1439,7 @@ export async function dispatchOpenWorkspace(
       return {
         ...opened,
         ...(reviewPrompt ? { reconcileStatus: opened.reconcileStatus ?? "skipped" } : {}),
-        promptDelivered: Boolean(reviewPrompt),
+        promptDelivered: Boolean(reviewPrompt) && !opened.launchFailed,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

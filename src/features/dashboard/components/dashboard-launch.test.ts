@@ -7,6 +7,7 @@ import {
   branchHandle,
   branchTargetHandle,
   REVIEW_PHASE_TIMEOUT_MS,
+  PAGE_READY_WAIT_MS,
   RESERVATION_BIND_TIMEOUT_MS,
   titleCaseLabel,
   reserveForkLabel,
@@ -22,6 +23,7 @@ import {
   type BranchLaunchDeps,
   type BranchResolution,
 } from "./dashboard-launch";
+import type { AgentSessionReadiness } from "@/tauri/commands";
 import { useSurfaceSyncStore } from "@/features/shell/stores/surface-sync-store";
 import { awaitContextForLaunch } from "@/features/viewer/lib/await-worktree-context";
 import { useViewerStore, type Workspace } from "@/shared/stores/viewer-store";
@@ -66,9 +68,9 @@ function makeDeps(
     bind: vi.fn(async () => {
       calls.push("bind");
     }),
-    waitLive: vi.fn(async () => {
-      calls.push("waitLive");
-      return true;
+    waitReady: vi.fn(async () => {
+      calls.push("waitReady");
+      return { ready: true as const };
     }),
     focus: vi.fn(() => {
       calls.push("focus");
@@ -252,7 +254,7 @@ describe("@P1 openStoryWorkspace", () => {
     });
   });
 
-  it("runs the seams in order: resolve → begin → worktree → connect → bind → waitLive → focus", async () => {
+  it("runs the seams in order: resolve → begin → worktree → connect → bind → waitReady → focus", async () => {
     const { deps, calls } = makeDeps();
     const res = await openStoryWorkspace("SW-DX-7", deps);
     expect(res).toEqual({ sessionId: "sess-1" });
@@ -263,7 +265,7 @@ describe("@P1 openStoryWorkspace", () => {
       "ensureWorktree",
       "connect",
       "bind",
-      "waitLive",
+      "waitReady",
       "focus",
     ]);
   });
@@ -443,7 +445,7 @@ describe("@P1 openStoryWorkspace", () => {
       "connect",
       "bind",
       "killSession",
-      "waitLive",
+      "waitReady",
       "focus",
     ]);
     expect(deps.evictStaleTab).toHaveBeenCalledWith("parked-1");
@@ -486,7 +488,7 @@ describe("@P1 openStoryWorkspace", () => {
       "connect",
       "bind",
       "killSession",
-      "waitLive",
+      "waitReady",
       "focus",
     ]);
     expect(deps.evictStaleTab).toHaveBeenCalledWith("dead-1");
@@ -545,7 +547,7 @@ describe("@P1 openStoryWorkspace", () => {
       "ensureWorktree",
       "connect",
       "bind",
-      "waitLive",
+      "waitReady",
     ]);
     expect(deps.focus).not.toHaveBeenCalled();
   });
@@ -639,11 +641,11 @@ describe("@P1 openStoryWorkspace", () => {
     expect(deps.killSession).not.toHaveBeenCalled();
   });
 
-  it("AC-8 a best-effort waitLive failure AFTER bind never reaps the bound session (open still succeeds)", async () => {
+  it("AC-8 a best-effort waitReady failure AFTER bind never reaps the bound session (open still succeeds)", async () => {
     // The session is COMMITTED at bind — a later probe/IPC hiccup must not tear down
     // a live, registered agent (would kill a good session on a transient error).
     const { deps } = makeDeps({
-      waitLive: vi.fn(async () => {
+      waitReady: vi.fn(async () => {
         throw new Error("probe IPC hiccup");
       }),
     });
@@ -668,13 +670,13 @@ describe("@P1 openStoryWorkspace", () => {
 
 // ── SW-GW-9: initialPrompt-on-launch (seed the spawned agent in one call) ───────
 describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
-  it("(a) seeds via sendLine AFTER waitLive, focus BEFORE the seed, promptDelivered:true", async () => {
+  it("(a) seeds via sendLine AFTER waitReady, focus BEFORE the seed, promptDelivered:true", async () => {
     const { deps, calls } = makeDeps();
     const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/bmad-dev-story x" });
     // AC-1: reuse the SHIPPED sendLine with the seed text.
     expect(deps.sendLine).toHaveBeenCalledWith("sess-1", "/bmad-dev-story x");
     // AC-2: the seed lands only AFTER the agent is proven live (never the bare shell).
-    expect(calls.indexOf("waitLive")).toBeLessThan(calls.indexOf("sendLine"));
+    expect(calls.indexOf("waitReady")).toBeLessThan(calls.indexOf("sendLine"));
     // Gap B: a headed open paints the terminal (focus) BEFORE the seed round-trip.
     expect(calls.indexOf("focus")).toBeLessThan(calls.indexOf("sendLine"));
     // AC-5: honest delivery — the line landed.
@@ -687,11 +689,11 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
       headed: false,
       initialPrompt: "/bmad-dev-story x",
     });
-    // AC-7: waitLive is not gated on headed, so the seed still fires for a background
+    // AC-7: waitReady is not gated on headed, so the seed still fires for a background
     // session; only the terminal-stealing focus is suppressed.
     expect(deps.sendLine).toHaveBeenCalledWith("sess-1", "/bmad-dev-story x");
     expect(deps.focus).not.toHaveBeenCalled();
-    expect(calls.indexOf("waitLive")).toBeLessThan(calls.indexOf("sendLine"));
+    expect(calls.indexOf("waitReady")).toBeLessThan(calls.indexOf("sendLine"));
     expect(res).toEqual({ sessionId: "sess-1", promptDelivered: true });
   });
 
@@ -708,7 +710,7 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
 
   it("does not type a role-enabled task again when the prepared CLI carries startup on argv", async () => {
     const { deps } = makeDeps({
-      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true })),
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
     });
     const result = await openStoryWorkspace("SW-DX-7", deps, {
       initialPrompt: "/review queued work",
@@ -730,14 +732,14 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     expect(deps.abort).not.toHaveBeenCalled();
   });
 
-  it("(e) a waitLive throw → promptDelivered:false, still returns {sessionId} (best-effort)", async () => {
+  it("(e) a waitReady throw → promptDelivered:false, still returns {sessionId} (best-effort)", async () => {
     const { deps } = makeDeps({
-      waitLive: vi.fn(async () => {
+      waitReady: vi.fn(async () => {
         throw new Error("liveness timeout");
       }),
     });
     const res = await openStoryWorkspace("SW-DX-7", deps, { initialPrompt: "/x" });
-    // AC-5: waitLive threw before the seed could run → promptDelivered:false, spawn ok.
+    // AC-5: waitReady threw before the seed could run → promptDelivered:false, spawn ok.
     expect(res).toEqual({ sessionId: "sess-1", promptDelivered: false });
     expect(deps.sendLine).not.toHaveBeenCalled();
     expect(deps.killSession).not.toHaveBeenCalled();
@@ -751,6 +753,300 @@ describe("@P1 openStoryWorkspace — initialPrompt seed (SW-GW-9)", () => {
     expect(calls).not.toContain("sendLine");
     // …but the requested seed must not vanish silently: report false, not a bare shape.
     expect(res).toEqual({ sessionId: "sess-1", promptDelivered: false });
+  });
+
+  it("(g) an agent still on a startup screen: nothing typed, launchFailed startup, session left running", async () => {
+    const { deps, calls } = makeDeps({
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x", readyWaitMs: 5 });
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", 5, { activityWrapped: undefined });
+    expect(deps.sendLine).not.toHaveBeenCalled();
+    expect(calls).not.toContain("sendLine");
+    expect(res).toEqual({
+      sessionId: "sess-1",
+      promptDelivered: false,
+      launchFailed: { reason: "startup", needsYouKind: "startup", message: expect.any(String) },
+    });
+    // Left at its screen for a person: never reaped, and focused so they can see it.
+    expect(deps.killSession).not.toHaveBeenCalled();
+    expect(deps.abort).not.toHaveBeenCalled();
+    expect(deps.focus).toHaveBeenCalledWith("org:team", "sess-1", "/managed/STORY-1.md");
+  });
+
+  it("(g2) an agent that exited before it was ready: launchFailed exited, no needsYouKind, nothing typed", async () => {
+    const { deps } = makeDeps({
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "exited" as const })),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(deps.sendLine).not.toHaveBeenCalled();
+    expect(res.promptDelivered).toBe(false);
+    expect(res.launchFailed).toEqual({ reason: "exited", message: expect.any(String) });
+    expect(res.launchFailed).not.toHaveProperty("needsYouKind");
+  });
+
+  it("(g3) a prompt on the CLI's argv that never ran: not delivered, and still pending for a person", async () => {
+    const { deps } = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(res.promptDelivered).toBe(false);
+    expect(res.launchFailed?.promptPending).toBe(true);
+    // An argv prompt whose CLI exited can no longer run: nothing is pending.
+    const exited = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "exited" as const })),
+    });
+    const gone = await openStoryWorkspace("STORY-1", exited.deps, { initialPrompt: "/x" });
+    expect(gone.promptDelivered).toBe(false);
+    expect(gone.launchFailed).not.toHaveProperty("promptPending");
+  });
+
+  it("(g4) ready and submitted: promptDelivered true and no launchFailed key", async () => {
+    const { deps } = makeDeps();
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(res).toEqual({ sessionId: "sess-1", promptDelivered: true });
+    expect("launchFailed" in res).toBe(false);
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+      activityWrapped: undefined,
+    });
+  });
+
+  it.each([true, false])(
+    "(g4b) the launch's activity-wrapper answer (%s) reaches the readiness wait",
+    async (activityWrapped) => {
+      const { deps } = makeDeps({
+        connect: vi.fn(async () => ({ sessionId: "sess-1", activityWrapped })),
+      });
+      await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+      expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+        activityWrapped,
+      });
+    },
+  );
+
+  it("(g4c) an adopted tab says so to the readiness wait", async () => {
+    const { deps } = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", adopted: true })),
+    });
+    await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(deps.waitReady).toHaveBeenCalledWith("sess-1", PAGE_READY_WAIT_MS, {
+      activityWrapped: undefined,
+      adopted: true,
+    });
+  });
+
+  it("(g5) the readiness wait also runs for a launch with no prompt, and reports the failure", async () => {
+    const { deps } = makeDeps({
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps);
+    expect(deps.waitReady).toHaveBeenCalledOnce();
+    expect(res.launchFailed?.reason).toBe("startup");
+  });
+
+  it("(g6) a first launch stuck waiting for readiness does not block an open of another handle", async () => {
+    let release!: (readiness: AgentSessionReadiness) => void;
+    // One registry for both opens, with a single launch permit: `begin` refuses while a
+    // reservation is outstanding, and `bind` (or `abort`) gives it back. A spine that kept
+    // the permit through the readiness wait would refuse the second open here.
+    let permitHeld = false;
+    const sessions = ["sess-1", "sess-2"];
+    const { deps } = makeDeps({
+      begin: vi.fn(async () => {
+        if (permitHeld) throw new Error("busy: a launch permit is still held");
+        permitHeld = true;
+        return true;
+      }),
+      bind: vi.fn(async () => {
+        permitHeld = false;
+      }),
+      abort: vi.fn(async () => {
+        permitHeld = false;
+      }),
+      connect: vi.fn(async () => ({ sessionId: sessions.shift()! })),
+      waitReady: vi.fn((sessionId: string) =>
+        sessionId === "sess-1"
+          ? new Promise<AgentSessionReadiness>((resolve) => {
+              release = resolve;
+            })
+          : Promise.resolve<AgentSessionReadiness>({ ready: true }),
+      ),
+    });
+    const first = openStoryWorkspace("STORY-A", deps, { initialPrompt: "/a" });
+    await vi.waitFor(() => expect(deps.waitReady).toHaveBeenCalledOnce());
+    expect(permitHeld).toBe(false);
+    // Nothing is held while the first waits: the second open reserves, binds and seeds.
+    await expect(openStoryWorkspace("STORY-B", deps, { initialPrompt: "/b" })).resolves.toEqual({
+      sessionId: "sess-2",
+      promptDelivered: true,
+    });
+    expect(deps.abort).not.toHaveBeenCalled();
+    release({ ready: true });
+    await expect(first).resolves.toEqual({ sessionId: "sess-1", promptDelivered: true });
+  });
+
+  it("(g7) an argv prompt whose readiness wait throws: not delivered, and no launchFailed", async () => {
+    const { deps } = makeDeps({
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
+      waitReady: vi.fn(async () => {
+        throw new Error("host unreachable");
+      }),
+    });
+    const res = await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    // Nothing confirmed the CLI took its argv prompt, and a thrown wait says nothing about
+    // its screen, so the result claims neither delivery nor a startup screen.
+    expect(res).toEqual({ sessionId: "sess-1", promptDelivered: false });
+    expect(deps.sendLine).not.toHaveBeenCalled();
+    expect(deps.killSession).not.toHaveBeenCalled();
+  });
+
+  it.each(["startup", "exited"] as const)(
+    "(g8) a typed starting prompt held back by a %s failure is named unsent in the message",
+    async (reason) => {
+      const failing = { waitReady: vi.fn(async () => ({ ready: false as const, reason })) };
+      // The launch's own prompt, typed after readiness: held back.
+      const typed = makeDeps(failing);
+      const own = await openStoryWorkspace("STORY-1", typed.deps, { initialPrompt: "/x" });
+      expect(own.launchFailed?.message).toMatch(/starting prompt was not sent/);
+      expect(own.launchFailed).not.toHaveProperty("promptPending");
+      // The agent's default prompt, typed when the launch brings none: held back too.
+      const named = makeDeps({
+        ...failing,
+        connect: vi.fn(async () => ({ sessionId: "sess-1", defaultPrompt: "/triage" })),
+      });
+      const byDefault = await openStoryWorkspace("STORY-1", named.deps);
+      expect(byDefault.launchFailed?.message).toMatch(/starting prompt was not sent/);
+      expect(named.deps.sendLine).not.toHaveBeenCalled();
+      // A prompt on argv was never going to be typed, and a launch with none holds nothing.
+      const argv = makeDeps({
+        ...failing,
+        connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
+      });
+      const onArgv = await openStoryWorkspace("STORY-1", argv.deps, { initialPrompt: "/x" });
+      expect(onArgv.launchFailed?.message).not.toMatch(/starting prompt/);
+      const bare = await openStoryWorkspace("STORY-1", makeDeps(failing).deps);
+      expect(bare.launchFailed?.message).not.toMatch(/starting prompt/);
+    },
+  );
+
+  it("(g9) a re-open of a launch left on its startup screen waits again before handing it back", async () => {
+    let fresh = true;
+    let answer: AgentSessionReadiness = { ready: false, reason: "startup" };
+    const { deps } = makeDeps({
+      begin: vi.fn(async () => {
+        const reserved = fresh;
+        fresh = false;
+        return reserved;
+      }),
+      resolveSession: vi.fn(async () => "sess-g9"),
+      connect: vi.fn(async () => ({
+        sessionId: "sess-g9",
+        activityWrapped: true,
+        promptInArgv: true,
+        taskInArgv: true,
+      })),
+      waitReady: vi.fn(async () => answer),
+    });
+    const first = await openStoryWorkspace("STORY-1", deps, {
+      initialPrompt: "/x",
+      readyWaitMs: 5,
+    });
+    expect(first.launchFailed?.promptPending).toBe(true);
+    // The re-open reuses the bound session, but asks the same wait again: still on its
+    // screen, so it fails the same way and nothing is typed or reaped.
+    const again = await openStoryWorkspace("STORY-1", deps, {
+      initialPrompt: "/x",
+      readyWaitMs: 5,
+    });
+    expect(deps.connect).toHaveBeenCalledOnce();
+    expect(deps.waitReady).toHaveBeenCalledTimes(2);
+    expect(deps.waitReady).toHaveBeenLastCalledWith("sess-g9", 5, { activityWrapped: true });
+    expect(again).toEqual({
+      sessionId: "sess-g9",
+      promptDelivered: false,
+      launchFailed: {
+        reason: "startup",
+        needsYouKind: "startup",
+        promptPending: true,
+        message: expect.any(String),
+      },
+    });
+    expect(deps.sendLine).not.toHaveBeenCalled();
+    expect(deps.killSession).not.toHaveBeenCalled();
+    expect(deps.abort).not.toHaveBeenCalled();
+    // Once the screen is cleared, a re-open hands the session back as live, unseeded…
+    answer = { ready: true };
+    await expect(openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" })).resolves.toEqual({
+      sessionId: "sess-g9",
+      promptDelivered: false,
+    });
+    expect(deps.waitReady).toHaveBeenCalledTimes(3);
+    // …and a session seen ready is never waited on again.
+    await openStoryWorkspace("STORY-1", deps, { initialPrompt: "/x" });
+    expect(deps.waitReady).toHaveBeenCalledTimes(3);
+    expect(deps.sendLine).not.toHaveBeenCalled();
+  });
+
+  it("(g10) an open joining a launch still waiting for readiness waits too, holding no permit", async () => {
+    let release!: (readiness: AgentSessionReadiness) => void;
+    let permitHeld = false;
+    let bound: string | null = null;
+    const { deps } = makeDeps({
+      begin: vi.fn(async () => {
+        if (permitHeld || bound) return false;
+        permitHeld = true;
+        return true;
+      }),
+      bind: vi.fn(async (_handle: string, sessionId: string) => {
+        bound = sessionId;
+        permitHeld = false;
+      }),
+      resolveSession: vi.fn(async () => bound),
+      connect: vi.fn(async () => ({ sessionId: "sess-g10" })),
+      waitReady: vi.fn(
+        () =>
+          new Promise<AgentSessionReadiness>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    });
+    const first = openStoryWorkspace("STORY-1", deps);
+    await vi.waitFor(() => expect(deps.waitReady).toHaveBeenCalledOnce());
+    const firstRelease = release;
+    const joined = openStoryWorkspace("STORY-1", deps);
+    await vi.waitFor(() => expect(deps.waitReady).toHaveBeenCalledTimes(2));
+    expect(permitHeld).toBe(false);
+    firstRelease({ ready: false, reason: "startup" });
+    release({ ready: false, reason: "startup" });
+    await expect(first).resolves.toMatchObject({ launchFailed: { reason: "startup" } });
+    await expect(joined).resolves.toMatchObject({
+      sessionId: "sess-g10",
+      launchFailed: { reason: "startup" },
+    });
+    expect(deps.connect).toHaveBeenCalledOnce();
+    expect(deps.abort).not.toHaveBeenCalled();
+  });
+
+  it("(g11) a task on argv is pending whether or not the open brought a prompt", async () => {
+    const failing = {
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
+    };
+    // A default task (no prompt from the open) rode argv: still pending.
+    const byDefault = makeDeps({
+      ...failing,
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: true })),
+    });
+    const res = await openStoryWorkspace("STORY-1", byDefault.deps);
+    expect(res.launchFailed?.promptPending).toBe(true);
+    // Role startup on argv with no task: nothing is pending.
+    const bare = makeDeps({
+      ...failing,
+      connect: vi.fn(async () => ({ sessionId: "sess-1", promptInArgv: true, taskInArgv: false })),
+    });
+    const none = await openStoryWorkspace("STORY-1", bare.deps);
+    expect(none.launchFailed).not.toHaveProperty("promptPending");
   });
 
   it("(AC-4) two concurrent opens with different prompts each seed their OWN session (parallel + neutral)", async () => {
@@ -948,9 +1244,9 @@ function makeBranchDeps(
     bind: vi.fn(async () => {
       calls.push("bind");
     }),
-    waitLive: vi.fn(async () => {
-      calls.push("waitLive");
-      return true;
+    waitReady: vi.fn(async () => {
+      calls.push("waitReady");
+      return { ready: true as const };
     }),
     focus: vi.fn(() => {
       calls.push("focus");
@@ -987,7 +1283,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
     ).toBe("acme/app::pull/42");
   });
 
-  it("runs the seams in order: resolveBranch → begin → worktree → connect → bind → waitLive → focus", async () => {
+  it("runs the seams in order: resolveBranch → begin → worktree → connect → bind → waitReady → focus", async () => {
     const { deps, calls } = makeBranchDeps();
     const res = await openBranchWorkspace(target, deps);
     expect(res).toEqual({ sessionId: "sess-b" });
@@ -997,7 +1293,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
       "ensureBranchWorktree",
       "connect",
       "bind",
-      "waitLive",
+      "waitReady",
       "focus",
     ]);
     // The Rust registry + launcher are keyed by the branch handle.
@@ -1162,7 +1458,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
     vi.useFakeTimers();
     try {
       const { deps } = makeBranchDeps({
-        waitLive: vi.fn(() => new Promise<boolean>(() => undefined)),
+        waitReady: vi.fn(() => new Promise<AgentSessionReadiness>(() => undefined)),
       });
       const opening = openBranchWorkspace(target, deps);
       const rejection = expect(opening).rejects.toThrow("agent readiness did not complete");
@@ -1175,10 +1471,28 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
   });
 
   it("preserves reconciliation truth on a deferred readiness failure", async () => {
-    const { deps } = makeBranchDeps({ waitLive: vi.fn(async () => false) });
+    const { deps } = makeBranchDeps({
+      waitReady: vi.fn(async () => {
+        throw new Error("host unreachable");
+      }),
+    });
     await expect(
       openBranchWorkspace({ ...target, linkedStoryId: "SW-OR-8" }, deps),
     ).rejects.toThrow("Reconciled · unavailable: review agent readiness failed");
+  });
+
+  it("passes a not-ready agent through as launchFailed instead of throwing, keeping reconciliation truth", async () => {
+    const { deps } = makeBranchDeps({
+      waitReady: vi.fn(async () => ({ ready: false as const, reason: "startup" as const })),
+    });
+    const res = await openBranchWorkspace({ ...target, linkedStoryId: "STORY-2" }, deps);
+    expect(res).toMatchObject({
+      sessionId: "sess-b",
+      reconcileStatus: "reconciled",
+      promptDelivered: false,
+      launchFailed: { reason: "startup", needsYouKind: "startup", message: expect.any(String) },
+    });
+    expect(deps.killSession).not.toHaveBeenCalled();
   });
 
   it("continues launch and reports skipped when a mapping is stale", async () => {
@@ -1394,7 +1708,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
       "connect",
       "bind",
       "killSession",
-      "waitLive",
+      "waitReady",
       "focus",
     ]);
     expect(deps.evictStaleTab).toHaveBeenCalledWith("parked-b");
@@ -1450,7 +1764,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
 
   it("surfaces a readiness probe failure after bind without orphan-style reaping", async () => {
     const { deps } = makeBranchDeps({
-      waitLive: vi.fn(async () => {
+      waitReady: vi.fn(async () => {
         throw new Error("probe hiccup");
       }),
     });
@@ -1474,7 +1788,7 @@ describe("@P1 openBranchWorkspace (SW-DX-18)", () => {
       "ensureBranchWorktree",
       "connect",
       "bind",
-      "waitLive",
+      "waitReady",
     ]);
     expect(deps.focus).not.toHaveBeenCalled();
   });
