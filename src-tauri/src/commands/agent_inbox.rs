@@ -2884,10 +2884,6 @@ impl InboxHost for AppInboxHost {
     }
     fn inbox_event(&self, event: InboxEvent) {
         use tauri::Emitter;
-        // Archive, withdraw and restore change which pins are live.
-        if matches!(event.kind, InboxChange::Archived | InboxChange::Withdrawn) {
-            crate::live_hub::pins::refresh(&self.app, event.team.clone(), None);
-        }
         let _ = self.app.emit(INBOX_EVENT, event);
     }
 
