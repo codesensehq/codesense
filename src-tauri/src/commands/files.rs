@@ -1047,6 +1047,22 @@ fn write_worktree_bytes(file_path: &Path, content: &[u8]) -> Result<(), String> 
     })
 }
 
+/// The binary companion to [`write_worktree_file`]: base64 bytes to a file in a
+/// registered worktree, by the same gate and the same unsuppressed atomic write.
+/// A canvas drawn in the worktree editor's Rendered view writes its PNG render
+/// through it.
+#[tauri::command]
+pub async fn write_binary_worktree_file(path: String, base64: String) -> Result<(), String> {
+    crate::commands::await_blocking("write_binary_worktree_file", move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64.as_bytes())
+            .map_err(|e| format!("invalid base64 for {}: {}", path, e))?;
+        let file_path = validate_worktree_path_owned(&path)?;
+        write_worktree_bytes(&file_path, &bytes)
+    })
+    .await
+}
+
 /// Atomically write base64-decoded **binary** `base64` bytes to a context-repo
 /// file. The binary companion to [`write_content_file`] — same sandbox, same
 /// atomic + watcher-suppressed write path, but for content that isn't UTF-8.

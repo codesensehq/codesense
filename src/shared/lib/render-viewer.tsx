@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 
 import { HtmlViewer } from "@/features/dashboard/components/html-viewer";
 import { ExcalidrawViewer } from "@/features/dashboard/components/excalidraw-viewer";
+import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 import { ImageViewer } from "@/features/dashboard/components/image-viewer";
 import { CodeFileViewer } from "@/features/viewer/components/code-file-viewer";
 import {
@@ -28,13 +29,14 @@ import { resolveVirtualTab } from "@/shared/lib/virtual-viewer-registry";
  * `common` carries the shared `CommonViewerProps` contract (file path,
  * refresh key, team content root, nav callback). `md` carries markdown-only
  * extras (post-commit signal, anchor scroll, watcher invalidation) — formats
- * with their own extras should mirror this split. The `never` exhaustiveness
+ * with their own extras should mirror this split, as `canvasWriter` (where a
+ * canvas saves, when not to the context repo) does. The `never` exhaustiveness
  * guard fails the TS build if a `VIEWER_EXTENSIONS` type is added without a
  * case here.
  */
 export function renderViewer(
   common: CommonViewerProps & { filePath: string },
-  md: MarkdownExtras,
+  { canvasWriter, ...md }: MarkdownExtras & { canvasWriter?: CanvasWriter },
 ): ReactElement {
   // SW-GS-2b (C): synthetic "virtual" tabs (e.g. the Git Sync Workbench) render
   // a registered React surface instead of disk content. Short-circuit BEFORE
@@ -96,7 +98,7 @@ export function renderViewer(
       // SW-SC-3: the canvas hot-reloads on an external write to its own file.
       // It reuses the same per-file `changedPaths` gate as html/markdown so a
       // per-repo refreshKey bump only reloads the canvas whose file changed.
-      return <ExcalidrawViewer {...common} changedPaths={md.changedPaths} />;
+      return <ExcalidrawViewer {...common} changedPaths={md.changedPaths} writer={canvasWriter} />;
     case "image":
       if (redlineDiff) return redlineDiff;
       // SW-SC-7: URL-served `<img>`. Reuses the same per-file `changedPaths`

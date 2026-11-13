@@ -101,6 +101,29 @@ describe("ExcalidrawCanvas PNG export (SW-SC-2)", () => {
     );
   });
 
+  it("saves the JSON and the PNG through a writer it is given, never the context writers", async () => {
+    const writer = {
+      writeText: vi.fn<(p: string, c: string) => Promise<void>>().mockResolvedValue(),
+      writeBinary: vi.fn<(p: string, b: string) => Promise<void>>().mockResolvedValue(),
+    };
+    render(
+      <ExcalidrawCanvas
+        filePath="/wt/d.excalidraw"
+        scene={EMPTY_SCENE}
+        libraryCtx={null}
+        writer={writer}
+      />,
+    );
+    fireScene([{ id: "a" }]);
+
+    expect(writer.writeText).toHaveBeenCalledWith("/wt/d.excalidraw", '{"json":true}');
+    await waitFor(() =>
+      expect(writer.writeBinary).toHaveBeenCalledWith("/wt/d.excalidraw.png", expect.any(String)),
+    );
+    expect(writeContentFile).not.toHaveBeenCalled();
+    expect(writeBinaryContentFile).not.toHaveBeenCalled();
+  });
+
   it("does not write when the persisted signature is unchanged", () => {
     // Seed matches exactly what the mock Excalidraw fires (0 elements,
     // viewBackgroundColor #fff) → signature unmoved → no JSON/PNG write.

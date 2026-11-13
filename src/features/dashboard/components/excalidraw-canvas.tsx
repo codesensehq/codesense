@@ -91,6 +91,18 @@ function persistedAppState(appState: unknown): Record<string, unknown> {
   return out;
 }
 
+/** Where a canvas saves: its JSON and its PNG render. Absent, the context
+ *  repo's writers; a canvas in a source worktree saves through the worktree's. */
+export type CanvasWriter = {
+  writeText: (path: string, content: string) => Promise<void>;
+  writeBinary: (path: string, base64: string) => Promise<void>;
+};
+
+const CONTEXT_WRITER: CanvasWriter = {
+  writeText: (path, content) => writeContentFile(path, content),
+  writeBinary: (path, base64) => writeBinaryContentFile(path, base64),
+};
+
 type Props = {
   filePath: string;
   scene: ExcalidrawScene;
@@ -110,6 +122,7 @@ type Props = {
    *  `null`/absent until an org/team/user is selected — load/persist no-op
    *  then (D5). */
   libraryCtx?: ResolverContext | null;
+  writer?: CanvasWriter;
 };
 
 /** Excalidraw's `validateEmbeddable`: no link may be embedded, so a canvas loads no outside frame. */
@@ -141,6 +154,7 @@ export default function ExcalidrawCanvas({
   reloadNonce,
   libraryCtx = null,
   readOnly = false,
+  writer = CONTEXT_WRITER,
 }: Props) {
   const { resolvedTheme } = useTheme();
 
@@ -190,7 +204,7 @@ export default function ExcalidrawCanvas({
         async (...args: unknown[]) => {
           const writtenSig = args[1] as string;
           try {
-            await writeContentFile(filePath, args[0] as string);
+            await writer.writeText(filePath, args[0] as string);
             // Advance the disk baseline only if the canvas still holds exactly
             // what we just wrote. If a reload (applyExternal) landed while this
             // write was in flight — cancel() can't stop an already-fired write
@@ -207,7 +221,7 @@ export default function ExcalidrawCanvas({
         SAVE_DEBOUNCE_MS,
         "excalidrawSave",
       ),
-    [filePath],
+    [filePath, writer],
   );
 
   // SW-SC-2 (AC-3/AC-4/AC-6): regenerate the PNG render alongside the JSON
@@ -227,7 +241,7 @@ export default function ExcalidrawCanvas({
           try {
             const blob = await exportToBlob({ ...s, mimeType: "image/png" });
             const base64 = await blobToBase64(blob);
-            await writeBinaryContentFile(canvasPngPath(filePath), base64);
+            await writer.writeBinary(canvasPngPath(filePath), base64);
           } catch (e) {
             logger.error("viewer", `excalidraw PNG render failed for ${filePath}: ${e}`);
           }
@@ -235,7 +249,7 @@ export default function ExcalidrawCanvas({
         SAVE_DEBOUNCE_MS,
         "excalidrawPng",
       ),
-    [filePath],
+    [filePath, writer],
   );
 
   // SW-SC-8 library state. True while the mount injection is mutating the

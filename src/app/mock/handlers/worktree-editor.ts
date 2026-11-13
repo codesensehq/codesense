@@ -300,6 +300,13 @@ export function worktreeEditorHandlers(base: HandlerRegistry, search = ""): Hand
       tree.set(at.rel, args.content as string);
       return undefined;
     },
+    // A canvas's PNG render: kept as its base64 text, which nothing reads back.
+    write_binary_worktree_file: (args) => {
+      const at = split(args.path as string);
+      if (!at) throw new Error("Access denied: path is outside any registered worktree");
+      treeFor(at.root).set(at.rel, args.base64 as string);
+      return undefined;
+    },
     worktree_list_files: (args) => {
       const at = split(args.root as string);
       const tree = treeFor(at?.root ?? (args.root as string));

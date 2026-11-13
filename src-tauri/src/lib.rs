@@ -1392,6 +1392,7 @@ pub fn run() {
             commands::files::read_workspace_file,
             commands::files::write_content_file,
             commands::files::write_worktree_file,
+            commands::files::write_binary_worktree_file,
             commands::worktree_editor::worktree_file_head,
             commands::worktree_editor::worktree_list_files,
             commands::files::write_binary_content_file,

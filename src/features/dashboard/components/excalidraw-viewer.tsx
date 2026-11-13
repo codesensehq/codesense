@@ -5,6 +5,7 @@ import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key
 import { readFile } from "@/tauri/commands";
 import { useReadyResolverContext } from "@/shared/hooks/use-resolver-context";
 import { logger } from "@/shared/lib/logger";
+import type { CanvasWriter } from "./excalidraw-canvas";
 import { toast } from "sonner";
 import {
   BLANK_SCENE,
@@ -69,6 +70,8 @@ type ExcalidrawViewerProps = CommonViewerProps & {
   /** SW-GS-3: render as a read-only review surface (the sync-view diff) — no
    *  editing, no persistence back to disk. */
   readOnly?: boolean;
+  /** Where the canvas saves; absent, the context repo's writers. */
+  writer?: CanvasWriter;
 };
 
 /**
@@ -92,6 +95,7 @@ export function ExcalidrawViewer({
   changedPaths,
   sceneText,
   readOnly,
+  writer,
 }: ExcalidrawViewerProps) {
   // `null` = still reading the file; a scene object once resolved (blank on
   // empty / missing / malformed).
@@ -251,6 +255,7 @@ export function ExcalidrawViewer({
             // (it would otherwise write the shared team .excalidrawlib).
             libraryCtx={readOnly ? null : libraryCtx}
             readOnly={readOnly}
+            writer={writer}
           />
         </Suspense>
       </div>

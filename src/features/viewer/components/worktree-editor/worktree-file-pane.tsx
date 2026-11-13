@@ -14,6 +14,8 @@ import {
 import { cn } from "@/lib/utils";
 import { basename } from "@/shared/lib/basename";
 import { renderViewer } from "@/shared/lib/render-viewer";
+import { writeBinaryWorktreeFile } from "@/tauri/commands";
+import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 import {
   CodeEditor,
   CodeMergeView,
@@ -34,6 +36,7 @@ import {
 
 import {
   TOO_LARGE_MESSAGE,
+  sha256Hex,
   useFileEditor,
   type FileDraft,
   type SelectedFile,
@@ -248,6 +251,12 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   const [refresh, setRefresh] = useState({ signal: refreshSignal, key: 0 });
   if (refresh.signal !== refreshSignal) setRefresh({ signal: refreshSignal, key: refresh.key + 1 });
   const changedPaths = useMemo(() => new Set([file.path]), [file.path]);
+  // A canvas drawn in Rendered saves into the worktree, locked to the disk
+  // version it was drawn over.
+  const canvasWriter = useMemo(() => worktreeCanvasWriter(backend), [backend]);
+  useEffect(() => {
+    canvasWriter.drawnOver(editable ? diskText : null);
+  }, [canvasWriter, editable, diskText]);
 
   // Report upward. Built field-by-field so an unrelated re-render doesn't
   // allocate a "changed" status object.
@@ -566,7 +575,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
           >
             {renderViewer(
               { filePath: file.path, teamContentPath: backend.rootPath, refreshKey: refresh.key },
-              { changedPaths },
+              { changedPaths, canvasWriter },
             )}
           </div>
         )}
@@ -665,6 +674,29 @@ function ViewModeToggle({
       </div>
     </div>
   );
+}
+
+/** Where a canvas in a local worktree saves: the editor's write, under the
+ *  same lock as a save in Source (the version on disk it was drawn over, the
+ *  last one read or its own last write), so it never overwrites an agent's
+ *  write; and the worktree's binary writer for its PNG render. */
+function worktreeCanvasWriter(
+  backend: WorktreeEditorBackend,
+): CanvasWriter & { drawnOver: (text: string | null) => void } {
+  let base: string | null = null;
+  return {
+    drawnOver: (text) => {
+      base = text;
+    },
+    writeText: async (path, content) => {
+      if (base == null) throw new Error("The file hasn’t been read yet.");
+      const lock = await sha256Hex(base);
+      if (lock == null) throw new Error("Can’t lock the save (no SHA-256 available).");
+      await backend.write(path, content, lock);
+      base = content;
+    },
+    writeBinary: writeBinaryWorktreeFile,
+  };
 }
 
 /** `text` with its line breaks in `eol`, when it uses the other ending. */
