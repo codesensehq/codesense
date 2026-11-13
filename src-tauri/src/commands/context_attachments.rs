@@ -7,6 +7,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::context_repo::{codesense_docs, context_attachments, sample_source_repo};
 use crate::domain::Principal;
 
+/// Emitted when an org's context repo is attached, detached or created here.
+pub const CONTEXT_ATTACHMENTS_CHANGED_EVENT: &str = "context-attachments-changed";
+
 async fn attachment_identity_without_start(
     app: &AppHandle,
 ) -> Result<(PathBuf, Principal), String> {
@@ -34,7 +37,7 @@ pub async fn attach_context_repository(
     .await?;
     // SW-OC-26: the footprint changed — re-index it.
     crate::context_query::reset_footprint(&app);
-    app.emit("context-attachments-changed", ())
+    app.emit(CONTEXT_ATTACHMENTS_CHANGED_EVENT, ())
         .map_err(|e| format!("Context attached, but refresh notification failed: {e}"))?;
     Ok(result)
 }
@@ -181,7 +184,7 @@ pub async fn detach_context_repository(app: AppHandle, org_slug: String) -> Resu
         state.clear_org(&detached_slug);
     }
     crate::context_repo::scratch_space::clear_active_org_if(&detached_slug);
-    app.emit("context-attachments-changed", ())
+    app.emit(CONTEXT_ATTACHMENTS_CHANGED_EVENT, ())
         .map_err(|e| format!("Context detached, but refresh notification failed: {e}"))
 }
 
