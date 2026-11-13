@@ -664,3 +664,75 @@ fn a_queued_receipt_is_pending_until_its_hook_including_when_the_hook_beats_the_
         );
     }
 }
+
+/// An outlet whose guarded terminal recovery is counted and accepted.
+#[derive(Default)]
+struct Recoveries(std::sync::atomic::AtomicUsize);
+
+impl InboxOutlet for Recoveries {
+    fn fate(&self, _: &str, _: &str, _: Fate) {}
+    fn waiter(&self, _: InboxWaiterState) {}
+    fn audience(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn has_tools(&self, _: &str) -> Option<bool> {
+        Some(true)
+    }
+    fn recover(&self, _: &str, _: &Notice<'_>) -> SubmitOutcome {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        SubmitOutcome::Accepted
+    }
+}
+
+/// A waiter woke the agent and was never re-armed: it now has only its grace.
+fn woken_and_not_re_armed(inbox: &Arc<HostInbox>, outlet: &Arc<Outlet>) {
+    let (served, helper) = waiter(inbox, outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "first".into(), "t1".into());
+    next(&helper);
+    next(&helper);
+    printed(&helper, "t1");
+    served.join().unwrap();
+    assert!(!inbox.state("S1").waiting && inbox.state("S1").grace_ms.is_some());
+}
+
+#[test]
+fn an_idle_agent_is_not_covered_by_the_grace_of_a_waiter_that_never_re_armed() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    // Just stopped: its turn-end hook is about to arm a waiter.
+    assert!(inbox.waiter_covers("S1", Duration::ZERO));
+    // Idle past the settle with no waiter waiting: nothing will wake it.
+    assert!(!inbox.waiter_covers("S1", REARM_SETTLE));
+    // A waiter that waits covers it however long it has been idle.
+    let (_served, _helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    assert!(inbox.waiter_covers("S1", REARM_SETTLE * 100));
+}
+
+#[test]
+fn mail_held_for_an_idle_agent_with_no_waiter_is_recovered_once() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    inbox.mail("S1", "second".into(), "t2".into());
+    let recoveries = Recoveries::default();
+    // The sweep recovers only what no waiter covers.
+    if !inbox.waiter_covers("S1", REARM_SETTLE) {
+        inbox.recover(&recoveries, "S1");
+    }
+    // Later sweeps, and a waiter arming now, find nothing left to wake it with.
+    inbox.recover(&recoveries, "S1");
+    assert_eq!(recoveries.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!inbox.holds("S1"));
+}
+
+#[test]
+fn a_busy_agent_is_covered_by_its_grace_and_not_recovered() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    inbox.mail("S1", "second".into(), "t2".into());
+    // The sweep never asks about a working agent (it recovers only those at their
+    // prompt), and one that just stopped is still covered.
+    assert!(inbox.waiter_covers("S1", REARM_SETTLE / 2));
+    assert!(inbox.holds("S1"));
+}

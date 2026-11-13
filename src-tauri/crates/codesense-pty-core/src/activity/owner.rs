@@ -9,7 +9,7 @@ use crate::inbox_host::{Fate, HostInbox, InboxOutlet, Repeat};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MAX_SESSIONS: usize = 1024;
 const RECENT_REPORTS: usize = 128;
@@ -735,6 +735,9 @@ impl ActivityOwner {
                 .iter()
                 .filter_map(|(session, entry)| {
                     let invocation = entry.invocation.as_ref()?;
+                    let idle_for = Duration::from_millis(
+                        invocation.capture(now).activity_age_ms.unwrap_or(0),
+                    );
                     (matches!(
                         self.adapter(invocation.snapshot.provider).inbox(),
                         InboxDelivery::Waiter { .. }
@@ -745,7 +748,7 @@ impl ActivityOwner {
                         && invocation.snapshot.observed
                         && invocation.snapshot.takes_input()
                         && invocation.snapshot.exit.is_none()
-                        && !self.inbox.waiter_armed(session)
+                        && !self.inbox.waiter_covers(session, idle_for)
                         && outlet.has_tools(session) != Some(false)
                         && self.inbox.awaits_submit(session))
                     .then(|| session.clone())
