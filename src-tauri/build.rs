@@ -22,6 +22,8 @@ fn main() {
     run_docs_generator("../scripts/generate-primitives-reference.mjs");
     run_docs_generator("../scripts/generate-yaml-schemas.mjs");
     run_docs_generator("../scripts/generate-ui-mcp-crossref.mjs");
+    // The archive ships the search index; it reads only the docs' HTML.
+    run_docs_generator("../scripts/generate-docs-search-index.mjs");
 
     run_docs_generator_with_args(
         "../scripts/build-codesense-docs.mjs",

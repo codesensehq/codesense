@@ -18,13 +18,18 @@
 //
 // Modes:
 //   write (default) — regenerate `generated/search-index.json` from HTML sources.
-//   --check          — exit non-zero if the committed index differs from a fresh render.
+//   --list-inputs    — print the inputs, for cargo's rerun-if-changed.
+//
+// The index is a build artifact, not committed (.gitignore): cargo's build script and
+// `pnpm gen:docs` write it before the docs archive is built, and `gen:docs:check` writes it
+// too, so a generator error still fails the check. --check is accepted and writes as well.
 //
 // Caps: each entry's `text` field is capped at 2 KB. Entries are deduped by heading-path.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listInputs } from "./lib/generator-inputs.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT = join(ROOT, "codesense-docs", "getting-started", "content");
@@ -153,7 +158,7 @@ export function buildIndex() {
     const pageTitle = title || page || rel;
     entries.push(...extractChunks(html, pageTitle, pageHref));
   }
-  // Stable order: by href, then title. Keeps the committed JSON diff-friendly.
+  // Stable order: by href, then title.
   entries.sort((a, b) => (a.href + a.title).localeCompare(b.href + b.title));
   return {
     schema: 1,
@@ -166,27 +171,18 @@ function serialize(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+export function buildInputs() {
+  return listInputs(import.meta.url, [CONTENT]);
+}
+
 function main() {
-  const check = process.argv.includes("--check");
-  const fresh = serialize(buildIndex());
-  if (check) {
-    const existing = existsSync(OUTPUT) ? readFileSync(OUTPUT, "utf8") : "";
-    if (existing !== fresh) {
-      console.error(
-        [
-          "generate-docs-search-index: committed search-index.json is stale.",
-          `  entity:    codesense-docs/getting-started/content/generated/search-index.json`,
-          `  generator: scripts/generate-docs-search-index.mjs`,
-          `  fix:       npm run gen:docs`,
-        ].join("\n"),
-      );
-      process.exit(1);
-    }
-    console.log("generate-docs-search-index: ok");
+  if (process.argv.includes("--list-inputs")) {
+    for (const input of buildInputs()) console.log(input);
     return;
   }
+  const fresh = serialize(buildIndex());
   mkdirSync(dirname(OUTPUT), { recursive: true });
-  writeFileSync(OUTPUT, fresh);
+  if (!existsSync(OUTPUT) || readFileSync(OUTPUT, "utf8") !== fresh) writeFileSync(OUTPUT, fresh);
   console.log(`generate-docs-search-index: wrote ${OUTPUT}`);
 }
 

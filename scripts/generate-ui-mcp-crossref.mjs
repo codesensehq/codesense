@@ -26,9 +26,9 @@
 //
 // Modes:
 //   write (default) — regenerate `generated/ui-mcp.json`.
-//   --check         — exit non-zero if the committed JSON differs from a
-//                     fresh render. Error names (i) the drifted entity,
-//                     (ii) the file(s) to edit, (iii) `npm run gen:docs`.
+//   The output is a build artifact, not committed (.gitignore): cargo's build script
+//   and `pnpm gen:docs` write it, and `gen:docs:check` writes it too, so a
+//   generator error still fails the check. --check is accepted and writes as well.
 //
 // Shape:
 //   {
@@ -54,7 +54,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listInputs } from "./lib/generator-inputs.mjs";
-import { allowStaleExport } from "./lib/sealed-export.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LIB_RS = join(ROOT, "src-tauri", "src", "lib.rs");
@@ -273,8 +272,7 @@ export function buildCrossref({ libRs, handlerRs, commandsTs, mapYaml, allowYaml
 
   // De-dup by name — the invoke_handler block has no duplicates today, but
   // keep the generator robust against a future cfg-arm variant that lands
-  // the same ident twice (we'd keep the first; drift surfaces as a review
-  // signal via the committed JSON).
+  // the same ident twice (we'd keep the first).
   const tauriByName = new Map();
   for (const cmd of tauriCmds) {
     if (!tauriByName.has(cmd.name)) tauriByName.set(cmd.name, cmd);
@@ -354,7 +352,7 @@ export function buildCrossref({ libRs, handlerRs, commandsTs, mapYaml, allowYaml
       };
     });
 
-  // Stable order so committed JSON diffs are small.
+  // Stable order, so the output is deterministic.
   paired.sort((a, b) => a.name.localeCompare(b.name));
   uiOnly.sort((a, b) => a.name.localeCompare(b.name));
   mcpOnly.sort((a, b) => a.name.localeCompare(b.name));
@@ -398,22 +396,6 @@ function readOrEmpty(path) {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
-// Line numbers shift whenever an unrelated edit lands in lib.rs/handler.rs/commands.ts; they
-// are the only thing the PR gate forgives (names, paths, files and pairings still compare).
-const withoutLines = (value) =>
-  JSON.stringify(value, (key, v) => (key === "line" || key === "wrapperLine" ? undefined : v));
-
-/** "ok" | "notice" (line-only drift tolerated by the PR gate) | "stale". Strict is exact. */
-export function crossrefVerdict(existingText, fresh, allowLineDrift) {
-  if (existingText === serialize(fresh)) return "ok";
-  if (!allowLineDrift) return "stale";
-  try {
-    return withoutLines(JSON.parse(existingText)) === withoutLines(fresh) ? "notice" : "stale";
-  } catch {
-    return "stale";
-  }
-}
-
 export function buildInputs() {
   return listInputs(import.meta.url, [LIB_RS, HANDLER_RS, COMMANDS_TS, MAP_PATH, ALLOW_PATH]);
 }
@@ -423,7 +405,6 @@ function run() {
     for (const input of buildInputs()) console.log(input);
     return;
   }
-  const check = process.argv.includes("--check");
   const { doc, warnings } = buildCrossref({
     libRs: readFileSync(LIB_RS, "utf8"),
     handlerRs: readFileSync(HANDLER_RS, "utf8"),
@@ -434,92 +415,9 @@ function run() {
   for (const w of warnings) console.warn(`generate-ui-mcp-crossref: ${w}`);
 
   const fresh = serialize(doc);
-  if (check) {
-    const existing = existsSync(OUTPUT) ? readFileSync(OUTPUT, "utf8") : "";
-    const verdict = crossrefVerdict(existing, doc, allowStaleExport());
-    if (verdict === "notice") {
-      console.warn(
-        "NOTICE: committed ui-mcp.json differs from a fresh render only in line numbers; regenerate during the next docs wave with pnpm gen:docs",
-      );
-    } else if (verdict === "stale") {
-      // Pinpoint the drifted entity so the error message is actionable.
-      // We walk paired / uiOnly / mcpOnly in order and report the first
-      // name that changed, is missing, or appeared.
-      const culprit = findDriftCulprit(existing, doc);
-      const files = describeFilesForCulprit(culprit);
-      console.error(
-        [
-          "generate-ui-mcp-crossref: committed ui-mcp.json is stale.",
-          `  entity:    ${culprit.label}`,
-          `  files:     ${files}`,
-          `  generator: scripts/generate-ui-mcp-crossref.mjs`,
-          `  fix:       npm run gen:docs`,
-        ].join("\n"),
-      );
-      process.exit(1);
-    }
-    console.log("generate-ui-mcp-crossref: ok");
-    return;
-  }
   mkdirSync(dirname(OUTPUT), { recursive: true });
   if (!existsSync(OUTPUT) || readFileSync(OUTPUT, "utf8") !== fresh) writeFileSync(OUTPUT, fresh);
   console.log(`generate-ui-mcp-crossref: wrote ${OUTPUT}`);
-}
-
-/**
- * Compare committed JSON against the fresh doc section by section and
- * return a `{ label, kind }` identifying the first entry that drifted.
- * `kind` is `paired` | `uiOnly` | `mcpOnly` so the error message can
- * point at the right source file.
- */
-function findDriftCulprit(existingText, fresh) {
-  let existing;
-  try {
-    existing = existingText ? JSON.parse(existingText) : {};
-  } catch {
-    return { label: "ui-mcp.json (unparseable; regenerate)", kind: "paired" };
-  }
-  for (const kind of ["paired", "uiOnly", "mcpOnly"]) {
-    const have = new Map((existing[kind] || []).map((r) => [r.name, r]));
-    for (const row of fresh[kind] || []) {
-      const prev = have.get(row.name);
-      if (!prev) return { label: `${row.name} (new ${friendlyKind(kind)})`, kind };
-      if (JSON.stringify(prev) !== JSON.stringify(row)) {
-        return { label: `${row.name} (${friendlyKind(kind)} changed)`, kind };
-      }
-    }
-    for (const prev of existing[kind] || []) {
-      if (!(fresh[kind] || []).some((r) => r.name === prev.name)) {
-        return { label: `${prev.name} (removed from ${friendlyKind(kind)})`, kind };
-      }
-    }
-  }
-  return { label: "ui-mcp.json (counts drifted)", kind: "paired" };
-}
-
-function friendlyKind(kind) {
-  if (kind === "paired") return "paired entry";
-  if (kind === "uiOnly") return "UI-only command";
-  return "MCP-only tool";
-}
-
-function describeFilesForCulprit(culprit) {
-  switch (culprit.kind) {
-    case "paired":
-      return `${LIB_RS_REL}, ${HANDLER_RS_REL}, ${COMMANDS_TS_REL}, _shared/ui-mcp-map.yml`;
-    case "uiOnly":
-      return (
-        `${LIB_RS_REL}, _shared/allow-unpaired.yml (add rationale), ` +
-        `_shared/ui-mcp-map.yml (if a mirror MCP tool now exists)`
-      );
-    case "mcpOnly":
-      return (
-        `${HANDLER_RS_REL}, _shared/allow-unpaired.yml (add rationale), ` +
-        `_shared/ui-mcp-map.yml (if a mirror UI command now exists)`
-      );
-    default:
-      return `${LIB_RS_REL}, ${HANDLER_RS_REL}`;
-  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) run();

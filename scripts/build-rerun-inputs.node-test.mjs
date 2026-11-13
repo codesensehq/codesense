@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -57,6 +57,7 @@ const generators = [
   ["primitives-reference", "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"],
   ["yaml-schemas", "src-tauri/src/routines/model.rs"],
   ["ui-mcp-crossref", "src-tauri/src/lib.rs"],
+  ["docs-search-index", "codesense-docs/getting-started/content"],
   ["codesense-docs", "codesense-docs"],
   ["sample-source-repo", "codesense-docs/sample-source-repo"],
 ];
@@ -94,6 +95,7 @@ for (const [name, outputs, args] of [
   ["primitives-reference", ["primitives.json"], []],
   ["yaml-schemas", ["schemas.json", "schemas/factory-phase.schema.json"], []],
   ["ui-mcp-crossref", ["ui-mcp.json"], []],
+  ["docs-search-index", ["search-index.json"], []],
 ]) {
   test(`${name} repeated generation preserves bytes and mtimes`, () => {
     const script = resolve(root, "scripts", `generate-${name}.mjs`);
@@ -105,7 +107,8 @@ for (const [name, outputs, args] of [
       assert.equal(result.status, 0, result.stderr);
     };
     const paths = outputs.map((p) => resolve(root, generated, p));
-    const originals = paths.map((p) => readFileSync(p));
+    // Outputs that are build artifacts may be absent in a fresh checkout.
+    const originals = paths.map((p) => (existsSync(p) ? readFileSync(p) : null));
     try {
       run();
       const before = paths.map((p) => [readFileSync(p), statSync(p, { bigint: true }).mtimeNs]);
@@ -116,7 +119,8 @@ for (const [name, outputs, args] of [
       }
     } finally {
       for (const [i, path] of paths.entries()) {
-        if (!readFileSync(path).equals(originals[i])) writeFileSync(path, originals[i]);
+        if (originals[i] === null) rmSync(path, { force: true });
+        else if (!readFileSync(path).equals(originals[i])) writeFileSync(path, originals[i]);
       }
     }
   });
