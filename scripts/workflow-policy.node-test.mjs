@@ -758,8 +758,12 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
     assert.match(docs.run, /\$RUST_PACKAGES/);
     assert.deepEqual(packages(docs.run), []);
     assert.equal(docs["timeout-minutes"], 15);
-    // Doctests run after failed tests, but only once the test build ran and succeeded.
-    assert.equal(docs.if, "(success() || failure()) && steps.compile.outcome == 'success'");
+    // Doctests run after failed tests, but only once the test build ran and succeeded. macOS
+    // leaves them to the nightly run instead of every merge group.
+    assert.equal(
+      docs.if,
+      `${name === "rust-macos" ? "github.event_name != 'merge_group' && " : ""}(success() || failure()) && steps.compile.outcome == 'success'`,
+    );
     assert.ok(runs.some((step) => step.id === "compile" && step.run.includes("--no-run")));
     assert.ok(steps.some((step) => step.run?.includes("--tool cargo-nextest")));
     const junit = steps.find((step) => step.with?.path === "target/nextest/ci/junit.xml");
