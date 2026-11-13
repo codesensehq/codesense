@@ -230,6 +230,9 @@ beforeEach(() => {
   });
   sessionCwdMock.mockReturnValue(null);
   sessionCwdRevisionMock.mockReturnValue(0);
+  // A mode switch writes the shared default; never let one leak into the next test.
+  const { defaultFileDiffMode: _mode, ...settings } = useViewerStore.getState().settings;
+  void _mode;
   useViewerStore.setState({
     sourceDiffShownBySession: {},
     sourceDiffSelectedFile: {},
@@ -244,7 +247,7 @@ beforeEach(() => {
     // SLW-DV-7: reset the comparison basis so a prior test's toggle doesn't leak.
     sourceDiffBaseMode: {},
     // SLW-WD-7: pin the default-layout setting so per-test mutations don't leak.
-    settings: { ...useViewerStore.getState().settings, defaultSourceDiffLayout: "inline" },
+    settings: { ...settings, defaultSourceDiffLayout: "inline" },
   });
 });
 
@@ -634,6 +637,46 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     );
   });
 
+  it("a new session opens in the code mode last chosen on any diff surface", () => {
+    useViewerStore.getState().setFileDiffMode("code", "structural");
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/mod.ts" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveAttribute(
+      "data-diff-mode",
+      "structural",
+    );
+    // Choosing here writes the shared default too.
+    fireEvent.click(screen.getByTestId("source-diff-ignore-ws-toggle-w1"));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.code).toBe("ignoreWhitespace");
+  });
+
+  it("an open session keeps the code mode it opened in when the default changes elsewhere", () => {
+    useViewerStore.getState().setFileDiffMode("code", "structural");
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/mod.ts" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    // Snapshotted into the session when it opened.
+    expect(useViewerStore.getState().sourceDiffMode["sid-ws"]).toBe("structural");
+    act(() => useViewerStore.getState().setFileDiffMode("code", "line"));
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveAttribute(
+      "data-diff-mode",
+      "structural",
+    );
+  });
+
   it("the structural toggle is disabled for a flat-tree language (SLW-DV-8b AC-1)", () => {
     stubChangeset({ files: [{ path: "src/main.rs", status: "modified" }] });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/main.rs" } });
@@ -732,6 +775,44 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     );
     expect(screen.getByTestId("mock-redline-prose")).toBeInTheDocument();
     expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
+    // Through the shared file-diff dispatch.
+    expect(screen.getByTestId("source-diff-markdown")).toBeInTheDocument();
+  });
+
+  it("a MARKDOWN file's mode sits in the view options and writes the shared default", () => {
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "docs/readme.md" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    const modes = screen.getByTestId("source-diff-markdown-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("old→new");
+    expect(screen.queryByTestId("mock-redline-prose")).not.toBeInTheDocument();
+    // Markdown shown as source is a code diff: its code controls come with it.
+    expect(screen.getByTestId("source-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-view-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-wrap-toggle-w1")).toBeInTheDocument();
+  });
+
+  it("an HTML file is its source diff, with no rendered mode offered", () => {
+    stubChangeset({ files: [...FILES, { path: "site/page.html", status: "modified" }] });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "site/page.html" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Side by side" })).not.toBeInTheDocument();
   });
 
   it("an MDX file is a code diff, not the prose redline (its imports and JSX are code)", () => {
@@ -2355,6 +2436,29 @@ describe("SourceDiffOverlay — History mode (SLW-WD-9)", () => {
     const flipped = screen.getByTestId("mock-code-diff-review");
     expect(flipped).toHaveAttribute("data-wrap", "wrap");
     expect(flipped).toHaveAttribute("data-collapse", "expand");
+  });
+
+  it("the commit pane offers the markdown modes, and Source brings the code controls", () => {
+    stubChangeset({ files: [{ path: "docs/readme.md", status: "modified" }] });
+    useViewerStore.setState({
+      sourceDiffHistoryMode: { "sid-ws": true },
+      sourceDiffSelectedSha: { "sid-ws": null },
+    });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("mock-redline-prose")).toBeInTheDocument();
+    expect(screen.queryByTestId("commit-diff-wrap-toggle-w1")).toBeNull();
+    const modes = screen.getByTestId("commit-diff-markdown-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
+    expect(screen.getByTestId("commit-diff-wrap-toggle-w1")).toBeInTheDocument();
+    expect(screen.getByTestId("commit-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
   });
 
   it("hides the commit-diff controls for a mode-only change and for a redline error", () => {

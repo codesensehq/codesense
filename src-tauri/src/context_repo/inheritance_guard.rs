@@ -167,6 +167,10 @@ const OWN_TEAM_BOUNDARIES: &[(&str, usize)] = &[
     ("src-tauri/src/commands/scratch_space_view.rs", 1),
     ("src-tauri/src/commands/status_taxonomy.rs", 1),
     ("src-tauri/src/commands/story_create.rs", 1),
+    // The resolution cache's stamp stats what `resolve_local` reads: the org's
+    // registry files and the team's own content folder. No parent is read, and
+    // `team_view` would parse the registry the stamp exists to avoid.
+    ("src-tauri/src/commands/team_resolution_cache.rs", 2),
     ("src-tauri/src/commands/watch.rs", 4),
     ("src-tauri/src/commands/worktree.rs", 3),
     ("src-tauri/src/content_engine/layers.rs", 1),

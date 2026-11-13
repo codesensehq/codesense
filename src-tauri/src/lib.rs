@@ -556,7 +556,9 @@ pub fn run() {
         // the `renderer_heartbeat` command (FE ack), read by the watchdog task.
         .manage(renderer_watchdog::RendererLiveness::default())
         .manage(mcp::state::AskUserRegistry::new())
+        .manage(commands::team_resolution_cache::TeamResolutionCache::default())
         .setup(move |app| {
+            commands::team_resolution_cache::listen(app.handle());
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);

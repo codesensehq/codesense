@@ -2556,6 +2556,31 @@ pub(crate) fn team_store_path(
     }
 }
 
+/// [`AppInboxHost`]'s `team_store`, over any runtime so tests can drive it.
+pub(crate) async fn app_team_store<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    team: &LaunchTeam,
+) -> Result<PathBuf, String> {
+    let resolution =
+        super::team_resolution_cache::derive_context_cached(app, &team.org, &team.team).await?;
+    team_store_path(resolution, team)
+}
+
+/// [`AppInboxHost`]'s `role_configs_for`, over any runtime so tests can drive it.
+pub(crate) async fn app_role_configs<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    team: &LaunchTeam,
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<Vec<crate::queue_roles::RoleConfig>, String> {
+    let scope = scope.clone();
+    let ctx =
+        super::team_resolution_cache::derive_context_cached(app, &team.org, &team.team).await?;
+    super::await_blocking("role_configs", move || {
+        crate::queue_roles::list_for(&super::roles::content(&ctx)?, &scope)
+    })
+    .await
+}
+
 /// The app-backed [`InboxHost`].
 #[derive(Clone)]
 pub(crate) struct AppInboxHost {
@@ -2725,13 +2750,7 @@ impl InboxHost for AppInboxHost {
         team: &LaunchTeam,
         scope: &crate::context_repo::caller_scope::CallerScope,
     ) -> Result<Vec<crate::queue_roles::RoleConfig>, String> {
-        let scope = scope.clone();
-        let ctx =
-            super::route_to_context::derive_context_for(&self.app, &team.org, &team.team).await?;
-        super::await_blocking("role_configs", move || {
-            crate::queue_roles::list_for(&super::roles::content(&ctx)?, &scope)
-        })
-        .await
+        app_role_configs(&self.app, team, scope).await
     }
 
     async fn chat_announcement(
@@ -2783,9 +2802,7 @@ impl InboxHost for AppInboxHost {
         .await
     }
     async fn team_store(&self, team: &LaunchTeam) -> Result<PathBuf, String> {
-        let resolution =
-            super::route_to_context::derive_context_for(&self.app, &team.org, &team.team).await?;
-        team_store_path(resolution, team)
+        app_team_store(&self.app, team).await
     }
 
     async fn active_team(&self) -> Result<LaunchTeam, String> {
