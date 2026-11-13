@@ -299,10 +299,8 @@ fn a_team_without_an_inbox_lists_the_builtin_inbox_after_its_own_panes() {
         "{commands:?}"
     );
     assert!(commands.iter().all(|c| c.1 == CommandScope::SlotFocused));
-    // Only toggle-list has a default chord.
-    let (last, rest) = commands.split_last().unwrap();
-    assert_eq!(last.2, Some("CmdOrCtrl+B"));
-    assert!(rest.iter().all(|c| c.2.is_none()));
+    // No default chord: ⌘B belongs to Toggle Sidebar, and a second owner is a conflict.
+    assert!(commands.iter().all(|c| c.2.is_none()));
     assert!(builtin::is_builtin_pane_path(Path::new(&inbox.path)));
     assert_eq!(
         std::fs::read_to_string(&inbox.path).unwrap(),

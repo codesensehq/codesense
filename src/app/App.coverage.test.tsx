@@ -947,6 +947,53 @@ describe("keyboard shortcuts", () => {
     document.body.removeChild(output);
   });
 
+  describe("Cmd+W over a maximized surface", () => {
+    async function mountWithOpenTab() {
+      const closeTab = vi.fn();
+      renderFullyLoaded();
+      useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "default" });
+      const teamKey = "acme:default";
+      viewerGetState.mockImplementation(() => ({
+        ...viewerStoreValues,
+        activeTab: { [teamKey]: "readme.md" },
+        closeTab,
+        openTabs: { [teamKey]: [{ path: "readme.md", name: "readme.md" }] },
+      }));
+      const overlay = document.createElement("div");
+      overlay.setAttribute("data-fullscreen", "true");
+      overlay.innerHTML = '<button id="exit">Exit full screen</button><textarea id="draft" />';
+      document.body.appendChild(overlay);
+      const onEscape = vi.fn();
+      overlay.addEventListener("codesense:frame-escape", onEscape);
+      await act(async () => {
+        render(<App />);
+      });
+      return { closeTab, onEscape, overlay };
+    }
+
+    it("exits the overlay from its chrome and leaves the tab behind it open", async () => {
+      const { closeTab, onEscape, overlay } = await mountWithOpenTab();
+      overlay.querySelector<HTMLElement>("#exit")!.focus();
+      await act(async () => {
+        fireEvent.keyDown(document.activeElement!, { key: "w", metaKey: true });
+      });
+      expect(onEscape).toHaveBeenCalledTimes(1);
+      expect(closeTab).not.toHaveBeenCalled();
+      document.body.removeChild(overlay);
+    });
+
+    it("keeps today's ⌘W while typing in a field inside the overlay", async () => {
+      const { closeTab, onEscape, overlay } = await mountWithOpenTab();
+      overlay.querySelector<HTMLElement>("#draft")!.focus();
+      await act(async () => {
+        fireEvent.keyDown(document.activeElement!, { key: "w", metaKey: true });
+      });
+      expect(onEscape).not.toHaveBeenCalled();
+      expect(closeTab).toHaveBeenCalled();
+      document.body.removeChild(overlay);
+    });
+  });
+
   it("closes active tab on Cmd+W in a slug-less epic workspace (SW-FX-38: repoPath null)", async () => {
     // SW-FX-38: `closeTab` keys off (teamKey, filePath); `repoPath` is
     // best-effort for the post-close reveal (safe no-op on ""). A slug-less
