@@ -190,4 +190,22 @@ describe("kit.chat", () => {
     chat.unmount();
     expect(s.el.childNodes.length).toBe(0);
   });
+  it("pinToBottom follows the newest message until the reader scrolls up, and reset follows again", () => {
+    const log = document.createElement("div");
+    Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
+    const pin = (kitOf().chat as unknown as { pinToBottom: (...a: any[]) => any }).pinToBottom(
+      log,
+      {
+        settle: false,
+      },
+    );
+    expect(log.scrollTop).toBe(1000);
+    log.scrollTop = 200;
+    log.dispatchEvent(new Event("scroll"));
+    pin.onContentChanged();
+    expect(log.scrollTop).toBe(200);
+    pin.reset();
+    expect(log.scrollTop).toBe(1000);
+  });
 });

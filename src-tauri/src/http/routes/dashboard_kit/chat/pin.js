@@ -20,6 +20,8 @@ export function pinToBottom(log,{settle=true,win=window}={}){
  follow();
  return {
   onContentChanged:follow,
+  // Another thread is opening (the peer changed): the reader follows it from its newest message, whatever they did in the last one.
+  reset(){following=true;follow();},
   release(){released=true;log.removeEventListener('scroll',onScroll);if(observer)observer.disconnect();},
  };
 }

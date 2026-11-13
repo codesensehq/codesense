@@ -187,6 +187,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   lastLiveState=now?now.state:'none';
   launch.rows(next);
   const moved=target.follow&&(before&&before.handle)!==(now&&now.handle);
+  if(moved)pin.reset();
   if(!started||moved||target.rows(next).some(row=>!watched.has(row.sessionId))){const read=readThread();if(!started)firstRead=read;started=true;}else render();
  }
  const offs=[reads.on('sessions',()=>onRows(reads.latestSessions())),reads.on('inbox',()=>{readThread();}),reads.on('activity',()=>render())];

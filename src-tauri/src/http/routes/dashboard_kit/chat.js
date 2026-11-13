@@ -405,6 +405,11 @@
     follow();
     return {
       onContentChanged: follow,
+      // Another thread is opening (the peer changed): the reader follows it from its newest message, whatever they did in the last one.
+      reset() {
+        following = true;
+        follow();
+      },
       release() {
         released = true;
         log.removeEventListener("scroll", onScroll);
@@ -720,6 +725,7 @@
       lastLiveState = now ? now.state : "none";
       launch.rows(next);
       const moved = target.follow && (before && before.handle) !== (now && now.handle);
+      if (moved) pin.reset();
       if (!started || moved || target.rows(next).some((row) => !watched.has(row.sessionId))) {
         const read = readThread();
         if (!started) firstRead = read;
