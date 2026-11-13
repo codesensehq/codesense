@@ -238,6 +238,20 @@ pub async fn worktree_list_files(root: String) -> Result<WorktreeFileList, Strin
     .await
 }
 
+/// The story files hydrated into a registered local worktree, by their path in
+/// it: the only files its Rendered view serves, and the ones that open
+/// Rendered by default. Refuses a root that isn't a registered worktree.
+#[tauri::command]
+pub async fn worktree_hydrated_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    root: String,
+) -> Result<Vec<String>, String> {
+    crate::commands::await_blocking("worktree_hydrated_files", move || {
+        super::files::worktree_hydrated_files_at(&app, Path::new(&root))
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
