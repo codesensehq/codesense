@@ -60,4 +60,17 @@ describe("team content resolution", () => {
       expect(resolveTeamContentContext(key, [org], true).kind).toBe("unavailable");
     }
   });
+  it("reports an org with no teams as an empty state, and keeps real failures unavailable", () => {
+    const bare: Org = { ...org, teams: [] };
+    const archivedOnly: Org = {
+      ...org,
+      teams: [{ name: "old", source_repos: [], archived: true }],
+    };
+    for (const key of ["acme/context:_none", "acme/context:planning"]) {
+      expect(resolveTeamContentContext(key, [bare], true)).toEqual({ kind: "no-teams" });
+      expect(resolveTeamContentContext(key, [archivedOnly], true)).toEqual({ kind: "no-teams" });
+    }
+    expect(resolveTeamContentContext("acme/context:gone", [org], true).kind).toBe("unavailable");
+    expect(resolveTeamContentContext("acme/context:planning", [], true).kind).toBe("unavailable");
+  });
 });

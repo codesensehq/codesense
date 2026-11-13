@@ -15,6 +15,7 @@ export interface ContentSource {
 
 export type TeamContentResolution =
   | { kind: "loading" }
+  | { kind: "no-teams" }
   | { kind: "unavailable"; error: string }
   | { kind: "ready"; source: ContentSource & { teamKey: string } };
 
@@ -25,6 +26,9 @@ export function resolveTeamContentContext(
   mainDoc = "",
 ): TeamContentResolution {
   const { orgSlug, teamName } = parseTeamKey(teamKey);
+  // An org with no team has nothing to browse; that is an empty state, not a failure.
+  const emptyOrg = orgs.find((item) => item.slug === orgSlug);
+  if (emptyOrg && !emptyOrg.teams.some((item) => !item.archived)) return { kind: "no-teams" };
   if (!orgSlug || !teamName || /[/\\]|^\.{1,2}$/.test(teamName)) {
     return { kind: "unavailable", error: "Select an available team to browse its context." };
   }
