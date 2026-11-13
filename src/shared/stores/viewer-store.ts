@@ -2049,12 +2049,13 @@ export type SourceDiffBaseMode = "branchBase" | "head";
  *  already ignores whitespace). `"line"` is the default universal diff;
  *  `"ignoreWhitespace"` suppresses whitespace-only churn (DV-8's synchronous
  *  override); `"structural"` diffs the parse tree off-thread (DV-8b, supported
- *  languages only, else it degrades to the line diff). Runtime-only, per tile. */
+ *  languages only, else it degrades to the line diff). Held per source diff
+ *  session (runtime-only): a session snapshots `defaultFileDiffMode.code` when
+ *  its overlay first opens, and a change there writes both. */
 export type SourceDiffMode = CodeDiffMode;
 
-/** A source diff session's code mode: its own choice, else the shared
- *  `defaultFileDiffMode.code` (so a session opens in the mode last chosen on
- *  any surface). */
+/** A source diff session's code mode: its own (snapshotted or chosen) mode,
+ *  else the shared `defaultFileDiffMode.code` until the overlay first opens. */
 export function sourceDiffModeFor(
   s: Pick<ViewerState, "sourceDiffMode" | "settings">,
   sessionId: string,
@@ -3190,6 +3191,9 @@ export interface ViewerState {
   /** Write one type's shared diff mode (`defaultFileDiffMode`); every diff
    *  surface opens that type in it next. Change-only. */
   setFileDiffMode: <K extends FileDiffKind>(kind: K, mode: FileDiffModes[K]) => void;
+  /** Snapshot the shared code mode into a source diff session that has none yet
+   *  (when its overlay first opens). Never overwrites the session's own mode. */
+  seedSourceDiffMode: (sessionId: string) => void;
   /** SLW-WDE-3: signal an external worktree change for a workspace's open editor
    *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce). Driven
    *  by the App-level `worktree-file-change` listener. */
@@ -8918,6 +8922,20 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     });
     // A code mode chosen here is the default the next diff anywhere opens in.
     get().setFileDiffMode("code", mode);
+  },
+
+  seedSourceDiffMode: (sessionId) => {
+    if (!sessionId) return;
+    set((s) =>
+      s.sourceDiffMode[sessionId] !== undefined
+        ? s
+        : {
+            sourceDiffMode: {
+              ...s.sourceDiffMode,
+              [sessionId]: resolveFileDiffModes(s.settings.defaultFileDiffMode).code,
+            },
+          },
+    );
   },
 
   setFileDiffMode: (kind, mode) => {

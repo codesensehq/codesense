@@ -657,6 +657,26 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(useViewerStore.getState().settings.defaultFileDiffMode?.code).toBe("ignoreWhitespace");
   });
 
+  it("an open session keeps the code mode it opened in when the default changes elsewhere", () => {
+    useViewerStore.getState().setFileDiffMode("code", "structural");
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/mod.ts" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    // Snapshotted into the session when it opened.
+    expect(useViewerStore.getState().sourceDiffMode["sid-ws"]).toBe("structural");
+    act(() => useViewerStore.getState().setFileDiffMode("code", "line"));
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveAttribute(
+      "data-diff-mode",
+      "structural",
+    );
+  });
+
   it("the structural toggle is disabled for a flat-tree language (SLW-DV-8b AC-1)", () => {
     stubChangeset({ files: [{ path: "src/main.rs", status: "modified" }] });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "src/main.rs" } });

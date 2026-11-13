@@ -250,6 +250,12 @@ export function SourceDiffOverlay({
   const setSelectedFile = useViewerStore((s) => s.setSourceDiffSelectedFile);
   const toggleViewOption = useViewerStore((s) => s.toggleSourceDiffOption);
   const setDiffMode = useViewerStore((s) => s.setSourceDiffMode);
+  const seedDiffMode = useViewerStore((s) => s.seedSourceDiffMode);
+  // The session opens in the code mode last chosen on any diff surface, then
+  // keeps it: a later change elsewhere doesn't move an open session.
+  useEffect(() => {
+    if (shown && isFocused && activeTabSessionId) seedDiffMode(activeTabSessionId);
+  }, [shown, isFocused, activeTabSessionId, seedDiffMode]);
   const { modes: fileDiffModes, setMode: setFileDiffMode } = useFileDiffModes();
   const markdownMode = fileDiffModes.markdown;
   const toggleEditorOpen = useViewerStore((s) => s.toggleWorktreeEditorOpen);

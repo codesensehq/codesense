@@ -71,4 +71,15 @@ describe("defaultFileDiffMode setting", () => {
     expect(sourceDiffModeFor(useViewerStore.getState(), "tab-1")).toBe("structural");
     expect(sourceDiffModeFor(useViewerStore.getState(), "tab-2")).toBe("line");
   });
+
+  it("opening a session snapshots the default; a later default leaves it alone", () => {
+    act(() => useViewerStore.getState().setFileDiffMode("code", "structural"));
+    act(() => useViewerStore.getState().seedSourceDiffMode("tab-1"));
+    expect(useViewerStore.getState().sourceDiffMode["tab-1"]).toBe("structural");
+    act(() => useViewerStore.getState().setFileDiffMode("code", "line"));
+    expect(sourceDiffModeFor(useViewerStore.getState(), "tab-1")).toBe("structural");
+    // Seeding again never overwrites the session's own mode.
+    act(() => useViewerStore.getState().seedSourceDiffMode("tab-1"));
+    expect(useViewerStore.getState().sourceDiffMode["tab-1"]).toBe("structural");
+  });
 });
