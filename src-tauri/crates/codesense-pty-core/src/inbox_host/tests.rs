@@ -664,3 +664,79 @@ fn a_queued_receipt_is_pending_until_its_hook_including_when_the_hook_beats_the_
         );
     }
 }
+
+/// An outlet whose guarded terminal recovery is counted and accepted.
+#[derive(Default)]
+struct Recoveries(std::sync::atomic::AtomicUsize);
+
+impl InboxOutlet for Recoveries {
+    fn fate(&self, _: &str, _: &str, _: Fate) {}
+    fn waiter(&self, _: InboxWaiterState) {}
+    fn audience(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn has_tools(&self, _: &str) -> Option<bool> {
+        Some(true)
+    }
+    fn recover(&self, _: &str, _: &Notice<'_>) -> SubmitOutcome {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        SubmitOutcome::Accepted
+    }
+}
+
+/// A waiter woke the agent and was never re-armed: it now has only its grace.
+fn woken_and_not_re_armed(inbox: &Arc<HostInbox>, outlet: &Arc<Outlet>) {
+    let (served, helper) = waiter(inbox, outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "first".into(), "t1".into());
+    next(&helper);
+    next(&helper);
+    printed(&helper, "t1");
+    served.join().unwrap();
+    assert!(!inbox.state("S1").waiting && inbox.state("S1").grace_ms.is_some());
+}
+
+#[test]
+fn an_idle_agent_is_not_covered_by_the_grace_of_a_waiter_that_never_re_armed() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    // Just stopped: its turn-end hook is about to arm a waiter.
+    assert!(inbox.waiter_covers("S1", Duration::ZERO));
+    // Idle past the settle with no waiter waiting: nothing will wake it.
+    assert!(!inbox.waiter_covers("S1", REARM_SETTLE));
+    // A waiter that waits covers it however long it has been idle.
+    let (_served, _helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    assert!(inbox.waiter_covers("S1", REARM_SETTLE * 100));
+}
+
+#[test]
+fn mail_recovered_for_an_idle_agent_is_recovered_once_and_never_handed_to_a_later_waiter() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    inbox.mail("S1", "second".into(), "t2".into());
+    let recoveries = Recoveries::default();
+    inbox.recover(&recoveries, "S1");
+    // A later sweep finds nothing left to recover.
+    inbox.recover(&recoveries, "S1");
+    assert_eq!(recoveries.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!inbox.holds("S1"));
+    // A waiter that arms now is not handed it: it waits, and is handed the next mail.
+    let (served, helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "third".into(), "t3".into());
+    assert_eq!(next(&helper), "mail t3");
+    assert_eq!(next(&helper), "third");
+    printed(&helper, "t3");
+    served.join().unwrap();
+}
+
+#[test]
+fn an_agent_that_only_just_stopped_is_covered_by_its_grace_and_its_mail_stays_held() {
+    let (inbox, outlet) = new();
+    woken_and_not_re_armed(&inbox, &outlet);
+    inbox.mail("S1", "second".into(), "t2".into());
+    // Its turn-end hook is about to arm a waiter.
+    assert!(inbox.waiter_covers("S1", REARM_SETTLE / 2));
+    assert!(inbox.holds("S1"));
+}

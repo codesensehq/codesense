@@ -104,7 +104,13 @@ fn title_is_the_document_title_or_none() {
         pane_title("<html><head><TITLE> Sprint  &amp; risks </TITLE></head>").as_deref(),
         Some("Sprint & risks")
     );
+    // Element text, decoded with the text set like a story title.
+    assert_eq!(
+        pane_title("<title>The clone&#x27;s &#39;risks&apos; &mdash; &rsquo;24</title>").as_deref(),
+        Some("The clone's 'risks' — ’24")
+    );
     assert_eq!(pane_title("<title></title>"), None);
+    assert_eq!(pane_title("<title>&#32;&nbsp;</title>"), None);
     assert_eq!(pane_title("<h1>no title</h1>"), None);
 }
 
@@ -293,10 +299,8 @@ fn a_team_without_an_inbox_lists_the_builtin_inbox_after_its_own_panes() {
         "{commands:?}"
     );
     assert!(commands.iter().all(|c| c.1 == CommandScope::SlotFocused));
-    // Only toggle-list has a default chord.
-    let (last, rest) = commands.split_last().unwrap();
-    assert_eq!(last.2, Some("CmdOrCtrl+B"));
-    assert!(rest.iter().all(|c| c.2.is_none()));
+    // No default chord: ⌘B belongs to Toggle Sidebar, and a second owner is a conflict.
+    assert!(commands.iter().all(|c| c.2.is_none()));
     assert!(builtin::is_builtin_pane_path(Path::new(&inbox.path)));
     assert_eq!(
         std::fs::read_to_string(&inbox.path).unwrap(),

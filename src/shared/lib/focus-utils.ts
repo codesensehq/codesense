@@ -7,6 +7,8 @@
  * check and extend the PaneType union.
  */
 
+import { isInHiddenTeam, queryAllShown } from "@/shared/lib/warm-scopes";
+
 export type PaneType = "file" | "terminal" | "scratch-note";
 
 /** Marks a popup that shows a terminal outside the CLI (the Agents pane's quick view). Its
@@ -77,4 +79,38 @@ export function editorOwnsShortcut(
   editorTarget = isTextEditorTarget(target),
 ): boolean {
   return (actionId === "nav.context-back" || actionId === "nav.context-forward") && editorTarget;
+}
+
+const OVERLAY = '[data-fullscreen="true"]';
+
+/** Focus in a field that keeps its own keys: an input, a textarea, a contenteditable or a terminal. */
+export function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return (
+    !!el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      !!el.isContentEditable ||
+      !!el.closest?.(".xterm"))
+  );
+}
+
+/** Asks a maximize overlay (`FullscreenOverlayShell`) to exit: the one event Esc and ⌘W from a
+ *  dashboard frame both send. */
+export function requestOverlayExit(overlay: Element): void {
+  overlay.dispatchEvent(new CustomEvent("codesense:frame-escape", { bubbles: true }));
+}
+
+/** Leaves a maximize overlay by the same event Esc from a frame sends, so ⌘W and Esc share one
+ *  exit. With `within` (the element a forwarded ⌘W came from) only the overlay containing it
+ *  exits; without, the topmost shown one does (the last in document order). Typing keeps its
+ *  chord: focus in a field is left alone, as the overlay's own Esc handler does. Returns whether
+ *  it acted. */
+export function exitTopmostOverlay(within?: Element | null): boolean {
+  const overlay = within
+    ? within.closest<HTMLElement>(OVERLAY)
+    : (queryAllShown(OVERLAY).at(-1) ?? null);
+  if (!overlay || isInHiddenTeam(overlay) || isTypingTarget(document.activeElement)) return false;
+  requestOverlayExit(overlay);
+  return true;
 }

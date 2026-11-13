@@ -765,3 +765,39 @@ describe("buildNavSearchFilter + flattenNavTree(search)", () => {
     expect(items.some((i) => i.type === "story")).toBe(true);
   });
 });
+
+describe("nav filter by story id", () => {
+  it("finds a story by its id when neither its file name nor its folder carries it", () => {
+    const epic = buildTree("plans", {
+      absoluteDirPath: "/ctx/plans",
+      dirPath: "plans",
+      stories: [
+        buildStoryRef("alpha.md", {
+          documentType: "story",
+          status: "todo",
+          absolutePath: "/ctx/plans/alpha.md",
+          storyId: "DEMO-12",
+        }),
+        buildStoryRef("beta.md", {
+          documentType: "story",
+          status: "todo",
+          absolutePath: "/ctx/plans/beta.md",
+          storyId: "DEMO-13",
+        }),
+      ],
+    });
+    const tree = buildTree("", { absoluteDirPath: "/ctx", subEpics: [epic] });
+    const search = buildNavSearchFilter({
+      query: " demo-12 ",
+      tree,
+      viewerRootEntries: [],
+      genericChildrenByPath: new Map(),
+      isDrilledIn: false,
+    });
+    const items = flattenNavTree(defaultArgs({ tree, search: search ?? undefined }));
+    expect(items.map((i) => i.type)).toEqual(["folder-header", "story"]);
+    expect(items.find((i) => i.type === "story")).toMatchObject({
+      story: { fileName: "alpha.md" },
+    });
+  });
+});

@@ -12,6 +12,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { workspaceReposForTeam } from "@/shared/lib/build-synthetic-repo";
 import { teamHasSatisfiedClone } from "@/features/attachment/lib/team-clone-gate";
 import { TEAM_EXPLAINER } from "@/shared/lib/onboarding-copy";
+import { orgHasTeams } from "@/shared/lib/team-content-context";
 
 import { EmptyState } from "@/shared/components/empty-state";
 import { LoadingState } from "@/shared/components/spinner";
@@ -78,14 +79,14 @@ export function TeamWorkspaceEmptyState() {
     activeOrg.teams.some((t) => t.name === activeTeamName);
 
   if (!isOnActiveTeam) {
-    // `orgHasTeams` selects between the "pick a team" state (teams present)
-    // and the "no teams yet → create in Settings" state. Open access keys
-    // this on team existence, not the user's memberships.
-    const orgHasTeams = activeOrg !== null && activeOrg.teams.length > 0;
+    // `orgHasTeams` selects between the "pick a team" state (unarchived teams
+    // present) and the "no teams yet → create in Settings" state, by the same
+    // rule as team content's no-teams state. Open access keys this on team
+    // existence, not the user's memberships.
     return shell(
       <NoTeamInOrgState
         orgName={activeOrg?.display_name ?? activeOrgSlug}
-        orgHasTeams={orgHasTeams}
+        orgHasTeams={orgHasTeams(activeOrg)}
       />,
     );
   }

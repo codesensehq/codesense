@@ -500,3 +500,26 @@ async fn review_02_nonpublic_address_families_are_refused() {
         );
     }
 }
+
+#[test]
+fn read_cached_refuses_a_directory_a_symlink_or_an_oversized_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let sha = |c: char| c.to_string().repeat(64);
+    std::fs::create_dir(dir.path().join(sha('a'))).unwrap();
+    std::fs::write(dir.path().join(sha('b')), vec![0u8; MAX_BYTES + 1]).unwrap();
+    std::fs::write(dir.path().join(sha('c')), b"GIF89a\x02\x00\x03\x00").unwrap();
+    let mut refused = vec!['a', 'b'];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.path().join(sha('c')), dir.path().join(sha('d'))).unwrap();
+        refused.push('d');
+    }
+    for refused in refused {
+        assert_eq!(
+            read_cached(dir.path(), &sha(refused)),
+            Err("media unavailable".to_string()),
+            "{refused}"
+        );
+    }
+    assert!(read_cached(dir.path(), &sha('c')).is_ok());
+}

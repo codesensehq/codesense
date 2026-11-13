@@ -2065,3 +2065,204 @@
   color: var(--ibx-mfg);
   border-top: 1px solid var(--ibx-hair);
 }
+
+/* Image attachments and the Open chip, as the Inbox pane shows them. */
+.ibx-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ibx-files .ibx-err {
+  font-size: 11px;
+  color: var(--destructive);
+}
+/* Sized from the stored w/h: never wider than the bubble, 360px or the file; never taller than 280px. */
+.ibx-media {
+  --w: 16;
+  --h: 9;
+  position: relative;
+  margin: 4px 0 0;
+  width: min(calc(var(--w) * 1px), 360px, calc(280px * var(--w) / var(--h)));
+  max-width: 100%;
+  aspect-ratio: var(--w) / var(--h);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ibx-muted);
+}
+.ibx-media-open {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+button.ibx-media-open {
+  cursor: zoom-in;
+}
+.ibx-media-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ibx-media.loading .ibx-media-img,
+.ibx-media.unavailable .ibx-media-img {
+  visibility: hidden;
+}
+/* Reduce Motion: an animated image shows its still first frame until Play is pressed. */
+.ibx-media-still {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ibx-media.still .ibx-media-img {
+  display: none;
+}
+.ibx-media.still .ibx-media-still {
+  display: block;
+}
+.ibx-media-play {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ibx-bg) 92%, transparent);
+  box-shadow:
+    0 0 0 1px var(--ibx-border),
+    0 1px 2px var(--ibx-shadow);
+  color: var(--ibx-fg);
+}
+.ibx-media-play:hover {
+  background: var(--ibx-bg);
+}
+.ibx-media.loading {
+  box-shadow: inset 0 0 0 1px var(--ibx-border);
+}
+.ibx-media-spin {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ibx-media.loading {
+    animation: ibx-shim 1.4s ease-in-out infinite;
+  }
+  @keyframes ibx-shim {
+    50% {
+      opacity: 0.55;
+    }
+  }
+}
+/* No image yet: one card for ask, off and failed. */
+.ibx-media-card {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 4px;
+  width: 320px;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 9px 10px 8px;
+  border-radius: 8px;
+  background: var(--ibx-card);
+  border: 1px solid var(--ibx-border);
+}
+.ibx-media-card > .ibx-ico {
+  margin-top: 2px;
+  color: var(--ibx-mfg);
+}
+.ibx-media-card.failed > .ibx-ico {
+  color: var(--destructive);
+}
+.ibx-media-card .alt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ibx-fg);
+}
+.ibx-media-card .meta {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-media-card .meta > span:first-child {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.ibx-media-card .meta b {
+  color: var(--ibx-fg);
+  font-weight: 600;
+}
+.ibx-media-card .ibx-chip a {
+  color: inherit;
+  text-decoration: none;
+}
+.ibx .ibx-media-card .ibx-chip.primary {
+  border-color: transparent;
+  background: var(--ibx-accent);
+  color: var(--ibx-accent-ink);
+  font-weight: 550;
+}
+.ibx-media-card .ibx-chip.primary:disabled {
+  opacity: 0.6;
+}
+/* Lightbox: the app's dialog; Esc closes it and focus returns to the image. */
+.ibx-lightbox .ibx-lb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-right: 28px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.ibx-lightbox .ibx-lb-head b {
+  font-weight: 600;
+}
+.ibx-lightbox .ibx-lb-head time {
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-lightbox .ibx-media {
+  width: min(calc(var(--w) * 1px), 100%, calc((100dvh - 180px) * var(--w) / var(--h)));
+  margin: 0 auto;
+}
+.ibx-lb-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ibx-lb-foot .row2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-lb-foot a {
+  color: var(--ibx-accent);
+  text-decoration: none;
+}
+.ibx-lb-foot a:hover {
+  text-decoration: underline;
+}

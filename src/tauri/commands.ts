@@ -1041,6 +1041,22 @@ export interface InboxMediaAttachment {
 }
 export const loadInboxMedia = (team: InboxTeam, messageId: number) =>
   invoke<void>("load_inbox_media", { team, messageId });
+/** A message's cached image for the app window (which has no frame to reach `/media/v1`):
+ *  refused unless the message carries `sha256` as a cached attachment. It crosses as one
+ *  ArrayBuffer: the MIME the host read from the bytes, a newline, then the bytes. */
+export const readInboxMedia = async (
+  team: InboxTeam,
+  messageId: number,
+  sha256: string,
+): Promise<Blob> => {
+  const frame = new Uint8Array(
+    await invoke<ArrayBuffer>("read_inbox_media", { team, messageId, sha256 }),
+  );
+  const newline = frame.indexOf(10);
+  if (newline < 0) throw new Error("media unavailable");
+  const type = new TextDecoder().decode(frame.subarray(0, newline));
+  return new Blob([frame.subarray(newline + 1)], { type });
+};
 
 export interface InboxMessageRow {
   conversation?: string;
