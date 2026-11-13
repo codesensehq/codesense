@@ -21,6 +21,8 @@ export const MAX_LIVE_HIDDEN_FRAMES = 4;
 type BadgeDelivery = { badge?: "live"; owner?: string };
 
 const RUN_REVIEW_TOPICS = ["runEndorsements", "runEvidence"] as const;
+/** Native events from one setup write arrive within this long of each other. */
+const SETUP_CHANGED_SETTLE_MS = 50;
 export type RunReviewTopic = (typeof RUN_REVIEW_TOPICS)[number];
 const isRunReviewTopic = (topic: string) =>
   (RUN_REVIEW_TOPICS as readonly string[]).includes(topic);
@@ -243,6 +245,7 @@ export class LiveHub {
   private ready: Promise<void> | null = null;
   private joinedSessionsRead?: Promise<SessionListRow[]>;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private setupTimer: ReturnType<typeof setTimeout> | null = null;
   private uiTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private uiWrites = new Map<string, Promise<unknown>>();
   constructor(private deps: Dependencies) {}
@@ -330,12 +333,29 @@ export class LiveHub {
       ["mcp:agent-progress", "agent-activity-changed"],
     ])
       this.listen(event, ({ payload }) => this.invalidate(type, payload));
+    // Creating or deleting a team, attaching a context repo and adding a source repo each
+    // raise one or two of these, so a burst folds into one page event.
+    for (const event of [
+      "org-registry-changed",
+      "context-attachments-changed",
+      "source-attachments-changed",
+    ])
+      this.listen(event, () => this.setupChanged());
     if (this.deps.watchPasteTarget) {
       const off = this.deps.watchPasteTarget(() => this.invalidate("paste-target-changed"));
       this.unlisteners.push(Promise.resolve(off));
     }
     this.ready = Promise.all(this.unlisteners).then(() => {});
     return this.ready;
+  }
+  /** Tells every page the setup (orgs, teams, source repos) changed, once per burst of
+   *  native events; a page rereads `setupState()`. */
+  private setupChanged() {
+    if (this.setupTimer) return;
+    this.setupTimer = setTimeout(() => {
+      this.setupTimer = null;
+      this.invalidate("setup-changed");
+    }, SETUP_CHANGED_SETTLE_MS);
   }
   /** Posts a payloadless (or context/inbox) change nudge to every frame; a hidden frame
    *  holds it until shown, since consumers must reread. */
@@ -1107,6 +1127,7 @@ export class LiveHub {
   dispose() {
     for (const off of this.unlisteners) void off.then((fn) => fn()).catch(() => {});
     if (this.timer) clearTimeout(this.timer);
+    if (this.setupTimer) clearTimeout(this.setupTimer);
     for (const timer of this.uiTimers.values()) clearTimeout(timer);
     for (const frame of this.frames.values()) {
       if (frame.hiddenTimer) clearTimeout(frame.hiddenTimer);

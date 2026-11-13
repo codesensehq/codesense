@@ -282,6 +282,35 @@ const INVOKE_META = {
       "Managed worktrees on this Mac — one row per managed checkout. Pairs with `onWorktreesChanged(cb)`.",
     examples: [{ args: {}, result: [{ id: "wt-demo-1", path: "/Users/…/worktrees/demo-1" }] }],
   },
+  setupState: {
+    description:
+      "This Mac's orgs, teams and source repos, read-only: `{orgs}`. Each team has `synced` and its `sourceRepos`, each with an `attachment` of `attached`, `missing` or `unattached`. No local paths. Pairs with the `codesense:setup-changed` message.",
+    examples: [
+      {
+        args: {},
+        result: {
+          orgs: [
+            {
+              slug: "acme/context",
+              displayName: "Acme",
+              loadErrors: [],
+              teams: [
+                {
+                  name: "docs",
+                  archived: false,
+                  parentTeam: null,
+                  synced: true,
+                  sourceRepos: [
+                    { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
   canPasteToTerminal: {
     description:
       'Whether `sendPrompt({handle: "active", text, submit: false})` has a terminal to paste into: the selected terminal tab of the person\'s focused workspace. Pairs with `onPasteTargetChanged(cb)`.',
@@ -1805,6 +1834,15 @@ const EVENT_META = {
     timing: "On managed worktree change",
     description: "Nudge for `worktrees()` listeners.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  "codesense:setup-changed": {
+    direction: "parent-to-doc",
+    payload: "N/A",
+    timing:
+      "After a team is created or deleted, a context repo is attached or a source repo is added",
+    description: "Nudge for `setupState()` re-reads. A burst of changes arrives as one message.",
+    example:
+      'window.addEventListener("message", (e) => {\n  if (e.data?.type === "codesense:setup-changed") codesense.setupState().then(render);\n});',
   },
   "codesense:paste-target-changed": {
     direction: "parent-to-doc",

@@ -23,7 +23,7 @@
 | routines:read | true | true | routine, routineResult, routineRun, routineRuns, routineStatus, routines, run, runEvidence, runWorkProduct, runs |  |
 | routines:run | true | false | routineRefresh |  |
 | routines:manage | true | false | routineCancel |  |
-| repo:read | true | true | getWorkspaceStatus, openDiff, setup, worktrees |  |
+| repo:read | true | true | getWorkspaceStatus, openDiff, setup, setupState, worktrees |  |
 | repo:write | true | false | none in page registry |  |
 | machines:read | true | true | getDependencyStatus, machines |  |
 | machines:manage | false | false | none in page registry |  |

@@ -14,9 +14,9 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 107,
+    "bridgeMethods": 108,
     "actionVerbs": 55,
-    "readVerbs": 52,
+    "readVerbs": 53,
     "surfaceMembers": 52
   },
   "sdk": [
@@ -4866,6 +4866,29 @@
       "name": "setup",
       "owner": "VerbMethods",
       "signature": "setup(args?: Record<string, unknown>): Promise<unknown>;",
+      "description": "read · repo:read · MCP twin describe_setup",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "repo:read",
+      "mcpTwin": "describe_setup",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "setupState",
+      "owner": "VerbMethods",
+      "signature": "setupState(args?: Record<string, unknown>): Promise<unknown>;",
       "description": "read · repo:read · MCP twin describe_setup",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -9768,6 +9791,27 @@
       "module": "records"
     },
     {
+      "name": "setupState",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "repo:read",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": "describe_setup",
+      "presentationOnlyReason": null,
+      "audited": false,
+      "action": false,
+      "module": "records"
+    },
+    {
       "name": "showMenu",
       "class": "read",
       "argsSchema": {
@@ -12060,6 +12104,22 @@
       "mcpTwin": "describe_setup"
     },
     {
+      "verb": "setupState",
+      "tier": "read",
+      "description": "read · repo:read · MCP twin describe_setup",
+      "args": {
+        "additionalProperties": true,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "result": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "repo:read",
+      "mcpTwin": "describe_setup"
+    },
+    {
       "verb": "showMenu",
       "tier": "read",
       "description": "read · sessions:read",
@@ -13903,9 +13963,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "e6df87f983e580a45b8b0599442abae7881398cf2aa42585b77352dbd4a7a458",
-    "src-tauri/src/verbs/registry.generated.json": "6372301da09ca9496bceeb77427398df2d51b871af01221d163595fd348263a6",
-    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "7d3f1f7039459f6fe9605c2aa1e0b3405dbe0ce64643bfeeca1e0ebcb63d02e5",
+    "src-tauri/src/verbs/registry.generated.json": "da4381ab5a143df56b7aebeb0813e94812f535a85b725608181f6a076c5e9301",
+    "src-tauri/src/verbs/registry.rs": "48f2315a8dedb0fb59bd1aec1be50c0be88ac3d9fb8ddc4b6f53b35719cff580",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "fbdd390d3f42c7532ef78dd8cc42e02c10e36a3003126f92d7c653c4944100e3",

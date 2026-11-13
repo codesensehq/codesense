@@ -260,6 +260,67 @@ pub async fn setup<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<serde_
     Ok(crate::attribution::setup::local(&doctor))
 }
 
+/// This Mac's orgs, their teams and each team's source repos, read-only (the page's
+/// `setupState()`). The same read as `describe_setup`'s `orgs`, without local paths or its
+/// attribution and scratch parts.
+#[tauri::command]
+pub async fn setup_state<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+    let (home, user_id) = crate::commands::route_to_context::resolve_ambient(&app).await?;
+    await_blocking("setup_state", move || {
+        let principal = crate::domain::Principal::from(user_id);
+        let orgs = crate::mcp::setup_tools::describe_orgs(&home, &principal)?;
+        Ok(setup_state_value(&orgs))
+    })
+    .await
+}
+
+/// `{orgs: [{slug, displayName, loadErrors, teams: [{name, archived, parentTeam, starterPage?,
+/// synced, sourceRepos: [{slug, remoteKey, attachment}]}]}]}`.
+fn setup_state_value(orgs: &[crate::mcp::setup_tools::SetupOrg]) -> serde_json::Value {
+    let orgs: Vec<serde_json::Value> = orgs
+        .iter()
+        .map(|org| {
+            let teams: Vec<serde_json::Value> = org
+                .teams
+                .iter()
+                .map(|team| {
+                    let repos: Vec<serde_json::Value> = team
+                        .source_repos
+                        .iter()
+                        .map(|repo| {
+                            serde_json::json!({
+                                "slug": repo.slug,
+                                "remoteKey": repo.remote_key,
+                                "attachment": repo.attachment,
+                            })
+                        })
+                        .collect();
+                    let mut row = serde_json::json!({
+                        "name": team.name,
+                        "archived": team.archived,
+                        "parentTeam": team.parent_team,
+                        "synced": team.synced,
+                        "sourceRepos": repos,
+                    });
+                    if let Some(page) = &team.starter_page {
+                        row["starterPage"] = serde_json::json!(page);
+                    }
+                    row
+                })
+                .collect();
+            serde_json::json!({
+                "slug": org.slug,
+                "displayName": org.display_name,
+                "loadErrors": org.load_errors,
+                "teams": teams,
+            })
+        })
+        .collect();
+    serde_json::json!({ "orgs": orgs })
+}
+
 /// One joined session, from the same backend as the MCP session_read verb.
 #[tauri::command]
 pub async fn session_read<R: tauri::Runtime>(
@@ -319,6 +380,55 @@ pub async fn session_read_model_rates() -> Result<Vec<session_usage::StoredRate>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page's setup read carries names, flags and repo identities, and no local paths.
+    #[test]
+    fn setup_state_lists_orgs_teams_and_repos_without_local_paths() {
+        use crate::mcp::setup_tools::{AttachmentStatus, SetupOrg, SetupRepo, SetupTeam};
+        let org = SetupOrg {
+            slug: "acme/ctx".into(),
+            display_name: "Acme".into(),
+            org_root: "/private/ctx".into(),
+            remote_url: Some("git@example.com:acme/ctx.git".into()),
+            load_errors: vec![],
+            teams: vec![SetupTeam {
+                name: "docs".into(),
+                archived: false,
+                parent_team: None,
+                starter_page: Some("README.md".into()),
+                synced: true,
+                source_repos: vec![SetupRepo {
+                    slug: "acme/web".into(),
+                    remote_key: "github.com/acme/web".into(),
+                    attachment: AttachmentStatus::Attached,
+                    local_path: Some("/private/web".into()),
+                }],
+            }],
+        };
+        let value = setup_state_value(&[org]);
+        assert_eq!(
+            value,
+            serde_json::json!({"orgs": [{
+                "slug": "acme/ctx",
+                "displayName": "Acme",
+                "loadErrors": [],
+                "teams": [{
+                    "name": "docs",
+                    "archived": false,
+                    "parentTeam": null,
+                    "synced": true,
+                    "starterPage": "README.md",
+                    "sourceRepos": [{
+                        "slug": "acme/web",
+                        "remoteKey": "github.com/acme/web",
+                        "attachment": "attached",
+                    }],
+                }],
+            }]})
+        );
+        assert!(!value.to_string().contains("/private"));
+        assert_eq!(setup_state_value(&[]), serde_json::json!({"orgs": []}));
+    }
 
     #[test]
     fn a_refusal_is_an_error_naming_it_and_ok_is_the_data() {

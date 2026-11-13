@@ -921,6 +921,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "setupState",
+    "class": "read",
+    "grant": "repo:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": "describe_setup",
+    "presentationOnlyReason": null
+  },
+  {
     "name": "showMenu",
     "class": "read",
     "grant": "sessions:read",
