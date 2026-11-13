@@ -423,6 +423,11 @@ it("keeps exactly one focusable filter field as the nav moves between a dashboar
     })),
   );
   await waitFor(() => expect(fields()).toHaveLength(1));
-  // The retiring frame stays mounted until it flushes, but its field cannot take focus.
-  if (dashboardFrame.isConnected) expect(dashboardFrame.closest("[inert]")).not.toBeNull();
+  // The retiring frame is gone, or stays mounted until it flushes with its field unfocusable.
+  expect(!dashboardFrame.isConnected || dashboardFrame.closest("[inert]") !== null).toBe(true);
+  // So the native field is the only one that can take focus, counting inside any frame left.
+  const focusable = [...document.querySelectorAll("iframe")]
+    .filter((frame) => !frame.closest("[inert]"))
+    .flatMap((frame) => [...(frame.contentDocument?.querySelectorAll("#filter") ?? [])]);
+  expect(focusable).toHaveLength(0);
 });

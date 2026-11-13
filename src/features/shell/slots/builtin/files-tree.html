@@ -510,6 +510,18 @@
             ...(dir ? { dir } : {}),
           };
         }
+        // A topic's next rows: the snapshot replaces them on a reset, a new revision or no delta;
+        // otherwise (and after a replacement) the delta's removes and upserts apply on top.
+        function mergeRows(rows, rev, snapshot, delta) {
+          if (snapshot.reset || snapshot.rev !== rev || !delta) rows = snapshot.snapshot || [];
+          if (delta && !snapshot.reset) {
+            const values = new Map(rows.map((row) => [row.id, row]));
+            (delta.removes || []).forEach((id) => values.delete(id));
+            (delta.upserts || []).forEach((row) => values.set(row.id, row));
+            rows = [...values.values()];
+          }
+          return rows;
+        }
         async function subscribeDirectory(dir = "") {
           const cached = subscriptions.get(dir);
           if (cached?.active) return cached.read;
@@ -552,15 +564,7 @@
             }
             entry.receiving = true;
             const keepCached = entry.ready && !!snapshot.cursor;
-            let rows = entry.rows;
-            if (snapshot.reset || snapshot.rev !== entry.rev || !delta)
-              rows = snapshot.snapshot || [];
-            if (delta && !snapshot.reset) {
-              const values = new Map(rows.map((row) => [row.id, row]));
-              (delta.removes || []).forEach((id) => values.delete(id));
-              (delta.upserts || []).forEach((row) => values.set(row.id, row));
-              rows = [...values.values()];
-            }
+            let rows = mergeRows(entry.rows, entry.rev, snapshot, delta);
             if (!keepCached) entry.rows = rows;
             entry.rev = snapshot.rev;
             entry.ready = true;
@@ -682,67 +686,121 @@
             ? "Loading " + scopeName() + "'s files…"
             : "Loading team context…";
         }
-        // The nav filter's matching rule: any of the texts holds the query (already lower-cased).
-        const textMatches = (query, ...texts) =>
-          !query || texts.some((text) => !!text && String(text).toLocaleLowerCase().includes(query));
+        // The nav filter's matching rule: the trimmed query is a case-insensitive substring of any
+        // of the texts. navTextMatches in nav-ordering.ts is the same rule for the native nav; both
+        // run tests/support/fixtures/nav-text-match.ts.
+        const textMatches = (query, ...texts) => {
+          const q = String(query).trim().toLocaleLowerCase();
+          return !q || texts.some((text) => !!text && String(text).toLocaleLowerCase().includes(q));
+        };
         // The team's story index (stories and epics with their paths). It answers a story-id
         // filter for folders that are not listed yet, so the match never waits on a directory read.
-        // Only a query that can be a story id (it holds a digit or a dash) reads it, so a plain
-        // name filter costs no extra subscription.
+        // Only a query shaped like a story id (letters, a dash, then a digit: "DEMO-12") reads it;
+        // a name such as "my-notes" or "2024" costs no extra subscription, and a title word is
+        // answered by the listed rows alone.
+        const STORY_ID_QUERY = /^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*-\d/i;
         let storyIndex = null;
         function dropStoryIndex() {
-          if (storyIndex) cs.unsubscribe?.("stories", storyIndex.changed);
+          const entry = storyIndex;
           storyIndex = null;
+          if (!entry) return;
+          entry.active = false;
+          // Before the subscription resolves there is nothing to detach; the resolution does it.
+          if (entry.subscribed) cs.unsubscribe?.("stories", entry.changed);
         }
         function syncStoryIndex() {
-          if (!filter || state.scope !== "team" || !/[\d-]/.test(filter)) return dropStoryIndex();
+          if (!filter || state.scope !== "team" || !STORY_ID_QUERY.test(filter))
+            return dropStoryIndex();
           if (storyIndex) return;
-          const entry = (storyIndex = { rows: new Map() }),
-            epoch = generation;
-          entry.changed = (snapshot, delta) => {
-            if (disposed || storyIndex !== entry || epoch !== generation) return;
-            if (!delta) entry.rows = new Map((snapshot.snapshot || []).map((row) => [row.id, row]));
-            else {
-              (delta.removes || []).forEach((id) => entry.rows.delete(id));
-              (delta.upserts || []).forEach((row) => entry.rows.set(row.id, row));
-            }
+          const entry = (storyIndex = {
+              rows: [],
+              rev: null,
+              version: 0,
+              active: true,
+              subscribed: false,
+              ready: false,
+              pending: [],
+              changed: null,
+              buckets: null,
+            }),
+            epoch = generation,
+            live = () => !disposed && entry.active && epoch === generation;
+          const apply = (snapshot, delta) => {
+            entry.rows = mergeRows(entry.rows, entry.rev, snapshot, delta);
+            entry.rev = snapshot.rev;
+            entry.version++;
             paint();
           };
+          entry.changed = (snapshot, delta) => {
+            if (!live()) return;
+            if (!entry.ready) {
+              if (delta) entry.pending.push([snapshot, delta]);
+              return;
+            }
+            apply(snapshot, delta);
+          };
           Promise.resolve(cs.subscribe?.("stories", { window: [0, 2000], onChange: entry.changed }))
-            .then((snapshot) => snapshot && entry.changed(snapshot, null))
-            .catch(() => {});
+            .then((snapshot) => {
+              entry.subscribed = true;
+              if (!live()) {
+                if (storyIndex === entry) storyIndex = null;
+                entry.active = false;
+                return cs.unsubscribe?.("stories", entry.changed);
+              }
+              entry.ready = true;
+              if (snapshot) apply(snapshot, null);
+              entry.pending.splice(0).forEach(([later, delta]) => apply(later, delta));
+            })
+            .catch(() => {
+              // Forget the failed read, so the next keystroke tries again.
+              if (storyIndex === entry) storyIndex = null;
+              entry.active = false;
+            });
+        }
+        // The indexed stories and epics matching the query, bucketed by the folder that shows them
+        // (a story's own folder, and every folder above it as a directory row). Built once per
+        // (query, index version, root), so a paint's per-folder lookups never scan the index.
+        function indexBuckets() {
+          const stamp = filter + "\0" + root + "\0" + storyIndex.version;
+          if (storyIndex.buckets?.stamp === stamp) return storyIndex.buckets.map;
+          const map = new Map();
+          for (const entry of storyIndex.rows) {
+            if (
+              (entry.kind !== "story" && entry.kind !== "epic") ||
+              !entry.path.startsWith(root + "/") ||
+              !textMatches(filter, entry.storyId, entry.title, entry.name)
+            )
+              continue;
+            const parts = entry.path.slice(root.length + 1).split("/");
+            parts.forEach((part, depth) => {
+              const parent = depth ? root + "/" + parts.slice(0, depth).join("/") : root,
+                path = parent + "/" + part,
+                direct = depth === parts.length - 1,
+                bucket = map.get(parent) || map.set(parent, new Map()).get(parent);
+              if (bucket.has(path)) return;
+              bucket.set(path, {
+                id: path,
+                path,
+                name: direct ? entry.name : part,
+                kind: direct && entry.kind === "story" ? "file" : "dir",
+                ...(direct ? { storyId: entry.storyId, title: entry.title } : {}),
+                root,
+              });
+            });
+          }
+          storyIndex.buckets = { stamp, map };
+          return map;
         }
         // Listed rows of a directory, plus (while filtering) the indexed stories and epics that
         // match the query and live under it, whether or not their folder has been listed.
         function rootsFor(dir) {
           const rows = subscriptions.get(dir)?.rows || [];
-          if (!filter || !storyIndex) return rows;
-          const base = dir || root,
-            query = filter.toLocaleLowerCase(),
-            have = new Set(rows.map((row) => row.path)),
-            added = [];
-          if (!base) return rows;
-          for (const entry of storyIndex.rows.values()) {
-            if (
-              (entry.kind !== "story" && entry.kind !== "epic") ||
-              !entry.path.startsWith(base + "/") ||
-              !textMatches(query, entry.storyId, entry.title, entry.name)
-            )
-              continue;
-            const [first, ...rest] = entry.path.slice(base.length + 1).split("/"),
-              path = rest.length ? base + "/" + first : entry.path,
-              direct = !rest.length;
-            if (have.has(path)) continue;
-            have.add(path);
-            added.push({
-              id: path,
-              path,
-              name: direct ? entry.name : first,
-              kind: direct && entry.kind === "story" ? "file" : "dir",
-              ...(direct ? { storyId: entry.storyId, title: entry.title } : {}),
-              root,
-            });
-          }
+          const base = dir || root;
+          if (!filter || !storyIndex?.ready || !base) return rows;
+          const bucket = indexBuckets().get(base);
+          if (!bucket) return rows;
+          const have = new Set(rows.map((row) => row.path)),
+            added = [...bucket.values()].filter((row) => !have.has(row.path));
           return added.length ? [...rows, ...added] : rows;
         }
         function rowTree(rows, ancestors = new Set()) {
@@ -787,7 +845,7 @@
                       ariaHidden: true,
                     },
                   ];
-                else if (expanded.has(row.id) && !listing?.ready)
+                else if (expanded.has(row.id) && !listing?.ready && !value.children.length)
                   value.children = [
                     {
                       id: row.id + ":loading",

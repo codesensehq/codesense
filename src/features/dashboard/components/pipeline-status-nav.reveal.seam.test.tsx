@@ -16,8 +16,12 @@ import {
 // The reveal effect scrolls through the virtual list's imperative handle; spy on
 // it instead of measuring a real virtualizer (jsdom has no layout).
 const scrollToIndex = vi.fn();
+// The rows the list was last given, so a scroll's index can be checked against its row.
+const listItems = vi.fn<(items: unknown[]) => void>();
+const listedItems = (): unknown[] => listItems.mock.calls.at(-1)?.[0] ?? [];
 vi.mock("@/shared/components/virtual-list", () => ({
-  VirtualList: forwardRef<unknown, { items: unknown[] }>(function VirtualListStub(_props, ref) {
+  VirtualList: forwardRef<unknown, { items: unknown[] }>(function VirtualListStub(props, ref) {
+    listItems(props.items);
     useImperativeHandle(ref, () => ({ scrollToIndex, getScrollElement: () => null }), []);
     return null;
   }),
@@ -108,12 +112,16 @@ function renderNav(tree: DerivedPipelineTree, selectedPath: string) {
     />
   );
   const view = render(ui(tree, selectedPath));
-  return { rerenderTree: (t: DerivedPipelineTree) => view.rerender(ui(t, selectedPath)) };
+  return {
+    rerenderTree: (t: DerivedPipelineTree) => view.rerender(ui(t, selectedPath)),
+    rerender: () => view.rerender(ui(tree, selectedPath)),
+  };
 }
 
 describe("PipelineStatusNav reveal scroll", () => {
   beforeEach(() => {
     scrollToIndex.mockClear();
+    listItems.mockClear();
     pendingListings.clear();
     frames = new Map();
     nextFrame = 1;
@@ -150,7 +158,7 @@ describe("PipelineStatusNav reveal scroll", () => {
 
     expect(scrollToIndex).toHaveBeenCalledTimes(1);
     const [index] = scrollToIndex.mock.calls[0];
-    expect(index).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(listedItems()[index])).toContain("/repo/assets/sample.ts");
   });
 
   it.each([
@@ -161,5 +169,23 @@ describe("PipelineStatusNav reveal scroll", () => {
     renderNav(makeTree(overrides), path);
     flushFrames();
     expect(scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls again to the same row when the reveal counter is bumped", () => {
+    const { rerender } = renderNav(
+      makeTree({ stories: [story("a.md"), story("target.md")] }),
+      "/repo/target.md",
+    );
+    flushFrames();
+    expect(scrollToIndex).toHaveBeenCalledTimes(1);
+    const [index] = scrollToIndex.mock.calls[0];
+    expect(JSON.stringify(listedItems()[index])).toContain("/repo/target.md");
+
+    // A double-click on the file's tab bumps the counter; nothing else changes.
+    mockRevealCounter = { "/repo": 1 };
+    rerender();
+    flushFrames();
+    expect(scrollToIndex).toHaveBeenCalledTimes(2);
+    expect(scrollToIndex.mock.calls[1][0]).toBe(index);
   });
 });

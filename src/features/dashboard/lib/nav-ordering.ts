@@ -16,10 +16,11 @@ export const compareNavNames = navCollator.compare;
 
 /** The nav filter's one matching rule: the trimmed query is a case-insensitive substring of
  *  any of the given texts (a name, a story id, a title). An empty query matches everything.
- *  The dashboard kit carries the same rule as `navTextMatches`. */
+ *  The files-tree pane (`textMatches` in files-tree.html) carries the same rule; both run the
+ *  cases in tests/support/fixtures/nav-text-match.ts. */
 export function navTextMatches(query: string, ...texts: (string | null | undefined)[]): boolean {
-  const q = query.trim().toLowerCase();
-  return !q || texts.some((text) => !!text && text.toLowerCase().includes(q));
+  const q = query.trim().toLocaleLowerCase();
+  return !q || texts.some((text) => !!text && text.toLocaleLowerCase().includes(q));
 }
 
 /** Order sub-epics alphabetically by dirName. */
