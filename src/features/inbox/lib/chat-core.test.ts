@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: MIT
+// The chat-core cases the dashboard kit and the context repo's story-view both run (their copy is chat-core.test.mjs):
+// the marks rule and the card parser, through the overlay's import.
+import { describe, expect, it } from "vitest";
+
+import { cardAnswer, deliveryMark, isBusy, parseCard, type ChatLeadRow } from "./chat-core";
+
+const SENT = Date.parse("2026-11-12T10:00:00Z");
+const later = (ms: number) => new Date(SENT + ms).toISOString();
+const earlier = (ms: number) => new Date(SENT - ms).toISOString();
+// The lead rows below are the shapes list_sessions returns: mailNotice null | 'pending' | 'told', notifiedAt RFC 3339 or null, unread a count.
+const lead = (extra: ChatLeadRow = {}): ChatLeadRow => ({
+  state: "running",
+  unread: 1,
+  mailNotice: "pending",
+  notifiedAt: null,
+  ...extra,
+});
+const mark = (extra: Partial<Parameters<typeof deliveryMark>[0]> = {}) =>
+  deliveryMark({ sentAt: SENT, busyAtSend: true, lead: lead(), newestLeadAt: 0, ...extra });
+
+describe("deliveryMark", () => {
+  it("isBusy: only an idle lead is free", () => {
+    expect(isBusy({ state: "idle" })).toBe(false);
+    for (const state of ["running", "needs-you", "offline", "unknown"])
+      expect(isBusy({ state }), state).toBe(true);
+    expect(isBusy(null), "no lead row: the launch machine owns the mark").toBe(false);
+  });
+
+  it("a send to an idle lead is Delivered at once", () => {
+    expect(mark({ busyAtSend: false })).toBe("delivered");
+  });
+
+  it("a send to a busy lead is Queued while its notice is pending or absent", () => {
+    expect(mark()).toBe("queued");
+    expect(mark({ lead: lead({ mailNotice: null, unread: 1 }) }), "unread mail, no notice").toBe(
+      "queued",
+    );
+  });
+
+  it("Queued clears on mailNotice told", () => {
+    expect(mark({ lead: lead({ mailNotice: "told", notifiedAt: later(5) }) })).toBe("delivered");
+    expect(
+      mark({ lead: lead({ mailNotice: "told", notifiedAt: null }) }),
+      "told alone is enough",
+    ).toBe("delivered");
+  });
+
+  it("Queued clears on notifiedAt at or after sentAt with unread 0", () => {
+    expect(mark({ lead: lead({ mailNotice: null, unread: 0, notifiedAt: later(0) }) })).toBe(
+      "delivered",
+    );
+    expect(mark({ lead: lead({ mailNotice: null, unread: 0, notifiedAt: later(2000) }) })).toBe(
+      "delivered",
+    );
+  });
+
+  it("the real told -> read sequence: pending, told, then read (mailNotice null, unread 0)", () => {
+    const sequence: [ChatLeadRow, string][] = [
+      [lead({ mailNotice: "pending", unread: 1, notifiedAt: null }), "queued"],
+      [lead({ mailNotice: "told", unread: 1, notifiedAt: later(900) }), "delivered"],
+      [lead({ mailNotice: null, unread: 0, notifiedAt: later(900) }), "delivered"],
+    ];
+    for (const [row, want] of sequence) expect(mark({ lead: row }), JSON.stringify(row)).toBe(want);
+  });
+
+  it("an older notice or unread mail does not clear Queued", () => {
+    expect(
+      mark({ lead: lead({ mailNotice: null, unread: 0, notifiedAt: earlier(1) }) }),
+      "the notice predates the send",
+    ).toBe("queued");
+    expect(
+      mark({ lead: lead({ mailNotice: null, unread: 1, notifiedAt: later(10) }) }),
+      "read is unread 0",
+    ).toBe("queued");
+    expect(
+      mark({ lead: lead({ mailNotice: "pending", unread: 0, notifiedAt: null }) }),
+      "no notice at all",
+    ).toBe("queued");
+    expect(
+      mark({ lead: lead({ mailNotice: null, unread: 0, notifiedAt: "not a date" }) }),
+      "an unparsable time never clears",
+    ).toBe("queued");
+  });
+
+  it("Queued clears on a lead message after sentAt, and not on one before it", () => {
+    expect(mark({ newestLeadAt: SENT + 1 })).toBe("delivered");
+    expect(mark({ newestLeadAt: SENT })).toBe("queued");
+    expect(mark({ newestLeadAt: SENT - 1 })).toBe("queued");
+  });
+
+  it("with no lead row a busy send keeps its mark, so a lead that leaves cannot un-deliver one", () => {
+    expect(mark({ lead: null })).toBe("queued");
+    expect(mark({ lead: null, busyAtSend: false })).toBe("delivered");
+  });
+});
+
+const Q = "Lazy-load inboxes after the first paint, or page them 10 at a time?";
+const card = (options: string, pick = "Lazy-load after paint") =>
+  `${Q}\n\nOptions: ${options}. My pick: ${pick}, because it is faster.`;
+
+describe("parseCard", () => {
+  it("reads the question, the options and the pick; the pick comes first", () => {
+    const parsed = parseCard(card("`Page 10 at a time`, `Lazy-load after paint`, or `Both`"));
+    expect(parsed?.question).toBe(Q);
+    expect(parsed?.options).toEqual(["Lazy-load after paint", "Page 10 at a time", "Both"]);
+    expect(parsed?.pick).toBe("Lazy-load after paint");
+    expect(parsed?.reason).toBe("it is faster");
+  });
+
+  it("the pick may be backticked, differ in case, and a card with no pick keeps its order", () => {
+    expect(parseCard(card("`A`, `B`", "`B`"))?.options[0]).toBe("B");
+    expect(parseCard(card("`Yes`, `No`", "yes"))?.options[0]).toBe("Yes");
+    const none = parseCard(`${Q}\n\nOptions: \`A\` or \`B\`.`);
+    expect(none?.options).toEqual(["A", "B"]);
+    expect(none?.pick).toBeNull();
+    expect(
+      parseCard(card("`A`, `B`", "C"))?.pick,
+      "a pick that is no option is dropped",
+    ).toBeNull();
+  });
+
+  it("keeps the text before Options as the question, over several lines", () => {
+    const parsed = parseCard(
+      "Merge SV-X-1?\n**PR:** link\n\nOptions: `merge` or `hold`. My pick: merge, because green.",
+    );
+    expect(parsed?.question).toBe("Merge SV-X-1?\n**PR:** link");
+    expect(parsed?.options).toEqual(["merge", "hold"]);
+  });
+
+  it("falls back (null) for anything it cannot read as buttons", () => {
+    for (const text of [
+      "",
+      null,
+      undefined,
+      42,
+      "Should I ship it?",
+      "Options: just words, no backticks. My pick: words.",
+      `${Q}\n\nOptions: \`only one\`. My pick: only one.`,
+      "Merge?\n\nOptions: `merge`, or `send back: <reason>`. My pick: merge, because ok.",
+      `${Q}\n\nOptions: ${Array.from({ length: 9 }, (_, i) => `\`o${i}\``).join(", ")}.`,
+      `${Q}\n\nOptions: \`${"x".repeat(200)}\`, \`b\`.`,
+      `${Q}\n\nOptions: \`A\`, \`A\`.`,
+      "\n\nOptions: `A`, `B`.",
+    ])
+      expect(parseCard(text), String(text).slice(0, 60)).toBeNull();
+  });
+
+  it("uses the last Options line, so a quoted earlier one does not win", () => {
+    const parsed = parseCard(
+      "Earlier I wrote\nOptions: `x`, `y`.\nNow:\nOptions: `A`, `B`. My pick: B.",
+    );
+    expect(parsed?.options).toEqual(["B", "A"]);
+  });
+});
+
+describe("cardAnswer", () => {
+  it("a human row whose inReplyTo is the card id answers it, wherever it was sent from", () => {
+    const thread = [
+      { messageId: 5, from: "human", inReplyTo: 7, text: "Both", createdAtMs: SENT + 1000 },
+      { messageId: 6, from: "human", inReplyTo: null, text: "hi" },
+    ];
+    expect(cardAnswer(7, thread)).toEqual({ text: "Both", at: SENT + 1000 });
+    expect(cardAnswer(8, thread)).toBeNull();
+    expect(cardAnswer(7, [])).toBeNull();
+    expect(cardAnswer(7, undefined)).toBeNull();
+    expect(
+      cardAnswer(7, [{ messageId: 9, from: "role:x", inReplyTo: 7 }]),
+      "only the person",
+    ).toBeNull();
+  });
+});
