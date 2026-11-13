@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
-  closeAgentInboxRail,
+  closeAgentInboxRailToTerminal,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
@@ -178,12 +178,7 @@ function closeInboxRailKeepingFocus(sessionId: string): void {
     overlay && overlay.dataset.sessionId === sessionId
       ? overlay.closest("[data-pane-id], [data-pane-active]")
       : null;
-  closeAgentInboxRail(sessionId);
-  // A terminal the chat covered is inert until the chat is gone: focus it once that has rendered.
-  if (pane)
-    requestAnimationFrame(() =>
-      pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
-    );
+  closeAgentInboxRailToTerminal(sessionId, pane);
 }
 
 export interface ShortcutAction {

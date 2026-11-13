@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   closeAgentInboxRail,
+  closeAgentInboxRailToTerminal,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "./agent-inbox-rail-store";
@@ -64,5 +65,25 @@ describe("agent inbox rail store", () => {
     closeAgentInboxRail("sid-a");
     expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
     expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({ composeRequest: 0 });
+  });
+
+  it("closes the chat, then focuses the pane's terminal once the chat has gone", async () => {
+    openAgentInboxRail(SID);
+    const pane = document.createElement("div");
+    pane.innerHTML = '<div class="xterm"><textarea data-testid="term"></textarea></div>';
+    document.body.appendChild(pane);
+    closeAgentInboxRailToTerminal(SID, pane);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+    // A covered terminal is inert until then: focus waits for the next frame.
+    expect(document.activeElement).not.toBe(pane.querySelector("textarea"));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(pane.querySelector("textarea"));
+    pane.remove();
+  });
+
+  it("closes the chat and leaves focus alone when there is no pane to hand it to", () => {
+    openAgentInboxRail(SID);
+    expect(() => closeAgentInboxRailToTerminal(SID, null)).not.toThrow();
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
   });
 });

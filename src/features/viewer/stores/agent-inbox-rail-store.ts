@@ -116,3 +116,15 @@ export function markAgentInboxRailComposeHandled(sessionId: string, n: number): 
 export function closeAgentInboxRail(sessionId: string) {
   useAgentInboxRailStore.getState().close(sessionId);
 }
+
+/**
+ * Close the chat on `sessionId`, then focus the terminal in `pane` (the tab's pane, if known).
+ * A terminal the chat covered is inert until the chat is gone, so focus waits for the next frame.
+ */
+export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element | null) {
+  closeAgentInboxRail(sessionId);
+  if (pane)
+    requestAnimationFrame(() =>
+      pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
+    );
+}

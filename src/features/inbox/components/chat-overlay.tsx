@@ -8,7 +8,7 @@ import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-pr
 import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
-  closeAgentInboxRail,
+  closeAgentInboxRailToTerminal,
   markAgentInboxRailComposeHandled,
   useAgentInboxRailComposeHandled,
   useAgentInboxRailStore,
@@ -219,14 +219,11 @@ export function ChatOverlay({
   const keyHint = formatKeystrokeDisplay(
     findShortcutAction(CHAT_TERMINAL_SHORTCUT_ID)?.defaultKeystroke ?? "",
   );
-  const toTerminal = () => {
-    const pane = rootRef.current?.closest("[data-pane-id], [data-pane-active]");
-    closeAgentInboxRail(sessionId);
-    // A covered terminal is inert until the overlay is gone: focus it once that has rendered.
-    requestAnimationFrame(() =>
-      pane?.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
+  const toTerminal = () =>
+    closeAgentInboxRailToTerminal(
+      sessionId,
+      rootRef.current?.closest("[data-pane-id], [data-pane-active]") ?? null,
     );
-  };
 
   // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
   // its composer once that shows (or on the chat itself while it loads), unless it is already
