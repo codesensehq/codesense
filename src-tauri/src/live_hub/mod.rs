@@ -1638,10 +1638,30 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     if paused {
         return;
     }
+    let viewed = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .subscription_view(subscription_id);
     TopicRegistry::unsubscribe(
         &mut app.state::<LiveHub>().model.lock().unwrap().projections,
         subscription_id,
     );
+    // The last subscriber of a pins view takes the view's refreshes with it.
+    if let Some((topic, key)) = viewed.filter(|(topic, _)| topic == pins::TOPIC) {
+        let held = app
+            .state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .has_view_subscribers(&topic, &key);
+        if !held {
+            pins::drop_view(app, &key);
+        }
+    }
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
 }
 pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &str) {

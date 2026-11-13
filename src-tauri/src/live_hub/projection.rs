@@ -643,6 +643,12 @@ impl TopicRegistry {
             .values()
             .any(|s| s.topic == topic && s.key == key)
     }
+    /// The topic and view key subscription `id` follows.
+    pub fn subscription_view(&self, id: &str) -> Option<(String, String)> {
+        self.subscriptions
+            .get(id)
+            .map(|s| (s.topic.clone(), s.key.clone()))
+    }
     pub fn unsubscribe(&mut self, id: &str) {
         self.subscriptions.remove(id);
     }
