@@ -148,10 +148,10 @@ fn spec(
                 | "react"
                 | "updates"
                 | "humanStatus"
-                | "inbox.pins"
-                | "inbox.pin"
-                | "inbox.unpin"
-                | "inbox.reorderPins"
+                | "pins"
+                | "pin"
+                | "unpin"
+                | "reorderPins"
         ),
         confirmable,
         mcp_twin: mcp_twin.map(str::to_owned),
@@ -183,11 +183,11 @@ fn capability_for_verb(name: &str) -> &'static str {
         "openTab" | "openWorkspace" | "runSkill" => "launch",
         "humanStatus" | "inbox" | "roles" | "updates" | "watchInbox" | "watchAgentInbox"
         | "watchAgentActivity" | "openMessage" | "embedMessage" | "openAgentInbox"
-        | "inbox.pins" => "inbox:read:team",
+        | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "inbox.pin"
-        | "inbox.unpin" | "inbox.reorderPins" => "inbox:write",
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
+        | "unpin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -271,15 +271,15 @@ fn register_resources(registry: &mut Registry) {
     // tool; reading another thread and reordering are the person's, from a page.
     for (verb, class, twin, reason) in [
         (
-            "inbox.pins",
+            "pins",
             Class::Read,
             None,
             Some("Agents read their pins in the result of the pin tool; pages read any thread of their team"),
         ),
-        ("inbox.pin", Class::Metadata, Some("pin"), None),
-        ("inbox.unpin", Class::Metadata, Some("pin"), None),
+        ("pin", Class::Metadata, Some("pin"), None),
+        ("unpin", Class::Metadata, Some("pin"), None),
         (
-            "inbox.reorderPins",
+            "reorderPins",
             Class::Metadata,
             None,
             Some("The person arranges a thread's pins; an agent places a pin with the pin tool's position"),

@@ -220,7 +220,7 @@ async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeConte
     return { viewKey: await recordsPrepareView(ctx!.frame!.frameId, String(args.collection)) };
   if (args.topic === "pins") {
     const { agentId, storyId } = pinThread(args, "subscribe");
-    const team = await inboxTeam(ctx, "inbox.pins");
+    const team = await inboxTeam(ctx, "pins");
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
   if (args.topic === "agentDefinitions") {
@@ -1397,19 +1397,17 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   // An agent thread's pin list (saved agent + story), in the frame's team store. The
   // person pins into any thread; an agent pins its own with the MCP pin tool.
-  "inbox.pins": async (args, ctx) => {
-    const a = argObject(args, "inbox.pins");
-    const { agentId, storyId } = pinThread(a, "inbox.pins");
-    return inboxWrite(ctx, "inbox.pins", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "read" }),
-    );
+  pins: async (args, ctx) => {
+    const a = argObject(args, "pins");
+    const { agentId, storyId } = pinThread(a, "pins");
+    return inboxWrite(ctx, "pins", a, (team) => agentPins(team, agentId, storyId, { op: "read" }));
   },
-  "inbox.pin": async (args, ctx) => {
-    const a = argObject(args, "inbox.pin");
-    const { agentId, storyId } = pinThread(a, "inbox.pin");
-    const id = messageId(a.messageId, "inbox.pin");
+  pin: async (args, ctx) => {
+    const a = argObject(args, "pin");
+    const { agentId, storyId } = pinThread(a, "pin");
+    const id = messageId(a.messageId, "pin");
     if (a.position != null && (!Number.isSafeInteger(a.position) || (a.position as number) < 0)) {
-      throw new Error("inbox.pin: position, if present, must be a whole number from 0");
+      throw new Error("pin: position, if present, must be a whole number from 0");
     }
     const position = a.position == null ? undefined : (a.position as number);
     // The engine checks the preview's fields; here only its shape.
@@ -1417,10 +1415,10 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "preview" in a &&
       (typeof a.preview !== "object" || !a.preview || Array.isArray(a.preview))
     ) {
-      throw new Error("inbox.pin: preview, if present, must be an object");
+      throw new Error("pin: preview, if present, must be an object");
     }
     const preview = a.preview as AgentPinPreview | undefined;
-    return inboxWrite(ctx, "inbox.pin", a, (team) =>
+    return inboxWrite(ctx, "pin", a, (team) =>
       agentPins(team, agentId, storyId, {
         op: "pin",
         messageId: id,
@@ -1429,22 +1427,22 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       }),
     );
   },
-  "inbox.unpin": async (args, ctx) => {
-    const a = argObject(args, "inbox.unpin");
-    const { agentId, storyId } = pinThread(a, "inbox.unpin");
-    const id = messageId(a.messageId, "inbox.unpin");
-    return inboxWrite(ctx, "inbox.unpin", a, (team) =>
+  unpin: async (args, ctx) => {
+    const a = argObject(args, "unpin");
+    const { agentId, storyId } = pinThread(a, "unpin");
+    const id = messageId(a.messageId, "unpin");
+    return inboxWrite(ctx, "unpin", a, (team) =>
       agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
     );
   },
-  "inbox.reorderPins": async (args, ctx) => {
-    const a = argObject(args, "inbox.reorderPins");
-    const { agentId, storyId } = pinThread(a, "inbox.reorderPins");
+  reorderPins: async (args, ctx) => {
+    const a = argObject(args, "reorderPins");
+    const { agentId, storyId } = pinThread(a, "reorderPins");
     if (!Array.isArray(a.messageIds)) {
-      throw new Error("inbox.reorderPins: {messageIds} must list the thread's pinned message ids");
+      throw new Error("reorderPins: {messageIds} must list the thread's pinned message ids");
     }
-    const messageIds = a.messageIds.map((id) => messageId(id, "inbox.reorderPins"));
-    return inboxWrite(ctx, "inbox.reorderPins", a, (team) =>
+    const messageIds = a.messageIds.map((id) => messageId(id, "reorderPins"));
+    return inboxWrite(ctx, "reorderPins", a, (team) =>
       agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
     );
   },

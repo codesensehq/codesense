@@ -155,10 +155,10 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
         "getWorkspaceStatus" => string("storyId"),
         "sendPrompt" | "stopSession" | "closeTerminalTab" => string("handle"),
         "sendAsHuman" => string("to"),
-        "inbox.reorderPins" => args["messageIds"]
+        "reorderPins" => args["messageIds"]
             .as_array()
             .map(|pins| format!("{} pins", pins.len())),
-        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "inbox.pin" | "inbox.unpin" => {
+        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" => {
             args["messageId"]
                 .as_number()
                 .map(|id| format!("message {id}"))
