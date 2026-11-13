@@ -304,6 +304,102 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
     Err("Access denied: path is outside any registered worktree".to_string())
 }
 
+/// The registered story worktree `root` names, as spelled and as its real
+/// path, when it is one and not in the context repo; `None` otherwise. A frame
+/// rooted there (the worktree editor's Rendered view) takes the worktree gate
+/// ([`path_in_frame_worktree`]); context content keeps its team-scoped gate.
+///
+/// The root is taken both ways because a worktree behind a symlink (`/var`, a
+/// linked `~/dev`) is requested by its spelling and then re-checked by its
+/// real path once the file is resolved. So the root must *be* a registered
+/// root, by either spelling, never merely lie inside one: a link committed in
+/// the worktree (`W/link → $HOME`) would otherwise admit everything under its
+/// target.
+pub(crate) fn frame_worktree_root<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: &Path,
+) -> Option<[PathBuf; 2]> {
+    let spelled = normalize_path_components(root);
+    let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
+    let registered = codesense_home_dir()
+        .map(|home| crate::install::worktree_index::worktree_roots(&home))
+        .unwrap_or_default();
+    let is_root = registered.iter().any(|r| {
+        let r = normalize_path_components(r);
+        r == spelled || r.canonicalize().is_ok_and(|r| r == real)
+    });
+    let roots = [spelled, real];
+    (is_root && roots.iter().all(|root| !path_in_context_roots(root, app))).then_some(roots)
+}
+
+/// May a frame rooted at the worktree `roots` (from [`frame_worktree_root`])
+/// with `document` read `path`? Only a hydrated story file: the repo's own
+/// files (its secrets, its source, a page an agent wrote there) are never
+/// served. The one exception is the frame's own document when it is an image,
+/// so a repo image still opens Rendered and its frame reads nothing else.
+/// Traversal-safe like [`validate_worktree_path`], and a link inside the
+/// worktree is judged by where it resolves.
+pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    roots: &[PathBuf; 2],
+    document: &Path,
+    path: &Path,
+) -> bool {
+    if !path_within_any_root(path, roots) {
+        return false;
+    }
+    let resolved = |p: &Path| {
+        p.canonicalize()
+            .unwrap_or_else(|_| normalize_path_components(p))
+    };
+    if is_image_path(document) && resolved(document) == resolved(path) {
+        return true;
+    }
+    let resolved = resolved(path);
+    let Some(rel) = roots
+        .iter()
+        .rev()
+        .find_map(|root| resolved.strip_prefix(root).ok())
+    else {
+        return false;
+    };
+    hydrated_worktree_files(app, roots).contains(&*rel.to_string_lossy())
+}
+
+/// The hydrated story files of the worktree at `roots`, by their path in it.
+/// The profile is peeked, as the context gate does: a read never pins the
+/// selection, and revoked machine access hydrates nothing.
+fn hydrated_worktree_files<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    roots: &[PathBuf; 2],
+) -> std::collections::BTreeSet<String> {
+    let (Some(home), Some(profile)) = (
+        codesense_home_dir(),
+        crate::commands::local_profile::peek_active(app),
+    ) else {
+        return Default::default();
+    };
+    crate::agents::prepare::step3::hydrated_team_files(&home, &profile.principal, &roots[1])
+}
+
+/// The hydrated story files of the registered worktree `root` names: what its
+/// Rendered view serves, and opens Rendered.
+pub(crate) fn worktree_hydrated_files_at<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    let roots = frame_worktree_root(app, root)
+        .ok_or("Access denied: path is not a registered worktree root")?;
+    Ok(hydrated_worktree_files(app, &roots).into_iter().collect())
+}
+
+/// Whether `path` names an image by its extension (the viewer route's MIME).
+pub(crate) fn is_image_path(path: &Path) -> bool {
+    mime_guess::from_path(path)
+        .first()
+        .is_some_and(|mime| mime.type_() == mime_guess::mime::IMAGE)
+}
+
 /// Owned-`PathBuf` variant of `validate_context_path`. Builds the `PathBuf`
 /// from a string, runs validation, and returns the owned path so handlers
 /// can collapse the two-line preamble into a single call.
@@ -1023,6 +1119,22 @@ fn write_worktree_bytes(file_path: &Path, content: &[u8]) -> Result<(), String> 
         error!(target: "files", "write_worktree_file failed for {}: {}", file_path.display(), e);
         format!("failed to write file {}: {}", file_path.display(), e)
     })
+}
+
+/// The binary companion to [`write_worktree_file`]: base64 bytes to a file in a
+/// registered worktree, by the same gate and the same unsuppressed atomic write.
+/// A canvas drawn in the worktree editor's Rendered view writes its PNG render
+/// through it.
+#[tauri::command]
+pub async fn write_binary_worktree_file(path: String, base64: String) -> Result<(), String> {
+    crate::commands::await_blocking("write_binary_worktree_file", move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64.as_bytes())
+            .map_err(|e| format!("invalid base64 for {}: {}", path, e))?;
+        let file_path = validate_worktree_path_owned(&path)?;
+        write_worktree_bytes(&file_path, &bytes)
+    })
+    .await
 }
 
 /// Atomically write base64-decoded **binary** `base64` bytes to a context-repo

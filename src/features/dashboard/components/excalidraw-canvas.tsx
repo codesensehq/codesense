@@ -91,9 +91,25 @@ function persistedAppState(appState: unknown): Record<string, unknown> {
   return out;
 }
 
+/** Where a canvas saves: its JSON and its PNG render. Absent, the context
+ *  repo's writers; a canvas in a source worktree saves through the worktree's.
+ *  `base` is the exact text of the disk version the canvas adopted (`null`: no
+ *  file was there), so a writer can refuse a save over a newer version. */
+export type CanvasWriter = {
+  writeText: (path: string, content: string, base: string | null) => Promise<void>;
+  writeBinary: (path: string, base64: string) => Promise<void>;
+};
+
+const CONTEXT_WRITER: CanvasWriter = {
+  writeText: (path, content) => writeContentFile(path, content),
+  writeBinary: (path, base64) => writeBinaryContentFile(path, base64),
+};
+
 type Props = {
   filePath: string;
   scene: ExcalidrawScene;
+  /** The exact text `scene` was read from (`null`: the read failed). */
+  sourceText?: string | null;
   /**
    * SW-GS-3: read-only review surface (the sync-view diff). Renders the canvas
    * in Excalidraw view mode AND disables the persist path, so a stray edit can
@@ -105,11 +121,14 @@ type Props = {
   // `reloadNonce` increments on each genuine external change so the canvas
   // reacts even when two writes parse to the same `externalScene` object.
   externalScene?: ExcalidrawScene | null;
+  /** The exact text `externalScene` was read from. */
+  externalText?: string | null;
   reloadNonce?: number;
   /** Active team context for the wireframe library (SW-SC-5/SW-SC-8).
    *  `null`/absent until an org/team/user is selected — load/persist no-op
    *  then (D5). */
   libraryCtx?: ResolverContext | null;
+  writer?: CanvasWriter;
 };
 
 /** Excalidraw's `validateEmbeddable`: no link may be embedded, so a canvas loads no outside frame. */
@@ -137,10 +156,13 @@ const LIBRARY_PUBLISH_ITEM_SELECTOR = '.library-menu [data-testid="lib-dropdown-
 export default function ExcalidrawCanvas({
   filePath,
   scene: fileScene,
+  sourceText = null,
   externalScene: fileExternalScene,
+  externalText = null,
   reloadNonce,
   libraryCtx = null,
   readOnly = false,
+  writer = CONTEXT_WRITER,
 }: Props) {
   const { resolvedTheme } = useTheme();
 
@@ -176,6 +198,19 @@ export default function ExcalidrawCanvas({
   const diskSigRef = useRef<string>(initialSig);
   const liveSigRef = useRef<string>(initialSig);
 
+  // The save lock: the exact text of the disk version the canvas adopted, the
+  // one `diskSig` was drawn over. It moves only on the initial scene, an
+  // applied or no-op reload, and the canvas's own write; a nudged reload adopts
+  // nothing, so a dirty canvas's save stays locked to the older version and is
+  // refused over the newer one. `adoptGen` counts adoptions so a write that
+  // lands after a reload was adopted doesn't move the lock back.
+  const adoptedRef = useRef<string | null>(sourceText);
+  const adoptGenRef = useRef(0);
+  const adopt = useCallback((text: string | null) => {
+    adoptedRef.current = text;
+    adoptGenRef.current += 1;
+  }, []);
+
   // One debounced writer per mounted file (the parent keys this component on
   // filePath, so `filePath` is stable for the component's lifetime). Saving is
   // fire-and-forget — drawing is never blocked on disk I/O (AC-6). `diskSig`
@@ -188,9 +223,13 @@ export default function ExcalidrawCanvas({
     () =>
       createDebouncedAction(
         async (...args: unknown[]) => {
+          const content = args[0] as string;
           const writtenSig = args[1] as string;
           try {
-            await writeContentFile(filePath, args[0] as string);
+            const gen = adoptGenRef.current;
+            await writer.writeText(filePath, content, adoptedRef.current);
+            // The disk now holds what was written, whatever the user drew since.
+            if (adoptGenRef.current === gen) adoptedRef.current = content;
             // Advance the disk baseline only if the canvas still holds exactly
             // what we just wrote. If a reload (applyExternal) landed while this
             // write was in flight — cancel() can't stop an already-fired write
@@ -207,7 +246,7 @@ export default function ExcalidrawCanvas({
         SAVE_DEBOUNCE_MS,
         "excalidrawSave",
       ),
-    [filePath],
+    [filePath, writer],
   );
 
   // SW-SC-2 (AC-3/AC-4/AC-6): regenerate the PNG render alongside the JSON
@@ -227,7 +266,7 @@ export default function ExcalidrawCanvas({
           try {
             const blob = await exportToBlob({ ...s, mimeType: "image/png" });
             const base64 = await blobToBase64(blob);
-            await writeBinaryContentFile(canvasPngPath(filePath), base64);
+            await writer.writeBinary(canvasPngPath(filePath), base64);
           } catch (e) {
             logger.error("viewer", `excalidraw PNG render failed for ${filePath}: ${e}`);
           }
@@ -235,7 +274,7 @@ export default function ExcalidrawCanvas({
         SAVE_DEBOUNCE_MS,
         "excalidrawPng",
       ),
-    [filePath],
+    [filePath, writer],
   );
 
   // SW-SC-8 library state. True while the mount injection is mutating the
@@ -360,7 +399,7 @@ export default function ExcalidrawCanvas({
   // imperative API isn't captured yet, so the caller can fall back to a nudge
   // rather than silently drop the change.
   const applyExternal = useCallback(
-    (s: ExcalidrawScene): boolean => {
+    (s: ExcalidrawScene, text: string | null): boolean => {
       const api = apiRef.current;
       if (!api) return false;
       // Discard any debounced local save still in flight: the user took the
@@ -384,15 +423,19 @@ export default function ExcalidrawCanvas({
       const appliedSig = sceneSignature(api.getSceneElements(), api.getAppState(), api.getFiles());
       diskSigRef.current = appliedSig;
       liveSigRef.current = appliedSig;
+      adopt(text);
       return true;
     },
-    [save],
+    [save, adopt],
   );
 
   // A reload the user must opt into because they have unsaved local edits
   // (AC-3). Holds the latest external scene; a newer write while the nudge is
   // open replaces it so "reload" always takes the freshest disk state.
-  const [pendingReload, setPendingReload] = useState<ExcalidrawScene | null>(null);
+  const [pendingReload, setPendingReload] = useState<{
+    scene: ExcalidrawScene;
+    text: string | null;
+  } | null>(null);
 
   // React to an external write parsed by the wrapper. Gated on `reloadNonce`
   // so it fires once per genuine change and never on the initial mount.
@@ -409,25 +452,28 @@ export default function ExcalidrawCanvas({
     const dirty = liveSigRef.current !== diskSigRef.current;
     const decision = decideCanvasReload({ externalSig, diskSig: diskSigRef.current, dirty });
     if (decision === "noop") {
-      // Disk matches what we already hold — clear any open nudge that was
-      // pointing at a now-superseded intermediate scene.
+      // Disk matches what we already hold (maybe in other bytes): adopt those
+      // bytes, and clear any open nudge that was pointing at a now-superseded
+      // intermediate scene.
+      adopt(externalText);
       setPendingReload(null);
       return;
     }
+    const pending = { scene: externalScene, text: externalText };
     if (decision === "apply") {
       // Fall back to a nudge if the API isn't captured yet, so a clean-canvas
       // reload is surfaced (user-recoverable) rather than silently dropped.
-      setPendingReload(applyExternal(externalScene) ? null : externalScene);
+      setPendingReload(applyExternal(externalScene, externalText) ? null : pending);
       return;
     }
-    setPendingReload(externalScene);
-  }, [reloadNonce, externalScene, applyExternal]);
+    setPendingReload(pending);
+  }, [reloadNonce, externalScene, externalText, applyExternal, adopt]);
 
   const acceptPendingReload = useCallback(() => {
     if (!pendingReload) return;
     // Keep the banner up if the apply couldn't run (API not ready) so the
     // reload isn't lost; by click time the API is captured in practice.
-    if (applyExternal(pendingReload)) setPendingReload(null);
+    if (applyExternal(pendingReload.scene, pendingReload.text)) setPendingReload(null);
   }, [pendingReload, applyExternal]);
 
   // Load the team library into the panel — fully off the mount path (AC-6):

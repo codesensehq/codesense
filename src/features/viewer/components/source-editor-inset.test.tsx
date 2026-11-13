@@ -152,6 +152,7 @@ const writeHashes: (string | undefined)[] = [];
 const lazyAttachWorktreeWatchMock = vi.fn<(id: string, cwd: string) => Promise<number>>();
 const detachWorktreeWatchMock = vi.fn<(id: string, token: number) => Promise<void>>();
 const worktreeListFilesMock = vi.fn();
+const worktreeHydratedFilesMock = vi.fn();
 const worktreeFileHeadMock = vi.fn();
 const remote = {
   list: vi.fn(),
@@ -187,6 +188,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   lazyAttachWorktreeWatch: (id: string, cwd: string) => lazyAttachWorktreeWatchMock(id, cwd),
   detachWorktreeWatch: (id: string, token: number) => detachWorktreeWatchMock(id, token),
   worktreeListFiles: (root: string) => worktreeListFilesMock(root),
+  worktreeHydratedFiles: (root: string) => worktreeHydratedFilesMock(root),
   worktreeFileHead: (path: string) => worktreeFileHeadMock(path),
   sourceRemoteListDirectory: (...a: unknown[]) => remote.list(...a),
   sourceRemoteFileRead: (...a: unknown[]) => remote.read(...a),
@@ -252,6 +254,8 @@ beforeEach(() => {
   });
   worktreeFileHeadMock.mockReset();
   worktreeFileHeadMock.mockResolvedValue(null);
+  worktreeHydratedFilesMock.mockReset();
+  worktreeHydratedFilesMock.mockResolvedValue([]);
   for (const fn of Object.values(remote)) fn.mockReset();
   // SLW-WDE-3: reset the per-workspace external-change signal between tests.
   useViewerStore.setState({
@@ -313,10 +317,10 @@ describe("SourceEditorInset — read/gate (SLW-WDE-1 carried forward)", () => {
     expect(screen.getByTestId("mock-code-editor")).not.toHaveAttribute("data-readonly", "true");
   });
 
-  it("§B: an oversized file shows a placeholder WITHOUT reading it — not editable", () => {
+  it("§B: an oversized file shows a placeholder WITHOUT reading it — not editable", async () => {
     render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
     fireEvent.click(screen.getByTestId("pick-large"));
-    expect(screen.getByTestId("worktree-file-placeholder")).toBeInTheDocument();
+    expect(await screen.findByTestId("worktree-file-placeholder")).toBeInTheDocument();
     expect(screen.getByText(/too large/i)).toBeInTheDocument();
     // Says how big the file is and what the editor takes, not just "no".
     expect(screen.getByTestId("worktree-file-placeholder")).toHaveTextContent("5 MB");
@@ -329,6 +333,8 @@ describe("SourceEditorInset — read/gate (SLW-WDE-1 carried forward)", () => {
     readFileMock.mockResolvedValueOnce("\0PNG rest");
     render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
     fireEvent.click(screen.getByTestId("pick-binary"));
+    // An image opens Rendered; Source is where the editor says it can't hold it.
+    fireEvent.click(await screen.findByRole("radio", { name: "Source" }));
     expect(await screen.findByTestId("worktree-file-placeholder")).toBeInTheDocument();
     expect(screen.getByText(/binary file/i)).toBeInTheDocument();
     expect(screen.queryByTestId("mock-code-editor")).not.toBeInTheDocument();
@@ -544,6 +550,64 @@ describe("SourceEditorInset — edit + save (SLW-WDE-2)", () => {
       "data-disk",
       "a\r\nagent\r\n",
     );
+  });
+
+  it("⇧⌘V switches a renderable file between Rendered and Source", async () => {
+    readFileMock.mockResolvedValueOnce("\0PNG rest");
+    render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("pick-binary"));
+    const source = await screen.findByRole("radio", { name: "Source" });
+    expect(source).toHaveAttribute("aria-checked", "false");
+    fireEvent.keyDown(screen.getByTestId("source-editor-inset-w1"), {
+      key: "v",
+      code: "KeyV",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(source).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("⇧⌘V from inside the rendered view switches it, but not from inside a canvas (Excalidraw's paste)", async () => {
+    readFileMock.mockResolvedValueOnce("\0PNG rest");
+    render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("pick-binary"));
+    const source = await screen.findByRole("radio", { name: "Source" });
+    const renderedLayer = await screen.findByTestId("worktree-rendered");
+    const chord = { key: "V", code: "KeyV", metaKey: true, shiftKey: true };
+
+    // A canvas inside the rendered layer: its ⇧⌘V is a plain paste.
+    const canvas = document.createElement("div");
+    canvas.className = "excalidraw";
+    const canvasInput = document.createElement("textarea");
+    canvas.appendChild(canvasInput);
+    renderedLayer.appendChild(canvas);
+    fireEvent.keyDown(canvasInput, chord);
+    expect(source).toHaveAttribute("aria-checked", "false");
+
+    // Plain rendered DOM: the keydown bubbles to the editor and toggles.
+    const plain = document.createElement("span");
+    renderedLayer.appendChild(plain);
+    fireEvent.keyDown(plain, chord);
+    expect(source).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("reads the worktree's hydrated story files once, and again when the worktree changes", async () => {
+    await openTextFile();
+    readFileMock.mockResolvedValueOnce("export const b = 3;\n");
+    fireEvent.click(screen.getByTestId("pick-other"));
+    await screen.findByTestId("worktree-tab-b.ts");
+    // One read for the worktree, not one per open file.
+    expect(worktreeHydratedFilesMock).toHaveBeenCalledTimes(1);
+    expect(worktreeHydratedFilesMock).toHaveBeenCalledWith("/wt");
+
+    act(() => useViewerStore.getState().bumpWorktreeChangedPath(ws.id, "stories/new.md"));
+    await waitFor(() => expect(worktreeHydratedFilesMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("a failed read of the hydrated files still opens the file, in Source", async () => {
+    worktreeHydratedFilesMock.mockRejectedValue(new Error("record unreadable"));
+    await openTextFile();
+    expect(activePane().getByTestId("mock-code-editor")).toHaveAttribute("data-path", "/wt/a.ts");
   });
 
   it("⌃G over an open quick open switches it to go to line", async () => {

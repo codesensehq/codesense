@@ -738,6 +738,36 @@ describe("HtmlViewer codesense:shortcut router", () => {
     });
   }
 
+  it("offers a forwarded chord to the host's onFrameShortcut first, and the registry only when it refuses", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    // A registry binding on the same chord, so a refusal is observable.
+    shortcutOverrides = { "viewer.toggle-nav": "CmdOrCtrl+Shift+V" };
+    const onFrameShortcut = vi.fn(
+      (_key: { key: string }, _editorTarget: boolean, textFieldTarget: boolean) => !textFieldTarget,
+    );
+    render(
+      <HtmlViewer filePath={filePath} teamContentPath="/repo" onFrameShortcut={onFrameShortcut} />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector("iframe")?.getAttribute("src")).toContain(
+        "http://f-test.localhost:9123",
+      );
+    });
+
+    dispatchIframeMessage(chord("V", true));
+    expect(onFrameShortcut).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ key: "V", code: "KeyV", metaKey: true, shiftKey: true }),
+      false,
+      false,
+    );
+    expect(mockDispatchMenuAction).not.toHaveBeenCalled();
+
+    // In a text field inside the page the host refuses, and the registry runs.
+    dispatchIframeMessage({ ...chord("V", true), textFieldTarget: true });
+    expect(onFrameShortcut).toHaveBeenLastCalledWith(expect.anything(), false, true);
+    expect(mockDispatchMenuAction).toHaveBeenCalledExactlyOnceWith("viewer.toggle-nav");
+  });
+
   it("⌘P is an ordinary registry chord: file quick-open, or whatever took it", async () => {
     await renderWithShortcuts();
     dispatchIframeMessage(chord("p"));
