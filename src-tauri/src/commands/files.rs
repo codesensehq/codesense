@@ -309,15 +309,21 @@ pub(crate) fn validate_worktree_path(path: &Path) -> Result<(), String> {
 /// (the worktree editor's Rendered view): it reads its own worktree only, never
 /// another worktree, and context content keeps its team-scoped gate.
 /// Traversal-safe like [`validate_worktree_path`].
+///
+/// The root is taken both as spelled and as its real path: a worktree behind a
+/// symlink (`/var`, a linked `~/dev`) is requested by its spelling and then
+/// re-checked by its real path once the file is resolved.
 pub(crate) fn path_in_frame_worktree<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     root: &Path,
     path: &Path,
 ) -> bool {
-    let root = normalize_path_components(root);
-    !path_in_context_roots(&root, app)
-        && path_in_worktree_roots(&root)
-        && path_within_any_root(path, std::slice::from_ref(&root))
+    let spelled = normalize_path_components(root);
+    let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
+    let roots = [spelled, real];
+    roots.iter().all(|root| !path_in_context_roots(root, app))
+        && roots.iter().any(|root| path_in_worktree_roots(root))
+        && path_within_any_root(path, &roots)
 }
 
 /// Owned-`PathBuf` variant of `validate_context_path`. Builds the `PathBuf`
