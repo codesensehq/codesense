@@ -270,10 +270,23 @@ pub async fn setup_state<R: tauri::Runtime>(
     let (home, user_id) = crate::commands::route_to_context::resolve_ambient(&app).await?;
     await_blocking("setup_state", move || {
         let principal = crate::domain::Principal::from(user_id);
-        let orgs = crate::mcp::setup_tools::describe_orgs(&home, &principal)?;
-        Ok(setup_state_value(&orgs))
+        setup_state_from(crate::mcp::setup_tools::describe_orgs(&home, &principal))
     })
     .await
+}
+
+/// The page's answer, or a message free of local paths: the read's own error names them, so
+/// it goes to the log instead.
+fn setup_state_from(
+    read: Result<Vec<crate::mcp::setup_tools::SetupOrg>, String>,
+) -> Result<serde_json::Value, String> {
+    match read {
+        Ok(orgs) => Ok(setup_state_value(&orgs)),
+        Err(error) => {
+            log::warn!("setup_state: cannot read the orgs: {error}");
+            Err("unavailable: cannot read the setup on this machine".into())
+        }
+    }
 }
 
 /// `{orgs: [{slug, displayName, loadErrors, teams: [{name, archived, parentTeam, starterPage?,
@@ -479,6 +492,21 @@ mod tests {
         );
         assert!(!value.to_string().contains("/private"));
         assert_eq!(setup_state_value(&[]), serde_json::json!({"orgs": []}));
+    }
+
+    /// A failed read of the orgs answers without the paths its own error names.
+    #[test]
+    fn a_failed_org_read_answers_without_local_paths() {
+        let error = setup_state_from(Err(
+            "cannot read /Users/ada/.codesense/orgs: permission denied".into(),
+        ))
+        .unwrap_err();
+        assert_eq!(error, "unavailable: cannot read the setup on this machine");
+        assert!(!error.contains("/Users") && !error.contains("ada"));
+        assert_eq!(
+            setup_state_from(Ok(vec![])).unwrap(),
+            serde_json::json!({"orgs": []})
+        );
     }
 
     /// A load error outside the org root, even a sibling with the same prefix, keeps only its

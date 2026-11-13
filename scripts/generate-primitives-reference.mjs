@@ -284,7 +284,7 @@ const INVOKE_META = {
   },
   setupState: {
     description:
-      "This Mac's orgs, teams and source repos, read-only: `{orgs}`. Each team has `synced` and its `sourceRepos`, each with an `attachment` of `attached`, `missing` or `unattached`. No local paths. Pairs with the `codesense:setup-changed` message.",
+      "This Mac's orgs, teams and source repos, read-only: `{orgs}`. Each team has `synced` and its `sourceRepos`, each with an `attachment` of `attached`, `missing` or `unattached`. No local paths. Needs the machine-wide `machines:read` grant, since it lists every org on this Mac, and only a page holding it hears `codesense:setup-changed`.",
     examples: [
       {
         args: {},

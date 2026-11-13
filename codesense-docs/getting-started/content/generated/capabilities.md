@@ -23,9 +23,9 @@
 | routines:read | true | true | routine, routineResult, routineRun, routineRuns, routineStatus, routines, run, runEvidence, runWorkProduct, runs |  |
 | routines:run | true | false | routineRefresh |  |
 | routines:manage | true | false | routineCancel |  |
-| repo:read | true | true | getWorkspaceStatus, openDiff, setup, setupState, worktrees |  |
+| repo:read | true | true | getWorkspaceStatus, openDiff, setup, worktrees |  |
 | repo:write | true | false | none in page registry |  |
-| machines:read | true | true | getDependencyStatus, machines |  |
+| machines:read | true | true | getDependencyStatus, machines, setupState |  |
 | machines:manage | false | false | none in page registry |  |
 | accounts:manage | false | false | setModelRate |  |
 | dashboards:install:private | false | false | none in page registry |  |

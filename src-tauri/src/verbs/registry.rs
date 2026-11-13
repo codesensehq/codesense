@@ -193,8 +193,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "routines" | "run" | "runEvidence" | "runWorkProduct" | "runs" => "routines:read",
         "routineRefresh" => "routines:run",
         "routineCancel" => "routines:manage",
-        "getWorkspaceStatus" | "setup" | "setupState" | "worktrees" => "repo:read",
-        "getDependencyStatus" | "machines" => "machines:read",
+        "getWorkspaceStatus" | "setup" | "worktrees" => "repo:read",
+        "getDependencyStatus" | "machines" | "setupState" => "machines:read",
         "setModelRate" => "accounts:manage",
         _ => panic!("no capability for verb {name}"),
     }

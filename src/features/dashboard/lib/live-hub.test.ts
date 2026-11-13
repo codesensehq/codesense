@@ -2237,12 +2237,14 @@ const setupWrites: [string, string[]][] = [
   // The registry commit, then the folder's binding after its reconcile.
   ["add_source_repo with a local folder", ["org-registry-changed", "source-attachments-changed"]],
 ];
+// `setupState()` needs machines:read, so only a frame holding it is told the setup changed.
+const setupReader = { grants: ["sessions:read", "machines:read"] };
 const setupChanges = (post: ReturnType<typeof vi.fn>) =>
   post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed");
 for (const [write, emitted] of setupWrites)
   it(`raises one codesense:setup-changed for ${write}`, async () => {
     const post = vi.fn();
-    const frame = hub.attach("setup", "all", post, true);
+    const frame = hub.attach("setup", "all", post, true, false, undefined, setupReader);
     await frame.subscribe("sessions");
     for (const event of emitted) {
       events.get(event)!({ payload: null });
@@ -2257,7 +2259,7 @@ for (const [write, emitted] of setupWrites)
   });
 it("tells the page during a long run of setup events, not only after it", async () => {
   const post = vi.fn();
-  const frame = hub.attach("setup-run", "all", post, true);
+  const frame = hub.attach("setup-run", "all", post, true, false, undefined, setupReader);
   await frame.subscribe("sessions");
   // A bulk edit: one registry event every 300 ms for 3 s.
   for (let elapsed = 0; elapsed < 2100; elapsed += 300) {
@@ -2274,7 +2276,7 @@ it("tells the page during a long run of setup events, not only after it", async 
 });
 it("holds a setup change for a hidden page and replays it once on show", async () => {
   const post = vi.fn();
-  const frame = hub.attach("setup-hidden", "all", post, false);
+  const frame = hub.attach("setup-hidden", "all", post, false, false, undefined, setupReader);
   const subscribed = frame.subscribe("sessions");
   events.get("org-registry-changed")!({ payload: null });
   events.get("source-attachments-changed")!({ payload: null });
@@ -2282,5 +2284,32 @@ it("holds a setup change for a hidden page and replays it once on show", async (
   expect(setupChanges(post)).toHaveLength(0);
   frame.visible(true);
   await subscribed;
+  expect(setupChanges(post)).toHaveLength(1);
+});
+
+it("tells setup-changed only to frames holding machines:read", async () => {
+  const reader = vi.fn();
+  const teamOnly = vi.fn();
+  const ungranted = vi.fn();
+  const a = hub.attach("setup-reader", "all", reader, true, false, undefined, setupReader);
+  const b = hub.attach("setup-team", "all", teamOnly, true, false, undefined, {
+    grants: ["sessions:read", "repo:read"],
+  });
+  const c = hub.attach("setup-none", "all", ungranted, true);
+  await Promise.all([a, b, c].map((f) => f.subscribe("sessions")));
+  events.get("org-registry-changed")!({ payload: null });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(reader)).toHaveLength(1);
+  expect(setupChanges(teamOnly)).toHaveLength(0);
+  expect(setupChanges(ungranted)).toHaveLength(0);
+});
+it("follows a rebound frame's grant for setup-changed", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("setup-rebind", "all", post, true, false, undefined, {
+    grants: ["repo:read"],
+  });
+  frame.rekey("all", undefined, ["machines:read"]);
+  events.get("org-registry-changed")!({ payload: null });
+  await vi.advanceTimersByTimeAsync(500);
   expect(setupChanges(post)).toHaveLength(1);
 });

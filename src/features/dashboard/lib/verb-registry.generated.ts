@@ -923,7 +923,7 @@ export const VERB_REGISTRY = [
   {
     "name": "setupState",
     "class": "read",
-    "grant": "repo:read",
+    "grant": "machines:read",
     "inboxTarget": false,
     "confirmable": false,
     "action": false,

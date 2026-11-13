@@ -1979,9 +1979,9 @@ Class: read; default grant: repo:read; MCP twin: describe_setup.
 setupState(args?: Record<string, unknown>): Promise<unknown>;
 ```
 
-read · repo:read · MCP twin describe_setup
+read · machines:read · MCP twin describe_setup
 
-Class: read; default grant: repo:read; MCP twin: describe_setup.
+Class: read; default grant: machines:read; MCP twin: describe_setup.
 
 ## VerbMethods: showMenu
 

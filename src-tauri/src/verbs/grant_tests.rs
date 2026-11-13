@@ -16,6 +16,58 @@ fn all_registered_verbs_name_a_grantable_capability() {
 }
 
 #[test]
+fn setup_state_needs_the_machine_wide_read_not_the_team_safe_repo_read() {
+    assert_eq!(
+        builtin_registry().get("setupState").unwrap().grant,
+        "machines:read"
+    );
+    let store = FrameStore::default();
+    let mut record = store.mint(
+        9321,
+        FrameGrant {
+            frame_id: String::new(),
+            principal: "human".into(),
+            dashboard: "board".into(),
+            slot: "right-pane".into(),
+            team: Some(crate::dashboard_stream::frame::FrameTeam {
+                org: "acme".into(),
+                team: "a".into(),
+            }),
+            scope: "team".into(),
+        },
+        "/ctx".into(),
+        "/ctx/board.html".into(),
+        "/ctx".into(),
+        FramePolicy::default(),
+        None,
+    );
+    record.effective_grant = vec!["repo:read".into()];
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "setupState",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+    record.effective_grant = vec!["machines:read".into()];
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "setupState",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+}
+
+#[test]
 fn projection_admission_uses_the_topic_and_resolved_frame_view() {
     let store = FrameStore::default();
     let mut record = store.mint(

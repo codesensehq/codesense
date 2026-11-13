@@ -19,7 +19,14 @@ import { readSharedUiState, writeSharedUiState, watchSharedUiState } from "./sha
 // Policy: hidden badge work is bounded independently of visible delivery.
 export const LIVE_HIDDEN_THROTTLE_MS = 2000;
 export const MAX_LIVE_HIDDEN_FRAMES = 4;
-type BadgeDelivery = { badge?: "live"; owner?: string };
+type BadgeDelivery = {
+  badge?: "live";
+  owner?: string;
+  /** What the frame's grant allows, so it is told only changes it could read. */
+  grants?: readonly string[];
+};
+/** `setupState()` reads every org on this Mac, so it takes the machine-wide grant. */
+const SETUP_READ_GRANT = "machines:read";
 
 const RUN_REVIEW_TOPICS = ["runEndorsements", "runEvidence"] as const;
 /** One setup write's native events (a registry commit, then a checkout bind after its
@@ -93,6 +100,7 @@ type Dependencies = {
 };
 type Frame = {
   viewKey: string;
+  grants: readonly string[];
   liveBadge: boolean;
   hiddenLive: boolean;
   shownOrder: number;
@@ -382,6 +390,7 @@ export class LiveHub {
     };
     const changes = type === "inbox-changed" ? inboxChangesOf(payload) : [];
     for (const frame of this.frames.values()) {
+      if (type === "setup-changed" && !frame.grants.includes(SETUP_READ_GRANT)) continue;
       // A change that named only other teams' rows tells a team frame nothing.
       if (changes.length && !deliverable(frame, { ...message, changes })) continue;
       if (!frame.visible) {
@@ -495,6 +504,7 @@ export class LiveHub {
       `${delivery.owner ? delivery.owner + ":" : ""}${id}:${key}`;
     const frame: Frame = {
       viewKey,
+      grants: delivery.grants ?? [],
       liveBadge: delivery.badge === "live",
       hiddenLive: false,
       shownOrder: ++this.shownOrder,
@@ -707,10 +717,11 @@ export class LiveHub {
       /** Moves the frame's subscriptions to a new view key (a re-bound grant) and asks the
        *  page to resync every topic it reads. The synchronous handoff rotates the page's
        *  token after keys advance and before any new-scope notifications are posted. */
-      rekey: (next: string, beforeResync?: () => void) => {
+      rekey: (next: string, beforeResync?: () => void, grants?: readonly string[]) => {
         if (frame.disposed) return;
         frame.generation++;
         frame.viewKey = next;
+        if (grants) frame.grants = grants;
         frame.resync.clear();
         frame.pending = [];
         const filesToResync: string[] = [];

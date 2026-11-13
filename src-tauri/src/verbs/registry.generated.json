@@ -3521,7 +3521,7 @@
     "resultSchema": {
       "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
     },
-    "grant": "repo:read",
+    "grant": "machines:read",
     "inboxTarget": false,
     "confirmable": false,
     "mcpTwin": "describe_setup",
