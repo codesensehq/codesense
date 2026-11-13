@@ -6,32 +6,33 @@ import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-se
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
+import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
   closeAgentInboxRail,
   markAgentInboxRailComposeHandled,
   useAgentInboxRailComposeHandled,
+  useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useSlotTarget } from "@/features/shell/slots/reveal-slot";
 import { StatusMark } from "@/shared/components/status-mark";
-import { useCurrentUser } from "@/shared/lib/get-current-user";
+import { useNow } from "@/shared/hooks/use-now";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { findShortcutAction } from "@/shared/lib/shortcuts/registry";
 import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
-import { markInboxMessageRead, type AgentSessionRow, type InboxTeam } from "@/tauri/commands";
+import { markInboxMessageRead, type AgentSessionRow } from "@/tauri/commands";
 
 import { goToSession } from "../actions";
-import { fixtureSessions } from "../fixtures";
+import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useSessionInbox } from "../hooks/use-session-inbox";
-import { agentTeam, between } from "../lib/agent-chat";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
-import { buildDirectory, HUMAN, msgKey, normalizeMessage, roleSummaries, sameTeam } from "../model";
+import { HUMAN, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
-import { teamOfKey } from "./inbox-rail";
+import { GroupChatPane, type GroupRoom } from "./group-chat";
 import { Ico, InboxLoading, MessageBody, ReadFailure, StaleNotice } from "./primitives";
 import { PinPreview } from "./pin-preview";
 import { Conversation } from "./threads-lens";
@@ -43,12 +44,6 @@ import { Conversation } from "./threads-lens";
 export const CHAT_TERMINAL_SHORTCUT_ID = "viewer.toggle-agent-inbox";
 
 const NO_ROWS: readonly AgentSessionRow[] = [];
-
-const since = (startedAtMs: number | null | undefined, now: number) => {
-  if (!startedAtMs) return null;
-  const min = Math.max(0, Math.round((now - startedAtMs) / 60_000));
-  return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h ${min % 60}m`;
-};
 
 /**
  * An agent's chat on its own terminal tab: the conversation with you (the same thread its full
@@ -87,33 +82,18 @@ export function ChatOverlay({
   const status = row ? statusOf(row) : null;
   const subagents = useSubagentsOpen(sessionId);
   const sessions = useInboxSessions();
-  const user = useCurrentUser();
   const rootRef = useRef<HTMLElement>(null);
   const layout = overlayLayout(size.width, size.height);
   const tall = layout.height === "tall";
 
-  const messages = useMemo(() => (data?.messages ?? []).map(normalizeMessage), [data]);
-  const home = teamOfKey(teamKey);
-  const team: InboxTeam | null = useMemo(
-    () => agentTeam(messages, handle, home),
-    // `home` is named by `teamKey`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, handle, teamKey],
-  );
-  const teamMessages = useMemo(
-    () => (team ? messages.filter((m) => sameTeam(m.team, team)) : messages),
-    [messages, team],
-  );
-  const conversation = useMemo(
-    () => teamMessages.filter((m) => between(m, handle)),
-    [teamMessages, handle],
-  );
-  const dir = useMemo(() => {
-    const rows =
-      source === "fixture" ? [...(sessions ?? []), ...fixtureSessions()] : (sessions ?? []);
-    return buildDirectory(rows, messages, { humanName: user?.display_name });
-  }, [sessions, source, messages, user?.display_name]);
-  const roles = useMemo(() => roleSummaries(dir, teamMessages), [dir, teamMessages]);
+  // The chat's team is fixed while it shows this session, as the quick chat's is.
+  const { messages, home, team, teamMessages, conversation, dir, roles } = useAgentConversation({
+    data,
+    source,
+    handle,
+    teamKey,
+    chatKey: JSON.stringify([teamKey, sessionId]),
+  });
   const view: InboxView = useMemo(
     () => ({
       me: HUMAN,
@@ -122,7 +102,7 @@ export function ChatOverlay({
       messages: teamMessages,
       roles,
       held: [],
-      // Per tab and session, as the rail's: a new session in the tab starts a fresh draft.
+      // Per tab and session: a new session in the tab starts a fresh draft.
       drafts: `tab:${tabId}:${sessionId}`,
       fallbackTeam: team ?? home,
       source,
@@ -130,9 +110,7 @@ export function ChatOverlay({
       replyTo: () => {},
       goTo: (key) => void goToSession(key),
     }),
-    // `home` is named by `teamKey`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [handle, dir, teamMessages, roles, tabId, sessionId, team, teamKey, source],
+    [handle, dir, teamMessages, roles, tabId, sessionId, team, home, source],
   );
 
   // On screen, the chat reads what the agent sent you, as the rail did; nothing else is marked.
@@ -161,16 +139,59 @@ export function ChatOverlay({
     );
   }, [composeRequest, composeHandled, loaded, sessionId]);
 
+  // The room this session shares with the rest of its workspace: ⌘⌥G flips the chat to it.
+  const listed = sessions?.find((s) => s.handle === handle);
+  const workspaceId = listed?.chatWorkspaceId ?? row?.chatWorkspaceId;
+  const room: GroupRoom | null = workspaceId
+    ? {
+        workspaceId,
+        sessions: [
+          {
+            handle,
+            name,
+            unread: listed?.groupUnread ?? row?.groupUnread ?? 0,
+            readId: listed?.groupReadId ?? row?.groupReadId ?? 0,
+          },
+        ],
+      }
+    : null;
+  const [group, setGroup] = useState<{ session: string; shown: boolean; focus: number }>({
+    session: sessionId,
+    shown: false,
+    focus: 0,
+  });
+  // Another session starts on its own chat, with no pin open.
+  const [openPin, setOpenPin] = useState<number | null>(null);
+  if (group.session !== sessionId) {
+    setGroup({ session: sessionId, shown: false, focus: 0 });
+    setOpenPin(null);
+  }
+  const groupShown = group.shown && room !== null;
+  const groupRequest = useAgentInboxRailStore((s) => s.bySession[sessionId]?.groupRequest ?? 0);
+  const groupHandled = useAgentInboxRailStore((s) => s.bySession[sessionId]?.groupHandled ?? 0);
+  const roomKnown = sessions !== null;
+  const hasRoom = room !== null;
+  useEffect(() => {
+    if (groupRequest <= groupHandled || !loaded || !roomKnown) return;
+    const frame = requestAnimationFrame(() => {
+      // A session with no room has nothing to open: the request ends here.
+      if (hasRoom) setGroup((g) => ({ ...g, shown: !g.shown, focus: g.shown ? 0 : g.focus + 1 }));
+      useAgentInboxRailStore.getState().markGroupHandled(sessionId, groupRequest);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [groupRequest, groupHandled, loaded, roomKnown, hasRoom, sessionId]);
+
+  // The thread is the saved agent and story the session was launched with, as the engine keys
+  // it: the launch's agent, else the one its tab says it runs.
   const { pins } = useAgentPins(
     team ?? home,
-    agentKeyOfRevision(row?.agentRevision),
-    row?.story ?? null,
+    listed?.agent ?? agentKeyOfRevision(row?.agentRevision),
+    row?.story ?? listed?.story ?? null,
   );
   const pinTitle = (id: number) => {
     const m = messages.find((x) => x.id === id && (!team || sameTeam(x.team, team)));
     return m?.summary || m?.text.split("\n")[0] || `Pin ${id}`;
   };
-  const [openPin, setOpenPin] = useState<number | null>(null);
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
   const openedMessage = opened
     ? (messages.find((m) => m.id === opened.messageId && (!team || sameTeam(m.team, team))) ?? null)
@@ -201,17 +222,27 @@ export function ChatOverlay({
   const toTerminal = () => {
     const pane = rootRef.current?.closest("[data-pane-id], [data-pane-active]");
     closeAgentInboxRail(sessionId);
-    pane?.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus();
+    // A covered terminal is inert until the overlay is gone: focus it once that has rendered.
+    requestAnimationFrame(() =>
+      pane?.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
+    );
   };
 
+  // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
+  // its composer once that shows (or on the chat itself while it loads), unless it is already
+  // inside.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (placement !== "cover" || !visible || !root || root.contains(document.activeElement)) return;
+    const composer = root.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
+    (composer ?? root).focus({ preventScroll: true });
+  }, [placement, visible, loaded, groupShown]);
+
+  const now = useNow(visible, 60_000);
   const statusWord = status ? agentStatusWords(status, subagents) : null;
-  const now = Date.now();
-  const recordText: Record<OverlayRecordField, string | null> = {
-    // The model, cost and files wait on a per-agent session record read.
-    model: null,
-    cost: null,
-    files: null,
-    time: since(row?.startedAtMs, now),
+  // The model, cost and files fields wait on a per-agent session record read.
+  const recordText: Partial<Record<OverlayRecordField, string | null>> = {
+    time: formatElapsed(row?.startedAtMs ?? null, now),
     story: row?.story ?? null,
   };
   const recordParts = [
@@ -251,6 +282,7 @@ export function ChatOverlay({
           if (e.key !== "Escape" || e.defaultPrevented || t.matches("input, textarea")) return;
           e.preventDefault();
           if (opened) closePin();
+          else if (groupShown) setGroup((g) => ({ ...g, shown: false }));
           else toTerminal();
         }}
       >
@@ -261,6 +293,9 @@ export function ChatOverlay({
             {layout.showKind && row?.role && <span className="ibx-ov-kind">{row.role}</span>}
             {layout.head === "one-line" && !layout.statusInRecord && statusWord && (
               <span className="ibx-ov-now">{statusWord}</span>
+            )}
+            {layout.head === "one-line" && (
+              <RemoteServerUpdateAction sessionId={sessionId} className="ibx-rh-update" />
             )}
             {layout.record === "in-head" && record}
             <span className="ibx-ov-sp" />
@@ -281,7 +316,7 @@ export function ChatOverlay({
           {layout.record === "own-line" && record}
         </header>
         {pins.length > 0 && (
-          <div className="ibx-ov-pins" data-shape={pinShape} aria-label="Pinned">
+          <div className="ibx-ov-pins" data-shape={pinShape} role="group" aria-label="Pinned">
             {pins.map((p) => (
               <PinPreview
                 key={p.messageId}
@@ -334,6 +369,14 @@ export function ChatOverlay({
               <ReadFailure what={`${name}'s chat`} error={error} onRetry={() => void reload()} />
             ) : !data ? (
               <InboxLoading what={`${name}'s chat`} />
+            ) : groupShown && room ? (
+              <GroupChatPane
+                room={room}
+                onBack={() => setGroup((g) => ({ ...g, shown: false }))}
+                focusRequest={group.focus}
+                visible={visible}
+                human
+              />
             ) : (
               <Conversation
                 thread={{ key: handle, messages: conversation }}

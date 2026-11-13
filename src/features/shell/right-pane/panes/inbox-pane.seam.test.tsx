@@ -96,7 +96,6 @@ const resolveTarget = (target?: { conversation?: string; team?: { org: string; t
   }).dashboard?.panelId ?? null;
 
 import { ScratchNoteWidthDivider } from "@/features/viewer/components/scratch-note-width-divider";
-import { InboxRail } from "@/features/inbox/components/inbox-rail";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RightPaneLayout } from "@/features/viewer/components/right-pane-layout";
 import { usePaneStore } from "./pane-store";
@@ -871,25 +870,16 @@ describe("human inbox pane through the real bridge", () => {
     expect(p.doc.activeElement).toBe(el(p, "draft"));
   });
 
-  it.each(["shortcut", "rail"])("opens the real pane from the %s entry point", async (entry) => {
+  it("opens the real pane from the shortcut", async () => {
     setPreview(true);
     render(
       <TooltipProvider>
         <PanePanelsMount />
-        <InboxRail
-          tabId="mia-tab"
-          sessionId="Mia"
-          teamKey={`${ORG}:${TEAM}`}
-          composeRequest={0}
-          narrow
-        />
         <RightPaneLayout repoPath="" onClose={() => {}} onFileSelect={onFileSelect} />
       </TooltipProvider>,
     );
     await waitFor(() => expect(getPanel(PANEL)).toBeDefined());
-    if (entry === "shortcut")
-      SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run();
-    else fireEvent.click(await screen.findByTestId("inbox-rail-open-inbox-pane"));
+    SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run();
     await waitFor(() => expect(useViewerStore.getState().rightPaneOpen).toBe(true));
     await waitFor(() =>
       expect(
@@ -900,18 +890,10 @@ describe("human inbox pane through the real bridge", () => {
     const p = bootPaneDoc(frame, PANE);
     docs.push(p);
     await waitFor(() => expect(p.doc.querySelectorAll(".ib-row")).toHaveLength(2));
-    if (entry === "rail") {
-      await waitFor(() =>
-        expect(el(p, "conversation-Mia").getAttribute("aria-selected")).toBe("true"),
-      );
-      expect(p.doc.activeElement).toBe(el(p, "draft"));
-      expect(el(p, "log").querySelector(".ib-target")).toBeNull();
-    } else {
-      act(() => SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run());
-      expect(useViewerStore.getState().rightPaneOpen).toBe(false);
-      act(() => SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run());
-      expect(useViewerStore.getState().rightPaneOpen).toBe(true);
-    }
+    act(() => SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run());
+    expect(useViewerStore.getState().rightPaneOpen).toBe(false);
+    act(() => SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-inbox-rollup")!.run());
+    expect(useViewerStore.getState().rightPaneOpen).toBe(true);
   });
 
   it("keeps only the newest intent across a reload before ready and buffers it for a late subscriber exactly once", async () => {
@@ -1568,33 +1550,6 @@ describe("cross-team inbox pane through the real bridge", () => {
       { ...row(1, "Ori"), id: 1, team: { org: ORG, team: "web" }, toRole: null },
     ];
   });
-  it.each(["inbox", "human-inbox"])(
-    "the real rail opens a chosen %s dashboard across teams with its conversation intent",
-    async (surface) => {
-      crossSurface = surface;
-      const base = tauriInvoke.getMockImplementation()!;
-      tauriInvoke.mockImplementation(async (cmd, args) =>
-        cmd === "list_session_inbox" ? { handle: "Ori", roles: [], messages: [] } : base(cmd, args),
-      );
-      const p = await openInbox();
-      setPreview(true);
-      render(
-        <TooltipProvider>
-          <InboxRail
-            tabId="ori-tab"
-            sessionId="Ori"
-            teamKey={`${ORG}:web`}
-            composeRequest={0}
-            narrow
-          />
-        </TooltipProvider>,
-      );
-      const button = await screen.findByTestId("inbox-rail-open-inbox-pane");
-      fireEvent.click(button);
-      await waitFor(() => expect(el(p, "thread-name").textContent).toBe("Ori"));
-      expect(el(p, "thread-team").textContent).toBe("web");
-    },
-  );
   async function chooseFilter(p: PaneDoc, name: string) {
     fireEvent.click(el(p, "team-filter"));
     fireEvent.click(

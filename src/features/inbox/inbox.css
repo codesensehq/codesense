@@ -156,39 +156,6 @@
   min-height: 0;
   height: 100%;
 }
-.ibx-splitter {
-  width: 6px;
-  flex: none;
-  cursor: col-resize;
-  position: relative;
-  background: var(--ibx-bg);
-  touch-action: none;
-  user-select: none;
-}
-.ibx-splitter::after {
-  content: "";
-  position: absolute;
-  inset: 0 2px;
-  background: var(--ibx-border);
-  transition: background 0.15s;
-}
-.ibx-splitter:hover::after,
-.ibx-splitter[data-dragging="true"]::after {
-  background: var(--ibx-accent);
-}
-.ibx-splitter:focus-visible {
-  outline: 2px solid var(--ibx-accent);
-  outline-offset: -2px;
-}
-.ibx-rail {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  background: var(--ibx-bg);
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
 
 /* ---------- agent chat overlay ----------
  * One markup for every pane size: the overlay's data attributes carry its layout (the design's
@@ -1828,36 +1795,11 @@
   color: var(--ibx-mfg);
 }
 
-/* Narrow rail: the lens labels give way to their icons and the list column slims. */
-.ibx-rail[data-narrow="true"] .ibx-lens span {
-  display: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-th-list {
-  width: 132px;
-}
-.ibx-rail[data-narrow="true"] .ibx-scope .h {
-  display: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-scope .t {
-  flex: 0 1 auto;
-  max-width: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-rh-top {
-  flex-wrap: wrap;
-}
-
 /* A stacked lens uses the full rail width. */
 .ibx-th-list.full {
   width: 100%;
   flex: 1;
   border-right: 0;
-}
-.ibx-rail[data-narrow="true"] .ibx-lrow {
-  grid-template-columns: 40px 14px minmax(0, 104px) 1fr;
-  gap: 6px;
-}
-.ibx-rail[data-narrow="true"] .ibx-lx {
-  margin-left: 30px;
 }
 
 /* ---------- a saved agent's inbox (Agents tab) ---------- */

@@ -4,7 +4,7 @@ import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { act, fireEvent, render, renderHook, screen } from "@/test-utils";
+import { act, fireEvent, render, screen } from "@/test-utils";
 import {
   closeAgentInboxRail,
   openAgentInboxRail,
@@ -35,15 +35,7 @@ vi.mock("./chat-overlay", () => ({
   },
 }));
 
-const tabIndex = vi.hoisted(() => ({
-  running: {} as Record<string, Record<string, { id: string }[]>>,
-}));
-vi.mock("@/features/viewer/lib/cli-workspace/store/terminal-selectors", () => ({
-  useRunningTerminalTabIndex: () => tabIndex.running,
-  useMinimizedTerminalTabIndex: () => ({}),
-}));
-
-import { InboxSplit, useInboxTabCleanup } from "./inbox-split";
+import { InboxSplit } from "./inbox-split";
 
 const mounts = vi.fn();
 function Terminal() {
@@ -63,7 +55,7 @@ beforeEach(() => {
     processAgentBySession: { "sess-1": "codex" },
   });
   mounts.mockClear();
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
+  useAgentInboxRailStore.setState({ bySession: {} });
 });
 
 describe("InboxSplit", () => {
@@ -194,29 +186,5 @@ describe("InboxSplit", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe("useInboxTabCleanup", () => {
-  it("forgets a closed tab's width and lens, not those of a tab merely Hidden or moved", () => {
-    useAgentInboxRailStore.setState({
-      widthByTab: { a: 400, b: 500 },
-      lensByTab: { a: "spool", b: "wire" },
-    });
-    const a = { id: "a" };
-    const b = { id: "b" };
-    tabIndex.running = { team: { ws: [a, b] } };
-    const { rerender } = renderHook(({ tabs }) => useInboxTabCleanup(tabs), {
-      initialProps: { tabs: [a, b] },
-    });
-    // `a` is Hidden: off the tile's strip, still running.
-    tabIndex.running = { team: { ws: [b, a] } };
-    rerender({ tabs: [b] });
-    expect(useAgentInboxRailStore.getState().lensByTab.a).toBe("spool");
-    // `a` closes for good; `b` closes too.
-    tabIndex.running = { team: { ws: [] } };
-    rerender({ tabs: [] });
-    expect(useAgentInboxRailStore.getState().lensByTab).toEqual({});
-    expect(useAgentInboxRailStore.getState().widthByTab).toEqual({});
   });
 });

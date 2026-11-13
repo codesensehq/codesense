@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { ConversationMessage } from "../api";
 import { HUMAN, sameTeam } from "../model";
+import { NO_TEAM_SENTINEL, parseTeamKey } from "@/shared/lib/team-key";
 import type { InboxTeam } from "@/tauri/commands";
 
 /** A message between the human and `handle`, either way (role mail and other agents' are not). */
@@ -20,4 +21,11 @@ export function agentTeam(
   let last: ConversationMessage | null = null;
   for (const m of own) if (!last || m.createdAtMs > last.createdAtMs) last = m;
   return last ? last.team : home;
+}
+
+/** The team a session's first message goes to when no earlier message names one. */
+export function teamOfKey(teamKey: string): InboxTeam | null {
+  if (teamKey === NO_TEAM_SENTINEL) return null;
+  const { orgSlug, teamName } = parseTeamKey(teamKey);
+  return teamName ? { org: orgSlug, team: teamName } : null;
 }

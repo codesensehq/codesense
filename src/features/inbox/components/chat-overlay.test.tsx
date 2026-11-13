@@ -134,7 +134,7 @@ beforeEach(() => {
   clearInboxDrafts();
   vi.clearAllMocks();
   useInboxSessionsStore.setState({ sessions: null });
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
+  useAgentInboxRailStore.setState({ bySession: {} });
   roster();
   api.loadSessionInbox.mockResolvedValue({
     dto: { handle: LEAD, roles: [], messages: MESSAGES },
