@@ -51,8 +51,12 @@ vi.mock("@/shared/components/code-editor", async (orig) => ({
   },
 }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
-  HtmlViewer: ({ baselineSource }: { baselineSource?: unknown }) => (
-    <div data-testid="html" data-baseline={baselineSource ? "yes" : "no"} />
+  HtmlViewer: ({ baselineSource, snapshot }: { baselineSource?: unknown; snapshot?: boolean }) => (
+    <div
+      data-testid="html"
+      data-baseline={baselineSource ? "yes" : "no"}
+      data-snapshot={String(snapshot ?? true)}
+    />
   ),
 }));
 vi.mock("@/features/dashboard/components/image-viewer", () => ({
@@ -161,6 +165,8 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     render(renderFileDiff(args("/ctx/page.html", { sides: { ...sides(), rendered } })));
     const frames = screen.getAllByTestId("html");
     expect(frames.map((f) => f.dataset.baseline)).toEqual(["yes", "no"]);
+    // Neither pane draws the Snapshot band, so both pages start level.
+    expect(frames.map((f) => f.dataset.snapshot)).toEqual(["false", "false"]);
   });
 
   it("Files: HTML shows the toggle at 899 px, After first", () => {

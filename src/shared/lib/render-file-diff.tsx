@@ -788,6 +788,9 @@ function renderRenderedSide(
           refreshKey={refreshKey}
           changedPaths={changedPaths}
           baselineSource={baselineSource}
+          // The working-tree pane would draw a Snapshot band the baseline pane
+          // lacks, leaving the two pages misaligned.
+          snapshot={false}
         />
       );
     default: {
