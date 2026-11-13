@@ -4,6 +4,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { stubResizeObserver } from "@/test/resize-observer-stub";
 
+// Every CodeDiffReview render, by layout: a remount at a new width shows up here.
+const codeDiffMounts = vi.hoisted((): string[] => []);
+
 // Stub every renderer to a marker: this suite checks the dispatch, not them.
 vi.mock("@/features/git-sync/components/redline-prose", () => ({
   RedlineProse: ({
@@ -38,11 +41,14 @@ vi.mock("@/shared/components/code-editor", async (orig) => ({
     after: string;
     diffMode?: string;
     mode?: string;
-  }) => (
-    <div data-testid="code-diff" data-diff-mode={diffMode ?? "line"} data-mode={mode}>
-      {before}→{after}
-    </div>
-  ),
+  }) => {
+    codeDiffMounts.push(mode ?? "");
+    return (
+      <div data-testid="code-diff" data-diff-mode={diffMode ?? "line"} data-mode={mode}>
+        {before}→{after}
+      </div>
+    );
+  },
 }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
   HtmlViewer: ({ baselineSource }: { baselineSource?: unknown }) => (
@@ -329,3 +335,49 @@ describe("renderFileDiff — edge states (AC 7)", () => {
 function sides() {
   return { before: "old", after: "new", status: "modified" as const };
 }
+
+describe("renderFileDiff — frame-level layout state", () => {
+  it("below 900 px the Before | After toggle sits in the strip as a labelled group", () => {
+    atWidth(899);
+    render(
+      renderFileDiff(
+        args("/ctx/a.md", { modes: { markdown: "side-by-side" } }, { onModeChange: vi.fn() }),
+      ),
+    );
+    const strip = screen.getByTestId("file-diff-strip");
+    const sides = within(strip).getByRole("group", { name: "Side shown" });
+    expect(within(sides).getByRole("button", { name: "After" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // No second chrome row under the strip.
+    expect(screen.queryByTestId("file-diff-toggle")).toBeNull();
+  });
+
+  it("a host without a mode switch still gets the side toggle when narrow", () => {
+    atWidth(899);
+    render(renderFileDiff(args("/ctx/a.md", { modes: { markdown: "side-by-side" } })));
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(screen.getAllByTestId("rendered-md").map((p) => p.textContent)).toEqual(["old"]);
+  });
+
+  it("waits for the measured width instead of mounting the code diff twice", () => {
+    atWidth(1200);
+    codeDiffMounts.length = 0;
+    render(renderFileDiff(args("/repo/a.ts")));
+    expect(screen.getByTestId("code-diff")).toHaveAttribute("data-mode", "split");
+    // Never first rendered inline at an unknown width.
+    expect(codeDiffMounts).not.toContain("inline");
+  });
+
+  it("the large-diff opt-in survives a mode switch on the same file", () => {
+    const big = "x".repeat(LARGE_DIFF_CHARS);
+    const props = (markdown: "redline" | "source") =>
+      args("/ctx/a.md", { sides: { ...sides(), before: big }, modes: { markdown } });
+    const { rerender } = render(renderFileDiff(props("redline")));
+    fireEvent.click(screen.getByTestId("file-diff-show-anyway"));
+    rerender(renderFileDiff(props("source")));
+    expect(screen.queryByTestId("file-diff-large-gate")).toBeNull();
+    expect(screen.getByTestId("code-diff")).toBeInTheDocument();
+  });
+});

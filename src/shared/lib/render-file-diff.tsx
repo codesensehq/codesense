@@ -194,28 +194,109 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
   );
 }
 
-/** The header strip (the former `BeforeAfterDiffToggle` pattern): status, then
- *  the mode switch at the right. Drawn only where the surface takes the switch. */
+type Side = "before" | "after";
+
+/** How two sides lay out in the body: both two-up, one at a time, only the
+ *  present side, or not yet known (the body hasn't been measured). */
+type SideLayout = "two" | "toggle" | "one" | "unknown";
+
+function sideAvailability(sides: FileDiffSides) {
+  return { hasBefore: sides.status !== "added", hasAfter: sides.status !== "deleted" };
+}
+
+function sideLayout(sides: FileDiffSides, width: number | null): SideLayout {
+  const { hasBefore, hasAfter } = sideAvailability(sides);
+  if (!hasBefore || !hasAfter) return "one";
+  if (width == null) return "unknown";
+  return width >= SIDE_BY_SIDE_MIN_WIDTH ? "two" : "toggle";
+}
+
+function sideLabel(sides: FileDiffSides, side: Side) {
+  return side === "before" ? (sides.beforeLabel ?? "Before") : (sides.afterLabel ?? "After");
+}
+
+/** State a diff keeps across its own mode switches: the measured body, the side
+ *  the reader picked in the narrow layout, and a large file's opt-in. */
+function useFrameState(filePath: string) {
+  const [bodyRef, width] = useContainerWidth();
+  const [picked, setPicked] = useState<Side>("after");
+  const [forcedPath, setForcedPath] = useState<string | null>(null);
+  return {
+    bodyRef,
+    width,
+    picked,
+    setPicked,
+    gate: { forced: forcedPath === filePath, onForce: () => setForcedPath(filePath) },
+  };
+}
+
+type Gate = ReturnType<typeof useFrameState>["gate"];
+
+/** The narrow layout's Before | After switch, drawn in the strip. */
+function SideToggle({
+  sides,
+  picked,
+  onPick,
+}: {
+  sides: FileDiffSides;
+  picked: Side;
+  onPick: (side: Side) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Side shown"
+      className="inline-flex overflow-hidden rounded border border-border"
+    >
+      {(["before", "after"] as const).map((side) => (
+        <button
+          key={side}
+          type="button"
+          aria-pressed={picked === side}
+          onClick={() => onPick(side)}
+          className={cn(
+            "px-2 py-0.5",
+            picked === side ? "bg-accent font-medium" : "hover:bg-accent/60",
+          )}
+        >
+          {sideLabel(sides, side)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The header strip (the former `BeforeAfterDiffToggle` pattern): status, the
+ *  narrow layout's side toggle, then the mode switch at the right. A host that
+ *  draws its own mode switch (the source diff) gets the strip only for the side
+ *  toggle; it shows status in its own chrome. */
 function DiffStrip<K extends FileDiffKind>({
   sides,
   kind,
   mode,
   prefs,
   showSwitch,
+  sideToggle,
 }: {
   sides: FileDiffSides;
   kind: K;
   mode: FileDiffModes[K];
   prefs: FileDiffPrefs;
   showSwitch: boolean;
+  sideToggle?: ReactNode;
 }) {
   const onModeChange = showSwitch ? prefs.onModeChange : undefined;
-  // A host without a switch here (the source diff) shows status in its own chrome.
-  if (!onModeChange) return null;
+  if (!onModeChange && !sideToggle) return null;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
-    <div className="flex flex-none items-center gap-2 border-b px-3 py-1.5 text-xs">
-      {sides.status && <span className="font-medium">{STATUS_LABEL[sides.status]}</span>}
+    <div
+      className="flex flex-none items-center gap-2 border-b px-3 py-1.5 text-xs"
+      data-testid={`${prefix}-strip`}
+    >
+      {onModeChange && sides.status && (
+        <span className="font-medium">{STATUS_LABEL[sides.status]}</span>
+      )}
+      {sideToggle}
       {onModeChange && (
         <div className="ml-auto">
           <FileDiffModeSwitch
@@ -260,10 +341,6 @@ function DiffFrame({
   );
 }
 
-function sideAvailability(sides: FileDiffSides) {
-  return { hasBefore: sides.status !== "added", hasAfter: sides.status !== "deleted" };
-}
-
 function isLarge(sides: FileDiffSides) {
   return (
     sides.before != null &&
@@ -272,20 +349,20 @@ function isLarge(sides: FileDiffSides) {
   );
 }
 
-/** Gates an enormous resolved diff behind an explicit opt-in, remembered by path. */
+/** Gates an enormous resolved diff behind an explicit opt-in. The opt-in lives
+ *  in the frame, so switching mode on the same file keeps it. */
 function LargeDiffGate({
-  filePath,
   sides,
+  gate,
   prefix,
   children,
 }: {
-  filePath: string;
   sides: FileDiffSides;
+  gate: Gate;
   prefix: string;
   children: ReactNode;
 }) {
-  const [forcedPath, setForcedPath] = useState<string | null>(null);
-  if (!isLarge(sides) || forcedPath === filePath) return <>{children}</>;
+  if (!isLarge(sides) || gate.forced) return <>{children}</>;
   return (
     <OverlayCenteredState
       testId={`${prefix}-large-gate`}
@@ -293,7 +370,7 @@ function LargeDiffGate({
         <button
           type="button"
           data-testid={`${prefix}-show-anyway`}
-          onClick={() => setForcedPath(filePath)}
+          onClick={gate.onForce}
           className="rounded border border-border px-2 py-0.5 text-[0.7rem] font-medium text-foreground hover:bg-accent"
         >
           Show diff anyway
@@ -305,39 +382,40 @@ function LargeDiffGate({
   );
 }
 
-/** Before and After two-up at {@link SIDE_BY_SIDE_MIN_WIDTH}, a toggle below,
- *  and only the present side (labelled) for an added or deleted file. */
+/** Before and After two-up at {@link SIDE_BY_SIDE_MIN_WIDTH}, the picked side
+ *  below it (the toggle is in the strip), and only the present side (labelled)
+ *  for an added or deleted file. */
 function SideBySide({
   sides,
-  width,
+  layout,
+  picked,
   prefix,
   renderSide,
 }: {
   sides: FileDiffSides;
-  width: number | null;
+  layout: SideLayout;
+  picked: Side;
   prefix: string;
   /** `active` marks the pane the reader is on (scroll keys bind to it). */
-  renderSide: (side: "before" | "after", active: boolean) => ReactNode;
+  renderSide: (side: Side, active: boolean) => ReactNode;
 }) {
-  const [picked, setPicked] = useState<"before" | "after">("after");
-  const { hasBefore, hasAfter } = sideAvailability(sides);
-  const label = (side: "before" | "after") =>
-    side === "before" ? (sides.beforeLabel ?? "Before") : (sides.afterLabel ?? "After");
   const labelRow = "flex-none border-b border-border px-3 py-1 text-[11.5px] font-semibold";
 
-  if (!hasBefore || !hasAfter) {
-    const only = hasAfter ? "after" : "before";
+  if (layout === "unknown") return <CodeSkeleton prefix={prefix} />;
+
+  if (layout === "one") {
+    const only = sideAvailability(sides).hasAfter ? "after" : "before";
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className={labelRow} data-testid={`${prefix}-one-side`}>
-          {label(only)}
+          {sideLabel(sides, only)}
         </div>
         <div className="min-h-0 flex-1">{renderSide(only, true)}</div>
       </div>
     );
   }
 
-  if (width != null && width >= SIDE_BY_SIDE_MIN_WIDTH) {
+  if (layout === "two") {
     return (
       <div className="grid h-full min-h-0 grid-cols-2" data-testid={`${prefix}-side-by-side`}>
         {(["before", "after"] as const).map((side) => (
@@ -348,7 +426,7 @@ function SideBySide({
               side === "after" && "border-l border-border",
             )}
           >
-            <div className={labelRow}>{label(side)}</div>
+            <div className={labelRow}>{sideLabel(sides, side)}</div>
             <div className="min-h-0 flex-1">{renderSide(side, side === "after")}</div>
           </div>
         ))}
@@ -357,26 +435,8 @@ function SideBySide({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid={`${prefix}-toggle`}>
-      <div className="flex flex-none items-center border-b border-border px-3 py-1 text-xs">
-        <div className="inline-flex overflow-hidden rounded border border-border">
-          {(["before", "after"] as const).map((side) => (
-            <button
-              key={side}
-              type="button"
-              aria-pressed={picked === side}
-              onClick={() => setPicked(side)}
-              className={cn(
-                "px-2 py-0.5",
-                picked === side ? "bg-accent font-medium" : "hover:bg-accent/60",
-              )}
-            >
-              {label(side)}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="min-h-0 flex-1">{renderSide(picked, true)}</div>
+    <div className="h-full min-h-0" data-testid={`${prefix}-one-at-a-time`}>
+      {renderSide(picked, true)}
     </div>
   );
 }
@@ -415,16 +475,25 @@ function BinaryNote({ prefs }: { prefs: FileDiffPrefs }) {
 
 /** The text diff: the code body, and every type's Source mode. */
 function SourceBody({
-  filePath,
   sides,
   state,
   prefs,
+  filePath,
   width,
-}: Omit<FileDiffArgs, "fileType"> & { width: number | null }) {
+  gate,
+}: Omit<FileDiffArgs, "fileType"> & { width: number | null; gate: Gate }) {
   const prefix = prefs.testIdPrefix ?? "file-diff";
   if (state.kind === "binary") return <BinaryNote prefs={prefs} />;
   if (state.kind === "error") return <ErrorRow prefix={prefix} message={state.message} />;
-  if (state.kind === "loading" || sides.before == null || sides.after == null) {
+  // Until the body is measured the layout is unknown: mounting the diff now would
+  // build it inline and then rebuild it split.
+  const layoutFixed = prefs.code?.mode != null;
+  if (
+    state.kind === "loading" ||
+    sides.before == null ||
+    sides.after == null ||
+    (width == null && !layoutFixed)
+  ) {
     return <CodeSkeleton prefix={prefix} />;
   }
   // An oversized file shown past the gate never pays for ignore-whitespace or
@@ -432,7 +501,7 @@ function SourceBody({
   const diffMode = isLarge(sides) ? "line" : prefs.modes.code;
   const layout = width != null && width >= SIDE_BY_SIDE_MIN_WIDTH ? "split" : "inline";
   return (
-    <LargeDiffGate filePath={filePath} sides={sides} prefix={prefix}>
+    <LargeDiffGate sides={sides} gate={gate} prefix={prefix}>
       <CodeDiffReview
         mode={layout}
         {...prefs.code}
@@ -469,21 +538,29 @@ function ProseScroll({
 const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert";
 
 function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
-  const [bodyRef, width] = useContainerWidth();
+  const frame = useFrameState(filePath);
   const mode = prefs.modes.markdown;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   const proseClass = prefs.prose?.className ?? PROSE_CLASS;
+  const layout = sideLayout(sides, frame.width);
 
   let body: ReactNode;
   if (mode === "source") {
     body = (
-      <SourceBody filePath={filePath} sides={sides} state={state} prefs={prefs} width={width} />
+      <SourceBody
+        filePath={filePath}
+        sides={sides}
+        state={state}
+        prefs={prefs}
+        width={frame.width}
+        gate={frame.gate}
+      />
     );
   } else if (state.kind === "binary") {
     body = <BinaryNote prefs={prefs} />;
   } else if (mode === "redline") {
     body = (
-      <LargeDiffGate filePath={filePath} sides={sides} prefix={prefix}>
+      <LargeDiffGate sides={sides} gate={frame.gate} prefix={prefix}>
         <ProseScroll prefs={prefs} scrollRef={prefs.prose?.scrollRef}>
           <RedlineProse
             before={state.kind === "ready" ? sides.before : null}
@@ -506,10 +583,11 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
   } else {
     const text = { before: sides.before, after: sides.after };
     body = (
-      <LargeDiffGate filePath={filePath} sides={sides} prefix={prefix}>
+      <LargeDiffGate sides={sides} gate={frame.gate} prefix={prefix}>
         <SideBySide
           sides={sides}
-          width={width}
+          layout={layout}
+          picked={frame.picked}
           prefix={prefix}
           renderSide={(side, active) => (
             <ProseScroll prefs={prefs} scrollRef={active ? prefs.prose?.scrollRef : undefined}>
@@ -526,12 +604,26 @@ function MarkdownFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
     );
   }
 
+  const showToggle = mode === "side-by-side" && state.kind === "ready" && layout === "toggle";
   return (
     <DiffFrame
       testId={`${prefix}-markdown`}
-      bodyRef={bodyRef}
+      bodyRef={frame.bodyRef}
       header={prefs.header}
-      strip={<DiffStrip sides={sides} kind="markdown" mode={mode} prefs={prefs} showSwitch />}
+      strip={
+        <DiffStrip
+          sides={sides}
+          kind="markdown"
+          mode={mode}
+          prefs={prefs}
+          showSwitch
+          sideToggle={
+            showToggle && (
+              <SideToggle sides={sides} picked={frame.picked} onPick={frame.setPicked} />
+            )
+          }
+        />
+      }
     >
       {body}
     </DiffFrame>
@@ -545,16 +637,24 @@ function RenderedFileDiff({
   state,
   prefs,
 }: FileDiffArgs & { fileType: "html" | "image" | "excalidraw" }) {
-  const [bodyRef, width] = useContainerWidth();
+  const frame = useFrameState(filePath);
   const prefix = prefs.testIdPrefix ?? "file-diff";
   const rendered = sides.rendered;
   // Off Files there is no serving for both sides yet: Source is the only mode.
   const mode = rendered ? prefs.modes.html : "source";
+  const layout = sideLayout(sides, frame.width);
 
   let body: ReactNode;
   if (mode === "source" || !rendered) {
     body = (
-      <SourceBody filePath={filePath} sides={sides} state={state} prefs={prefs} width={width} />
+      <SourceBody
+        filePath={filePath}
+        sides={sides}
+        state={state}
+        prefs={prefs}
+        width={frame.width}
+        gate={frame.gate}
+      />
     );
   } else if (state.kind === "error") {
     body = <ErrorRow prefix={prefix} message={state.message} />;
@@ -564,21 +664,39 @@ function RenderedFileDiff({
     body = (
       <SideBySide
         sides={sides}
-        width={width}
+        layout={layout}
+        picked={frame.picked}
         prefix={prefix}
         renderSide={(side) => renderRenderedSide(fileType, side, sides, rendered)}
       />
     );
   }
 
+  const showToggle =
+    !!rendered &&
+    mode === "side-by-side" &&
+    state.kind !== "loading" &&
+    state.kind !== "error" &&
+    layout === "toggle";
   return (
     <DiffFrame
       testId={`${prefix}-rendered`}
-      bodyRef={bodyRef}
+      bodyRef={frame.bodyRef}
       header={prefs.header}
       strip={
         rendered ? (
-          <DiffStrip sides={sides} kind="html" mode={mode} prefs={prefs} showSwitch />
+          <DiffStrip
+            sides={sides}
+            kind="html"
+            mode={mode}
+            prefs={prefs}
+            showSwitch
+            sideToggle={
+              showToggle && (
+                <SideToggle sides={sides} picked={frame.picked} onPick={frame.setPicked} />
+              )
+            }
+          />
         ) : (
           // Off Files the body is a code diff, so it takes the code modes.
           <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
@@ -592,7 +710,7 @@ function RenderedFileDiff({
 
 function renderRenderedSide(
   fileType: "html" | "image" | "excalidraw",
-  side: "before" | "after",
+  side: Side,
   sides: FileDiffSides,
   rendered: RenderedSides,
 ): ReactNode {
@@ -651,18 +769,25 @@ function renderRenderedSide(
 }
 
 function CodeFileDiff({ filePath, sides, state, prefs }: FileDiffArgs) {
-  const [bodyRef, width] = useContainerWidth();
+  const frame = useFrameState(filePath);
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
     <DiffFrame
       testId={`${prefix}-code`}
-      bodyRef={bodyRef}
+      bodyRef={frame.bodyRef}
       header={prefs.header}
       strip={
         <DiffStrip sides={sides} kind="code" mode={prefs.modes.code} prefs={prefs} showSwitch />
       }
     >
-      <SourceBody filePath={filePath} sides={sides} state={state} prefs={prefs} width={width} />
+      <SourceBody
+        filePath={filePath}
+        sides={sides}
+        state={state}
+        prefs={prefs}
+        width={frame.width}
+        gate={frame.gate}
+      />
     </DiffFrame>
   );
 }

@@ -49,7 +49,10 @@ test("below 900 px the HTML diff is a Before | After toggle", async ({ page }) =
   await openChanges(page, 1000);
   await page.getByRole("button", { name: /^inbox-board/ }).click();
   const diff = page.getByTestId("file-diff-rendered").last();
-  await expect(diff.getByTestId("file-diff-toggle")).toBeVisible();
+  // The side toggle sits in the strip, not on a row of its own.
+  await expect(
+    diff.getByTestId("file-diff-strip").getByRole("group", { name: "Side shown" }),
+  ).toBeVisible();
   await expect(diff.getByRole("button", { name: "After" })).toHaveAttribute("aria-pressed", "true");
   await diff.getByRole("button", { name: "Before" }).click();
   await expect(diff.getByRole("button", { name: "Before" })).toHaveAttribute(
