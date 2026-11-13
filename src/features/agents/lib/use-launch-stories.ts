@@ -86,6 +86,7 @@ export function useLaunchStories(teamKey: string) {
       stop();
     };
   }, [key, page, orgSlug, teamName, sourceSlugs]);
+  if (context.kind === "no-teams") return { stories: [], loading: false };
   if (context.kind === "unavailable") return { stories: [], loading: false, error: context.error };
   if (!page || read.key !== key) return { stories: [], loading: true };
   return read;
