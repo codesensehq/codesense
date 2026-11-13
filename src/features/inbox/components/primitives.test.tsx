@@ -255,8 +255,23 @@ describe("MessageBody Open chip", () => {
     bridgeResolveOpenTarget.mockResolvedValue(target);
     render(<MessageBody m={{ ...base, text: "review this", primaryFile: "docs/plan.md" }} />);
     fireEvent.click(screen.getByRole("button", { name: "docs/plan.md" }));
-    await waitFor(() => expect(openFileInTeam).toHaveBeenCalledWith(target));
+    await waitFor(() => expect(openFileInTeam).toHaveBeenCalledWith(target, {}));
     expect(bridgeResolveOpenTarget).toHaveBeenCalledWith(
+      `/orgs/x/${team.team}/content/inbox.html`,
+      "docs/plan.md",
+      team.team,
+    );
+  });
+
+  it("opens a path#fragment the team doesn't hold as the path, at the fragment", async () => {
+    bridgeResolveOpenTarget.mockImplementation(async (_page: string, path: string) => {
+      if (path.includes("#")) throw new Error("not-found: docs/plan.md#goals");
+      return target;
+    });
+    render(<MessageBody m={{ ...base, primaryFile: "docs/plan.md#goals" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "docs/plan.md#goals" }));
+    await waitFor(() => expect(openFileInTeam).toHaveBeenCalledWith(target, { hash: "#goals" }));
+    expect(bridgeResolveOpenTarget).toHaveBeenLastCalledWith(
       `/orgs/x/${team.team}/content/inbox.html`,
       "docs/plan.md",
       team.team,

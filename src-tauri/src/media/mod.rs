@@ -366,18 +366,20 @@ pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
     if !valid_sha(sha) {
         return Err("invalid media hash".into());
     }
-    let path = dir.join(sha);
     // Only a regular file within the fetch cap: the cache is app-owned, but the read
-    // path stays bounded whatever sits under the hash name.
-    let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    // stays bounded whatever sits under the hash name. One handle is checked, read and
+    // touched, so the file can't be swapped between the check and the read.
+    let file = crate::agents::content_reader::open_no_follow(&dir.join(sha))
+        .map_err(|_| "media unavailable".to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
         return Err("media unavailable".into());
     }
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
-        let _ =
-            file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
+    let bytes = read_limited(&file)?;
+    if bytes.len() > MAX_BYTES {
+        return Err("media unavailable".into());
     }
+    let _ = file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
     Ok(bytes)
 }
 fn store_bytes(dir: &Path, bytes: &[u8], a: &mut Attachment) -> Result<(), Failure> {

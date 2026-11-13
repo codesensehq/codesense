@@ -25,6 +25,7 @@ import { isLiveInboxMessage } from "@/features/weft/lib/live-inbox-message";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { InboxLens } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { usePrefersReducedMotion } from "@/shared/lib/use-prefers-reduced-motion";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -688,8 +689,8 @@ export function OpenFileChip({ m }: { m: ConversationMessage }) {
       return;
     }
     const page = `${pathToTeamContentDirSync(known.org_root, team)}/inbox.html`;
-    bridgeResolveOpenTarget(page, file, team)
-      .then((target) => openFileInTeam(target))
+    resolveOpenPath(file, (path) => bridgeResolveOpenTarget(page, path, team))
+      .then(({ target, hash }) => openFileInTeam(target, hash ? { hash } : {}))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
   return (
