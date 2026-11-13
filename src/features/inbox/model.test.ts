@@ -24,7 +24,6 @@ import {
   counterpart,
   defaultRecipient,
   direction,
-  filterSpool,
   initials,
   labelOf,
   msgKey,
@@ -39,12 +38,9 @@ import {
   arrivalNote,
   dayHeads,
   newArrivals,
-  spoolItems,
   unseenBelow,
   threadLanes,
   threadsFor,
-  wireArrows,
-  wireColumns,
 } from "./model";
 
 const NOW = new Date(2026, 9, 5, 9, 0).getTime();
@@ -114,22 +110,12 @@ describe("threads", () => {
   });
 });
 
-describe("mailspool", () => {
-  const mine = fixtureSessionInbox(FX.t9, NOW).messages;
-
+describe("direction", () => {
   it("marks typed, role, sent and received directions", () => {
     expect(direction(messages[7]!, FX.t9).glyph).toBe("⇢");
     expect(direction(messages[6]!, FX.impl).glyph).toBe("⤳");
     expect(direction(messages[5]!, FX.impl).glyph).toBe("→");
     expect(direction(messages[8]!, FX.t9).glyph).toBe("←");
-  });
-
-  it("filters by chip and by the prompt's from:/to:/text terms", () => {
-    expect(filterSpool(mine, FX.t9, "terminal", "", dir).map((m) => m.id)).toEqual([8, 10]);
-    expect(filterSpool(mine, FX.t9, "unread", "", dir).map((m) => m.id)).toEqual([11]);
-    expect(filterSpool(mine, FX.t9, "all", "from:@amelia", dir).map((m) => m.id)).toEqual([9, 11]);
-    expect(filterSpool(messages, HUMAN, "all", "to:#reviewer", dir).map((m) => m.id)).toEqual([7]);
-    expect(filterSpool(mine, FX.t9, "all", '"cache"', dir).map((m) => m.id)).toEqual([11]);
   });
 });
 
@@ -167,36 +153,6 @@ describe("claim and routing", () => {
     expect(names).toEqual(["architect", "reviewer"]);
     expect(roles.find((r) => r.role === "reviewer")).toMatchObject({ holder: null, pending: 1 });
     expect(roles.find((r) => r.role === "architect")).toMatchObject({ holder: null, pending: 1 });
-  });
-});
-
-describe("wire", () => {
-  it("draws this tab first, then participants, then dashed role lanes", () => {
-    const inbox = fixtureSessionInbox(FX.impl, NOW);
-    const cols = wireColumns(inbox.messages, FX.impl);
-    expect(cols).toEqual([
-      { key: FX.impl, queue: false },
-      { key: FX.ctrl, queue: false },
-      { key: HUMAN, queue: false },
-      { key: "#reviewer", queue: true },
-    ]);
-    const arrows = wireArrows(cols, inbox.messages);
-    const toReviewer = arrows.find((a) => a.message.id === 7)!;
-    expect(toReviewer.dir).toBe("r");
-    expect(toReviewer.kinds).toEqual(["q"]);
-    expect(toReviewer.leftPct).toBeCloseTo(12.5);
-    expect(toReviewer.widthPct).toBeCloseTo(75);
-    expect(arrows.find((a) => a.message.id === 6)!.kinds).toEqual(["human"]);
-    expect(arrows.find((a) => a.message.id === 3)!.dir).toBe("l");
-  });
-
-  it("draws a note to oneself as a loop on its own lifeline, not nothing", () => {
-    const note = { ...messages[0]!, id: 900, from: HUMAN, to: HUMAN, toRole: null };
-    const cols = wireColumns([note], null);
-    const [loop] = wireArrows(cols, [note]);
-    expect(loop?.dir).toBe("self");
-    expect(loop?.leftPct).toBeCloseTo(50);
-    expect(loop?.widthPct).toBeGreaterThan(0);
   });
 });
 
@@ -437,42 +393,6 @@ describe("long logs: day dividers and the jump to latest", () => {
         month: "short",
       }),
     );
-  });
-
-  it("flattens the spool into day dividers and lines, keyed apart", () => {
-    const log = [msg(1, at(4, 8)), msg(2, at(4, 9)), msg(3, at(5, 7))];
-    const items = spoolItems(log, NOW);
-    expect(items.map((i) => (i.kind === "day" ? i.label : i.m.id))).toEqual([
-      "Yesterday",
-      1,
-      2,
-      "Today",
-      3,
-    ]);
-    expect(new Set(items.map((i) => i.key)).size).toBe(items.length);
-    // A line knows its place among the lines, for aria-posinset.
-    expect(items.filter((i) => i.kind === "msg").map((i) => i.kind === "msg" && i.pos)).toEqual([
-      0, 1, 2,
-    ]);
-  });
-
-  it("lists the newest 500 lines with one divider per day", () => {
-    const log = Array.from({ length: 500 }, (_, i) => msg(i, at(1, 0) + i * 15 * 60_000));
-    const items = spoolItems(log, NOW);
-    expect(items.filter((i) => i.kind === "msg")).toHaveLength(500);
-    // 500 lines a quarter-hour apart from Oct 1 run into Oct 6: six days.
-    expect(items.filter((i) => i.kind === "day")).toHaveLength(6);
-  });
-
-  it("keeps a day's divider key when that day's first line is trimmed (the 500 cap)", () => {
-    const log = [msg(1, at(4, 8)), msg(2, at(4, 9)), msg(3, at(5, 7))];
-    const before = spoolItems(log, NOW)
-      .filter((i) => i.kind === "day")
-      .map((i) => i.key);
-    const after = spoolItems(log.slice(1), NOW)
-      .filter((i) => i.kind === "day")
-      .map((i) => i.key);
-    expect(after).toEqual(before);
   });
 
   it("gives lines with no valid time one divider between them, as before", () => {
