@@ -1075,6 +1075,48 @@ it("tells the command registry the built-in Inbox shows while a failed Inbox fal
   expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, null);
 });
 
+it("publishes a refreshed Inbox fallback's commands without withdrawing them", async () => {
+  const builtin = {
+    ...entry,
+    title: "Inbox",
+    scope: "private" as const,
+    team: undefined,
+    panelId: "pane:private:acme/inbox",
+    path: "/builtin-panes/panes/inbox.html",
+    panesDir: "/builtin-panes/panes",
+    dashboardRef: { scope: "built-in" as const, org: "acme", id: "inbox" },
+  };
+  // The same Inbox, listed again with an edited command set.
+  const refreshed = { ...builtin, modified: "2026-11-13T12:00:00Z" };
+  const listing = (inbox: typeof builtin) => ({
+    contentRoot: "/ctx",
+    chain: [],
+    panes: [inbox],
+    builtinInbox: inbox,
+  });
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "dev" });
+  vi.mocked(listBuiltinPanes)
+    .mockResolvedValueOnce(listing(builtin))
+    .mockResolvedValue(listing(refreshed));
+  displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
+  render(<SlotDashboardHost slotId="right-pane" entry={keyedEntry} contentRoot="/ctx" visible />);
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, builtin),
+  );
+  // A reload fails again and lists the built-ins again.
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "still broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, refreshed),
+  );
+  const sinceShown = displayedBody.mock.calls.slice(
+    displayedBody.mock.calls.findIndex(([, , body]) => body === builtin),
+  );
+  expect(sinceShown.filter(([, , body]) => body === null)).toEqual([]);
+});
+
 it("withdraws a failed dashboard's commands while a native body shows, and gives them back on recovery", () => {
   vi.useFakeTimers();
   displayedBody.mockClear();

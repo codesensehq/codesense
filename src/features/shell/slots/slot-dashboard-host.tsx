@@ -947,24 +947,23 @@ export function SlotDashboardHost({
   const failedKey = entry.dashboardRef ? dashboardRefKey(entry.dashboardRef) : null;
   const shownInPlace: PaneEntry | "native" | null =
     failure && !retained && !fallbackConfig ? (fallbackInbox ?? "native") : null;
-  // The effect depends on the fallback's key, so a refreshed copy of the same entry doesn't
-  // withdraw and re-register its commands.
-  const shownBodyRef = useRef(shownInPlace);
-  useEffect(() => {
-    shownBodyRef.current = shownInPlace;
-  });
+  // Withdrawing follows the fallback's key, so a refreshed copy of the same entry doesn't
+  // withdraw and re-register its commands; publishing follows the body itself, so the refreshed
+  // copy's commands (an edited team Inbox, say) replace the old ones in place.
   const shownKey =
     typeof shownInPlace === "object" && shownInPlace
       ? shownInPlace.dashboardRef
         ? dashboardRefKey(shownInPlace.dashboardRef)
         : shownInPlace.panelId
       : shownInPlace;
+  const showingInPlace = !!shownInPlace;
   useEffect(() => {
-    const body = shownBodyRef.current;
-    if (!failedKey || !body) return;
-    setSlotDisplayedBody(slotId, failedKey, body);
+    if (!failedKey || !showingInPlace) return;
     return () => setSlotDisplayedBody(slotId, failedKey, null);
-  }, [slotId, failedKey, shownKey]);
+  }, [slotId, failedKey, showingInPlace, shownKey]);
+  useEffect(() => {
+    if (failedKey && shownInPlace) setSlotDisplayedBody(slotId, failedKey, shownInPlace);
+  }, [slotId, failedKey, shownInPlace]);
   const strip = failure && !showingEntryFallback && (
     <SlotFallbackStrip
       entry={entry}

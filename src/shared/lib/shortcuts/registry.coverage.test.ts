@@ -624,16 +624,19 @@ describe("NAV_MENU_ITEMS", () => {
 describe("shipped default shortcuts", () => {
   afterEach(() => setDynamicShortcutActions([]));
 
-  // Every built-in pane's `codesense:commands` declaration, as the app registers it.
-  const declarations = (BUILTIN_PANES as { id: string; source: string }[]).flatMap(
-    ({ id, source }) => {
-      const html = readFileSync(source, "utf8");
-      const raw = /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1];
-      // A pane that declares the tag must parse; one that never mentions it has no commands.
-      if (html.includes('name="codesense:commands"'))
-        expect(raw, `${id} commands tag`).toBeTruthy();
-      return raw ? [{ pane: id, commands: JSON.parse(raw) as DeclaredCommand[] }] : [];
-    },
+  // Every built-in pane's `codesense:commands` tag, read without asserting so a broken tag fails
+  // its own named test below rather than the whole file at collection.
+  const panes = (BUILTIN_PANES as { id: string; source: string }[]).map(({ id, source }) => {
+    const html = readFileSync(source, "utf8");
+    return {
+      id,
+      mentionsTag: html.includes('name="codesense:commands"'),
+      raw: /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1],
+    };
+  });
+  // Each declaration as the app registers it.
+  const declarations = panes.flatMap(({ id, raw }) =>
+    raw ? [{ pane: id, commands: JSON.parse(raw) as DeclaredCommand[] }] : [],
   );
   type DeclaredCommand = { id: string; label: string; defaultChord?: string };
   const declared = (pane: string, commands: DeclaredCommand[]): ShortcutAction[] =>
@@ -656,6 +659,11 @@ describe("shipped default shortcuts", () => {
     expect(declarations.map((d) => d.pane)).toEqual(
       expect.arrayContaining(["inbox", "files-tree", "agent-list", "notes"]),
     );
+  });
+
+  // A pane that declares the tag must parse; one that never mentions it has no commands.
+  it.each(panes.filter((p) => p.mentionsTag))("finds the $id pane's commands tag", ({ raw }) => {
+    expect(raw).toBeTruthy();
   });
 
   it("never resolves to a conflict on a fresh install", () => {
