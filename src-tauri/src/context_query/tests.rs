@@ -1487,6 +1487,58 @@ fn summary_is_capped() {
     assert!(s.ends_with('…'));
 }
 
+/// An HTML story's title reaches `query_context` with its character
+/// references decoded once, from `<title>`, `<h1>` and the `cs:title` meta.
+#[test]
+fn html_story_titles_decode_character_references() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("c");
+    write(
+        &root.join("e/T-1.html"),
+        "<html><head><meta name=\"cs:type\" content=\"story\"><meta name=\"cs:story-id\" content=\"T-1\"><title>Settle the clone&#x27;s paths &amp; &lt;b&gt; &amp;#39;</title></head></html>",
+    );
+    write(
+        &root.join("e/T-2.html"),
+        "<html><head><meta name=\"cs:type\" content=\"story\"><meta name=\"cs:story-id\" content=\"T-2\"></head><body><h1>The clone&#39;s &quot;h1&quot;</h1></body></html>",
+    );
+    write(
+        &root.join("e/T-3.html"),
+        "<html><head><meta name=\"cs:type\" content=\"story\"><meta name=\"cs:story-id\" content=\"T-3\"><meta name=\"cs:title\" content=\"The clone&#x27;s meta\"></head></html>",
+    );
+    let mut state = IndexState::default();
+    state.reconcile(vec![IndexRoot {
+        dir: root,
+        org: Some("acme".into()),
+        team: Some("default".into()),
+        layer: Layer::Team,
+    }]);
+    let snap = state.snapshot(1, true);
+    let result = run(&snap, json!({ "limit": 1000 }));
+    let title = |name: &str| {
+        result
+            .rows
+            .iter()
+            .find(|r| r.file_name == name)
+            .unwrap_or_else(|| panic!("{name} indexed"))
+            .title
+            .clone()
+    };
+    assert_eq!(
+        title("T-1.html").as_deref(),
+        Some("Settle the clone's paths & <b> &#39;")
+    );
+    assert_eq!(title("T-2.html").as_deref(), Some("The clone's \"h1\""));
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .find(|r| r.file_name == "T-3.html")
+            .unwrap()
+            .fields["title"],
+        "The clone's meta"
+    );
+}
+
 /// SW-DNS-2: a summary is plain text — inline Markdown markup dropped and
 /// character references decoded — for Markdown and HTML stories alike.
 #[test]

@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::pipeline_format::entities::{decode_entities, NamedSet};
 use crate::content_engine::validate_path_segment;
 use crate::context_repo::scratch_space::{self, is_scratch_team};
 use crate::context_repo::{path_to_org_root, path_to_team_content_dir, path_to_team_panes_dir};
@@ -159,7 +160,7 @@ pub(crate) fn pane_title(html: &str) -> Option<String> {
     let open = lower.find("<title")?;
     let start = open + lower[open..].find('>')? + 1;
     let end = start + lower[start..].find("</title")?;
-    let text = decode_entities(&html[start..end]);
+    let text = decode_entities(&html[start..end], NamedSet::Attribute);
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!text.is_empty()).then_some(text)
 }
@@ -317,7 +318,7 @@ impl DashboardDeclaration {
                 .collect()
         };
         let (commands, commands_error) = match pane_meta(html, "codesense:commands")
-            .map(decode_entities)
+            .map(|raw| decode_entities(raw, NamedSet::Attribute))
             .filter(|raw| !raw.trim().is_empty())
         {
             None => (Vec::new(), None),
@@ -365,14 +366,6 @@ impl DashboardDeclaration {
         }
         Ok(())
     }
-}
-
-fn decode_entities(raw: &str) -> String {
-    raw.replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 pub(crate) fn pane_meta<'a>(html: &'a str, name: &str) -> Option<&'a str> {
