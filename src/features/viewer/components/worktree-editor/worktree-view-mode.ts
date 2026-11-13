@@ -18,6 +18,17 @@ const TEAM_CONTEXT_DIRS = ["stories/", "design/", "team-context/"];
 
 const STORAGE_KEY = "codesense.worktree-editor.view-mode";
 
+/** ⇧⌘V (⇧⌃V off the Mac): Rendered ⇄ Source, as VS Code's preview toggle. */
+export function isViewToggleChord(key: {
+  code?: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+}): boolean {
+  return !!(key.metaKey || key.ctrlKey) && !!key.shiftKey && !key.altKey && key.code === "KeyV";
+}
+
 /** The viewer type of `path` when the viewer can render it, else `null`. */
 export function renderableType(path: string): ViewerFileType | null {
   const type = getViewerFileType(path);

@@ -16,6 +16,7 @@ import { basename } from "@/shared/lib/basename";
 import { renderViewer } from "@/shared/lib/render-viewer";
 import { writeBinaryWorktreeFile } from "@/tauri/commands";
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
+import type { FrameShortcutHandler } from "@/features/dashboard/components/html-viewer";
 import {
   CodeEditor,
   CodeMergeView,
@@ -49,6 +50,7 @@ import { FileWarningPlaceholder } from "../file-warning-placeholder";
 import { EditorSkeleton, EditorStateMessage } from "./editor-states";
 import {
   initialViewMode,
+  isViewToggleChord,
   rememberViewMode,
   renderableType,
   type WorktreeViewMode,
@@ -404,6 +406,18 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
   useEffect(() => {
     apiState.current = { save, getDraft, rendered, backOutOfReconcile, toggleView };
   });
+  // A rendered html frame swallows ⇧⌘V and forwards it here: this pane's own
+  // toggle takes it, unless the page has focus in a text field (paste and
+  // match style) or an editor. Stable, and reads the latest toggle the way the
+  // chrome's handle does.
+  const [onFrameShortcut] = useState(() => {
+    const handler: FrameShortcutHandler = (key, editorTarget, textFieldTarget) => {
+      if (editorTarget || textFieldTarget || !isViewToggleChord(key)) return false;
+      apiState.current.toggleView();
+      return true;
+    };
+    return handler;
+  });
   useEffect(() => {
     const api: PaneApi = {
       // The model's latest buffer (a hand-merge just lifted in included), not
@@ -619,7 +633,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
           >
             {renderViewer(
               { filePath: file.path, teamContentPath: backend.rootPath, refreshKey: refresh.key },
-              { changedPaths, canvasWriter },
+              { changedPaths, canvasWriter, onFrameShortcut },
             )}
           </div>
         )}

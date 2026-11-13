@@ -43,6 +43,7 @@ import { EditorStatusBar } from "./worktree-editor/editor-status-bar";
 import { EditorBreadcrumbs } from "./worktree-editor/editor-breadcrumbs";
 import { EditorQuickOpen } from "./worktree-editor/editor-quick-open";
 import { EditorStateMessage, Kbd } from "./worktree-editor/editor-states";
+import { isViewToggleChord } from "./worktree-editor/worktree-view-mode";
 
 /** A pending discard confirmation: closing a dirty tab, or the whole editor
  *  while any tab is dirty. Held until confirmed or cancelled — unsaved edits
@@ -604,9 +605,10 @@ export function SourceEditorInset({
       openPalette(":");
       return;
     }
-    if (mod && e.shiftKey && !e.altKey && e.code === "KeyV") {
+    if (isViewToggleChord(e)) {
       // Rendered ⇄ Source, as VS Code's preview toggle. CodeMirror binds
-      // nothing to it.
+      // nothing to it; inside a canvas it is Excalidraw's plain paste.
+      if (target?.closest?.(".excalidraw")) return;
       claim();
       activeApi()?.toggleView();
       return;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { createElement, forwardRef, useEffect, useImperativeHandle } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The Rendered | Source toggle: a story doc or dashboard in a source worktree
@@ -442,6 +442,78 @@ describe("WorktreeFilePane Rendered | Source", () => {
     render(pane(`${ROOT}/stories/epic/SV-2-story.md`, backend()));
     expect(await screen.findByTestId("stub-editor")).toBeInTheDocument();
     expect(screen.queryByTestId("stub-markdown")).toBeNull();
+  });
+
+  describe("⇧⌘V inside a rendered html frame", () => {
+    const VIEW_CHORD = {
+      key: "V",
+      code: "KeyV",
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+    };
+    type FrameShortcut = (
+      key: typeof VIEW_CHORD,
+      editorTarget: boolean,
+      textFieldTarget: boolean,
+    ) => boolean;
+    const frameShortcutFor = (path: string) =>
+      viewer.props.filter((p) => p.kind === "html" && p.filePath === path).at(-1)
+        ?.onFrameShortcut as FrameShortcut | undefined;
+
+    it("the frame's forwarded chord switches its pane to Source", async () => {
+      readFileMock.mockResolvedValue("<!doctype html><p>board</p>");
+      render(pane(DASHBOARD, backend()));
+      await screen.findByTestId("stub-html");
+
+      let claimed = false;
+      act(() => {
+        claimed = frameShortcutFor(DASHBOARD)!(VIEW_CHORD, false, false);
+      });
+      expect(claimed).toBe(true);
+      expect(await screen.findByTestId("stub-editor")).toBeVisible();
+      expect(screen.getByRole("radio", { name: "Source" })).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("leaves the chord to a text field in the page, and to any other chord", async () => {
+      readFileMock.mockResolvedValue("<!doctype html><p>board</p>");
+      render(pane(DASHBOARD, backend()));
+      await screen.findByTestId("stub-html");
+      const onFrameShortcut = frameShortcutFor(DASHBOARD)!;
+
+      expect(onFrameShortcut(VIEW_CHORD, false, true)).toBe(false);
+      expect(onFrameShortcut(VIEW_CHORD, true, false)).toBe(false);
+      expect(onFrameShortcut({ ...VIEW_CHORD, shiftKey: false }, false, false)).toBe(false);
+      expect(screen.getByRole("radio", { name: "Rendered" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    it("with two panes, only the pane that owns the frame flips", async () => {
+      const OTHER = `${ROOT}/stories/epic/SV-2-story.html`;
+      readFileMock.mockResolvedValue("<!doctype html><p>board</p>");
+      render(
+        createElement(
+          "div",
+          null,
+          createElement("section", { "data-testid": "a" }, pane(DASHBOARD, backend())),
+          createElement("section", { "data-testid": "b" }, pane(OTHER, backend())),
+        ),
+      );
+      await waitFor(() => expect(screen.getAllByTestId("stub-html")).toHaveLength(2));
+
+      act(() => {
+        frameShortcutFor(OTHER)!(VIEW_CHORD, false, false);
+      });
+      const a = within(screen.getByTestId("a"));
+      const b = within(screen.getByTestId("b"));
+      expect(await b.findByTestId("stub-editor")).toBeVisible();
+      expect(b.getByRole("radio", { name: "Source" })).toHaveAttribute("aria-checked", "true");
+      expect(a.getByRole("radio", { name: "Rendered" })).toHaveAttribute("aria-checked", "true");
+      expect(a.queryByTestId("stub-editor")).toBeNull();
+    });
   });
 
   it("a canvas drawn in Rendered saves through the worktree writer, locked to the base it names, PNG included", async () => {

@@ -563,6 +563,30 @@ describe("SourceEditorInset — edit + save (SLW-WDE-2)", () => {
     expect(source).toHaveAttribute("aria-checked", "true");
   });
 
+  it("⇧⌘V from inside the rendered view switches it, but not from inside a canvas (Excalidraw's paste)", async () => {
+    readFileMock.mockResolvedValueOnce("\0PNG rest");
+    render(<SourceEditorInset workspace={ws} seedRelPath={null} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("pick-binary"));
+    const source = await screen.findByRole("radio", { name: "Source" });
+    const renderedLayer = await screen.findByTestId("worktree-rendered");
+    const chord = { key: "V", code: "KeyV", metaKey: true, shiftKey: true };
+
+    // A canvas inside the rendered layer: its ⇧⌘V is a plain paste.
+    const canvas = document.createElement("div");
+    canvas.className = "excalidraw";
+    const canvasInput = document.createElement("textarea");
+    canvas.appendChild(canvasInput);
+    renderedLayer.appendChild(canvas);
+    fireEvent.keyDown(canvasInput, chord);
+    expect(source).toHaveAttribute("aria-checked", "false");
+
+    // Plain rendered DOM: the keydown bubbles to the editor and toggles.
+    const plain = document.createElement("span");
+    renderedLayer.appendChild(plain);
+    fireEvent.keyDown(plain, chord);
+    expect(source).toHaveAttribute("aria-checked", "true");
+  });
+
   it("⌃G over an open quick open switches it to go to line", async () => {
     await openTextFile();
     const inset = screen.getByTestId("source-editor-inset-w1");

@@ -2,7 +2,7 @@
 import { dashboardPublishingFallback } from "@/features/dashboard-publishing/dashboards-virtual-tab";
 import type { ReactElement } from "react";
 
-import { HtmlViewer } from "@/features/dashboard/components/html-viewer";
+import { HtmlViewer, type FrameShortcutHandler } from "@/features/dashboard/components/html-viewer";
 import { ExcalidrawViewer } from "@/features/dashboard/components/excalidraw-viewer";
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 import { ImageViewer } from "@/features/dashboard/components/image-viewer";
@@ -30,13 +30,18 @@ import { resolveVirtualTab } from "@/shared/lib/virtual-viewer-registry";
  * refresh key, team content root, nav callback). `md` carries markdown-only
  * extras (post-commit signal, anchor scroll, watcher invalidation) — formats
  * with their own extras should mirror this split, as `canvasWriter` (where a
- * canvas saves, when not to the context repo) does. The `never` exhaustiveness
+ * canvas saves, when not to the context repo) and `onFrameShortcut` (a key an
+ * html frame forwards, offered to its host first) do. The `never` exhaustiveness
  * guard fails the TS build if a `VIEWER_EXTENSIONS` type is added without a
  * case here.
  */
 export function renderViewer(
   common: CommonViewerProps & { filePath: string },
-  { canvasWriter, ...md }: MarkdownExtras & { canvasWriter?: CanvasWriter },
+  {
+    canvasWriter,
+    onFrameShortcut,
+    ...md
+  }: MarkdownExtras & { canvasWriter?: CanvasWriter; onFrameShortcut?: FrameShortcutHandler },
 ): ReactElement {
   // SW-GS-2b (C): synthetic "virtual" tabs (e.g. the Git Sync Workbench) render
   // a registered React surface instead of disk content. Short-circuit BEFORE
@@ -73,6 +78,7 @@ export function renderViewer(
           viewStateKey={md.viewStateKey}
           pendingHash={md.pendingHash}
           onPendingHashConsumed={md.onPendingHashConsumed}
+          onFrameShortcut={onFrameShortcut}
         />
       );
     case "markdown":

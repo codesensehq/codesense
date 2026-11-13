@@ -195,6 +195,9 @@ type HtmlViewerProps = CommonViewerProps & {
   onFrameViewKey?: (viewKey: string) => void;
   /** Rendered instead of the default deleted-file placeholder on a 404. */
   renderMissing?: () => ReactNode;
+  /** Offered each key the frame forwards before the shortcut registry; true
+   *  claims it (the registry doesn't see it). */
+  onFrameShortcut?: FrameShortcutHandler;
   /** Whether the host shows the doc right now (default true); the doc hears it,
    *  together with the app window's own visibility, through `onVisibility`. */
   visible?: boolean;
@@ -235,6 +238,13 @@ function parseDocBadge(raw: unknown): DocBadge | null | undefined {
   const sev = severity === "warning" || severity === "error" ? severity : "info";
   return count === 0 ? null : { count: Math.floor(count), severity: sev };
 }
+
+/** A key forwarded from a frame, as the host's `onFrameShortcut` hears it. */
+export type FrameShortcutHandler = (
+  key: KeyboardEventInit & { key: string; code: string },
+  editorTarget: boolean,
+  textFieldTarget: boolean,
+) => boolean;
 
 /** Match a key forwarded from a frame against the registry with the host's UI gate,
  *  and run what it finds. */
@@ -386,6 +396,7 @@ export function HtmlViewer({
   onPageLoad,
   onFrameViewKey,
   renderMissing,
+  onFrameShortcut,
   visible = true,
   intent,
   onIntentDelivered,
@@ -827,6 +838,10 @@ export function HtmlViewer({
   const onFrameViewKeyRef = useRef(onFrameViewKey);
   const onPageStartRef = useRef(onPageStart);
   const onPageLoadRef = useRef(onPageLoad);
+  const onFrameShortcutRef = useRef(onFrameShortcut);
+  useLayoutEffect(() => {
+    onFrameShortcutRef.current = onFrameShortcut;
+  }, [onFrameShortcut]);
   useLayoutEffect(() => {
     onDocProblemRef.current = onDocProblem;
     onDocLoadedRef.current = onDocLoaded;
@@ -1967,7 +1982,10 @@ export function HtmlViewer({
           shiftKey: data.shiftKey as boolean,
           altKey: data.altKey as boolean,
         };
-        dispatchFrameKey(key, data.editorTarget === true, data.textFieldTarget === true);
+        const editorTarget = data.editorTarget === true;
+        const textFieldTarget = data.textFieldTarget === true;
+        if (onFrameShortcutRef.current?.(key, editorTarget, textFieldTarget)) return;
+        dispatchFrameKey(key, editorTarget, textFieldTarget);
         return;
       }
 
