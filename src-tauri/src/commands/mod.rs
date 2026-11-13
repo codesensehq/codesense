@@ -116,6 +116,8 @@ pub mod remote_source;
 pub mod worktree_editor;
 // SLW-WD-4: app-side bridge to WD-3's route/un-route verbs (shared with MCP).
 pub mod route_to_context;
+// The inbox and roles reads' cache of resolved teams.
+pub(crate) mod team_resolution_cache;
 // The Routines tab's commands over the routine service.
 pub mod routines;
 pub mod scratch;

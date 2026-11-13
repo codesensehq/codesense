@@ -63,7 +63,7 @@ const NEVER_SKIPPED_ON = ["merge_group", "push", "schedule"];
 const RUST_PATH_FILTER = {
   file: "rust.yml",
   job: "changes",
-  jobs: ["rust-macos", "rust-linux"],
+  jobs: ["rust-macos", "rust-linux", "rust-check-linux"],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
 const SCORECARD_ACTIONS = new Set([

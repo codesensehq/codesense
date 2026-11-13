@@ -337,8 +337,9 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
   const filter = changes.steps.find((step) => step.id === "filter");
   assert.match(filter.run, /^\s*\*\) echo "rust=true" >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m);
   assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
-  for (const name of ["rust-macos", "rust-linux"])
-    assert.equal(workflow.jobs[name].needs, "changes");
+  for (const name of ["rust-macos", "rust-linux", "rust-check-linux"])
+    assert.equal(workflow.jobs[name].needs, "changes", name);
+  assert.equal(workflow.jobs["rust-check-linux"].if, `\${{ ${pathFilter} }}`);
 });
 
 test("only rust.yml's test jobs may skip a merge group on the changes job's output", () => {

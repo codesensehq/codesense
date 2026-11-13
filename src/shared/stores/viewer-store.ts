@@ -313,6 +313,12 @@ import {
 } from "@/features/viewer/lib/workspace-setup-state";
 import type { AgentPrepareState } from "@/features/agents/lib/agent-prepare-progress";
 import {
+  resolveFileDiffModes,
+  type CodeDiffMode,
+  type FileDiffKind,
+  type FileDiffModes,
+} from "@/shared/lib/file-diff-mode";
+import {
   DEFAULT_WORKSPACE_BAR_SIZE,
   resolveWorkspaceBarSize,
   type WorkspaceBarSize,
@@ -1620,6 +1626,11 @@ export interface ViewerSettings {
   // per-tile `inline` view-option fallback (an explicit per-tile toggle still
   // wins). Optional — undefined means default (`inline`).
   defaultSourceDiffLayout?: SourceDiffLayout;
+  // The mode each file type's diff opens in, on every diff surface. A mode
+  // switch on any surface writes it (unlike `defaultSourceDiffLayout`, which a
+  // per-tile toggle overrides). Optional — read through `resolveFileDiffModes`,
+  // which fills a missing or unknown value with that type's default.
+  defaultFileDiffMode?: Partial<FileDiffModes>;
   // SW-SD-2: override for the account/CLI-agnostic agent runner behind the
   // `analyze` bridge verb. RESERVED surface — the field + read path exist so a
   // user can retune model/timeout without a rebuild, but the backend consumes the
@@ -2038,8 +2049,19 @@ export type SourceDiffBaseMode = "branchBase" | "head";
  *  already ignores whitespace). `"line"` is the default universal diff;
  *  `"ignoreWhitespace"` suppresses whitespace-only churn (DV-8's synchronous
  *  override); `"structural"` diffs the parse tree off-thread (DV-8b, supported
- *  languages only, else it degrades to the line diff). Runtime-only, per tile. */
-export type SourceDiffMode = "line" | "ignoreWhitespace" | "structural";
+ *  languages only, else it degrades to the line diff). Held per source diff
+ *  session (runtime-only): a session snapshots `defaultFileDiffMode.code` when
+ *  its overlay first opens, and a change there writes both. */
+export type SourceDiffMode = CodeDiffMode;
+
+/** A source diff session's code mode: its own (snapshotted or chosen) mode,
+ *  else the shared `defaultFileDiffMode.code` until the overlay first opens. */
+export function sourceDiffModeFor(
+  s: Pick<ViewerState, "sourceDiffMode" | "settings">,
+  sessionId: string,
+): SourceDiffMode {
+  return s.sourceDiffMode[sessionId] ?? resolveFileDiffModes(s.settings.defaultFileDiffMode).code;
+}
 
 /** The agents pane's search text and Show filter. */
 export interface AgentsPaneSearch {
@@ -3166,6 +3188,12 @@ export interface ViewerState {
   /** SLW-DV-8b (RD-3): set a workspace's code-diff mode (line / ignore-whitespace /
    *  structural). Change-only. */
   setSourceDiffMode: (sessionId: string, mode: SourceDiffMode) => void;
+  /** Write one type's shared diff mode (`defaultFileDiffMode`); every diff
+   *  surface opens that type in it next. Change-only. */
+  setFileDiffMode: <K extends FileDiffKind>(kind: K, mode: FileDiffModes[K]) => void;
+  /** Snapshot the shared code mode into a source diff session that has none yet
+   *  (when its overlay first opens). Never overwrites the session's own mode. */
+  seedSourceDiffMode: (sessionId: string) => void;
   /** SLW-WDE-3: signal an external worktree change for a workspace's open editor
    *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce). Driven
    *  by the App-level `worktree-file-change` listener. */
@@ -8889,10 +8917,31 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setSourceDiffMode: (sessionId, mode) => {
     if (!sessionId) return;
     set((s) => {
-      const current = s.sourceDiffMode[sessionId] ?? "line";
-      if (current === mode) return s; // change-only
+      if (sourceDiffModeFor(s, sessionId) === mode) return s; // change-only
       return { sourceDiffMode: { ...s.sourceDiffMode, [sessionId]: mode } };
     });
+    // A code mode chosen here is the default the next diff anywhere opens in.
+    get().setFileDiffMode("code", mode);
+  },
+
+  seedSourceDiffMode: (sessionId) => {
+    if (!sessionId) return;
+    set((s) =>
+      s.sourceDiffMode[sessionId] !== undefined
+        ? s
+        : {
+            sourceDiffMode: {
+              ...s.sourceDiffMode,
+              [sessionId]: resolveFileDiffModes(s.settings.defaultFileDiffMode).code,
+            },
+          },
+    );
+  },
+
+  setFileDiffMode: (kind, mode) => {
+    const current = resolveFileDiffModes(get().settings.defaultFileDiffMode);
+    if (current[kind] === mode) return; // change-only
+    get().updateSettings({ defaultFileDiffMode: { ...current, [kind]: mode } });
   },
 
   toggleWorktreeEditorOpen: ({ sessionId, workspaceId, open }) => {

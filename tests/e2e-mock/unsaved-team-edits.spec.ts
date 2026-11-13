@@ -78,9 +78,12 @@ for (const theme of ["light", "dark"] as const) {
     await expect(diff).toContainText("Both changed since the file was copied");
     await expect(diff.getByTestId("team-edit-diff-sides")).toContainText("Team's version now");
     await expect(diff.getByTestId("team-edit-diff-sides")).toContainText("SW-RM-4");
-    const title = await diff.getByRole("heading").boundingBox();
+    const title = await diff.getByRole("heading", { name: /^CLAUDE\.md/ }).boundingBox();
     const close = await diff.getByRole("button", { name: "Close" }).boundingBox();
     expect(title && close && title.x + title.width <= close.x + 0.5).toBe(true);
+    // A markdown file opens as the rendered redline; Source is the text diff.
+    await expect(diff.getByTestId("team-edit-diff-markdown")).toBeVisible();
+    await diff.getByRole("button", { name: "Source" }).click();
     await expect(diff.locator(".cm-editor").first()).toBeVisible();
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/xs27-view-${theme}.png` });
     await page.keyboard.press("Escape");

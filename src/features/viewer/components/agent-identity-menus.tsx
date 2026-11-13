@@ -181,10 +181,15 @@ export function FaceChoices({
       <Separator />
       {avatars.packs.map((pack) => (
         <Sub key={pack.id}>
-          <SubTrigger data-checked={face.startsWith(`${pack.id}:`) || undefined}>
+          <SubTrigger
+            className="group/identity-pack"
+            data-checked={face.startsWith(`${pack.id}:`) || undefined}
+          >
             {pack.name}
             {pack.scope === "personal" && (
-              <span className="ml-1 text-[var(--ag-faint)]">· only you</span>
+              <span className="ml-1 text-muted-foreground group-focus/identity-pack:text-accent-foreground group-data-open/identity-pack:text-accent-foreground">
+                · only you
+              </span>
             )}
           </SubTrigger>
           <SubContent className="max-h-80 overflow-y-auto">
@@ -221,7 +226,7 @@ export function FaceChoices({
           <Sub>
             <SubTrigger>Team default pack</SubTrigger>
             <SubContent>
-              <Label className="max-w-56 text-[11px] font-normal text-[var(--ag-faint)]">
+              <Label className="max-w-56 text-[11px] font-normal">
                 Agents nobody gave a face get one from this pack, for the whole team.
               </Label>
               <RadioGroup value={teamDefault} onValueChange={setDefault}>
