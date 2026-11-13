@@ -273,7 +273,8 @@ test("rust.yml runs nightly instead of on push, and only the nightly run saves o
   for (const name of ["rust-macos", "rust-linux"]) {
     const steps = workflow.jobs[name].steps;
     const saves = steps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
-    assert.equal(saves.length, 1, name);
+    // Scanner archives on both; macOS also saves its incremental state.
+    assert.equal(saves.length, name === "rust-macos" ? 2 : 1, name);
     for (const step of saves) assert.ok(step.if.startsWith(`${nightly} &&`), name);
     const rustCache = steps.filter((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
     assert.equal(rustCache.length, 1, name);
