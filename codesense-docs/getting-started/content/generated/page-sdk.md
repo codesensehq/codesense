@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 107 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 108 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -1972,6 +1972,16 @@ setup(args?: Record<string, unknown>): Promise<unknown>;
 read · repo:read · MCP twin describe_setup
 
 Class: read; default grant: repo:read; MCP twin: describe_setup.
+
+## VerbMethods: setupState
+
+```ts
+setupState(args?: Record<string, unknown>): Promise<unknown>;
+```
+
+read · machines:read · MCP twin describe_setup
+
+Class: read; default grant: machines:read; MCP twin: describe_setup.
 
 ## VerbMethods: showMenu
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { render } from "@/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { frameFixture, FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import type { FrameRecord, MintFrameArgs } from "@/tauri/commands";
@@ -73,6 +74,7 @@ beforeEach(() => {
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
@@ -406,4 +408,26 @@ it("keeps the outgoing file-nav frame mounted until its flush finishes when the 
   expect(post.mock.calls.some(([m]) => m.type === "codesense:flush")).toBe(true);
   expect(original.isConnected).toBe(true);
   expect(post.mock.calls.some(([m]) => m.type === "codesense:teardown")).toBe(false);
+});
+
+it("keeps exactly one focusable filter field as the nav moves between a dashboard and native", async () => {
+  const fields = () => document.querySelectorAll('[data-testid="left-nav-filter-field"]');
+  render(selectedPaneNav());
+  await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+  const dashboardFrame = document.querySelector("iframe")!;
+  expect(fields()).toHaveLength(0);
+
+  await act(async () =>
+    useDashboardProfileStore.setState((s) => ({
+      profile: { ...s.profile!, slots: { "file-nav": "native" } },
+    })),
+  );
+  await waitFor(() => expect(fields()).toHaveLength(1));
+  // The retiring frame is gone, or stays mounted until it flushes with its field unfocusable.
+  expect(!dashboardFrame.isConnected || dashboardFrame.closest("[inert]") !== null).toBe(true);
+  // So the native field is the only one that can take focus, counting inside any frame left.
+  const focusable = [...document.querySelectorAll("iframe")]
+    .filter((frame) => !frame.closest("[inert]"))
+    .flatMap((frame) => [...(frame.contentDocument?.querySelectorAll("#filter") ?? [])]);
+  expect(focusable).toHaveLength(0);
 });

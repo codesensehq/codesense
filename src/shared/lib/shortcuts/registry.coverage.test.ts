@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+// @ts-expect-error -- the built-in pane table is a plain Node ESM script.
+import { BUILTIN_PANES } from "../../../../scripts/lib/builtin-panes.mjs";
 
 import { isReservedKeystroke, matchesKeystroke, parseKeystroke } from "./keystroke";
 import {
   findConflict,
   resolveBindings,
+  setDynamicShortcutActions,
   NAV_AXES,
   NAV_MENU_ITEMS,
   SHORTCUT_ACTIONS,
@@ -614,5 +618,59 @@ describe("NAV_MENU_ITEMS", () => {
     for (const hardcoded of ["nav.switch-org", "nav.switch-team"]) {
       expect(ids).not.toContain(hardcoded);
     }
+  });
+});
+
+describe("shipped default shortcuts", () => {
+  afterEach(() => setDynamicShortcutActions([]));
+
+  // Every built-in pane's `codesense:commands` tag, read without asserting so a broken tag fails
+  // its own named test below rather than the whole file at collection.
+  const panes = (BUILTIN_PANES as { id: string; source: string }[]).map(({ id, source }) => {
+    const html = readFileSync(source, "utf8");
+    return {
+      id,
+      mentionsTag: html.includes('name="codesense:commands"'),
+      raw: /name="codesense:commands"\s+content='([^']*)'/.exec(html)?.[1],
+    };
+  });
+  // Each declaration as the app registers it.
+  const declarations = panes.flatMap(({ id, raw }) =>
+    raw ? [{ pane: id, commands: JSON.parse(raw) as DeclaredCommand[] }] : [],
+  );
+  type DeclaredCommand = { id: string; label: string; defaultChord?: string };
+  const declared = (pane: string, commands: DeclaredCommand[]): ShortcutAction[] =>
+    commands.map((c) => ({
+      id: `${pane}/${c.id}`,
+      label: c.label,
+      defaultKeystroke: c.defaultChord ?? "",
+      scope: "global",
+      command: {
+        dashboard: pane,
+        dashboardTitle: pane,
+        dashboardScope: "built-in",
+        humanOnly: false,
+        active: true,
+      },
+      run: () => {},
+    }));
+
+  it("reads a commands declaration from every built-in pane that has one", () => {
+    expect(declarations.map((d) => d.pane)).toEqual(
+      expect.arrayContaining(["inbox", "files-tree", "agent-list", "notes"]),
+    );
+  });
+
+  // A pane that declares the tag must parse; one that never mentions it has no commands.
+  it.each(panes.filter((p) => p.mentionsTag))("finds the $id pane's commands tag", ({ raw }) => {
+    expect(raw).toBeTruthy();
+  });
+
+  it("never resolves to a conflict on a fresh install", () => {
+    const actions = declarations.flatMap((d) => declared(d.pane, d.commands));
+    expect(actions.some((a) => a.defaultKeystroke)).toBe(true);
+    setDynamicShortcutActions(actions);
+    const conflicts = [...resolveBindings({})].filter(([, b]) => b.unbound?.kind === "conflict");
+    expect(conflicts).toEqual([]);
   });
 });

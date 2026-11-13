@@ -639,8 +639,10 @@ export function NavFileActionsOwner({
     if (!target) return;
     const idx = flatItems.findIndex((item) => itemFilePath(item) === target);
     if (idx < 0) return;
-    revealTargetRef.current = null;
+    // The target stays set until the scroll runs: a `flatItems` change before the
+    // frame cancels it via the cleanup, and the next run must still find the target.
     const raf = requestAnimationFrame(() => {
+      revealTargetRef.current = null;
       virtualListRef.current?.scrollToIndex(idx, { align: "auto", behavior: "smooth" });
     });
     return () => cancelAnimationFrame(raf);

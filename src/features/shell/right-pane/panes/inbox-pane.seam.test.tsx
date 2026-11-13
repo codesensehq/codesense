@@ -3478,7 +3478,7 @@ describe("inbox commands", () => {
     setDynamicShortcutActions([]);
   });
 
-  it("lists every command under the Inbox in declaration order, with ⌘B waiting on its conflict", async () => {
+  it("lists every command under the Inbox in declaration order, and none of them bound by default", async () => {
     await openWithCommands();
     const actions = allShortcutActions().filter((a) => a.command?.dashboardTitle === "Inbox");
     expect(actions.map((a) => [a.label, a.command?.icon])).toEqual([
@@ -3494,11 +3494,9 @@ describe("inbox commands", () => {
       ["Toggle conversation list", "panel-left"],
     ]);
     const bindings = resolveBindings({});
-    expect(actions.slice(0, 9).every((a) => bindings.get(a.id)?.keystroke === "")).toBe(true);
-    expect(bindings.get(commandId("toggle-list"))).toMatchObject({
-      keystroke: "",
-      unbound: { kind: "conflict", wanted: "CmdOrCtrl+B" },
-    });
+    // Declared with no default chord: ⌘B is Toggle Sidebar's, and a second owner is a conflict.
+    expect(actions.every((a) => bindings.get(a.id)?.keystroke === "")).toBe(true);
+    expect(bindings.get(commandId("toggle-list"))?.unbound).toEqual({ kind: "none" });
   });
 
   it("delivers a rebound chord from the focused pane, never matches a plain j in a terminal", async () => {

@@ -218,7 +218,9 @@ function GlobalCliBody({
   const startAgentUnavailable =
     teamContent.kind === "loading"
       ? "Loading team content…"
-      : "Team content is unavailable. Open or refresh this team to start an agent.";
+      : teamContent.kind === "no-teams"
+        ? "Create a team to start an agent."
+        : "Team content is unavailable. Open or refresh this team to start an agent.";
 
   return (
     <>

@@ -3,6 +3,7 @@ import { StrictMode, type ComponentProps } from "react";
 import { listBuiltinPanes } from "@/tauri/commands";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { SlotDashboardHost } from "./slot-dashboard-host";
@@ -26,6 +27,10 @@ vi.mock("@/tauri/commands", async (original) => ({
   saveAppState: vi.fn(async (next: string) => {
     state.app = next;
   }),
+}));
+const displayedBody = vi.hoisted(() => vi.fn());
+vi.mock("@/features/dashboard/lib/dashboard-commands", () => ({
+  setSlotDisplayedBody: displayedBody,
 }));
 const props = vi.hoisted(() => ({
   current: null as any,
@@ -1032,6 +1037,128 @@ it.each(["team", "private"] as const)(
     ).toBeTruthy();
   },
 );
+
+const keyedEntry = {
+  ...entry,
+  title: "Inbox",
+  dashboardRef: { scope: "team" as const, org: "acme", team: "dev", id: "inbox" },
+};
+
+it("tells the command registry the built-in Inbox shows while a failed Inbox falls back to it", async () => {
+  const builtin = {
+    ...entry,
+    title: "Inbox",
+    scope: "private" as const,
+    team: undefined,
+    panelId: "pane:private:acme/inbox",
+    path: "/builtin-panes/panes/inbox.html",
+    panesDir: "/builtin-panes/panes",
+    dashboardRef: { scope: "built-in" as const, org: "acme", id: "inbox" },
+  };
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "dev" });
+  vi.mocked(listBuiltinPanes).mockResolvedValue({
+    contentRoot: "/ctx",
+    chain: [],
+    panes: [builtin],
+    builtinInbox: builtin,
+  });
+  displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
+  const view = render(
+    <SlotDashboardHost slotId="right-pane" entry={keyedEntry} contentRoot="/ctx" visible />,
+  );
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, builtin),
+  );
+  view.unmount();
+  expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, null);
+});
+
+it("publishes a refreshed Inbox fallback's commands without withdrawing them", async () => {
+  const builtin = {
+    ...entry,
+    title: "Inbox",
+    scope: "private" as const,
+    team: undefined,
+    panelId: "pane:private:acme/inbox",
+    path: "/builtin-panes/panes/inbox.html",
+    panesDir: "/builtin-panes/panes",
+    dashboardRef: { scope: "built-in" as const, org: "acme", id: "inbox" },
+  };
+  // The same Inbox, listed again with an edited command set.
+  const refreshed = { ...builtin, modified: "2026-11-13T12:00:00Z" };
+  const listing = (inbox: typeof builtin) => ({
+    contentRoot: "/ctx",
+    chain: [],
+    panes: [inbox],
+    builtinInbox: inbox,
+  });
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "dev" });
+  vi.mocked(listBuiltinPanes)
+    .mockResolvedValueOnce(listing(builtin))
+    .mockResolvedValue(listing(refreshed));
+  displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
+  render(<SlotDashboardHost slotId="right-pane" entry={keyedEntry} contentRoot="/ctx" visible />);
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, builtin),
+  );
+  // A reload fails again and lists the built-ins again.
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await act(async () => props.current.onDocProblem({ kind: "script", message: "still broken" }));
+  await waitFor(() =>
+    expect(displayedBody).toHaveBeenLastCalledWith("right-pane", failedKey, refreshed),
+  );
+  const sinceShown = displayedBody.mock.calls.slice(
+    displayedBody.mock.calls.findIndex(([, , body]) => body === builtin),
+  );
+  expect(sinceShown.filter(([, , body]) => body === null)).toEqual([]);
+});
+
+it("withdraws a failed dashboard's commands while a native body shows, and gives them back on recovery", () => {
+  vi.useFakeTimers();
+  displayedBody.mockClear();
+  const failedKey = dashboardRefKey(keyedEntry.dashboardRef);
+  render(
+    <SlotDashboardHost
+      slotId="dock"
+      entry={keyedEntry}
+      contentRoot="/ctx"
+      visible
+      renderNative={() => <div>Agents list</div>}
+    />,
+  );
+  act(() => vi.advanceTimersByTime(30000));
+  expect(screen.getByText("Agents list")).toBeTruthy();
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", failedKey, "native");
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  act(() => props.current.onDocLive());
+  expect(displayedBody).toHaveBeenLastCalledWith("dock", failedKey, null);
+});
+
+it("keeps a live dashboard's commands when only a refresh candidate fails", () => {
+  vi.useFakeTimers();
+  displayedBody.mockClear();
+  const host = (refreshKey: number) => (
+    <SlotDashboardHost
+      slotId="dock"
+      entry={keyedEntry}
+      contentRoot="/ctx"
+      visible
+      refreshKey={refreshKey}
+      renderNative={() => <div>Agents list</div>}
+    />
+  );
+  const view = render(host(1));
+  act(() => props.current.onDocLive());
+  view.rerender(host(2));
+  act(() => vi.advanceTimersByTime(150));
+  act(() => props.current.onDocProblem({ kind: "script", message: "broken candidate" }));
+  expect(screen.queryByText("Agents list")).toBeNull();
+  expect(displayedBody.mock.calls.filter(([, , body]) => body !== null)).toEqual([]);
+});
 
 it("keeps dock retry activity while its native fallback is on screen", () => {
   vi.useFakeTimers();

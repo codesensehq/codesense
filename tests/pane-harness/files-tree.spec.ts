@@ -118,6 +118,32 @@ test("tree navigation, filter, inherited badge, drill and shared selection", asy
   await expect(pane.frame.getByRole("navigation")).toBeHidden();
 });
 
+test("a story id keeps its folder row and finds a story in an unlisted folder", async ({
+  mountPane,
+}) => {
+  const plans = file("plans", { kind: "dir" });
+  const deep = file("plans/deep/story.md", {
+    name: "story.md",
+    kind: "story",
+    storyId: "DEMO-77",
+    title: "Deep story",
+  });
+  const pane = await mountPane(PANE, {
+    ...mount,
+    topics: {
+      files: [file("a.md"), plans, file("other", { kind: "dir" })],
+      stories: [deep],
+      "ui:file-nav": [ui()],
+    },
+  });
+  await expect(pane.frame.locator('[data-path="/fixture/plans"]')).toBeVisible();
+  await pane.frame.getByLabel("Filter files").fill("DEMO-77");
+  await expect(pane.frame.locator('[data-path="/fixture/plans"]')).toBeVisible();
+  await expect(pane.frame.locator('[data-path="/fixture/plans/deep/story.md"]')).toBeVisible();
+  await expect(pane.frame.locator('[data-path="/fixture/other"]')).toHaveCount(0);
+  await expect(pane.frame.locator('[data-path="/fixture/a.md"]')).toHaveCount(0);
+});
+
 test("preview, pin, row tags, direct keyboard dialogs, native filter menu and collapse command", async ({
   mountPane,
 }) => {
