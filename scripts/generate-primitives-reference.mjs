@@ -113,7 +113,7 @@ const INVOKE_META = {
     description:
       "Persist a shared ui:<slotId> patch and echo its requestId in a delta. Uses host app-state storage, separate from page-private prefs.",
   },
-  "pins": {
+  pins: {
     description:
       "Read an agent thread's pin list in the frame's team: the thread is the saved agent agentId plus storyId (omit it for a session launched with no story). At most 3 pins, each with its preview once one is sent. Pins whose message is archived or withdrawn drop out. Subscribe with codesense.subscribe('pins', {agentId, storyId, onChange}) for live updates.",
     examples: [
@@ -139,7 +139,7 @@ const INVOKE_META = {
       },
     ],
   },
-  "pin": {
+  pin: {
     description:
       "Pin a message of the frame's team into an agent thread at position (0 is first; omitted, last), with an optional preview: what the folded pin shows (shortName, value, unit, status, chart, up to 3 lines). Pinning a pinned message leaves it in place; a preview replaces its preview (outcome 'updated'). A thread holds at most 3 pins. Agents pin their own thread with the pin MCP tool.",
     examples: [
@@ -161,11 +161,11 @@ const INVOKE_META = {
       },
     ],
   },
-  "unpin": {
+  unpin: {
     description: "Take a message out of an agent thread's pin list; the pins after it move up.",
     examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
   },
-  "reorderPins": {
+  reorderPins: {
     description:
       "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
     examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageIds: [43, 42] } }],
