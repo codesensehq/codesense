@@ -21,11 +21,13 @@
 import type {
   AgentAccountProvenance,
   AgentLaunchWarning,
+  AgentSessionReadiness,
   BranchCheckoutMode,
   LaunchBindScope,
   WorkspaceReadResult,
 } from "@/tauri/commands";
 import { DEFAULT_LAUNCH_AGENT, DEFAULT_UNATTENDED_AGENT } from "@/shared/lib/default-agent";
+import type { LaunchFailed } from "@/shared/lib/launch-target";
 import { reviewWorkspaceHandle } from "@/shared/lib/review-workspace-handle";
 import type { MachineLocation } from "@/shared/lib/workspace-location";
 
@@ -100,7 +102,23 @@ export interface ConnectedSession {
   /** The agent's own first prompt, for a launch that brought none — seeded once live. */
   defaultPrompt?: string;
   promptInArgv?: boolean;
+  /** A starting task (the launch's own or the agent's default) rode argv, so it still runs
+   *  once a startup screen is cleared. */
+  taskInArgv?: boolean;
   /** An existing tab was adopted rather than spawned: a failed launch never ends it. */
+  adopted?: boolean;
+  /** The launch line ran under the activity wrapper (see `LaunchResult`). False: the line
+   *  was typed raw, so the host can never observe the agent and its readiness can't gate. */
+  activityWrapped?: boolean;
+}
+
+/** What `waitReady` is told about the launch it waits on. */
+export interface ReadyWaitOptions {
+  /** False: the launch line was typed raw (never observed), so the wait falls back to the
+   *  process wait instead of failing the launch. Anything else: observed, the gate applies. */
+  activityWrapped?: boolean;
+  /** An existing tab was adopted, not launched here: with `activityWrapped` unknown, nothing
+   *  says the host observes its agent, so the observed-bit gate does not apply. */
   adopted?: boolean;
 }
 
@@ -185,9 +203,14 @@ export interface DashboardLaunchDeps {
    *  Account provenance is staged trusted-side at spawn and stamped by the bind
    *  command itself — it is never supplied by the renderer. */
   bind: (storyId: string, sessionId: string, scope?: LaunchBindScope) => Promise<void>;
-  /** Best-effort wait for the launched agent PROCESS to come up (liveness
-   *  probe, not `aiStatus`) so a subsequent fire lands in the agent, not a shell. */
-  waitLive: (sessionId: string) => Promise<boolean>;
+  /** Wait up to `timeoutMs` for the launched agent to be input-ready, so nothing is
+   *  typed into a shell or a startup screen. Resolves `{ready:false}` instead of
+   *  rejecting when it never is. */
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** AC-14: focus the launched terminal (layout `console` + active tab). */
   focus: (teamKey: string, sessionId: string, storyFilePath: string) => void;
   /** AC-10/AC-12: resolve the story's bound session id, or `null`. */
@@ -354,8 +377,8 @@ export async function reserveForkLabel(
  * SW-GW-7 — the ONE `headed`-aware agent-session dance, shared by every workspace
  * kind (story · branch · epic-headless · dir-headless). The four spines differ ONLY
  * in how they resolve `(teamKey, cwd, handle, role)`; the reserve → idempotent-
- * re-open → connect → bind → reap → waitLive → (seed) → focus sequence — with SW-GW-5's
- * liveness gate + reservation-coherence ordering and SW-DX-17b's reap-at-bind-fail —
+ * re-open → connect → bind → reap → waitReady → (seed) → focus sequence — with its
+ * liveness gate + reservation-coherence ordering and its reap-at-bind-fail —
  * is identical, so it lives here ONCE instead of being copy-pasted per kind. The
  * caller (an adapter) pre-resolves its kind-specific context and closes it into the
  * `ensureCwd` / `connect` / `focus` thunks below. SW-GW-9: an optional (already-
@@ -400,8 +423,12 @@ export interface AgentSessionDeps {
   bind: (handle: string, sessionId: string, agentRevision?: string) => Promise<void>;
   /** Reap an orphaned/superseded session through the one `kill_session` choke. */
   killSession: (sessionId: string) => Promise<void>;
-  /** Best-effort wait for the agent PROCESS to come up (liveness probe). */
-  waitLive: (sessionId: string) => Promise<boolean>;
+  /** Wait up to `timeoutMs` for the agent to be input-ready (see the story deps). */
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** Focus the launched terminal (layout `console` + active tab). Called ONLY when
    *  `headed`; the adapter closes over teamKey + the focus key. */
   focus: (sessionId: string) => void;
@@ -417,6 +444,35 @@ export interface AgentSessionDeps {
  * capped backoff so it does not hammer the Tauri bridge. */
 export const RESERVATION_BIND_TIMEOUT_MS = 180_000;
 
+/** How long a page launch waits for its agent to be input-ready before it reports a
+ *  startup screen. Well under the backend's 180 s unready-bound sweep; covers a cold start
+ *  with MCP servers. Injectable per launch (`opts.readyWaitMs`). */
+export const PAGE_READY_WAIT_MS = 45_000;
+
+/** The failed-launch result for an agent that was not input-ready: what a person sees, and
+ *  what became of its starting prompt. `promptPending`: the prompt rode in argv and still
+ *  runs once the screen is cleared. `promptHeld`: a typed starting prompt (the launch's own
+ *  or the agent's default) was held back, so the message says it was not sent. */
+function launchFailedFor(
+  reason: "startup" | "exited",
+  prompt: { promptPending: boolean; promptHeld: boolean },
+): LaunchFailed {
+  const notSent = prompt.promptHeld ? " Its starting prompt was not sent." : "";
+  return reason === "startup"
+    ? {
+        reason,
+        needsYouKind: "startup",
+        message: `The agent is waiting on a startup screen (a trust, login or update prompt). Nothing was typed; open its terminal to answer it.${notSent}`,
+        ...(prompt.promptPending ? { promptPending: true as const } : {}),
+      }
+    : { reason, message: `The agent exited before it was ready to take input.${notSent}` };
+}
+
+/** Bound launches whose agent has not been seen input-ready yet, by session: the wait they
+ *  need, and whether a task rides their argv. A re-open that reuses one asks the wait again
+ *  before handing it back, so a caller never types into a startup screen it left. */
+const unreadyLaunches = new Map<string, { wait: ReadyWaitOptions; promptPending: boolean }>();
+
 /**
  * SW-GW-7: run the shared agent-session dance for `handle`. `headed:false` suppresses
  * EVERY focus (both the idempotent re-open re-focus and the post-bind console swap) —
@@ -431,8 +487,13 @@ export async function launchAgentSession(
   handle: string,
   headed: boolean,
   deps: AgentSessionDeps,
-  opts?: { initialPrompt?: string; preReserved?: boolean },
-): Promise<{ sessionId: string; promptDelivered?: boolean; warnings?: AgentLaunchWarning[] }> {
+  opts?: { initialPrompt?: string; preReserved?: boolean; readyWaitMs?: number },
+): Promise<{
+  sessionId: string;
+  promptDelivered?: boolean;
+  launchFailed?: LaunchFailed;
+  warnings?: AgentLaunchWarning[];
+}> {
   // SW-GW-9: the caller (adapter) normalizes; the spine treats a present value as a
   // real seed to deliver, an absent one as "no seeding path".
   const initialPrompt = opts?.initialPrompt;
@@ -456,6 +517,8 @@ export async function launchAgentSession(
   let spawnedSessionId: string | undefined;
   // SW-GW-5: a superseded (parked/dead) session to reap AFTER a successful rebind.
   let staleToReap: string | undefined;
+  // A launch recorded as unready whose bind never committed: nothing reuses it.
+  let unreadyRegistered: string | undefined;
 
   try {
     deps.assertContinue?.();
@@ -496,6 +559,30 @@ export async function launchAgentSession(
           deps.assertContinue?.();
           // A headless re-open must not yank focus to the backgrounded session.
           if (headed) deps.focus(existing);
+          // A launch not yet seen ready may still be on its startup screen: wait again, with
+          // what its own wait needed, and hand it back failed while it is not ready.
+          const unready = unreadyLaunches.get(existing);
+          if (unready) {
+            const readiness = await deps
+              .waitReady(existing, opts?.readyWaitMs ?? PAGE_READY_WAIT_MS, unready.wait)
+              .catch(() => undefined);
+            if (readiness?.ready) {
+              unreadyLaunches.delete(existing);
+            } else if (readiness) {
+              return {
+                sessionId: existing,
+                promptDelivered: false,
+                launchFailed: launchFailedFor(readiness.reason, {
+                  promptPending: unready.promptPending,
+                  promptHeld: false,
+                }),
+              };
+            } else {
+              return initialPrompt
+                ? { sessionId: existing, promptDelivered: false }
+                : { sessionId: existing };
+            }
+          }
           // SW-GW-9 Gap A (AC-5): an already-live session is handed back WITHOUT
           // re-seeding (re-injecting a briefed prompt would be wrong). But a requested
           // seed must not vanish silently — report promptDelivered:false ("asked, not
@@ -505,6 +592,7 @@ export async function launchAgentSession(
             : { sessionId: existing };
         }
         staleToReap = existing;
+        unreadyLaunches.delete(existing);
       }
     }
 
@@ -525,9 +613,19 @@ export async function launchAgentSession(
     // An adopted tab was not spawned here, so a failed bind leaves it running.
     spawnedSessionId = connected.adopted ? undefined : sessionId;
     deps.assertContinue?.();
+    const wait: ReadyWaitOptions = {
+      activityWrapped: connected.activityWrapped,
+      adopted: connected.adopted,
+    };
+    const promptPending = Boolean(connected.taskInArgv);
+    // Recorded before the bind publishes the session, so an open that joins it from then on
+    // waits for readiness too.
+    unreadyLaunches.set(sessionId, { wait, promptPending });
+    unreadyRegistered = sessionId;
     await deps.bind(handle, sessionId, connected.agentRevision);
+    unreadyRegistered = undefined;
     // `bind` COMMITTED the session — first-class + killable via the SW-DX-17a panel,
-    // no longer an orphan. Clear the reap handle: a best-effort waitLive/focus failure
+    // no longer an orphan. Clear the reap handle: a best-effort waitReady/focus failure
     // must NEVER reap a live, bound, registered agent (code-review r1 MAJOR).
     spawnedSessionId = undefined;
     // SW-GW-5: post-rebind the stale id no longer maps in the registry — reap its PTY.
@@ -543,44 +641,72 @@ export async function launchAgentSession(
     // agent never came up. A headed open focuses the terminal; a headless open stays
     // backgrounded + adoptable (no layout swap, no tab steal).
     //
-    // SW-GW-9: honest delivery signal — present ONLY when a seed was requested.
-    // Optimistically `true`, flipped to `false` on any waitLive/sendLine failure.
+    // Honest delivery signal — present when a seed was requested, and always `false` on
+    // a failed launch (`launchFailed`) whether or not one was. `true` only while nothing
+    // says otherwise: it turns `false` when the agent is not input-ready, `sendLine`
+    // reports the line unsent, or anything in the tail throws.
     let promptDelivered: boolean | undefined = initialPrompt ? true : undefined;
+    let launchFailed: LaunchFailed | undefined;
     try {
-      await deps.waitLive(sessionId);
+      // Nothing reaches the CLI until it is input-ready: a startup screen (trust, login,
+      // update, any prompt) would take the typed line as its answer. Not ready → nothing is
+      // typed, and the session is left running for a person to deal with.
+      const readiness = await deps.waitReady(
+        sessionId,
+        opts?.readyWaitMs ?? PAGE_READY_WAIT_MS,
+        wait,
+      );
+      if (readiness.ready) unreadyLaunches.delete(sessionId);
       // Focus FIRST (a synchronous void store setter) so a headed open paints the
       // terminal INSTANTLY; the user then watches the seed land — no perceived delay
       // (SW-GW-9 Gap B). The seed targets sessionId directly, not the focused tab,
-      // so focus order can never affect where the line lands.
+      // so focus order can never affect where the line lands. A failed launch is
+      // focused too, so the person sees the screen it is stuck on.
       if (headed) deps.focus(sessionId);
-      // SW-GW-9 (AC-1/AC-7): seed the live agent via the SHIPPED `sendLine` (SW-DX-10)
-      // — the one injector, reused verbatim (no new primitive, AC-3). `waitLive` is not
-      // gated on `headed`, so this seeds a headless background session too (the RF-18
-      // combo). Only the story adapter wires `sendLine` + a normalized `initialPrompt`;
-      // branch/epic/dir pass neither, so this is a clean no-op for them.
-      //
-      // KNOWN RACE (pre-existing, deferred): two CONCURRENT seeded opens of the SAME
-      // handle can double-submit here (the non-`fresh` caller in the begin→bind window
-      // falls through to connect [launcher dedup → same session] + rebind and runs this
-      // tail against the shared session). The shipped code already double-binds/-focuses
-      // in this window; the seed only extends it. A local `fresh`-gate is INCORRECT (it
-      // would DROP a legitimate seed in the A-fails/B-succeeds interleaving — an AC-5
-      // silent drop); the real fix is launcher-level in-flight coordination (SW-GW-5/6),
-      // out of scope. Trigger is degenerate; nothing is reaped or corrupted.
-      // A named agent launched with no prompt of its own starts with its default one.
+      // A named agent launched with no prompt of its own starts with its default one; a
+      // prompt that rode in argv is never typed.
       const seed = connected.promptInArgv ? undefined : (initialPrompt ?? connected.defaultPrompt);
-      if (seed && deps.sendLine) {
-        const { submitted } = await deps.sendLine(sessionId, seed);
-        if (initialPrompt) promptDelivered = submitted; // honest: what actually landed
+      if (!readiness.ready) {
+        launchFailed = launchFailedFor(readiness.reason, {
+          promptPending,
+          promptHeld: Boolean(seed && deps.sendLine),
+        });
+        if (initialPrompt) promptDelivered = false;
+      } else {
+        // Seed the live agent via the shipped `sendLine`: the one injector, reused
+        // verbatim (no new primitive). The readiness wait is not gated on `headed`, so this
+        // seeds a headless background session too. Only the story adapter wires `sendLine`
+        // + a normalized `initialPrompt`; branch/epic/dir pass neither, so this is a clean
+        // no-op for them.
+        //
+        // KNOWN RACE (pre-existing, deferred): two CONCURRENT seeded opens of the SAME
+        // handle can double-submit here (the non-`fresh` caller in the begin→bind window
+        // falls through to connect [launcher dedup → same session] + rebind and runs this
+        // tail against the shared session). The shipped code already double-binds/-focuses
+        // in this window; the seed only extends it. A local `fresh`-gate is INCORRECT (it
+        // would DROP a legitimate seed in the A-fails/B-succeeds interleaving — an AC-5
+        // silent drop); the real fix is launcher-level in-flight coordination, out of
+        // scope. Trigger is degenerate; nothing is reaped or corrupted.
+        if (seed && deps.sendLine) {
+          const { submitted } = await deps.sendLine(sessionId, seed);
+          if (initialPrompt) promptDelivered = submitted; // honest: what actually landed
+        }
       }
     } catch {
       // swallow — the session is bound and running; the open still succeeds. AC-5:
-      // a waitLive timeout / sendLine throw ONLY flips promptDelivered; it never
-      // reaches the reap path (gated on spawnedSessionId, cleared at bind above).
-      if (initialPrompt && !connected.promptInArgv) promptDelivered = false;
+      // a waitReady throw / sendLine throw ONLY flips promptDelivered; it never
+      // reaches the reap path (gated on spawnedSessionId, cleared at bind above). A
+      // thrown wait carries no `launchFailed`: it says nothing about the agent's screen,
+      // and the contract's reasons are what the wait observed. Even an argv prompt reads
+      // undelivered, since nothing confirmed the CLI took it.
+      if (initialPrompt) promptDelivered = false;
     }
     const warnings = connected.warnings?.length ? { warnings: connected.warnings } : {};
-    return initialPrompt ? { sessionId, promptDelivered, ...warnings } : { sessionId, ...warnings };
+    return launchFailed
+      ? { sessionId, promptDelivered: false, launchFailed, ...warnings }
+      : initialPrompt
+        ? { sessionId, promptDelivered, ...warnings }
+        : { sessionId, ...warnings };
   } catch (err) {
     // Only the fresh reserver owns the permit — a concurrent/idempotent caller must
     // NOT release a live launch it doesn't own (AC-8). Abort the COMPOUND handle so a
@@ -588,6 +714,7 @@ export async function launchAgentSession(
     if (fresh) {
       await deps.abort(handle);
     }
+    if (unreadyRegistered) unreadyLaunches.delete(unreadyRegistered);
     // SW-DX-17b / SW-GW-5: reap a session WE spawned that never bound — REGARDLESS of
     // permit ownership (a heal runs on a `!fresh` re-open yet still spawns). Evict its
     // tab too so a retry's dedup can't re-bind this dead orphan. Best-effort: a failed
@@ -639,8 +766,15 @@ export async function openStoryWorkspace(
     agent?: string;
     /** Where a new workspace is created (see the story target's `machineId`). */
     machineId?: string;
+    /** How long to wait for the agent to be input-ready; {@link PAGE_READY_WAIT_MS} when absent. */
+    readyWaitMs?: number;
   },
-): Promise<{ sessionId: string; promptDelivered?: boolean; warnings?: AgentLaunchWarning[] }> {
+): Promise<{
+  sessionId: string;
+  promptDelivered?: boolean;
+  launchFailed?: LaunchFailed;
+  warnings?: AgentLaunchWarning[];
+}> {
   const headed = opts?.headed !== false;
   const agent = launchAgentKey(opts?.agent, headed);
   // SW-GW-9 (AC-8): normalize at the seed-decision owner so a direct caller can never
@@ -769,12 +903,12 @@ export async function openStoryWorkspace(
       bind: (h, sessionId, agentRevision) =>
         deps.bind(h, sessionId, { teamKey: resolved.teamKey, agentRevision }),
       killSession: deps.killSession,
-      waitLive: deps.waitLive,
+      waitReady: deps.waitReady,
       focus: (sessionId) => deps.focus(resolved.teamKey, sessionId, resolved.storyFilePath),
       sendLine: deps.sendLine,
       emptyCwdError: `unavailable: worktree did not open for "${storyId}"`,
     },
-    { initialPrompt, preReserved },
+    { initialPrompt, preReserved, readyWaitMs: opts?.readyWaitMs },
   );
 }
 
@@ -821,7 +955,7 @@ export interface BranchResolution {
 
 /**
  * The `branch` open's injected seams — a focused subset of the story spine.
- * `begin`/`abort`/`bind`/`resolveSession`/`waitLive` are
+ * `begin`/`abort`/`bind`/`resolveSession`/`waitReady` are
  * handle-agnostic (they pass an opaque handle / cwd to the same Rust registry +
  * launcher the story path uses), so a branch reuses them with the
  * `${repo}::${branch}` handle; only `resolveBranch` + `ensureBranchWorktree` +
@@ -863,8 +997,12 @@ export interface BranchLaunchDeps {
   }) => Promise<ConnectedSession>;
   /** Stamp `handle → sessionId` trusted-side (+ arm status projection). */
   bind: (handle: string, sessionId: string, scope?: LaunchBindScope) => Promise<void>;
-  /** Best-effort wait for the agent PROCESS to come up (liveness probe). */
-  waitLive: (sessionId: string) => Promise<boolean>;
+  /** Wait up to `timeoutMs` for the agent to be input-ready (see the story deps). */
+  waitReady: (
+    sessionId: string,
+    timeoutMs: number,
+    opts?: ReadyWaitOptions,
+  ) => Promise<AgentSessionReadiness>;
   /** Submit a line into the live agent: a named agent's default prompt, when the launch
    *  brought no review prompt. */
   sendLine?: (sessionId: string, text: string) => Promise<{ submitted: boolean }>;
@@ -947,6 +1085,7 @@ export async function openBranchWorkspace(
   },
 ): Promise<{
   sessionId: string;
+  launchFailed?: LaunchFailed;
   reconcileStatus?: "reconciled" | "skipped";
   warnings?: AgentLaunchWarning[];
 }> {
@@ -1019,7 +1158,12 @@ export async function openBranchWorkspace(
     );
   };
   let readinessError: Error | undefined;
-  let opened: { sessionId: string; promptDelivered?: boolean; warnings?: AgentLaunchWarning[] };
+  let opened: {
+    sessionId: string;
+    promptDelivered?: boolean;
+    launchFailed?: LaunchFailed;
+    warnings?: AgentLaunchWarning[];
+  };
   try {
     opened = await launchAgentSession(handle, headed, {
       // Reservation/bind/cleanup are authoritative in-memory Rust mutations.
@@ -1079,11 +1223,14 @@ export async function openBranchWorkspace(
       bind: (h, sessionId, agentRevision) =>
         deps.bind(h, sessionId, { teamKey: res.teamKey, agentRevision }),
       killSession: deps.killSession,
-      waitLive: async (sessionId) => {
+      // A bounded wait that comes back not-ready is the launch's own result
+      // (`launchFailed`); only a wait that throws or hangs is a readiness error.
+      waitReady: async (sessionId, timeoutMs, readyOpts) => {
         try {
-          const live = await withReviewPhaseTimeout(deps.waitLive(sessionId), "agent readiness");
-          if (!live) throw new Error("unavailable: review agent did not become ready");
-          return true;
+          return await withReviewPhaseTimeout(
+            deps.waitReady(sessionId, timeoutMs, readyOpts),
+            "agent readiness",
+          );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           readinessError = new Error(`unavailable: review agent readiness failed (${message})`);
@@ -1391,6 +1538,9 @@ export interface DashboardLaunchController {
   openWorkspace: (arg: OpenWorkspaceArg) => Promise<{
     sessionId?: string;
     promptDelivered?: boolean;
+    /** The agent never became input-ready: nothing was typed and its session is left
+     *  running at its screen. Absent on success. */
+    launchFailed?: LaunchFailed;
     reconcileStatus?: "reconciled" | "skipped";
     /** A named agent launch's warnings (never a refusal); absent when there are none. */
     warnings?: AgentLaunchWarning[];

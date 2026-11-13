@@ -243,7 +243,9 @@ export function prepareAgentLaunch(args: Record<string, unknown>): PreparedAgent
     manifestHash: `sha256:mock-${agent.id}-${agent.revision}`,
     warnings: commandWarning(agent, prompt ?? agent.defaultPrompt),
     defaultPrompt: hermes && mode === "interactive" ? null : agent.defaultPrompt,
-    ...(hermes && mode === "interactive" ? { promptInArgv: true } : {}),
+    ...(hermes && mode === "interactive"
+      ? { promptInArgv: true, taskInArgv: Boolean((prompt ?? agent.defaultPrompt)?.trim()) }
+      : {}),
     scope: claude
       ? {
           extraArgs: ["--mcp-config", `${SCOPE_DIR}/${sessionId}.json`, "--strict-mcp-config"],
@@ -256,5 +258,7 @@ export function prepareAgentLaunch(args: Record<string, unknown>): PreparedAgent
 export function agentLaunchHandlers(): HandlerRegistry {
   return {
     agent_launch_prepare: (args) => prepareAgentLaunch(args),
+    // A mock agent is always past its startup screens.
+    agent_session_await_ready: () => ({ ready: true }),
   };
 }
