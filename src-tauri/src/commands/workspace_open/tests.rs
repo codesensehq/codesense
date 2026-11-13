@@ -4700,3 +4700,32 @@ async fn a_model_that_is_not_one_plain_word_is_invalid_and_launches_nothing() {
         assert!(host.launches().is_empty(), "{model}");
     }
 }
+
+#[tokio::test]
+async fn a_launch_model_goes_before_the_agents_operands() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 4);
+    *host.prepared.lock().unwrap() = Some(|agent| {
+        agent
+            .launch
+            .args
+            .extend(["--".to_string(), "/help".to_string()])
+    });
+    let opened = open_agent(
+        &host,
+        &active(),
+        &OpenRequest {
+            model: Some("anthropic/claude-sonnet-4".into()),
+            ..team_workspace("Sprint 1", None)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened.status, OpenStatus::Opened, "{}", opened.message);
+    let launches = host.launches();
+    let args = &launches[0].agent.launch.args;
+    assert_eq!(
+        &args[args.len() - 4..],
+        ["--model", "anthropic/claude-sonnet-4", "--", "/help"]
+    );
+}

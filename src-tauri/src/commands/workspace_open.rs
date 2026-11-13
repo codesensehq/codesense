@@ -465,13 +465,14 @@ async fn resolve_agent_launch(
     Ok(launch)
 }
 
-/// A model name is passed as one argv word: letters, digits and `.`, `_`, `-`, `[`, `]`.
+/// A model name is passed as one argv word: letters, digits and `.`, `_`, `-`, `[`, `]`, and
+/// the `/` and `:` of provider and tag ids (`anthropic/claude-sonnet-4`, `llama3:8b`).
 fn invalid_model(req: &OpenRequest) -> Option<String> {
     let model = non_blank(req.model.as_deref())?;
     let word = model.len() <= 64
-        && model
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']'))
+        && model.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | '/' | ':')
+        })
         && !model.starts_with('-');
     (!word).then(|| format!("unknown model {model:?}"))
 }
