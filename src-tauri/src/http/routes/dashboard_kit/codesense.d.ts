@@ -378,6 +378,8 @@ declare namespace CodesenseSdk {
     onRoutinesChanged(cb: () => void): Unsubscribe;
     onMachinesChanged(cb: () => void): Unsubscribe;
     onWorktreesChanged(cb: () => void): Unsubscribe;
+    /** Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. */
+    onSessionRecordChanged(cb: () => void): Unsubscribe;
     /** Runs `cb` when the answer to canPasteToTerminal() flips between true and false.
      * Re-read then. */
     onPasteTargetChanged(cb: () => void): Unsubscribe;
@@ -1457,6 +1459,10 @@ declare namespace CodesenseSdk {
       sessionId: string;
       toolUseId?: string | null;
       turn?: number | null;
+    }): Promise<unknown>;
+    /** read · sessions:read */
+    sessionRecord(args: {
+      handle: string;
     }): Promise<unknown>;
     /** read · sessions:read · MCP twin session_usage */
     sessionUsage(args?: Record<string, unknown>): Promise<unknown>;

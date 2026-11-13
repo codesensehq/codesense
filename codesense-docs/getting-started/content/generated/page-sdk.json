@@ -14,10 +14,10 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 107,
+    "bridgeMethods": 108,
     "actionVerbs": 55,
-    "readVerbs": 52,
-    "surfaceMembers": 52
+    "readVerbs": 53,
+    "surfaceMembers": 53
   },
   "sdk": [
     {
@@ -401,6 +401,14 @@
       "owner": "Surface",
       "signature": "onWorktreesChanged(cb: () => void): Unsubscribe;",
       "description": "",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "onSessionRecordChanged",
+      "owner": "Surface",
+      "signature": "onSessionRecordChanged(cb: () => void): Unsubscribe;",
+      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -971,6 +979,14 @@
       "owner": "Surface",
       "signature": "onWorktreesChanged(cb: () => void): Unsubscribe;",
       "description": "",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "onSessionRecordChanged",
+      "owner": "Surface",
+      "signature": "onSessionRecordChanged(cb: () => void): Unsubscribe;",
+      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -4581,6 +4597,36 @@
           "sessionId"
         ],
         "title": "Params",
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "sessionRecord",
+      "owner": "VerbMethods",
+      "signature": "sessionRecord(args: {\n      handle: string;\n    }): Promise<unknown>;",
+      "description": "read · sessions:read",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "sessions:read",
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly.",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
         "type": "object"
       },
       "resultSchema": {
@@ -9463,6 +9509,34 @@
       "module": "agent"
     },
     {
+      "name": "sessionRecord",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly.",
+      "audited": false,
+      "action": false,
+      "module": "agent"
+    },
+    {
       "name": "sessionUsage",
       "class": "read",
       "argsSchema": {
@@ -11953,6 +12027,29 @@
       "mcpTwin": "session_read"
     },
     {
+      "verb": "sessionRecord",
+      "tier": "read",
+      "description": "read · sessions:read",
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "mcpTwin": null
+    },
+    {
       "verb": "sessionUsage",
       "tier": "read",
       "description": "read · sessions:read · MCP twin session_usage",
@@ -13847,12 +13944,12 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "6380ffcc8e53f13de2ae36605e0816b46685c609b28e3bda5a9bb2175ad90a2e",
-    "src-tauri/src/verbs/registry.generated.json": "e80d878c6e9007af20d746241f9fdc384d05ab1e67efa115af3f997e5fc16487",
-    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "bb89922dd0833213e7fc8b938ccd2c0af1ef613ab1d935380887bd4bee8b55ae",
+    "src-tauri/src/verbs/registry.generated.json": "abb360fb86d807da7d07a3419462ee7d840638e43470ac9702d1a0e7493b8861",
+    "src-tauri/src/verbs/registry.rs": "55bdf8c712abfec286b174c57298db04ad805f1460d53fe0807817db3a993265",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "fbdd390d3f42c7532ef78dd8cc42e02c10e36a3003126f92d7c653c4944100e3",
+    "src-tauri/src/http/routes/viewer.rs": "4ec19bf5799849aa2535f8e922eba8b235d17ca17060748ea529618527f15cea",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

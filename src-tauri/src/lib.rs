@@ -1322,6 +1322,7 @@ pub fn run() {
             commands::data_read_model::open_diff_read,
             commands::data_read_model::setup,
             commands::data_read_model::story_changes,
+            commands::data_read_model::session_record,
             commands::data_read_model::story_totals,
             commands::data_read_model::session_set_model_rate,
             commands::data_read_model::spend_cap_set,

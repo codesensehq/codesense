@@ -11,6 +11,7 @@
 //! otherwise the rate table. A rate applies from its effective day, so a price change adds a row and
 //! leaves earlier usage at the price it was billed at.
 
+pub mod agent_record;
 pub(crate) mod contribution;
 pub mod conversation;
 pub(crate) mod cost_rollup;

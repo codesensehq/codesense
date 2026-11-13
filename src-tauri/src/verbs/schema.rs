@@ -14,6 +14,9 @@ pub fn args_schema(name: &str) -> Value {
     if name == "whyLine" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::attribution::why_line::Params)).expect("why line schema");
     }
+    if name == "sessionRecord" {
+        return json!({"type":"object","properties":{"handle":{"type":"string","minLength":1}},"required":["handle"],"additionalProperties":false});
+    }
     if name == "sessionRead" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::session_usage::session_read::Params)).expect("session read schema");
     }

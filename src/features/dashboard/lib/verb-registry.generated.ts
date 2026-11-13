@@ -831,6 +831,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "sessionRecord",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly."
+  },
+  {
     "name": "sessionUsage",
     "class": "read",
     "grant": "sessions:read",

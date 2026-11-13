@@ -76,6 +76,7 @@ import {
   listManagedWorktrees,
   listMachines,
   sessionReadUsage,
+  sessionRecord,
   sessionRead,
   setupStatus,
   whyLine,
@@ -1095,6 +1096,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       ctx?.frame?.frameId,
       ctx?.docPath,
     );
+  },
+  // [session_usage + story_changes] one agent's record by launch handle: {handle, sessionId, cli,
+  // model, tokens, costUsd, durationMs, story, files, unavailable}.
+  sessionRecord: (args, ctx) => {
+    const a = argObject(args, "sessionRecord");
+    if (Object.keys(a).some((key) => key !== "handle"))
+      throw new Error("sessionRecord: unknown field");
+    const handle = requiredId(a, ["handle"], "sessionRecord: handle is required");
+    return sessionRecord({ handle }, ctx?.frame?.frameId, ctx?.docPath);
   },
   openDiff: (args, ctx) =>
     openDiff(argObject(args, "openDiff") as unknown as OpenDiffParams, {

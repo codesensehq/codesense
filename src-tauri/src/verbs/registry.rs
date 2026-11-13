@@ -166,7 +166,7 @@ fn capability_for_verb(name: &str) -> &'static str {
         );
     }
     match name {
-        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "modelRates" | "canPasteToTerminal" | "prefs"
+        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
         | "setPrefs" | "setUiState" | "subscribe" | "unsubscribe" | "page" | "moveWorkspace"
         | "openLauncher" | "openRoutineDraft" | "launchUnder" | "dismiss_agent_mark"
         | "showMenu" | "showPopover" | "focusOut" | "focusTerminal" | "commands.register" => {
@@ -1201,6 +1201,18 @@ mod agent {
                 false,
                 Some("session_read"),
                 None,
+                false,
+                false,
+            ),
+        );
+        registry.register(
+            "agent",
+            spec(
+                "sessionRecord",
+                Class::Read,
+                false,
+                None,
+                Some("A page's per-agent summary of session_usage and story_changes; agents read those two tools directly."),
                 false,
                 false,
             ),

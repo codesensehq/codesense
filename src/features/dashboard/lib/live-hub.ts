@@ -320,16 +320,22 @@ export class LiveHub {
       this.queueDelta(subscription.frame, delta);
       this.schedule();
     });
-    for (const [event, type] of [
+    const nudges: [event: string, type: string | string[]][] = [
       ["agent-inbox-changed", "inbox-changed"],
       ["routines:changed", "routines-changed"],
       ["machines-changed", "machines-changed"],
       ["worktree-changed", "worktrees-changed"],
       ["context-index-changed", "context-changed"],
       ["mcp:agent-message", "agent-activity-changed"],
-      ["mcp:agent-progress", "agent-activity-changed"],
-    ])
-      this.listen(event, ({ payload }) => this.invalidate(type, payload));
+      // An agent's session record (tokens, cost, files) moves with its progress and its end.
+      ["mcp:agent-progress", ["agent-activity-changed", "session-record-changed"]],
+      ["mcp:agent-done", "session-record-changed"],
+      ["pty-exit", "session-record-changed"],
+    ];
+    for (const [event, type] of nudges)
+      this.listen(event, ({ payload }) => {
+        for (const each of Array.isArray(type) ? type : [type]) this.invalidate(each, payload);
+      });
     if (this.deps.watchPasteTarget) {
       const off = this.deps.watchPasteTarget(() => this.invalidate("paste-target-changed"));
       this.unlisteners.push(Promise.resolve(off));

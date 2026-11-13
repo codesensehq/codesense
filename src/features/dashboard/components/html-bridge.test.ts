@@ -341,6 +341,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "sendToSession",
       "sendToWorkspaceTab",
       "sessionRead",
+      "sessionRecord",
       "sessionUsage",
       "sessions",
       "setField",
@@ -2297,6 +2298,7 @@ describe("routine, run, worktree and machine read verbs", () => {
       "storyChanges",
       "storyTotals",
       "sessionUsage",
+      "sessionRecord",
       "modelRates",
     ]) {
       expect(READ_VERBS).toContain(verb);

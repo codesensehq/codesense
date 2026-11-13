@@ -22,6 +22,7 @@
         "page",
         "prefs",
         "sessionRead",
+        "sessionRecord",
         "sessionUsage",
         "sessions",
         "setPrefs",
@@ -777,8 +778,8 @@
   },
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/registry.generated.json": "e80d878c6e9007af20d746241f9fdc384d05ab1e67efa115af3f997e5fc16487",
-    "src-tauri/src/verbs/registry.rs": "6638bcb0162e91dc22f8b1068e553a3f9899ac955c758fb612f1b7adc117c4f1",
+    "src-tauri/src/verbs/registry.generated.json": "abb360fb86d807da7d07a3419462ee7d840638e43470ac9702d1a0e7493b8861",
+    "src-tauri/src/verbs/registry.rs": "55bdf8c712abfec286b174c57298db04ad805f1460d53fe0807817db3a993265",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }

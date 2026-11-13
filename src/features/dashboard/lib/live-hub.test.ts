@@ -2094,6 +2094,23 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
 });
 
+it("nudges every frame to reread a session record on an agent's progress, end or exit", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  const nudges = () =>
+    post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-record-changed");
+  for (const event of ["mcp:agent-progress", "mcp:agent-done", "pty-exit"]) {
+    post.mockClear();
+    events.get(event)!({ payload: { handle: "agent-1" } });
+    expect(nudges(), event).toEqual([{ type: "codesense:session-record-changed" }]);
+  }
+  // Progress still nudges the activity listeners it always did.
+  post.mockClear();
+  events.get("mcp:agent-progress")!({ payload: null });
+  expect(post.mock.calls.map(([m]) => m.type)).toContain("codesense:agent-activity-changed");
+});
+
 it.each(["before", "after"])(
   "a hidden live team frame keeps broad changes arriving %s named rows on its timed flush",
   async (order) => {

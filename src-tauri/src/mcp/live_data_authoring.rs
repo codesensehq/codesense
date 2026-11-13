@@ -489,6 +489,10 @@ pub(crate) const READ_VERBS: &[&str] = &[
     // Many stories' totals in one read, from the story totals index; the same as the
     // MCP tool story_totals.
     "storyTotals",
+    // One agent's record by launch handle (model, tokens, cost, duration, files, story), from the
+    // same reads as session_usage and story_changes; the host pushes
+    // `codesense:session-record-changed` when it may have changed.
+    "sessionRecord",
     // The stored rates that price it: the seeded list prices and the ones setModelRate set. The
     // same as the MCP tool model_rates.
     "modelRates",
