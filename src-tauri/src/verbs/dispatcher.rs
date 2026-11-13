@@ -255,6 +255,13 @@ fn check_capability(
     {
         return Err("denied: grant");
     }
+    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds.
+    if spec.name == "openWorkspace"
+        && args["target"]["kind"] == "team-workspace"
+        && !grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
+    {
+        return Err("denied: grant");
+    }
     if spec.inbox_target {
         // An omitted target means the bound team, never the active renderer team.
         let org = args["org"]

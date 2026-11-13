@@ -207,11 +207,6 @@ impl VerbSpec {
         {
             return "files:read";
         }
-        // Launching an agent into a team's workspace is narrower than any launch: only the
-        // bundled Foreman page holds this capability.
-        if self.name == "openWorkspace" && args["target"]["kind"] == "team-workspace" {
-            return super::foreman_launch::CAPABILITY;
-        }
         if self.name.starts_with("records.")
             || (matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
                 && args["topic"] == "records")

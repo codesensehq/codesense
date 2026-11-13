@@ -353,7 +353,7 @@ fn inherited_updates_and_human_status_require_all_team_capability_for_the_resolv
 }
 
 #[test]
-fn a_team_workspace_open_needs_the_foreman_launch_grant_that_launch_alone_does_not_give() {
+fn a_team_workspace_open_needs_the_foreman_launch_grant_beside_launch() {
     let store = FrameStore::default();
     let mut record = store.mint(
         9321,
@@ -400,8 +400,21 @@ fn a_team_workspace_open_needs_the_foreman_launch_grant_that_launch_alone_does_n
         ),
         Decision::Deny { .. }
     ));
-    // The narrow grant admits it, and by itself admits no other launch.
+    // The narrow grant admits it beside `launch`, and by itself admits no launch at all.
     record.effective_grant = vec![foreman_launch::CAPABILITY.into()];
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &record,
+            "openWorkspace",
+            team_workspace.clone(),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+    record.effective_grant = vec!["launch".into(), foreman_launch::CAPABILITY.into()];
     assert!(!matches!(
         Dispatcher::default().dispatch_frame(
             &record,
@@ -412,6 +425,7 @@ fn a_team_workspace_open_needs_the_foreman_launch_grant_that_launch_alone_does_n
         ),
         Decision::Deny { .. }
     ));
+    record.effective_grant = vec![foreman_launch::CAPABILITY.into()];
     assert_eq!(
         Dispatcher::default().dispatch_frame(
             &record,
