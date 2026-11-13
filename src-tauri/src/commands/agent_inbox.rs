@@ -1729,6 +1729,12 @@ pub(crate) enum ReactResult {
     Invalid { message: String },
 }
 
+/// Whether `who` may act on message `m` as a party to it: the mail is the team's role mail,
+/// or `who` sent it, received it, or is the address it replies to.
+pub(crate) fn is_party(m: &inbox::InboxMessage, who: &str) -> bool {
+    m.role.is_some() || m.from == who || m.to == who || m.reply_to.as_deref() == Some(who)
+}
+
 /// React as `reactor` to message `message_id` in the store at `own`. A caller that is a
 /// session (`party`) reacts only to mail it sent, received or is the reply target of, or
 /// to a role queue; the human's pane reacts to anything it shows.
@@ -1745,13 +1751,7 @@ async fn react_in(
     let emoji = emoji.to_string();
     let stored = with_store("react", path, move |store| {
         if party {
-            let held = inbox::inbox_get(store, message_id)?.is_some_and(|m| {
-                m.role.is_some()
-                    || m.from == reactor
-                    || m.to == reactor
-                    || m.reply_to.as_deref() == Some(reactor.as_str())
-            });
-            if !held {
+            if !inbox::inbox_get(store, message_id)?.is_some_and(|m| is_party(&m, &reactor)) {
                 return Ok(Err(format!("no message {message_id}")));
             }
         }
@@ -2201,11 +2201,13 @@ pub(crate) async fn mark_archived_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("mark_inbox_messages_archived", path, move |store| {
         inbox::inbox_mark_archived_many(store, &message_ids)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2221,11 +2223,13 @@ pub(crate) async fn unarchive_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("unarchive_inbox_messages", path, move |store| {
         inbox::inbox_unarchive_many(store, &message_ids, &restore_unread)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2351,6 +2355,7 @@ pub(crate) async fn withdraw_by_human(
     message_id: i64,
 ) -> Result<WithdrawOutcome, String> {
     let path = host.team_store(team).await?;
+    let pin_path = path.clone();
     let now = chrono::Utc::now().timestamp_millis();
     let (outcome, changed) = with_store("withdraw_inbox_message", path, move |store| {
         crate::weft::role_inbox::withdraw_message_changed(store, message_id, now).map_err(|e| {
@@ -2362,6 +2367,7 @@ pub(crate) async fn withdraw_by_human(
     })
     .await??;
     if changed {
+        pins::refresh_pin_threads(host, team, pin_path, vec![message_id]).await;
         host.inbox_event(InboxEvent::new(InboxChange::Withdrawn, team, [message_id]));
     }
     Ok(outcome)
@@ -2878,10 +2884,6 @@ impl InboxHost for AppInboxHost {
     }
     fn inbox_event(&self, event: InboxEvent) {
         use tauri::Emitter;
-        // Archive, withdraw and restore change which pins are live.
-        if matches!(event.kind, InboxChange::Archived | InboxChange::Withdrawn) {
-            crate::live_hub::pins::refresh(&self.app, event.team.clone(), None);
-        }
         let _ = self.app.emit(INBOX_EVENT, event);
     }
 
@@ -3357,19 +3359,11 @@ pub async fn load_inbox_media(
     message_id: i64,
 ) -> Result<(), String> {
     let host = AppInboxHost::port(app);
-    let location = team_inbox(&*host, team.into()).await?;
+    let (location, attachments) = message_attachments(&*host, team.into(), message_id).await?;
     if host.media_config(&location.team).remote == crate::media::Remote::Off {
         return Err("media is off in team config".into());
     }
-    let mut row = with_store("media.load", location.path.clone(), move |s| {
-        inbox::inbox_get(s, message_id)
-    })
-    .await?
-    .map_err(|e| e.to_string())?
-    .ok_or("message unavailable")?;
-    host.present_media(&location.team, &mut row.attachments);
-    let a = row
-        .attachments
+    let a = attachments
         .into_iter()
         .next()
         .ok_or("message has no media")?;
@@ -3377,4 +3371,74 @@ pub async fn load_inbox_media(
         return Err("media cannot be loaded".into());
     }
     finish_media_fetch(&host, location, message_id, a, false).await
+}
+
+/// Message `message_id`'s attachments in `team`'s inbox, as the team's media config
+/// presents them.
+async fn message_attachments(
+    host: &dyn InboxHost,
+    team: LaunchTeam,
+    message_id: i64,
+) -> Result<(InboxLocation, Vec<crate::media::Attachment>), String> {
+    let location = team_inbox(host, team).await?;
+    let mut row = with_store("media.message", location.path.clone(), move |s| {
+        inbox::inbox_get(s, message_id)
+    })
+    .await?
+    .map_err(|e| e.to_string())?
+    .ok_or("message unavailable")?;
+    host.present_media(&location.team, &mut row.attachments);
+    Ok((location, row.attachments))
+}
+
+/// One message's cached image, for the app window, which has no frame to reach the
+/// `/media/v1` route with.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct InboxMediaBytes {
+    /// The type `media::inspect` reads from the bytes, as the route serves it.
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+impl InboxMediaBytes {
+    /// The IPC body: the MIME, a newline, then the bytes, so the image reaches the
+    /// renderer as one ArrayBuffer rather than base64 JSON.
+    pub(crate) fn into_frame(self) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(self.mime.len() + 1 + self.bytes.len());
+        frame.extend_from_slice(self.mime.as_bytes());
+        frame.push(b'\n');
+        frame.extend_from_slice(&self.bytes);
+        frame
+    }
+}
+
+/// The bytes of image `sha256` on message `message_id` in `team`'s inbox, served by the
+/// route's rule: the message must carry it as a cached attachment.
+pub(crate) async fn read_media(
+    host: &Arc<dyn InboxHost>,
+    team: LaunchTeam,
+    message_id: i64,
+    sha256: String,
+) -> Result<InboxMediaBytes, String> {
+    if !crate::media::valid_sha(&sha256) {
+        return Err("invalid media hash".into());
+    }
+    let (_, attachments) = message_attachments(&**host, team, message_id).await?;
+    crate::media::cached_attachment(&attachments, &sha256).ok_or("media unavailable")?;
+    let host = host.clone();
+    let bytes = await_blocking("media.read", move || host.cached_media(&sha256)).await?;
+    let (mime, _, _) =
+        crate::media::inspect(&bytes).map_err(|_| "media unavailable".to_string())?;
+    Ok(InboxMediaBytes { mime, bytes })
+}
+
+#[tauri::command]
+pub async fn read_inbox_media(
+    app: tauri::AppHandle,
+    team: InboxTeam,
+    message_id: i64,
+    sha256: String,
+) -> Result<tauri::ipc::Response, String> {
+    let media = read_media(&AppInboxHost::port(app), team.into(), message_id, sha256).await?;
+    Ok(tauri::ipc::Response::new(media.into_frame()))
 }

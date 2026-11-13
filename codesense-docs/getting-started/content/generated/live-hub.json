@@ -1101,9 +1101,9 @@
     "admitsSource": "\n    let key = key.split(\"|\").next().unwrap_or(key);\n    key == \"all\" || scope == Some(key)\n"
   },
   "sources": {
-    "src-tauri/src/live_hub/projection.rs": "ccd77098484ec379e0975d41dafa54ecc6ab8ad5d58255a3cf08311388e55204",
+    "src-tauri/src/live_hub/projection.rs": "607f16894f79b18975ef38adcfa51c66c3e214ad6b088f46e0459475b34418e2",
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
-    "src-tauri/src/live_hub/mod.rs": "e4b9ceaf279f493451bafc22b1ce17c30249f082b36080ceb76b11e0d17db9d9",
+    "src-tauri/src/live_hub/mod.rs": "2aa8c18996026926ab1ac6f7de87ed2e1afd6d84f5ed6f93c78ffb91534be91f",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
     "src-tauri/src/mcp/session_list.rs": "94bed4633747fb7396ad4f6a8e986929f3909219102eabf27de62d05350eb332",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",

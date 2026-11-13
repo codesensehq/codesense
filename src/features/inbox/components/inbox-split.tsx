@@ -1,15 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import {
-  cleanupAgentInboxRailTab,
-  useAgentInboxRailStore,
-} from "@/features/viewer/stores/agent-inbox-rail-store";
-import {
-  useMinimizedTerminalTabIndex,
-  useRunningTerminalTabIndex,
-} from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
+import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 
 import { overlayPlacement } from "../lib/overlay-layout";
 
@@ -39,9 +32,17 @@ export function InboxSplit({
   const ref = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState({ width: 0, height: 0 });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!visible || !target || !el || typeof ResizeObserver === "undefined") return;
+    if (!visible || !target || !el) return;
+    // Measured before the first paint, so a narrow tab never shows the chat docked for a frame.
+    const box = el.getBoundingClientRect();
+    setSplit((was) =>
+      was.width === box.width && was.height === box.height
+        ? was
+        : { width: box.width, height: box.height },
+    );
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect;
       if (r) setSplit({ width: r.width, height: r.height });
@@ -59,11 +60,16 @@ export function InboxSplit({
   const style: React.CSSProperties =
     placement.mode === "dock" ? { width: placement.width } : { position: "absolute", inset: 0 };
 
+  const covered = !!target && visible && runningAgent && placement.mode === "cover";
+
   return (
     // `flex-1 min-h-0`: under the caption it takes exactly the height left, never `h-full`
     // (that overflowed the tile by one caption height, see `paneBodyView`).
     <div ref={ref} className="ibx-split flex-1 min-h-0" data-testid={`inbox-split-${tab.id}`}>
-      <div className="ibx-split-term">{children}</div>
+      {/* Covered by the chat, the terminal takes no keys and no focus until the chat is gone. */}
+      <div className="ibx-split-term" inert={covered}>
+        {children}
+      </div>
       {target && visible && (
         <div
           data-surface="canvas"
@@ -86,29 +92,4 @@ export function InboxSplit({
       )}
     </div>
   );
-}
-
-/**
- * Drop a closed tab's remembered inbox width and lens so the maps stay bounded. A tab that only
- * left this tile (Hidden, moved to another tile, its workspace minimized) is still running and
- * keeps both.
- */
-export function useInboxTabCleanup(tabs: readonly { id: string }[]): void {
-  const running = useRunningTerminalTabIndex();
-  const minimized = useMinimizedTerminalTabIndex();
-  const known = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const alive = new Set<string>();
-    for (const index of [running, minimized])
-      for (const byWorkspace of Object.values(index))
-        for (const list of Object.values(byWorkspace)) for (const t of list) alive.add(t.id);
-    const here = new Set(tabs.map((t) => t.id));
-    const next = new Set(here);
-    for (const id of known.current) {
-      if (here.has(id)) continue;
-      if (alive.has(id)) next.add(id);
-      else cleanupAgentInboxRailTab(id);
-    }
-    known.current = next;
-  }, [tabs, running, minimized]);
 }

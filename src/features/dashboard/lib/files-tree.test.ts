@@ -2,11 +2,15 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { waitFor } from "@testing-library/dom";
+import { NAV_TEXT_MATCH_CASES } from "../../../../tests/support/fixtures/nav-text-match";
 const html = readFileSync("src/features/shell/slots/builtin/files-tree.html", "utf8");
 const kit = readFileSync("src-tauri/src/http/routes/dashboard_kit/kit.js", "utf8");
 const virtual = readFileSync("src-tauri/src/http/routes/dashboard_kit/virtual-list.js", "utf8");
 let teardown: (() => void) | undefined;
+// Lets a test answer a topic itself; return `undefined` to fall through to the default rows.
+let subscribeHook: ((topic: string, options: any, call: number) => unknown) | null = null;
 afterEach(() => {
+  subscribeHook = null;
   teardown?.();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -19,6 +23,7 @@ async function boot(
   pagination?: { first: any; page: () => Promise<any> },
   directoryRows?: any[],
   deferFiles = false,
+  storyRows: any[] = [],
 ) {
   document.body.innerHTML = html.slice(html.indexOf("<body>") + 6, html.indexOf("<script>"));
   const folder = {
@@ -45,7 +50,14 @@ async function boot(
         resolveFiles = resolve;
       })
     : null;
+  let storiesChanged: (snapshot: any, delta: any) => void = () => {};
+  const calls = new Map<string, number>();
   const subscribe = vi.fn(async (topic, options) => {
+    const call = (calls.get(topic) || 0) + 1;
+    calls.set(topic, call);
+    if (topic === "stories") storiesChanged = options.onChange;
+    const hooked = subscribeHook?.(topic, options, call);
+    if (hooked !== undefined) return hooked;
     if (topic === "ui:file-nav") {
       uiChanged = options.onChange;
       return {
@@ -54,6 +66,7 @@ async function boot(
         ],
       };
     }
+    if (topic === "stories") return { snapshot: storyRows, rev: 1 };
     if (pendingFiles) return new Promise(() => {});
     if (filesSnapshot) return filesSnapshot;
     if (pagination && !options.dir) return pagination.first;
@@ -100,6 +113,7 @@ async function boot(
   return {
     subscribe,
     unsubscribe: cs.unsubscribe,
+    stories: (snapshot: any, delta: any = null) => storiesChanged(snapshot, delta),
     flush: () => cs.onFlush.mock.calls[0][0](),
     writeUi: cs.setUiState,
     ready: cs.ready,
@@ -429,3 +443,275 @@ it.each(["save", "legacy replay"])(
     ]);
   },
 );
+
+const folderRow = (name: string, extra: Record<string, unknown> = {}) => ({
+  id: `/content/${name}`,
+  path: `/content/${name}`,
+  name,
+  kind: "dir",
+  root: "/content",
+  ...extra,
+});
+const type = (value: string) => {
+  const field = document.getElementById("filter") as HTMLInputElement;
+  field.value = value;
+  field.dispatchEvent(new Event("input"));
+};
+
+it("a story id narrows to the story through the story index while its folder is unlisted", async () => {
+  const storyRows = [
+    {
+      id: "/content/epic-a/deep/story.md",
+      path: "/content/epic-a/deep/story.md",
+      name: "story.md",
+      kind: "story",
+      storyId: "DEMO-12",
+      title: "Wire the thing",
+      ownerPath: "/content/epic-a/deep",
+    },
+    {
+      id: "/content/epic-a/other.md",
+      path: "/content/epic-a/other.md",
+      name: "other.md",
+      kind: "story",
+      storyId: "DEMO-13",
+      ownerPath: "/content/epic-a",
+    },
+  ];
+  // Listing a folder never resolves, so only the index can answer.
+  const pane = await boot(
+    false,
+    {},
+    false,
+    [folderRow("epic-a"), folderRow("epic-b")],
+    undefined,
+    undefined,
+    false,
+    storyRows,
+  );
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("files", expect.anything()));
+  type("DEMO-12");
+  await waitFor(() =>
+    expect(document.querySelector('[data-path="/content/epic-a/deep/story.md"]')).toBeTruthy(),
+  );
+  expect(document.querySelector('[data-path="/content/epic-a/deep"]')).toBeTruthy();
+  expect(document.querySelector('[data-path="/content/epic-b"]')).toBeNull();
+  expect(document.querySelector('[data-path="/content/epic-a/other.md"]')).toBeNull();
+  type("");
+  await waitFor(() =>
+    expect(pane.unsubscribe).toHaveBeenCalledWith("stories", expect.any(Function)),
+  );
+});
+
+it("only an id-shaped filter subscribes to the story index", async () => {
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("files", expect.anything()));
+  const storyReads = () => pane.subscribe.mock.calls.filter(([topic]) => topic === "stories");
+  // Each name filters the one folder row out, so the paint that follows has run the gate.
+  for (const name of ["meeting", "my-notes", "2024", "-3"]) {
+    type(name);
+    await waitFor(() => expect(document.querySelector('[data-path="/content/epic-a"]')).toBeNull());
+    expect(storyReads()).toHaveLength(0);
+  }
+  type("DEMO-1");
+  await waitFor(() => expect(storyReads()).toHaveLength(1));
+});
+
+it("a failed story-index read is retried by the next keystroke", async () => {
+  subscribeHook = (topic, _options, call) =>
+    topic === "stories" && call === 1 ? Promise.reject(new Error("down")) : undefined;
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  const storyReads = () => pane.subscribe.mock.calls.filter(([topic]) => topic === "stories");
+  type("DEMO-1");
+  await waitFor(() => expect(storyReads()).toHaveLength(1));
+  type("DEMO-12");
+  await waitFor(() => expect(storyReads()).toHaveLength(2));
+});
+
+it("a story index whose first paint throws is unsubscribed before it is forgotten", async () => {
+  // A null row makes the paint's bucketing throw after the subscription resolved.
+  subscribeHook = (topic) => (topic === "stories" ? { snapshot: [null], rev: 1 } : undefined);
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  const storyUnsubscribes = () =>
+    pane.unsubscribe.mock.calls.filter(([topic]) => topic === "stories");
+  type("DEMO-12");
+  await waitFor(() => expect(storyUnsubscribes()).toHaveLength(1));
+});
+
+it("a story index that resolves after the filter was cleared is unsubscribed", async () => {
+  let resolveStories!: (snapshot: any) => void;
+  subscribeHook = (topic) =>
+    topic === "stories"
+      ? new Promise((resolve) => {
+          resolveStories = resolve;
+        })
+      : undefined;
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  const storyUnsubscribes = () =>
+    pane.unsubscribe.mock.calls.filter(([topic]) => topic === "stories");
+  type("DEMO-12");
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("stories", expect.anything()));
+  type("");
+  await waitFor(() => expect(document.querySelector('[data-path="/content/epic-a"]')).toBeTruthy());
+  expect(storyUnsubscribes()).toHaveLength(0);
+  resolveStories({ snapshot: [], rev: 1 });
+  await waitFor(() => expect(storyUnsubscribes()).toHaveLength(1));
+});
+
+const indexed = (id: string, path = `/content/epic-a/${id}/story.md`) => ({
+  id: path,
+  path,
+  name: "story.md",
+  kind: "story",
+  storyId: id,
+});
+const indexedRow = (id: string) =>
+  document.querySelector(`[data-path="/content/epic-a/${id}/story.md"]`);
+
+it("applies live story-index deltas, then reads the new team's index after a team switch", async () => {
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, [
+    indexed("DEMO-12"),
+  ]);
+  type("DEMO-1");
+  await waitFor(() => expect(indexedRow("DEMO-12")).toBeTruthy());
+
+  pane.stories(
+    { snapshot: [indexed("DEMO-12")], rev: 2 },
+    { upserts: [indexed("DEMO-13")], removes: [] },
+  );
+  await waitFor(() => expect(indexedRow("DEMO-13")).toBeTruthy());
+  pane.stories(
+    { snapshot: [indexed("DEMO-12"), indexed("DEMO-13")], rev: 3 },
+    { upserts: [], removes: [indexed("DEMO-12").id] },
+  );
+  await waitFor(() => expect(indexedRow("DEMO-12")).toBeNull());
+  expect(indexedRow("DEMO-13")).toBeTruthy();
+
+  // A team switch drops that index and reads the new team's while the filter stays.
+  subscribeHook = (topic) =>
+    topic === "stories" ? { snapshot: [indexed("DEMO-15")], rev: 1 } : undefined;
+  pane.rebind();
+  await waitFor(() =>
+    expect(pane.unsubscribe).toHaveBeenCalledWith("stories", expect.any(Function)),
+  );
+  await waitFor(() => expect(indexedRow("DEMO-15")).toBeTruthy());
+  expect(indexedRow("DEMO-13")).toBeNull();
+});
+
+it("a reset snapshot replaces the story index", async () => {
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, [
+    indexed("DEMO-12"),
+  ]);
+  type("DEMO-1");
+  await waitFor(() => expect(indexedRow("DEMO-12")).toBeTruthy());
+  pane.stories(
+    { snapshot: [indexed("DEMO-14")], rev: 1, reset: true },
+    { upserts: [], removes: [] },
+  );
+  await waitFor(() => expect(indexedRow("DEMO-14")).toBeTruthy());
+  expect(indexedRow("DEMO-12")).toBeNull();
+});
+
+it("a delta that lands before the index snapshot is applied after it", async () => {
+  let resolveStories!: (snapshot: any) => void;
+  subscribeHook = (topic) =>
+    topic === "stories"
+      ? new Promise((resolve) => {
+          resolveStories = resolve;
+        })
+      : undefined;
+  const pane = await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, []);
+  type("DEMO-1");
+  await waitFor(() => expect(pane.subscribe).toHaveBeenCalledWith("stories", expect.anything()));
+  pane.stories(
+    { snapshot: [indexed("DEMO-12"), indexed("DEMO-13")], rev: 2 },
+    { upserts: [indexed("DEMO-13")], removes: [] },
+  );
+  resolveStories({ snapshot: [indexed("DEMO-12")], rev: 1 });
+  await waitFor(() => expect(indexedRow("DEMO-13")).toBeTruthy());
+  expect(indexedRow("DEMO-12")).toBeTruthy();
+});
+
+it("reads each indexed story once per query, not once per folder", async () => {
+  let reads = 0;
+  const counted = indexed("DEMO-12", "/content/epic-3/DEMO-12/story.md");
+  Object.defineProperty(counted, "title", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return "Wire the thing";
+    },
+  });
+  const folders = Array.from({ length: 40 }, (_, i) => folderRow(`epic-${i}`));
+  await boot(false, {}, false, folders, undefined, undefined, false, [counted]);
+  type("DEMO-12");
+  await waitFor(() =>
+    expect(document.querySelector('[data-path="/content/epic-3/DEMO-12/story.md"]')).toBeTruthy(),
+  );
+  expect(reads).toBeGreaterThan(0);
+  expect(reads).toBeLessThan(10);
+});
+
+it("shows no Loading placeholder beside children the story index supplied", async () => {
+  subscribeHook = (topic, options) =>
+    topic === "files" && options.dir ? new Promise(() => {}) : undefined;
+  await boot(false, {}, false, [folderRow("epic-a")], undefined, undefined, false, [
+    indexed("DEMO-12"),
+  ]);
+  type("DEMO-12");
+  await waitFor(() => expect(indexedRow("DEMO-12")).toBeTruthy());
+  expect(document.body.textContent).not.toContain("Loading children");
+});
+
+it.each(NAV_TEXT_MATCH_CASES)("the pane's filter rule $name", async ({ query, text, matches }) => {
+  await boot(false, {}, false, [
+    {
+      id: `/content/${text}`,
+      path: `/content/${text}`,
+      name: text,
+      kind: "file",
+      root: "/content",
+    },
+  ]);
+  type(query);
+  await waitFor(() =>
+    expect(!!document.querySelector(`[data-path="/content/${text}"]`)).toBe(matches),
+  );
+});
+
+it("a folder row whose label carries the story id stays when the id is typed", async () => {
+  await boot(false, {}, false, [
+    folderRow("epic-a", { storyId: "DEMO-7", title: "Epic" }),
+    folderRow("epic-b"),
+  ]);
+  type("DEMO-7");
+  await waitFor(() => expect(document.querySelector('[data-path="/content/epic-b"]')).toBeNull());
+  expect(document.querySelector('[data-path="/content/epic-a"]')).toBeTruthy();
+});
+
+it("typing a story id right after a team switch still narrows the tree", async () => {
+  const story = {
+    id: "/content/epic-a/story.md",
+    path: "/content/epic-a/story.md",
+    name: "story.md",
+    kind: "file",
+    storyId: "DEMO-12",
+    root: "/content",
+  };
+  const pane = await boot(false, {}, false, [folderRow("epic-a"), folderRow("epic-b")], undefined, [
+    story,
+    {
+      ...story,
+      id: "/content/epic-a/other.md",
+      path: "/content/epic-a/other.md",
+      storyId: "DEMO-99",
+    },
+  ]);
+  pane.rebind();
+  type("DEMO-12");
+  await waitFor(() =>
+    expect(document.querySelector('[data-path="/content/epic-a/story.md"]')).toBeTruthy(),
+  );
+  expect(document.querySelector('[data-path="/content/epic-a/other.md"]')).toBeNull();
+  expect(document.querySelectorAll("#filter")).toHaveLength(1);
+});

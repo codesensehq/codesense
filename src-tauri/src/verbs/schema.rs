@@ -110,7 +110,7 @@ pub fn args_schema(name: &str) -> Value {
             json!({"target":string(),"removeWorktree":{"type":"boolean"},"discardUnsaved":{"type":"boolean"}})
         }
         "openWorkspace" => {
-            json!({"storyId":string(),"target":{"type":"object","properties":{"kind":{"enum":["story","epic","branch","dir"]},"storyId":string(),"path":string()}},"headed":{"type":"boolean"},"initialPrompt":string(),"sessionMode":{"enum":["new","focus"]}})
+            json!({"storyId":string(),"target":{"type":"object","properties":{"kind":{"enum":["story","epic","branch","dir","team-workspace"]},"storyId":string(),"path":string(),"name":string(),"worktree":string(),"createWorktree":{"type":"boolean"},"team":string(),"org":string()}},"agent":string(),"model":string(),"role":string(),"mode":string(),"headed":{"type":"boolean"},"initialPrompt":string(),"sessionMode":{"enum":["new","focus"]}})
         }
         "openTab" => json!({"workspaceId":string(),"agent":{"type":"boolean"}}),
         "openFile" => {
@@ -123,18 +123,18 @@ pub fn args_schema(name: &str) -> Value {
         "getWorkspaceStatus" => json!({"storyId":string()}),
         "commands.register" => json!({"ids":{"type":"array","items":string()}}),
         "commands.run" => json!({"id":string(),"args":{}}),
-        "inbox.pins" | "inbox.pin" | "inbox.unpin" | "inbox.reorderPins" => {
+        "pins" | "pin" | "unpin" | "reorderPins" => {
             let id = json!({"type":"integer","minimum":1,"maximum":9_007_199_254_740_991_i64});
             let mut thread =
                 json!({"agentId":string(),"storyId":string(),"org":string(),"team":string()});
             match name {
-                "inbox.pin" => {
+                "pin" => {
                     thread["messageId"] = id;
                     thread["position"] = json!({"type":"integer","minimum":0});
                     thread["preview"] = pin_preview_schema();
                 }
-                "inbox.unpin" => thread["messageId"] = id,
-                "inbox.reorderPins" => thread["messageIds"] = json!({"type":"array","items":id}),
+                "unpin" => thread["messageId"] = id,
+                "reorderPins" => thread["messageIds"] = json!({"type":"array","items":id}),
                 _ => {}
             }
             thread
@@ -169,9 +169,9 @@ pub fn args_schema(name: &str) -> Value {
         "closeWorkspace" => &["target"],
         "commands.register" => &["ids"],
         "commands.run" => &["id"],
-        "inbox.pins" => &["agentId"],
-        "inbox.pin" | "inbox.unpin" => &["agentId", "messageId"],
-        "inbox.reorderPins" => &["agentId", "messageIds"],
+        "pins" => &["agentId"],
+        "pin" | "unpin" => &["agentId", "messageId"],
+        "reorderPins" => &["agentId", "messageIds"],
         _ => &[],
     };
     let mut schema = json!({"type":"object","properties":properties,"required":required,"additionalProperties":true});
@@ -246,7 +246,7 @@ pub fn result_schema(name: &str) -> Value {
         "commands.register" => {
             json!({"type":"object","properties":{"active":{"type":"array","items":{"type":"string"}}},"required":["active"]})
         }
-        "inbox.pins" | "inbox.pin" | "inbox.unpin" | "inbox.reorderPins" => {
+        "pins" | "pin" | "unpin" | "reorderPins" => {
             let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
             json!({"oneOf":[
                 {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},

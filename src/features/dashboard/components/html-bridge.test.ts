@@ -69,12 +69,14 @@ const mockSessionReadUsage = vi.fn();
 const mockSessionRead = vi.fn();
 const mockWhyLine = vi.fn();
 const mockSetupStatus = vi.fn();
+const mockAgentLaunchOpen = vi.fn();
 const mockSessionSetModelRate = vi.fn();
 const mockSessionReadModelRates = vi.fn();
 vi.mock("@/tauri/commands", () => ({
   fileSurfaceCall: (...args: unknown[]) => mockFileSurfaceCall(...args),
   fileSurfacePrepareView: (...args: unknown[]) => mockFileSurfacePrepareView(...args),
   sendPromptToAgent: (...args: unknown[]) => mockSendPromptToAgent(...args),
+  agentLaunchOpen: (...a: unknown[]) => mockAgentLaunchOpen(...a),
   routineReadList: (...a: unknown[]) => mockRoutineReadList(...a),
   routineReadGet: (...a: unknown[]) => mockRoutineReadGet(...a),
   routineReadRuns: (...a: unknown[]) => mockRoutineReadRuns(...a),
@@ -291,10 +293,6 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
-      "inbox.pin",
-      "inbox.pins",
-      "inbox.reorderPins",
-      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -312,6 +310,8 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "openTab",
       "openWorkspace",
       "page",
+      "pin",
+      "pins",
       "postMessage",
       "prefs",
       "queryContext",
@@ -328,6 +328,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "records.search",
       "records.setFields",
       "records.write",
+      "reorderPins",
       "replyAsHuman",
       "roles",
       "routeToContext",
@@ -366,6 +367,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "storyTotals",
       "subscribe",
       "unarchive",
+      "unpin",
       "unsubscribe",
       "updates",
       "validateYaml",
@@ -962,6 +964,79 @@ describe("draft action verb", () => {
     await expect(runBridgeCommand("draft", { level: "", from: "/a" })).rejects.toThrow(
       /non-empty strings/,
     );
+  });
+});
+
+describe("openWorkspace team-workspace target", () => {
+  const page = {
+    target: { kind: "team-workspace", name: "Foreman", worktree: "foreman", createWorktree: true },
+    agent: "foreman-claude",
+    model: "opus",
+    role: "foreman",
+    initialPrompt: "Hello",
+    mode: "visible-unfocused",
+  };
+
+  beforeEach(() => mockAgentLaunchOpen.mockReset());
+
+  it("launches through the native team launch, not the story controller", async () => {
+    const opened = { status: "opened", handle: "h", name: "Foreman", message: "Opened Foreman." };
+    mockAgentLaunchOpen.mockResolvedValue(opened);
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toEqual(opened);
+    expect(mockAgentLaunchOpen).toHaveBeenCalledWith({
+      target: "team-workspace",
+      name: "Foreman",
+      worktree: "foreman",
+      createWorktree: true,
+      team: undefined,
+      org: undefined,
+      agent: "foreman-claude",
+      model: "opus",
+      role: "foreman",
+      initialPrompt: "Hello",
+      mode: "visible-unfocused",
+    });
+  });
+
+  it("returns a refusal the page can match, never throws it", async () => {
+    const refusal = {
+      status: "invalid",
+      handle: null,
+      name: null,
+      message: "default has no worktree named 'foreman'. Pass createWorktree:true to create it",
+    };
+    mockAgentLaunchOpen.mockResolvedValue(refusal);
+    await expect(
+      runBridgeCommand("openWorkspace", {
+        target: { kind: "team-workspace", name: "Foreman", worktree: "foreman" },
+      }),
+    ).resolves.toEqual(refusal);
+    expect(mockAgentLaunchOpen.mock.calls[0][0].createWorktree).toBeUndefined();
+  });
+
+  it("reports a repeat launch as alreadyLive", async () => {
+    mockAgentLaunchOpen.mockResolvedValue({ status: "alreadyLive", handle: "h", name: "Foreman" });
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toMatchObject({
+      status: "alreadyLive",
+    });
+  });
+
+  it.each([
+    [{ target: { kind: "team-workspace" } }, /needs a \{ name \}/],
+    [{ target: { kind: "team-workspace", name: " " } }, /name, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", createWorktree: "yes" } },
+      /createWorktree, if present, must be a boolean/,
+    ],
+    [{ target: { kind: "team-workspace", name: "F" }, mode: "loud" }, /mode, if present/],
+    [{ target: { kind: "team-workspace", name: "F" }, model: " " }, /model, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", profile: "dev" } },
+      /^invalid: openWorkspace launches/,
+    ],
+  ])("refuses a malformed call %#", async (args, message) => {
+    await expect(runBridgeCommand("openWorkspace", args)).rejects.toThrow(message);
+    expect(mockAgentLaunchOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -1907,9 +1982,9 @@ describe("agents read model verbs", () => {
       },
     );
     const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
-    await runBridgeCommand("inbox.pin", { ...thread, messageId: 7 }, DOC);
-    await runBridgeCommand("inbox.pin", { ...thread, messageId: 3, position: 0 }, DOC);
-    const read = (await runBridgeCommand("inbox.pins", thread, DOC)) as {
+    await runBridgeCommand("pin", { ...thread, messageId: 7 }, DOC);
+    await runBridgeCommand("pin", { ...thread, messageId: 3, position: 0 }, DOC);
+    const read = (await runBridgeCommand("pins", thread, DOC)) as {
       pins: Array<{ messageId: number }>;
       team: string;
     };
@@ -1920,41 +1995,37 @@ describe("agents read model verbs", () => {
       messageId: 3,
       position: 0,
     });
-    await runBridgeCommand("inbox.reorderPins", { ...thread, messageIds: [7, 3] }, DOC);
-    await runBridgeCommand("inbox.unpin", { ...thread, messageId: 7 }, DOC);
-    const after = (await runBridgeCommand("inbox.pins", thread, DOC)) as {
+    await runBridgeCommand("reorderPins", { ...thread, messageIds: [7, 3] }, DOC);
+    await runBridgeCommand("unpin", { ...thread, messageId: 7 }, DOC);
+    const after = (await runBridgeCommand("pins", thread, DOC)) as {
       pins: Array<{ messageId: number }>;
     };
     expect(after.pins.map((p) => p.messageId)).toEqual([3]);
     // No story: the thread of a session launched with none.
-    await runBridgeCommand("inbox.pins", { agentId: "acme/default/dev" }, DOC);
+    await runBridgeCommand("pins", { agentId: "acme/default/dev" }, DOC);
     expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "acme/default/dev", null, {
       op: "read",
     });
-    expect(METADATA_ACTION_VERBS).toEqual(
-      expect.arrayContaining(["inbox.pin", "inbox.unpin", "inbox.reorderPins"]),
-    );
-    expect(READ_VERBS).toContain("inbox.pins");
+    expect(METADATA_ACTION_VERBS).toEqual(expect.arrayContaining(["pin", "unpin", "reorderPins"]));
+    expect(READ_VERBS).toContain("pins");
   });
 
   it("refuses a pins call with no thread, a bad message id or a bad position", async () => {
     mockAgentPins.mockReset();
-    await expect(runBridgeCommand("inbox.pins", {}, DOC)).rejects.toThrow(
-      /inbox.pins: \{agentId\}/,
+    await expect(runBridgeCommand("pins", {}, DOC)).rejects.toThrow(/pins: \{agentId\}/);
+    await expect(runBridgeCommand("pin", { agentId: "a", messageId: "7" }, DOC)).rejects.toThrow(
+      /messageId/,
     );
     await expect(
-      runBridgeCommand("inbox.pin", { agentId: "a", messageId: "7" }, DOC),
-    ).rejects.toThrow(/messageId/);
+      runBridgeCommand("pin", { agentId: "a", messageId: 7, position: -1 }, DOC),
+    ).rejects.toThrow(/pin: position/);
     await expect(
-      runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, position: -1 }, DOC),
-    ).rejects.toThrow(/inbox.pin: position/);
-    await expect(
-      runBridgeCommand("inbox.reorderPins", { agentId: "a", messageIds: "7" }, DOC),
+      runBridgeCommand("reorderPins", { agentId: "a", messageIds: "7" }, DOC),
     ).rejects.toThrow(/messageIds/);
     for (const preview of ["5 of 5", ["QA"], null]) {
       await expect(
-        runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, preview }, DOC),
-      ).rejects.toThrow(/inbox.pin: preview/);
+        runBridgeCommand("pin", { agentId: "a", messageId: 7, preview }, DOC),
+      ).rejects.toThrow(/pin: preview/);
     }
     expect(mockAgentPins).not.toHaveBeenCalled();
   });
@@ -1969,7 +2040,7 @@ describe("agents read model verbs", () => {
       chart: { kind: "segments", segments: ["on-track", "needs-you"], label: "1 of 2" },
       lines: ["AC 5 green on the merged head"],
     };
-    await runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, preview }, DOC);
+    await runBridgeCommand("pin", { agentId: "a", messageId: 7, preview }, DOC);
     expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "a", null, {
       op: "pin",
       messageId: 7,

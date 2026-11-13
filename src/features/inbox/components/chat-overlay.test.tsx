@@ -7,7 +7,10 @@ import {
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
+import { AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
@@ -16,7 +19,13 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   invoke: vi.fn(async () => undefined),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+const events = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    events.set(name, handler);
+    return Promise.resolve(() => {});
+  }),
+}));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const api = vi.hoisted(() => ({
@@ -30,6 +39,19 @@ const opened = vi.hoisted(() => vi.fn());
 vi.mock("@/features/shell/slots/reveal-slot", async (orig) => ({
   ...(await orig<typeof import("@/features/shell/slots/reveal-slot")>()),
   useSlotTarget: (_slot: string, options: unknown) => ({ activate: () => opened(options) }),
+}));
+
+vi.mock("./group-chat", async (orig) => ({
+  ...(await orig<typeof import("./group-chat")>()),
+  GroupChatPane: (p: {
+    room: { workspaceId: string };
+    onBack?: () => void;
+    focusRequest?: number;
+  }) => (
+    <div data-testid="group-pane" data-room={p.room.workspaceId} data-focus={p.focusRequest}>
+      <button onClick={p.onBack}>Back to the inbox</button>
+    </div>
+  ),
 }));
 
 import { ChatOverlay } from "./chat-overlay";
@@ -133,8 +155,16 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
 beforeEach(() => {
   clearInboxDrafts();
   vi.clearAllMocks();
+  events.clear();
   useInboxSessionsStore.setState({ sessions: null });
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
+  useAgentInboxRailStore.setState({ bySession: {} });
+  // The chat opens only on a running agent.
+  useAgentStateStore.setState({
+    bySession: {},
+    activityBySession: {},
+    exitBySession: {},
+    processAgentBySession: { [SESSION]: "claude" },
+  });
   roster();
   api.loadSessionInbox.mockResolvedValue({
     dto: { handle: LEAD, roles: [], messages: MESSAGES },
@@ -153,7 +183,11 @@ describe("ChatOverlay", () => {
   it("shows that agent's chat at its newest message, and sends to the agent from its composer", async () => {
     await renderOverlay(420, 700, "dock");
     const msgs = screen.getByTestId("ibx-msgs");
-    expect(within(msgs).getByText("Starting on the refresh timeout.")).toBeInTheDocument();
+    // The thread reads oldest to newest, and the last line is the agent's newest message.
+    const shown = Array.from(msgs.querySelectorAll(".ibx-m"));
+    expect(shown.length).toBeGreaterThanOrEqual(3);
+    expect(shown.at(-1)).toHaveTextContent("Review is clean; merge card is next.");
+    expect(shown[0]).toHaveTextContent("Starting on the refresh timeout.");
     const box = screen.getByRole("textbox");
     expect(box).toBeEnabled();
     fireEvent.change(box, { target: { value: "Ship it" } });
@@ -248,6 +282,7 @@ describe("ChatOverlay", () => {
     await renderOverlay(600, 300, "cover");
     const terminal = screen.getByRole("button", { name: "Terminal" });
     expect(terminal.getAttribute("title")).toMatch(/⌘I|Ctrl\+I/);
+    expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
     fireEvent.click(terminal);
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
   });
@@ -255,17 +290,99 @@ describe("ChatOverlay", () => {
   it("Escape outside the composer closes the chat", async () => {
     act(() => openAgentInboxRail(SESSION));
     await renderOverlay(420, 700, "dock");
+    expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
     fireEvent.keyDown(screen.getByTestId("ibx-msgs"), { key: "Escape" });
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
   });
 
-  it("folds the head's button labels into icons under 480 wide", async () => {
-    await renderOverlay(300, 700);
+  it.each([
+    [300, 700, false],
+    [640, 480, true],
+  ])("a %i × %i pane shows the head's button labels: %s", async (w, h, labelled) => {
+    await renderOverlay(w, h);
     const full = screen.getByRole("button", { name: "Full view" });
-    expect(full).not.toHaveTextContent("Full view");
-    await renderOverlay(640, 480);
-    expect(screen.getAllByRole("button", { name: "Full view" }).at(-1)).toHaveTextContent(
-      "Full view",
+    if (labelled) expect(full).toHaveTextContent("Full view");
+    else expect(full).not.toHaveTextContent("Full view");
+  });
+
+  it("redraws its pins when the engine says that thread's list changed", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    expect(screen.queryByTestId("chat-overlay-pin-4")).toBeNull();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "agent_pins"
+        ? {
+            status: "pins",
+            ...TEAM,
+            agentId: "builtin/claude",
+            storyId: "BUG-142",
+            pins: [
+              ...PINS,
+              { ...PINS[0], messageId: 4, position: 2, preview: { shortName: "New" } },
+            ],
+          }
+        : undefined,
     );
+    // Another thread's change is not this one's.
+    await act(async () =>
+      events.get(AGENT_PINS_CHANGED_EVENT)?.({
+        payload: { ...TEAM, agentId: "builtin/other", storyId: "BUG-142" },
+      }),
+    );
+    expect(screen.queryByTestId("chat-overlay-pin-4")).toBeNull();
+    await act(async () =>
+      events.get(AGENT_PINS_CHANGED_EVENT)?.({
+        payload: { ...TEAM, agentId: "builtin/claude", storyId: "BUG-142" },
+      }),
+    );
+    expect(await screen.findByTestId("chat-overlay-pin-4")).toHaveTextContent("New");
+  });
+
+  it.each(AGENT_RUNTIMES)("shows the chat and its composer for a %s session", async (runtime) => {
+    roster({ kind: runtime });
+    await renderOverlay(420, 700, "dock");
+    expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Full view" })).toBeInTheDocument();
+  });
+
+  it("covering the tab, takes the keyboard into its composer; docked, leaves it where it is", async () => {
+    const { unmount } = await renderOverlay(600, 300, "cover");
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+    unmount();
+    await renderOverlay(420, 700, "dock");
+    expect(screen.getByRole("textbox")).not.toHaveFocus();
+  });
+
+  describe("the group chat shortcut", () => {
+    const room = { chatWorkspaceId: "ws-1", groupUnread: 2, groupReadId: 5 };
+    const ask = () => act(() => useAgentInboxRailStore.getState().openGroup(SESSION));
+
+    it("flips the chat to the workspace room and back", async () => {
+      roster(room);
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(420, 700, "dock");
+      ask();
+      const pane = await screen.findByTestId("group-pane");
+      expect(pane).toHaveAttribute("data-room", "ws-1");
+      expect(screen.queryByTestId("ibx-msgs")).toBeNull();
+      expect(useAgentInboxRailStore.getState().bySession[SESSION]?.groupHandled).toBe(1);
+      ask();
+      await waitFor(() => expect(screen.queryByTestId("group-pane")).toBeNull());
+      expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+      ask();
+      fireEvent.click(await screen.findByRole("button", { name: "Back to the inbox" }));
+      expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+    });
+
+    it("has nothing to open for a session with no room, and says it handled the request", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(420, 700, "dock");
+      ask();
+      await waitFor(() =>
+        expect(useAgentInboxRailStore.getState().bySession[SESSION]?.groupHandled).toBe(1),
+      );
+      expect(screen.queryByTestId("group-pane")).toBeNull();
+    });
   });
 });

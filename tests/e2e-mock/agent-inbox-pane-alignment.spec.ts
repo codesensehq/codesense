@@ -48,7 +48,7 @@ async function showAllTabs(page: Page, wsId: string) {
 async function openInbox(page: Page, tabId: string) {
   await page.getByTestId(`terminal-grid-caption-inbox-${tabId}`).click();
   const pane = page.locator(paneOf(tabId));
-  await expect(pane).toBeVisible();
+  await expect(pane).toBeInViewport();
   return pane;
 }
 
@@ -152,6 +152,27 @@ test.describe("a tab's agent inbox pane lives in that tab", () => {
     }
   });
 
+  test("a wide tab docks the chat at 420 px and the terminal reflows beside it", async ({
+    page,
+  }) => {
+    await expand(page, BUG);
+    const before = await box(page, `${regionOf(AGENT_TAB)} .ibx-split-term`);
+    await openInbox(page, AGENT_TAB);
+    const chat = page.locator(paneOf(AGENT_TAB));
+    await expect(chat).toHaveAttribute("data-placement", "dock");
+    const g = await paneGeometry(page, AGENT_TAB, BUG);
+    expect(g.region.width).toBeGreaterThanOrEqual(840);
+    expect(Math.round(g.pane.width)).toBe(420);
+    const term = await box(page, `${regionOf(AGENT_TAB)} .ibx-split-term`);
+    // Beside the chat, not under it: the terminal gave up exactly the chat's width.
+    expect(Math.abs(term.x + term.width - g.pane.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(before.width - term.width - 420)).toBeLessThanOrEqual(1);
+    await expect(page.locator(`${regionOf(AGENT_TAB)} .ibx-split-term`)).not.toHaveAttribute(
+      "inert",
+      /.*/,
+    );
+  });
+
   test("narrow tile: the docked pane stays inside its tab, still under the caption", async ({
     page,
   }) => {
@@ -214,9 +235,10 @@ test.describe("the agent's chat at any pane size", () => {
       await expect(chat.getByTestId("chat-overlay-pin-9")).toContainText("stopped");
 
       // The newest message and the composer are on screen, inside the chat.
-      await expect(chat.getByText(/staging verification is waiting/)).toBeVisible();
+      await expect(chat.getByText(/staging verification is waiting/)).toBeInViewport();
       const composer = chat.locator(".ibx-comp textarea");
       await expect(composer).toBeEnabled();
+      await expect(composer).toBeInViewport();
       const c = await composer.boundingBox();
       expect(c).not.toBeNull();
       expect(c!.y + c!.height).toBeLessThanOrEqual(b.y + b.height + 1);
@@ -279,8 +301,17 @@ test.describe("the chat is ready when it opens", () => {
               `[data-testid="inbox-split-${id}"] [data-testid="chat-overlay"]`,
             );
             const composer = chat?.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
-            const newest = chat?.textContent?.includes("staging verification is waiting");
-            return !!composer && !composer.disabled && !!newest;
+            const list = chat?.querySelector<HTMLElement>('[data-testid="ibx-msgs"]');
+            const newest = [...(list?.querySelectorAll<HTMLElement>(".ibx-m") ?? [])]
+              .reverse()
+              .find((el) => el.textContent?.includes("staging verification is waiting"));
+            // In view: inside the list's own box, not scrolled out of it.
+            const inView =
+              !!list &&
+              !!newest &&
+              newest.getBoundingClientRect().bottom <= list.getBoundingClientRect().bottom + 1 &&
+              newest.getBoundingClientRect().top >= list.getBoundingClientRect().top - 1;
+            return !!composer && !composer.disabled && inView;
           };
           const done = () => {
             performance.mark("chat-open:ready");

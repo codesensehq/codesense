@@ -69,18 +69,19 @@ describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
     expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
   });
 
-  it("closing with focus inside the inbox hands focus to that tab's terminal", () => {
+  it("closing with focus inside the chat hands focus to that tab's terminal", async () => {
     useAgentInboxRailStore.getState().open("sess1");
     const pane = document.createElement("div");
     pane.setAttribute("data-pane-id", "sess1");
     pane.innerHTML =
       '<div class="xterm"><textarea data-testid="term"></textarea></div>' +
-      '<aside data-testid="inbox-rail" data-session-id="sess1"><textarea data-testid="box"></textarea></aside>';
+      '<aside data-testid="chat-overlay" data-session-id="sess1"><textarea data-testid="box"></textarea></aside>';
     document.body.appendChild(pane);
     pane.querySelector<HTMLTextAreaElement>('[data-testid="box"]')!.focus();
     run();
-    expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
     expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
     pane.remove();
   });
 

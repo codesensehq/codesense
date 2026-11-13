@@ -87,7 +87,7 @@ impl ContentReader for FsContentReader {
 /// file swapped for a link after it was checked is not followed, and without
 /// blocking, so one swapped for a FIFO cannot hang the open.
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
@@ -96,7 +96,7 @@ fn open_no_follow(path: &Path) -> io::Result<std::fs::File> {
 }
 
 #[cfg(not(unix))]
-fn open_no_follow(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 

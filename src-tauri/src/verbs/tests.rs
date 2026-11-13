@@ -997,10 +997,10 @@ fn open_diff_uses_existing_repo_read_and_typed_after_range_contract() {
 fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
     let registry = Registry::default();
     for (name, class, grant, twin) in [
-        ("inbox.pins", Class::Read, "inbox:read:team", None),
-        ("inbox.pin", Class::Metadata, "inbox:write", Some("pin")),
-        ("inbox.unpin", Class::Metadata, "inbox:write", Some("pin")),
-        ("inbox.reorderPins", Class::Metadata, "inbox:write", None),
+        ("pins", Class::Read, "inbox:read:team", None),
+        ("pin", Class::Metadata, "inbox:write", Some("pin")),
+        ("unpin", Class::Metadata, "inbox:write", Some("pin")),
+        ("reorderPins", Class::Metadata, "inbox:write", None),
     ] {
         let verb = registry.get(name).expect(name);
         assert_eq!(verb.module, "inbox", "{name}");
@@ -1021,7 +1021,7 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
             &json!({"status":"invalid","message":"no message 9"})
         ));
     }
-    let pin = &registry.get("inbox.pin").unwrap().args_schema;
+    let pin = &registry.get("pin").unwrap().args_schema;
     assert!(jsonschema::is_valid(
         pin,
         &json!({"agentId":"a","storyId":"DEMO-1","messageId":4,"position":0})
@@ -1031,7 +1031,7 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         pin,
         &json!({"agentId":"a","messageId":4,"position":-1})
     ));
-    let reorder = &registry.get("inbox.reorderPins").unwrap().args_schema;
+    let reorder = &registry.get("reorderPins").unwrap().args_schema;
     assert!(jsonschema::is_valid(
         reorder,
         &json!({"agentId":"a","messageIds":[3,1]})
@@ -1049,7 +1049,7 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
     assert_eq!(
         super::dispatcher::action_target(
             &caller("team"),
-            "inbox.reorderPins",
+            "reorderPins",
             &json!({"messageIds":[1,2]})
         )
         .as_deref(),

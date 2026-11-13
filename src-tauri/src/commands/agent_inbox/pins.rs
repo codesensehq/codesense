@@ -6,12 +6,13 @@
 use serde::Serialize;
 
 use super::{
-    caller_handle, session_store, team_inbox, with_store, Caller, InboxHost, InboxLocation,
-    InboxTeam, HUMAN,
+    caller_handle, is_party, session_store, team_inbox, with_store, Caller, InboxHost,
+    InboxLocation, InboxTeam, HUMAN,
 };
 use crate::commands::dashboard_launch::LaunchTeam;
 use crate::weft::inbox;
 use crate::weft::pins::{self, Pin, PinOutcome, PinPreview, ThreadKey};
+use crate::weft::sqlite::WvWriteError;
 
 /// Tells the viewer a thread's pin list changed, with [`PinsChanged`] as its payload.
 /// Mirrored in `src/tauri/events.ts`.
@@ -35,6 +36,34 @@ impl PinsChanged {
             agent_id: thread.agent_id.clone(),
             story_id: thread.story_id.clone(),
         }
+    }
+}
+
+/// Tells the viewer about every thread that pins any of `message_ids` in `team`'s
+/// store at `path`: archiving, withdrawing or restoring a message changes which of its
+/// pins are live. A store that cannot be read leaves the lists as they are.
+pub(crate) async fn refresh_pin_threads(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+    path: std::path::PathBuf,
+    message_ids: Vec<i64>,
+) {
+    let found = with_store("pin_threads_for", path, move |store| {
+        pins::pin_threads_for(store, &message_ids)
+    })
+    .await;
+    if let Ok(Ok(threads)) = found {
+        for thread in &threads {
+            host.pins_changed(team, thread);
+        }
+    }
+}
+
+/// A pin as a refusal names it: its message id, and its short name when it has one.
+fn pin_label(pin: &Pin) -> String {
+    match pin.preview.as_ref().and_then(|p| p.short_name.clone()) {
+        Some(name) => format!("{} ({name})", pin.message_id),
+        None => format!("{}", pin.message_id),
     }
 }
 
@@ -101,51 +130,57 @@ async fn pins_in(
     party: bool,
 ) -> Result<PinResult, String> {
     let InboxLocation { team, path } = own;
-    // A reorder reports no outcome: it either applied or was refused.
-    let reorder = matches!(op, PinOp::Reorder { .. });
     let stored = {
         let thread = thread.clone();
         with_store("pins", path, move |store| {
             if let (true, PinOp::Pin { message_id, .. }) = (party, &op) {
-                let held = inbox::inbox_get(store, *message_id)?.is_some_and(|m| {
-                    m.role.is_some()
-                        || m.from == by
-                        || m.to == by
-                        || m.reply_to.as_deref() == Some(&*by)
-                });
-                if !held {
+                if !inbox::inbox_get(store, *message_id)?.is_some_and(|m| is_party(&m, &by)) {
                     return Ok(Err(format!("no message {message_id}")));
                 }
             }
-            let outcome = match op {
-                PinOp::Read => None,
+            // What the call did, if it reports an outcome, and whether the list changed: a
+            // reorder reports none, and it either applied or was refused.
+            let (outcome, changed) = match op {
+                PinOp::Read => (None, false),
                 PinOp::Pin {
                     message_id,
                     position,
                     preview,
-                } => Some(pins::pin_add(
-                    store,
-                    &thread,
-                    message_id,
-                    &by,
-                    position,
-                    preview.as_ref(),
-                )?),
-                PinOp::Unpin { message_id } => Some(pins::pin_remove(store, &thread, message_id)?),
+                } => {
+                    match pins::pin_add(store, &thread, message_id, &by, position, preview.as_ref())
+                    {
+                        Ok(done) => (Some(done), done != PinOutcome::Unchanged),
+                        // An agent reads its pins only through this reply, so a refusal names
+                        // them: the cap says what to unpin.
+                        Err(WvWriteError::Invalid(reason)) => {
+                            let held = pins::pins_list(store, &thread)?
+                                .iter()
+                                .map(pin_label)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            return Ok(Err(format!("{}. Pinned now: {held}", reason.0)));
+                        }
+                        Err(other) => return Err(other),
+                    }
+                }
+                PinOp::Unpin { message_id } => {
+                    let done = pins::pin_remove(store, &thread, message_id)?;
+                    (Some(done), done != PinOutcome::Unchanged)
+                }
                 PinOp::Reorder { message_ids } => {
                     pins::pins_reorder(store, &thread, &message_ids)?;
-                    Some(PinOutcome::Pinned)
+                    (None, true)
                 }
             };
-            Ok(Ok((outcome, pins::pins_list(store, &thread)?)))
+            Ok(Ok((outcome, changed, pins::pins_list(store, &thread)?)))
         })
         .await?
     };
-    let (outcome, list) = match stored {
+    let (outcome, changed, list) = match stored {
         Ok(Ok(found)) => found,
         Ok(Err(message)) | Err(message) => return Ok(PinResult::Invalid { message }),
     };
-    if outcome.is_some_and(|o| o != PinOutcome::Unchanged) {
+    if changed {
         host.pins_changed(&team, &thread);
     }
     Ok(PinResult::Pins {
@@ -156,7 +191,7 @@ async fn pins_in(
             story_id: thread.story_id,
             pins: list,
         },
-        outcome: outcome.filter(|_| !reorder),
+        outcome,
     })
 }
 

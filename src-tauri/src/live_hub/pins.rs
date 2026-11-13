@@ -25,6 +25,15 @@ impl PinViews {
     pub fn new() -> Self {
         Self(Mutex::new(BTreeMap::new()))
     }
+
+    /// Stop re-reading the view `key`, once nothing subscribes to it; true when it was
+    /// prepared.
+    pub fn drop_view(&self, key: &str) -> bool {
+        self.0
+            .lock()
+            .map(|mut views| views.remove(key).is_some())
+            .unwrap_or_default()
+    }
 }
 
 /// The view key of `thread`'s list in `team`'s store.
@@ -104,6 +113,13 @@ pub async fn prepare(
     Ok(key)
 }
 
+/// The last subscriber of the view `key` left: drop it, so a view is not re-read for ever.
+pub fn drop_view<R: tauri::Runtime>(app: &tauri::AppHandle<R>, key: &str) {
+    if let Some(views) = app.try_state::<PinViews>() {
+        views.drop_view(key);
+    }
+}
+
 /// Re-read the prepared views of `team`: only `thread`'s when given, else all of them.
 pub fn refresh(app: &tauri::AppHandle, team: LaunchTeam, thread: Option<ThreadKey>) {
     let Some(views) = app.try_state::<PinViews>() else {
@@ -136,6 +152,28 @@ pub fn refresh(app: &tauri::AppHandle, team: LaunchTeam, thread: Option<ThreadKe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_with_no_subscriber_left_is_dropped_and_the_others_stay() {
+        let views = PinViews::new();
+        let team = LaunchTeam {
+            org: "acme".into(),
+            team: "core".into(),
+        };
+        let thread = ThreadKey::new("acme/core/dev", None).unwrap();
+        let (a, b) = ("pins:a", "pins:b");
+        for key in [a, b] {
+            views
+                .0
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), (team.clone(), thread.clone()));
+        }
+        assert!(views.drop_view(a));
+        assert!(!views.drop_view(a), "forgetting twice finds nothing");
+        assert_eq!(views.0.lock().unwrap().len(), 1);
+        assert!(views.drop_view(b));
+    }
 
     #[test]
     fn a_view_is_keyed_by_team_and_thread_and_rows_carry_their_place() {

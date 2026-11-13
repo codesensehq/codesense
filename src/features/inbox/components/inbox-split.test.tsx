@@ -4,7 +4,7 @@ import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { act, fireEvent, render, renderHook, screen } from "@/test-utils";
+import { act, fireEvent, render, screen } from "@/test-utils";
 import {
   closeAgentInboxRail,
   openAgentInboxRail,
@@ -35,15 +35,7 @@ vi.mock("./chat-overlay", () => ({
   },
 }));
 
-const tabIndex = vi.hoisted(() => ({
-  running: {} as Record<string, Record<string, { id: string }[]>>,
-}));
-vi.mock("@/features/viewer/lib/cli-workspace/store/terminal-selectors", () => ({
-  useRunningTerminalTabIndex: () => tabIndex.running,
-  useMinimizedTerminalTabIndex: () => ({}),
-}));
-
-import { InboxSplit, useInboxTabCleanup } from "./inbox-split";
+import { InboxSplit } from "./inbox-split";
 
 const mounts = vi.fn();
 function Terminal() {
@@ -63,7 +55,7 @@ beforeEach(() => {
     processAgentBySession: { "sess-1": "codex" },
   });
   mounts.mockClear();
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
+  useAgentInboxRailStore.setState({ bySession: {} });
 });
 
 describe("InboxSplit", () => {
@@ -195,28 +187,41 @@ describe("InboxSplit", () => {
       vi.unstubAllGlobals();
     }
   });
-});
 
-describe("useInboxTabCleanup", () => {
-  it("forgets a closed tab's width and lens, not those of a tab merely Hidden or moved", () => {
-    useAgentInboxRailStore.setState({
-      widthByTab: { a: 400, b: 500 },
-      lensByTab: { a: "spool", b: "wire" },
-    });
-    const a = { id: "a" };
-    const b = { id: "b" };
-    tabIndex.running = { team: { ws: [a, b] } };
-    const { rerender } = renderHook(({ tabs }) => useInboxTabCleanup(tabs), {
-      initialProps: { tabs: [a, b] },
-    });
-    // `a` is Hidden: off the tile's strip, still running.
-    tabIndex.running = { team: { ws: [b, a] } };
-    rerender({ tabs: [b] });
-    expect(useAgentInboxRailStore.getState().lensByTab.a).toBe("spool");
-    // `a` closes for good; `b` closes too.
-    tabIndex.running = { team: { ws: [] } };
-    rerender({ tabs: [] });
-    expect(useAgentInboxRailStore.getState().lensByTab).toEqual({});
-    expect(useAgentInboxRailStore.getState().widthByTab).toEqual({});
+  it("takes the covered terminal's keys and focus while the chat covers the tab, and gives them back", async () => {
+    const box = { width: 1200, height: 700 };
+    const observers: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: ResizeObserverCallback) {}
+        observe() {
+          const fire = () => this.cb([{ contentRect: box } as ResizeObserverEntry], this as never);
+          observers.push(fire);
+          fire();
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      render(
+        <InboxSplit tab={TAB} teamKey="o:t">
+          <Terminal />
+        </InboxSplit>,
+      );
+      const terminal = screen.getByTestId("terminal").parentElement!;
+      act(() => openAgentInboxRail("sess-1"));
+      await screen.findByTestId("chat-overlay");
+      // Docked beside the terminal, both take keys.
+      expect(terminal).not.toHaveAttribute("inert");
+      Object.assign(box, { width: 600, height: 300 });
+      act(() => observers.forEach((f) => f()));
+      expect(screen.getByTestId("chat-overlay")).toHaveAttribute("data-placement", "cover");
+      expect(terminal).toHaveAttribute("inert");
+      act(() => closeAgentInboxRail("sess-1"));
+      expect(terminal).not.toHaveAttribute("inert");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -6,7 +6,7 @@ import {
   pasteToActiveTerminal,
   type PasteStatus,
 } from "@/shared/lib/send-to-terminal";
-import { fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
+import { agentLaunchOpen, fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
@@ -103,6 +103,7 @@ import {
 } from "@/tauri/commands";
 import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
 import { readDashboardPrefs, writeDashboardPrefs } from "../lib/dashboard-prefs";
 import { setActiveDashboardCommands } from "../lib/dashboard-commands";
 import { FRAME_PRESENTATION_UNAVAILABLE } from "../lib/frame-presentation";
@@ -220,7 +221,7 @@ async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeConte
     return { viewKey: await recordsPrepareView(ctx!.frame!.frameId, String(args.collection)) };
   if (args.topic === "pins") {
     const { agentId, storyId } = pinThread(args, "subscribe");
-    const team = await inboxTeam(ctx, "inbox.pins");
+    const team = await inboxTeam(ctx, "pins");
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
   if (args.topic === "agentDefinitions") {
@@ -356,6 +357,51 @@ async function resolveInboxTeam(ctx: BridgeContext | undefined): Promise<InboxTe
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
   if (!activeOrgSlug || !activeTeamName) return null;
   return { org: activeOrgSlug, team: activeTeamName };
+}
+
+const TEAM_WORKSPACE_MODES = ["headed", "visible-unfocused", "headless"] as const;
+
+/**
+ * `openWorkspace` with a `team-workspace` target: launch an agent in a worktree of a team's
+ * context repo. The native dispatcher admits it only for a frame holding `foreman.launch`.
+ * A refusal (a missing worktree, a bad model) comes back as the launch's own `status:"invalid"`
+ * result so the page can match its message; only a malformed call throws.
+ */
+async function openTeamWorkspace(a: Record<string, unknown>, target: Record<string, unknown>) {
+  if ("profile" in target || "packId" in target) {
+    throw new Error(
+      "invalid: openWorkspace launches an agent; pass { agent }, not profile or packId",
+    );
+  }
+  const text = (value: unknown, label: string) =>
+    optionalNonEmptyString(
+      value,
+      `openWorkspace: ${label}, if present, must be a non-empty string`,
+    );
+  const name = text(target.name, "name");
+  if (name === undefined) throw new Error("openWorkspace: team-workspace target needs a { name }");
+  if (target.createWorktree !== undefined && typeof target.createWorktree !== "boolean") {
+    throw new Error("openWorkspace: createWorktree, if present, must be a boolean");
+  }
+  const mode = a.mode;
+  if (mode !== undefined && !TEAM_WORKSPACE_MODES.some((m) => m === mode)) {
+    throw new Error(
+      `openWorkspace: mode, if present, must be one of ${TEAM_WORKSPACE_MODES.join(", ")}`,
+    );
+  }
+  return agentLaunchOpen({
+    target: "team-workspace",
+    name,
+    worktree: text(target.worktree, "worktree"),
+    createWorktree: target.createWorktree,
+    team: text(target.team, "team"),
+    org: text(target.org, "org"),
+    agent: text(a.agent, "agent"),
+    model: text(a.model, "model"),
+    role: text(a.role, "role"),
+    initialPrompt: normalizeInitialPrompt(a.initialPrompt),
+    mode: mode as (typeof TEAM_WORKSPACE_MODES)[number] | undefined,
+  });
 }
 
 /** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
@@ -507,7 +553,6 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
   throw new Error("inbox: kind, if present, must be 'needs-you' or 'update'");
 }
 
-/** A required inbox message id. */
 /** The agent thread a pins call names: a saved agent id and an optional story id. */
 function pinThread(
   a: Record<string, unknown>,
@@ -523,6 +568,7 @@ function pinThread(
   return { agentId: a.agentId.trim(), storyId: storyId ?? null };
 }
 
+/** A required inbox message id. */
 function messageId(value: unknown, verb: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${verb}: {messageId} must be a message id from inbox()`);
@@ -1352,19 +1398,17 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   // An agent thread's pin list (saved agent + story), in the frame's team store. The
   // person pins into any thread; an agent pins its own with the MCP pin tool.
-  "inbox.pins": async (args, ctx) => {
-    const a = argObject(args, "inbox.pins");
-    const { agentId, storyId } = pinThread(a, "inbox.pins");
-    return inboxWrite(ctx, "inbox.pins", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "read" }),
-    );
+  pins: async (args, ctx) => {
+    const a = argObject(args, "pins");
+    const { agentId, storyId } = pinThread(a, "pins");
+    return inboxWrite(ctx, "pins", a, (team) => agentPins(team, agentId, storyId, { op: "read" }));
   },
-  "inbox.pin": async (args, ctx) => {
-    const a = argObject(args, "inbox.pin");
-    const { agentId, storyId } = pinThread(a, "inbox.pin");
-    const id = messageId(a.messageId, "inbox.pin");
+  pin: async (args, ctx) => {
+    const a = argObject(args, "pin");
+    const { agentId, storyId } = pinThread(a, "pin");
+    const id = messageId(a.messageId, "pin");
     if (a.position != null && (!Number.isSafeInteger(a.position) || (a.position as number) < 0)) {
-      throw new Error("inbox.pin: position, if present, must be a whole number from 0");
+      throw new Error("pin: position, if present, must be a whole number from 0");
     }
     const position = a.position == null ? undefined : (a.position as number);
     // The engine checks the preview's fields; here only its shape.
@@ -1372,10 +1416,10 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "preview" in a &&
       (typeof a.preview !== "object" || !a.preview || Array.isArray(a.preview))
     ) {
-      throw new Error("inbox.pin: preview, if present, must be an object");
+      throw new Error("pin: preview, if present, must be an object");
     }
     const preview = a.preview as AgentPinPreview | undefined;
-    return inboxWrite(ctx, "inbox.pin", a, (team) =>
+    return inboxWrite(ctx, "pin", a, (team) =>
       agentPins(team, agentId, storyId, {
         op: "pin",
         messageId: id,
@@ -1384,22 +1428,22 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       }),
     );
   },
-  "inbox.unpin": async (args, ctx) => {
-    const a = argObject(args, "inbox.unpin");
-    const { agentId, storyId } = pinThread(a, "inbox.unpin");
-    const id = messageId(a.messageId, "inbox.unpin");
-    return inboxWrite(ctx, "inbox.unpin", a, (team) =>
+  unpin: async (args, ctx) => {
+    const a = argObject(args, "unpin");
+    const { agentId, storyId } = pinThread(a, "unpin");
+    const id = messageId(a.messageId, "unpin");
+    return inboxWrite(ctx, "unpin", a, (team) =>
       agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
     );
   },
-  "inbox.reorderPins": async (args, ctx) => {
-    const a = argObject(args, "inbox.reorderPins");
-    const { agentId, storyId } = pinThread(a, "inbox.reorderPins");
+  reorderPins: async (args, ctx) => {
+    const a = argObject(args, "reorderPins");
+    const { agentId, storyId } = pinThread(a, "reorderPins");
     if (!Array.isArray(a.messageIds)) {
-      throw new Error("inbox.reorderPins: {messageIds} must list the thread's pinned message ids");
+      throw new Error("reorderPins: {messageIds} must list the thread's pinned message ids");
     }
-    const messageIds = a.messageIds.map((id) => messageId(id, "inbox.reorderPins"));
-    return inboxWrite(ctx, "inbox.reorderPins", a, (team) =>
+    const messageIds = a.messageIds.map((id) => messageId(id, "reorderPins"));
+    return inboxWrite(ctx, "reorderPins", a, (team) =>
       agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
     );
   },
@@ -1791,6 +1835,11 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       sessionMode?: unknown;
       reviewPrompt?: unknown;
       operationId?: unknown;
+      // `team-workspace` only: the agent, its model, display role and surfacing.
+      agent?: unknown;
+      model?: unknown;
+      role?: unknown;
+      mode?: unknown;
     };
     const headed = a.headed === false ? false : true;
     // SW-GW-9 (AC-8): normalize the optional seed at the untrusted wire boundary via
@@ -1838,6 +1887,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       }
       if (a.reviewPrompt !== undefined && target.kind !== "branch") {
         throw new Error("openWorkspace: reviewPrompt is only supported for branch targets");
+      }
+      if (target.kind === "team-workspace") {
+        return openTeamWorkspace(a, target as Record<string, unknown>);
       }
       // SW-GW-9 (AC-2): `initialPrompt` is STORY-ONLY. A non-story target has no agent
       // to seed at call time — `dir` is a bare CLI shell, `epic` returns no sessionId
@@ -2098,17 +2150,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
           })
         : await bridgeResolveOpenTarget(page, path, team, frame?.frameId);
     };
-    let target: { path: string; org: string; team: string }, hash: string | undefined;
-    // An admitted, existing literal path wins; only otherwise interpret '#'
-    // as a fragment, with the path part passing through the same admission.
-    try {
-      target = await resolvePath(a.path);
-    } catch (error) {
-      const fragmentAt = a.path.indexOf("#");
-      if (fragmentAt < 0) throw error;
-      target = await resolvePath(a.path.slice(0, fragmentAt));
-      hash = a.path.slice(fragmentAt);
-    }
+    const { target, hash } = await resolveOpenPath(a.path, resolvePath);
     openFileInTeam(target, {
       newTab: a.preview === false || a.newTab === true,
       navigate: ctx?.navigate,

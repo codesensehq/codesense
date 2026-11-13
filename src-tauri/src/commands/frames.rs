@@ -18,6 +18,10 @@ pub struct MintFrameArgs {
     pub builtin_team: Option<FrameTeam>,
     #[serde(default)]
     pub policy: FramePolicy,
+    /// The placed docs checkout, set natively (never from the caller) so a bundled page can
+    /// earn `foreman.launch`.
+    #[serde(skip)]
+    pub docs_root: Option<PathBuf>,
 }
 
 #[tauri::command]
@@ -31,6 +35,10 @@ pub async fn mint_frame<R: tauri::Runtime>(
         .0;
     let (records_home, local_principal) =
         crate::commands::route_to_context::resolve_ambient(&app).await?;
+    args.docs_root = Some(crate::context_repo::codesense_docs::docs_root(
+        &records_home,
+        &local_principal.into(),
+    ));
     let mut principal = "human".to_string();
     let team;
     let mut pane = None;
@@ -331,7 +339,7 @@ fn mint_record(
     team: Option<FrameTeam>,
     declared: &[String],
 ) -> FrameRecord {
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut args.policy,
         &args.slot,
@@ -339,6 +347,18 @@ fn mint_record(
         source_scope,
         declared,
     );
+    // Held only by a bundled page at its place in the docs checkout whose bytes match; never
+    // by declaration, and never by a baseline frame, which renders a committed blob.
+    if let Some(docs_root) = args
+        .docs_root
+        .as_deref()
+        .filter(|_| args.slot != "baseline")
+    {
+        effective_grant.extend(crate::verbs::foreman_launch::grant_for(
+            docs_root,
+            &args.document_path,
+        ));
+    }
     let scope = grant_scope(args.policy.team_safe, source_scope);
     let kind = if args.slot == "message" || args.message.is_some() {
         FrameCallerKind::Message
@@ -429,7 +449,7 @@ fn rebind_record(
         FrameCallerKind::Message => "message",
     };
     let mut frame_policy = record.policy.clone();
-    let effective_grant = mint_grant(
+    let mut effective_grant = mint_grant(
         policy,
         &mut frame_policy,
         &record.grant.slot,
@@ -437,6 +457,14 @@ fn rebind_record(
         source_scope,
         &record.declared,
     );
+    // A rebind keeps the page's own file, so it keeps what its bytes earned at mint.
+    if record
+        .effective_grant
+        .iter()
+        .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
+    {
+        effective_grant.push(crate::verbs::foreman_launch::CAPABILITY.to_owned());
+    }
     frames.rebind(
         frame_id,
         token,

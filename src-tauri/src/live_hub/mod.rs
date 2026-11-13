@@ -1638,15 +1638,43 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     if paused {
         return;
     }
+    let viewed = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .subscription_view(subscription_id);
     TopicRegistry::unsubscribe(
         &mut app.state::<LiveHub>().model.lock().unwrap().projections,
         subscription_id,
     );
+    drop_unwatched_pins(app, Vec::from_iter(viewed));
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
+}
+/// The last subscriber of a pins view takes the view's refreshes with it: drop each pins view
+/// among `viewed` (topic, view key) that nothing follows any more.
+fn drop_unwatched_pins<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    viewed: Vec<(String, String)>,
+) {
+    for (_, key) in viewed.into_iter().filter(|(topic, _)| topic == pins::TOPIC) {
+        let held = app
+            .state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .has_view_subscribers(pins::TOPIC, &key);
+        if !held {
+            pins::drop_view(app, &key);
+        }
+    }
 }
 pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &str) {
     if let Some(hub) = app.try_state::<LiveHub>() {
-        hub.model.lock().unwrap().projections.drop_owner(owner);
+        let gone = hub.model.lock().unwrap().projections.drop_owner(owner);
+        drop_unwatched_pins(app, gone);
         hub.invalidate(MACHINE_STATS);
     }
 }

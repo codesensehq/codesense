@@ -14,6 +14,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+use super::entities::{decode_entities, decode_title, NamedSet};
 use super::{truncate_to_char_boundary, FrontmatterFields, FIELD_NAME_MAP};
 
 // ----- Regex patterns (compiled once) ----------------------------------------
@@ -47,17 +48,13 @@ static HTML_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwra
 
 /// SLW-MD-1 (FIX 2): inverse of [`html_attr_escape`] — decode the entities we
 /// emit when writing `content="…"` so a value that was escaped on write reads
-/// back byte-for-byte. `&amp;` is decoded LAST so `&amp;lt;` (a literal
-/// `&lt;`) survives intact. Only the entities we produce are decoded; any
-/// other `&…;` in hand-authored content is left verbatim (best-effort, matching
-/// the forgiving regex-not-DOM posture).
+/// back byte-for-byte. Decoding is a single pass, so `&amp;lt;` (a literal
+/// `&lt;`) survives intact. Decimal and hex references decode; of the named
+/// ones only `quot gt lt amp` do, and any other `&…;` in hand-authored content
+/// is left verbatim (best-effort, matching the forgiving regex-not-DOM
+/// posture).
 fn html_attr_unescape(value: &str) -> String {
-    value
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
+    decode_entities(value, NamedSet::Attribute)
 }
 
 /// Collect all `cs:*` meta tag key-value pairs from the text. Values are
@@ -231,24 +228,14 @@ pub fn template_value_pairs(text: &str) -> Vec<(String, String)> {
 
 /// Extract title from `<title>` or first `<h1>`.
 ///
-/// Priority: `<title>` wins over `<h1>`. HTML tags are stripped from
-/// the extracted text. Returns `None` if neither found or both empty.
+/// Priority: `<title>` wins over `<h1>`. HTML tags are stripped from the
+/// extracted text, character references are decoded once and whitespace is
+/// collapsed (see [`decode_title`]). Returns `None` if neither found or both
+/// blank.
 pub fn extract_title(text: &str) -> Option<String> {
-    // Try <title> first
-    if let Some(cap) = TITLE_TAG.captures(text) {
-        let title = cap[1].trim().to_string();
-        if !title.is_empty() {
-            return Some(title);
-        }
-    }
-    // Fall back to first <h1>
-    if let Some(cap) = H1_TAG.captures(text) {
-        let title = cap[1].trim().to_string();
-        if !title.is_empty() {
-            return Some(title);
-        }
-    }
-    None
+    [&*TITLE_TAG, &*H1_TAG]
+        .into_iter()
+        .find_map(|tag| decode_title(&tag.captures(text)?[1]))
 }
 
 /// Extract a named section from `<section data-cs="{section_name}">`.
@@ -608,6 +595,64 @@ mod tests {
     #[test]
     fn title_empty_tags_returns_none() {
         assert_eq!(extract_title("<title></title><h1></h1>"), None);
+    }
+
+    #[test]
+    fn title_decodes_character_references_once() {
+        for (src, want) in [
+            ("clone&#x27;s", "clone's"),
+            ("clone&#39;s", "clone's"),
+            ("clone&apos;s", "clone's"),
+            ("a &amp; b", "a & b"),
+            ("&lt;b&gt;", "<b>"),
+            ("say &quot;hi&quot;", "say \"hi\""),
+            ("&amp;#39;", "&#39;"),
+        ] {
+            assert_eq!(
+                extract_title(&format!("<title>{src}</title>")),
+                Some(want.to_string()),
+                "<title> {src:?}"
+            );
+            assert_eq!(
+                extract_title(&format!("<h1>{src}</h1>")),
+                Some(want.to_string()),
+                "<h1> {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_blank_once_decoded_falls_back_to_the_h1_and_is_collapsed() {
+        for blank in ["&#32;", "&nbsp;", " &#9;&#10; "] {
+            assert_eq!(
+                extract_title(&format!("<title>{blank}</title><h1>The h1</h1>")),
+                Some("The h1".to_string()),
+                "{blank:?}"
+            );
+        }
+        assert_eq!(
+            extract_title("<title>Two&#10;lines\n  and&#9;a tab</title>"),
+            Some("Two lines and a tab".to_string())
+        );
+    }
+
+    #[test]
+    fn title_markup_stays_inert_text() {
+        assert_eq!(
+            extract_title("<title>&lt;img src=x onerror=alert(1)&gt;</title>"),
+            Some("<img src=x onerror=alert(1)>".to_string())
+        );
+    }
+
+    #[test]
+    fn attr_unescape_decodes_numeric_but_keeps_its_named_set() {
+        assert_eq!(html_attr_unescape("a&#x27;b &#39;c&#39;"), "a'b 'c'");
+        assert_eq!(html_attr_unescape("&quot;&lt;&gt;&amp;"), "\"<>&");
+        assert_eq!(html_attr_unescape("&amp;#39;"), "&#39;");
+        assert_eq!(
+            html_attr_unescape("&apos;&nbsp;&mdash;"),
+            "&apos;&nbsp;&mdash;"
+        );
     }
 
     // ----- extract_section -----------------------------------------------
