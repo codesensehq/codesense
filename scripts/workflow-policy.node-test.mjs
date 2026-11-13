@@ -206,6 +206,7 @@ test("a merge_group workflow saves no cache on merge groups", () => {
 const macosOptIn =
   "github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))";
 const pathFilter = "!cancelled() && needs.changes.outputs.rust != 'false'";
+const offMergeGroups = "github.event_name != 'merge_group'";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
 test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
@@ -257,21 +258,23 @@ test("a job is skipped only on pull requests when its workflow runs on merge_gro
   );
 });
 
-// main moves only through the merge queue: rust.yml runs on pull requests, merge groups, a
-// nightly schedule and by hand, never on push. The nightly run on main saves its caches and tracks
-// flaky tests; macOS, which skips only pull requests, always runs on merge groups and nightly.
-test("rust.yml runs nightly instead of on push, and only the nightly run saves or tracks", () => {
+// rust.yml runs on pull requests, merge groups, pushes to main, a nightly schedule and by hand.
+// macOS skips merge groups and runs on push and nightly instead; only the nightly run on main
+// saves its caches and tracks flaky tests.
+test("rust.yml runs on push to main and nightly, and only the nightly run saves or tracks", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   assert.deepEqual(Object.keys(workflow.on), [
     "pull_request",
     "merge_group",
+    "push",
     "schedule",
     "workflow_dispatch",
   ]);
+  assert.deepEqual(workflow.on.push, { branches: ["main"] });
   assert.deepEqual(workflow.on.schedule, [{ cron: "17 6 * * *" }]);
   assert.ok(
     workflow.jobs["rust-macos"].if.startsWith(
-      `\${{ ${pathFilter} && (github.event_name != 'pull_request' ||`,
+      `\${{ ${pathFilter} && ${offMergeGroups} && (github.event_name != 'pull_request' ||`,
     ),
   );
   const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
@@ -317,7 +320,10 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   ]);
   for (const trigger of ["merge_group", "schedule", "workflow_dispatch"])
     assert.ok(Object.hasOwn(workflow.on, trigger), trigger);
-  assert.equal(workflow.jobs["rust-macos"].if, `\${{ ${pathFilter} && (${macosOptIn}) }}`);
+  assert.equal(
+    workflow.jobs["rust-macos"].if,
+    `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+  );
   // Another label's run has a group of its own, so it cannot cancel the pull request's run.
   assert.equal(
     workflow.concurrency.group,
@@ -340,6 +346,37 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
   for (const name of ["rust-macos", "rust-linux", "rust-check-linux"])
     assert.equal(workflow.jobs[name].needs, "changes", name);
   assert.equal(workflow.jobs["rust-check-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+// A push diffs before..after; a new branch tip (before all zeros) tests everything.
+test("rust.yml's changes job tests a push with no before, and diffs one that has it", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const filter = workflow.jobs.changes.steps.find((step) => step.id === "filter");
+  assert.equal(filter.env.PUSH_BEFORE, "${{ github.event.before }}");
+  assert.equal(filter.env.PUSH_AFTER, "${{ github.event.after }}");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-changes-push-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const output = path.join(dir, "output");
+  const run = (before) => {
+    fs.writeFileSync(output, "");
+    // Outside a repository git diff fails, so a run that diffs exits non-zero.
+    const result = spawnSync("bash", ["-e", "-c", filter.run], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EVENT: "push",
+        PUSH_BEFORE: before,
+        PUSH_AFTER: "b".repeat(40),
+        GITHUB_OUTPUT: output,
+        GIT_CEILING_DIRECTORIES: dir,
+      },
+    });
+    return { status: result.status, output: fs.readFileSync(output, "utf8") };
+  };
+  assert.deepEqual(run("0".repeat(40)), { status: 0, output: "rust=true\n" });
+  // The failed diff fails the changes job, and the Rust jobs then run.
+  assert.notEqual(run("a".repeat(40)).status, 0);
 });
 
 test("only rust.yml's test jobs may skip a merge group on the changes job's output", () => {
@@ -377,6 +414,46 @@ test("only rust.yml's test jobs may skip a merge group on the changes job's outp
   ])
     assert.match(
       filtered(condition, file, job, needs),
+      /if must begin with/,
+      `${file} ${job}: ${condition}`,
+    );
+});
+
+// Only rust.yml's macOS job may skip merge groups, with exactly this term after the path filter.
+test("only rust.yml's macOS job may skip merge groups, and still runs on push and schedule", () => {
+  const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: changes\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  for (const condition of [
+    `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+    `\${{ ${pathFilter} && ${offMergeGroups} }}`,
+  ])
+    assert.equal(filtered(condition), "", condition);
+  for (const [condition, file, job] of [
+    [`\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`, "rust.yml", "rust-linux"],
+    [`\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`, "ci.yml", "rust-macos"],
+    [`\${{ ${pathFilter} && ${offMergeGroups} && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
+    [`\${{ ${pathFilter} && (${macosOptIn}) && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
+    [`\${{ ${offMergeGroups} && ${pathFilter} && (${macosOptIn}) }}`, "rust.yml", "rust-macos"],
+    ...["push", "schedule"].map((event) => [
+      `\${{ ${pathFilter} && github.event_name != '${event}' && (${macosOptIn}) }}`,
+      "rust.yml",
+      "rust-macos",
+    ]),
+    [
+      `\${{ ${pathFilter} && github.event_name == 'pull_request' && (${macosOptIn}) }}`,
+      "rust.yml",
+      "rust-macos",
+    ],
+  ])
+    assert.match(
+      filtered(condition, file, job),
       /if must begin with/,
       `${file} ${job}: ${condition}`,
     );
@@ -891,6 +968,15 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     assert.equal(flaky.run, "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml");
     assert.equal(flaky.if, "(success() || failure()) && steps.compile.outcome == 'success'");
   }
+  // A red macOS run on main lists its failed tests and run link in the job summary, read-only.
+  const red = workflow.jobs["rust-macos"].steps.find(
+    (step) => step.name === "Summarize a red run on main",
+  );
+  assert.equal(red.if, "(failure() || cancelled()) && github.ref == 'refs/heads/main'");
+  assert.equal(
+    red.run,
+    'node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"',
+  );
   const issues = workflow.jobs["flaky-issues"];
   assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-macos"]);
   assert.deepEqual(issues.concurrency, { group: "flaky-issues", "cancel-in-progress": false });

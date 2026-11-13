@@ -6,8 +6,10 @@ on:
     # The defaults, plus labeled: adding ci:macos starts the macOS job (below) on the pull request.
     types: [opened, synchronize, reopened, labeled]
   merge_group:
-  # No push: main moves only through the merge queue, which already ran these jobs on the exact
-  # commit it merges. A nightly run on main saves the caches and tracks flaky tests instead.
+  # The macOS job skips merge groups, so it runs on each push to main instead, after the merge.
+  # The nightly run on main saves the caches and tracks flaky tests.
+  push:
+    branches: [main]
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -30,8 +32,8 @@ jobs:
     # A merge group or pull request that changes nothing the Rust jobs build, run or read skips
     # them. GitHub reports a job skipped by its if as a success, so the required checks still
     # pass (a workflow skipped by a paths filter would leave them pending). The Rust jobs run
-    # unless this job says rust=false, so its failure runs them too. Scheduled and manual runs
-    # always test.
+    # unless this job says rust=false, so its failure runs them too. A push to main diffs what it
+    # added (a new branch tip has no before, so it tests); scheduled and manual runs always test.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -54,10 +56,15 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           case "$EVENT" in
             pull_request) range="$PR_BASE...$PR_HEAD" ;;
             merge_group) range="$GROUP_BASE..$GROUP_HEAD" ;;
+            push)
+              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+              range="$PUSH_BEFORE..$PUSH_AFTER" ;;
             *) echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # The filter never judges a change to itself.
@@ -98,15 +105,15 @@ jobs:
 
   rust-macos:
     name: Rust (macOS arm64)
-    # macOS runners are scarce: on a pull request this job runs only with the ci:macos label, never
-    # on a Dependabot pull request, and not again when another label is added. GitHub counts a
-    # skipped required job as passing on the pull request, which is acceptable only because the
-    # merge queue reruns this job on merge_group, where it always runs (as on the nightly schedule and
-    # workflow_dispatch); nothing merges without it, unless the change touches nothing Rust can
-    # see (the changes job). workflow-policy keeps the github.event_name != 'pull_request' || so
-    # that holds.
+    # macOS runners are scarce, and this job is not a required check: it never runs on a merge
+    # group, so the queue merges on the Linux and TypeScript checks. It runs after the merge, on
+    # each push to main that changes something Rust can see (the changes job), and always on the
+    # nightly schedule and workflow_dispatch; a red run there goes to the next hardening pass. On a
+    # pull request it runs only with the ci:macos label, never on a Dependabot pull request, and
+    # not again when another label is added. workflow-policy allows only this job to skip merge
+    # groups, and keeps the github.event_name != 'pull_request' || so push and schedule run it.
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: macos-15
     # Room for a full compile of the set, most of which the dependency cache does not
     # cover, followed by tests and doctests.
@@ -221,6 +228,14 @@ jobs:
           path: ${{ runner.temp }}/rust-ci-logs/
           retention-days: 7
           if-no-files-found: warn
+      - name: Summarize a red run on main
+        # Nothing blocks on this job, so a red run on main says what failed in the job summary for
+        # the hardening pass: the run link and each failed test. Read-only: no issue is written.
+        # Last, so a red tracked-files check or a timeout (cancelled) still gets a summary.
+        if: (failure() || cancelled()) && github.ref == 'refs/heads/main'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
 
   rust-linux:
     name: Rust (Linux)
@@ -326,13 +341,13 @@ jobs:
 
   rust-check-linux:
     name: Rust check (Linux)
-    # A compile check of the desktop app and its tests on pull requests, merge groups and the
-    # nightly run, so most Rust breaks fail here in minutes instead of in the merge queue's macOS
-    # job. Check only: the tests themselves run on macOS. It also builds the release-only
-    # `dashboard-publish` feature, which no other public job compiles.
+    # A compile check of the desktop app and its tests on pull requests, merge groups, main and the
+    # nightly run: the only compile of the app before a merge. Check only: the tests themselves run
+    # on macOS, after the merge. It also builds the release-only `dashboard-publish` feature, which
+    # no other public job compiles.
     # Gap: code behind `cfg(target_os = "macos")` and the macOS-only dependencies is not compiled
-    # on Linux. A change to that code still meets its first compile in the macOS job; add the
-    # `ci:macos` label to the pull request to run that job before the queue.
+    # on Linux. A change to that code first compiles on main, after the merge; add the `ci:macos`
+    # label to the pull request to run the macOS job before the queue.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ubuntu-24.04
