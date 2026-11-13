@@ -4,6 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
 import { parse } from "yaml";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
@@ -79,7 +80,7 @@ test("the root prompt is the spec, under 1.5k tokens, passed as the agent's syst
 test("the agent allows exactly the Foreman's tools and refuses the rest", () => {
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
-    assert.ok(/^(mcp__codesense__|Bash\()/.test(rule), rule);
+    assert.ok(/^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule), rule);
   }
   const tools = allow.filter((rule) => rule.startsWith("mcp__")).sort();
   assert.deepEqual(tools, TOOLS.map(mcp).sort());
@@ -104,13 +105,45 @@ test("every tool the spec names is allowed or forbidden", () => {
     assert.ok(spec.includes(`\`${name}\``), `${name} is listed as unavailable`);
 });
 
-test("the Foreman edits no file: every write tool is denied outright, none allowed", () => {
-  for (const tool of ["Edit", "Write", "NotebookEdit"]) {
-    assert.ok(deny.includes(tool), `${tool} is denied`);
-    assert.ok(
-      !allow.some((rule) => rule === tool || rule.startsWith(`${tool}(`)),
-      `${tool} is not allowed`,
+// A Claude path rule: `Tool(glob)`, the glob relative to the session's working directory.
+function ruleMatches(cwd, target, tool) {
+  return (rule) => {
+    const m = /^(Edit|Write|NotebookEdit)\((.*)\)$/.exec(rule);
+    if (!m || m[1] !== tool) return false;
+    const glob = path.resolve(cwd, m[2]).replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const re = glob
+      .replace(/\*\*/g, "\u0000")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\u0000/g, ".*");
+    return new RegExp(`^${re}$`).test(target);
+  };
+}
+const TOOLS_THAT_WRITE = ["Edit", "Write", "NotebookEdit"];
+const writeDenied = (cwd, target) =>
+  TOOLS_THAT_WRITE.every((tool) => deny.some(ruleMatches(cwd, target, tool)));
+const writeAllowed = (cwd, target) =>
+  TOOLS_THAT_WRITE.slice(0, 2).every(
+    (tool) =>
+      !deny.some(ruleMatches(cwd, target, tool)) && allow.some(ruleMatches(cwd, target, tool)),
+  );
+
+test("edits are denied in the home worktree and allowed in a foreman-* worktree, in two layouts", () => {
+  for (const home of ["/work/acme-docs/home", "/work/acme-user/home"]) {
+    const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
+    assert.equal(
+      writeDenied(home, path.join(home, "README.md")),
+      true,
+      `${home} is denied outright`,
     );
+    assert.equal(writeAllowed(home, path.join(home, "README.md")), false, `${home} is read-only`);
+    assert.equal(writeAllowed(home, path.join(home, "stories/a.md")), false);
+    assert.equal(
+      writeAllowed(home, path.join(sibling, "stories/a.md")),
+      true,
+      "a foreman-* worktree",
+    );
+    assert.equal(writeAllowed(home, path.resolve(home, "../other-worktree/a.md")), false);
+    assert.equal(writeAllowed(home, path.join(sibling, ".git")), false, "no git internals");
   }
 });
 
@@ -141,33 +174,71 @@ test("no Bash rule ends in :*, which Claude reads as a literal prefix", () => {
   }
 });
 
-// The only shell is the home update, as exact rules: a rule with no `*` matches only that
-// command, and `defaultMode: dontAsk` refuses the rest.
-const HOME_UPDATE = ["git fetch", "git fetch origin", "git merge --ff-only origin/main"];
-
-test("the only Bash rules are the home update's exact commands", () => {
-  const bash = [...allow, ...deny].filter((rule) => rule.startsWith("Bash"));
-  assert.deepEqual(
-    bash,
-    HOME_UPDATE.map((command) => `Bash(${command})`),
-  );
-  for (const rule of bash) assert.ok(!rule.includes("*"), rule);
-});
-
-test("nothing but the home update runs", () => {
-  for (const command of HOME_UPDATE) assert.ok(runs(command), `runs: ${command}`);
+test("git and gh run only in the home update, foreman-* worktrees and foreman/* branches", () => {
+  const wt = "../foreman-fix-docs-9f2a";
+  const branch = "foreman/fix-docs-9f2a";
   for (const command of [
-    "git fetch --upload-pack=/tmp/x origin",
-    "git fetch origin main:main",
-    "git merge --ff-only foreman/x",
-    "git merge --ff-only origin/main foreman/x",
-    "git worktree add -b foreman/x ../foreman-x origin/main",
-    "git -C ../foreman-x diff --no-index /etc/hosts x",
-    "git -C ../foreman-x push -u origin foreman/x:develop",
-    "git commit -m x",
+    "git fetch",
+    "git fetch origin",
+    "git merge --ff-only origin/main",
+    "git worktree list",
+    `git worktree add -b ${branch} ${wt} origin/main`,
+    "git worktree add -b foreman/a.b-1f2e ../foreman-a.b-1f2e main",
+    `git -C ${wt} status`,
+    `git -C ${wt} diff`,
+    `git -C ${wt} diff stories/a.md`,
+    `git -C ${wt} log --oneline -5`,
+    `git -C ${wt} add stories/a.md stories/b.md`,
+    `git -C ${wt} commit -s -F ${wt}.msg`,
+    `git -C ${wt} push -u origin ${branch}`,
+    `gh pr create --head ${branch} --title "Add the docs story" --body "Adds a + b: see stories/a.md -f"`,
+    `git worktree remove ${wt}`,
+  ]) {
+    assert.ok(runs(command), `runs: ${command}`);
+  }
+  for (const command of [
+    // Another subcommand or another repo slipped in before an allowed word.
+    `git -C ${wt} config core.hooksPath /tmp/h status`,
+    `git -C ${wt} reset --hard origin/main log`,
+    `git -C ${wt} -C ../home commit -s -F ${wt}.msg`,
+    `git -C ${wt} --git-dir=../home/.git add a`,
+    `git -C ${wt} -c core.hooksPath=/tmp/h commit -s -F ${wt}.msg`,
+    `git -C ${wt}/../home add README.md`,
+    // Any other ref, force or extra refspec on push.
+    `git -C ${wt} push -u origin ${branch} main`,
+    `git -C ${wt} push -u origin ${branch} -d main`,
+    `git -C ${wt} push -u origin ${branch}:main`,
+    `git -C ${wt} push -u origin ${branch}:refs/heads/main`,
+    `git -C ${wt} push -u origin +${branch}`,
+    `git -C ${wt} push -u origin ${branch} --force`,
+    `git -C ${wt} push -u origin ${branch} --all`,
+    `git -C ${wt} push -u origin ${branch} --no-verify`,
     "git push origin main",
+    // Writes, hooks and history through allowed commands.
+    `git -C ${wt} diff --output=../home/CLAUDE.md`,
+    `git -C ${wt} log --output=/tmp/x`,
+    `git -C ${wt} diff --ext-diff`,
+    `git -C ${wt} commit -s -F ${wt}.msg --no-verify`,
+    `git -C ${wt} commit -s -F ${wt}.msg --amend`,
+    `git -C ${wt} commit -s -F ${wt}.msg --author=x`,
+    `git -C ${wt} commit -s -m "x"`,
+    // Home, other worktrees, fetch and merge forms.
+    "git merge --ff-only foreman/x",
+    "git merge --ff-only main",
+    "git fetch --upload-pack=/tmp/x origin",
+    "git worktree remove ../story-lead-worktree",
+    `git worktree remove ${wt} ../story-lead-worktree`,
+    `git worktree remove --force ${wt}`,
+    `git worktree add -b ${branch} ${wt} origin/main ../home`,
+    `git worktree add -b ${branch} -f ${wt} origin/main`,
+    // gh beyond one pull request from a foreman branch.
+    `gh pr create --head ${branch} --repo other/repo --title t --body b`,
+    `gh pr create --head ${branch} --title t --body-file /etc/hosts`,
+    `gh pr create --head ${branch} --title t --body b --web`,
     "gh pr create --fill",
+    "gh pr merge 1",
     "gh api repos/x/y",
+    `${wt}/stories/next-id.sh`,
     "rm -rf ../home",
   ]) {
     assert.ok(!runs(command), `refused: ${command}`);
@@ -207,9 +278,8 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
     "git merge --ff-only origin/main",
     "never reset, commit or merge",
     "Working from <sha>, couldn't update: <reason>",
-    "the only shell you have",
-    "You never edit files",
-    "`foreman/<slug>` branch",
+    "foreman-<slug>-<4 hex>",
+    "git worktree remove",
     "Foreman handoff:",
     "at most 12 lines",
     "120k context",
