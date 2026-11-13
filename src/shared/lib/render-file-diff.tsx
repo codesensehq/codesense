@@ -107,24 +107,6 @@ export interface FileDiffArgs {
   prefs: FileDiffPrefs;
 }
 
-/** The mode kind a viewer type reads its mode from. */
-export function fileDiffKind(fileType: ViewerFileType): FileDiffKind {
-  switch (fileType) {
-    case "markdown":
-      return "markdown";
-    case "html":
-    case "image":
-    case "excalidraw":
-      return "html";
-    case "code":
-      return "code";
-    default: {
-      const _exhaustive: never = fileType;
-      return _exhaustive;
-    }
-  }
-}
-
 export function renderFileDiff(args: FileDiffArgs): ReactElement {
   const { fileType } = args;
   switch (fileType) {
