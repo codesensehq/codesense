@@ -229,6 +229,14 @@ impl Invocation {
         snapshot
     }
 
+    /// How long ago its last provider evidence came: for an agent at its prompt, its turn
+    /// end. Unlike `activity_age_ms`, terminal output (a prompt's repaints) never renews
+    /// it. None counts as just now.
+    fn evidence_age(&self, now: Instant) -> Duration {
+        self.evidence_at
+            .map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
+    }
+
     /// New provider evidence clears a self-reported block, while independent
     /// permission prompts and open questions keep their own holds.
     fn clear_reported_block(&mut self) -> bool {
@@ -735,9 +743,6 @@ impl ActivityOwner {
                 .iter()
                 .filter_map(|(session, entry)| {
                     let invocation = entry.invocation.as_ref()?;
-                    let idle_for = Duration::from_millis(
-                        invocation.capture(now).activity_age_ms.unwrap_or(0),
-                    );
                     (matches!(
                         self.adapter(invocation.snapshot.provider).inbox(),
                         InboxDelivery::Waiter { .. }
@@ -748,7 +753,9 @@ impl ActivityOwner {
                         && invocation.snapshot.observed
                         && invocation.snapshot.takes_input()
                         && invocation.snapshot.exit.is_none()
-                        && !self.inbox.waiter_covers(session, idle_for)
+                        && !self
+                            .inbox
+                            .waiter_covers(session, invocation.evidence_age(now))
                         && outlet.has_tools(session) != Some(false)
                         && self.inbox.awaits_submit(session))
                     .then(|| session.clone())
@@ -2022,7 +2029,7 @@ impl ActivityOwner {
         self.output_at(session, incarnation, Instant::now());
     }
 
-    fn output_at(&self, session: &str, incarnation: &str, now: Instant) {
+    pub(super) fn output_at(&self, session: &str, incarnation: &str, now: Instant) {
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(invocation) = sessions
             .get_mut(session)

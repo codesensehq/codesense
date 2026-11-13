@@ -711,28 +711,32 @@ fn an_idle_agent_is_not_covered_by_the_grace_of_a_waiter_that_never_re_armed() {
 }
 
 #[test]
-fn mail_held_for_an_idle_agent_with_no_waiter_is_recovered_once() {
+fn mail_recovered_for_an_idle_agent_is_recovered_once_and_never_handed_to_a_later_waiter() {
     let (inbox, outlet) = new();
     woken_and_not_re_armed(&inbox, &outlet);
     inbox.mail("S1", "second".into(), "t2".into());
     let recoveries = Recoveries::default();
-    // The sweep recovers only what no waiter covers.
-    if !inbox.waiter_covers("S1", REARM_SETTLE) {
-        inbox.recover(&recoveries, "S1");
-    }
-    // Later sweeps, and a waiter arming now, find nothing left to wake it with.
+    inbox.recover(&recoveries, "S1");
+    // A later sweep finds nothing left to recover.
     inbox.recover(&recoveries, "S1");
     assert_eq!(recoveries.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(!inbox.holds("S1"));
+    // A waiter that arms now is not handed it: it waits, and is handed the next mail.
+    let (served, helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "third".into(), "t3".into());
+    assert_eq!(next(&helper), "mail t3");
+    assert_eq!(next(&helper), "third");
+    printed(&helper, "t3");
+    served.join().unwrap();
 }
 
 #[test]
-fn a_busy_agent_is_covered_by_its_grace_and_not_recovered() {
+fn an_agent_that_only_just_stopped_is_covered_by_its_grace_and_its_mail_stays_held() {
     let (inbox, outlet) = new();
     woken_and_not_re_armed(&inbox, &outlet);
     inbox.mail("S1", "second".into(), "t2".into());
-    // The sweep never asks about a working agent (it recovers only those at their
-    // prompt), and one that just stopped is still covered.
+    // Its turn-end hook is about to arm a waiter.
     assert!(inbox.waiter_covers("S1", REARM_SETTLE / 2));
     assert!(inbox.holds("S1"));
 }

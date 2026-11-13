@@ -375,14 +375,16 @@ impl HostInbox {
         }
     }
 
-    /// Whether a waiter covers mail held for `session`'s agent, seen at its prompt for
-    /// `idle_for`: one waits, or the agent only just stopped and its waiter re-arms. Its
-    /// grace (see [`ARMED_GRACE`](crate::inbox_waiters::ARMED_GRACE)) bridges a running
-    /// turn, not an idle agent: one at its prompt with no waiter waiting for
-    /// [`REARM_SETTLE`] has none, and its held mail is recovered.
+    /// Whether a waiter covers mail held for `session`'s agent, at its prompt since its
+    /// turn ended `idle_for` ago: one waits, or the agent only just stopped and its waiter
+    /// re-arms. A grace bridges a running turn, not an idle agent: one at its prompt with
+    /// no waiter waiting for [`REARM_SETTLE`] has none, and its held mail is recovered.
+    /// That holds for both graces, a woken waiter's
+    /// [`ARMED_GRACE`](crate::inbox_waiters::ARMED_GRACE) and a quiet one's
+    /// [`REASK_GRACE`](crate::inbox_waiters::REASK_GRACE): an idle agent whose waiter ended
+    /// a quiet wait and has not asked again within the settle is recovered too.
     pub(crate) fn waiter_covers(&self, session: &str, idle_for: Duration) -> bool {
-        self.waiters.armed(session)
-            && (self.waiters.is_waiting(session) || idle_for < REARM_SETTLE)
+        self.waiters.armed(session) && (self.waiters.is_waiting(session) || idle_for < REARM_SETTLE)
     }
 
     pub fn state(&self, session: &str) -> InboxWaiterState {
