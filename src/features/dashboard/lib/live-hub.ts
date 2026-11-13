@@ -12,6 +12,7 @@ import {
   agentReadSessions,
   type SessionListRow,
 } from "@/tauri/commands";
+import { ORG_REGISTRY_CHANGED_EVENT, SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT } from "@/tauri/events";
 import { logger } from "@/shared/lib/logger";
 import { readSharedUiState, writeSharedUiState, watchSharedUiState } from "./shared-ui-state";
 
@@ -24,6 +25,8 @@ const RUN_REVIEW_TOPICS = ["runEndorsements", "runEvidence"] as const;
 /** One setup write's native events (a registry commit, then a checkout bind after its
  *  reconcile) can be this far apart; the page hears once they have been quiet this long. */
 const SETUP_CHANGED_SETTLE_MS = 500;
+/** A longer run of setup events still tells the page within this long of its first event. */
+const SETUP_CHANGED_MAX_WAIT_MS = 2000;
 export type RunReviewTopic = (typeof RUN_REVIEW_TOPICS)[number];
 const isRunReviewTopic = (topic: string) =>
   (RUN_REVIEW_TOPICS as readonly string[]).includes(topic);
@@ -247,6 +250,7 @@ export class LiveHub {
   private joinedSessionsRead?: Promise<SessionListRow[]>;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private setupFirstAt: number | null = null;
   private uiTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private uiWrites = new Map<string, Promise<unknown>>();
   constructor(private deps: Dependencies) {}
@@ -338,9 +342,9 @@ export class LiveHub {
     // context repo, adding a source repo) raises one or more of these; a burst folds into one
     // page event.
     for (const event of [
-      "org-registry-changed",
+      ORG_REGISTRY_CHANGED_EVENT,
       "context-attachments-changed",
-      "source-attachments-changed",
+      SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT,
     ])
       this.listen(event, () => this.setupChanged());
     if (this.deps.watchPasteTarget) {
@@ -353,11 +357,18 @@ export class LiveHub {
   /** Tells every page the setup (orgs, teams, source repos) changed, once the burst of
    *  native events has settled; a page rereads `setupState()`. */
   private setupChanged() {
+    const now = Date.now();
+    this.setupFirstAt ??= now;
     if (this.setupTimer) clearTimeout(this.setupTimer);
+    const wait = Math.min(
+      SETUP_CHANGED_SETTLE_MS,
+      this.setupFirstAt + SETUP_CHANGED_MAX_WAIT_MS - now,
+    );
     this.setupTimer = setTimeout(() => {
       this.setupTimer = null;
+      this.setupFirstAt = null;
       this.invalidate("setup-changed");
-    }, SETUP_CHANGED_SETTLE_MS);
+    }, wait);
   }
   /** Posts a payloadless (or context/inbox) change nudge to every frame; a hidden frame
    *  holds it until shown, since consumers must reread. */

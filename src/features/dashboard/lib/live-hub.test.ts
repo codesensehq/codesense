@@ -2255,6 +2255,23 @@ for (const [write, emitted] of setupWrites)
     await vi.advanceTimersByTimeAsync(500);
     expect(setupChanges(post)).toHaveLength(2);
   });
+it("tells the page during a long run of setup events, not only after it", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("setup-run", "all", post, true);
+  await frame.subscribe("sessions");
+  // A bulk edit: one registry event every 300 ms for 3 s.
+  for (let elapsed = 0; elapsed < 2100; elapsed += 300) {
+    events.get("org-registry-changed")!({ payload: null });
+    await vi.advanceTimersByTimeAsync(300);
+  }
+  expect(setupChanges(post)).toHaveLength(1);
+  for (let elapsed = 2100; elapsed < 3000; elapsed += 300) {
+    events.get("org-registry-changed")!({ payload: null });
+    await vi.advanceTimersByTimeAsync(300);
+  }
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(post)).toHaveLength(2);
+});
 it("holds a setup change for a hidden page and replays it once on show", async () => {
   const post = vi.fn();
   const frame = hub.attach("setup-hidden", "all", post, false);

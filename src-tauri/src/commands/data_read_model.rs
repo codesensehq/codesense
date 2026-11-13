@@ -326,12 +326,18 @@ fn setup_state_value(orgs: &[crate::mcp::setup_tools::SetupOrg]) -> serde_json::
 }
 
 /// A registry load error (`<path>: <message>`) with its path made relative to the org, so no
-/// local path reaches a page.
+/// local path reaches a page. A path outside the org keeps only the message.
 fn org_relative(org_root: &str, error: &str) -> String {
-    error
+    match error
         .strip_prefix(org_root)
-        .map(|rest| rest.trim_start_matches(['/', '\\']).to_string())
-        .unwrap_or_else(|| error.to_string())
+        .and_then(|rest| rest.strip_prefix(['/', '\\']))
+    {
+        Some(relative) => relative.to_string(),
+        None => error
+            .split_once(": ")
+            .map_or("a registry file failed to load", |(_, message)| message)
+            .to_string(),
+    }
 }
 
 /// One joined session, from the same backend as the MCP session_read verb.
@@ -424,7 +430,20 @@ mod tests {
                     parent_team: Some("docs".into()),
                     starter_page: None,
                     synced: false,
-                    source_repos: vec![],
+                    source_repos: vec![
+                        SetupRepo {
+                            slug: "acme/api".into(),
+                            remote_key: "github.com/acme/api".into(),
+                            attachment: AttachmentStatus::Missing,
+                            local_path: Some("/private/api".into()),
+                        },
+                        SetupRepo {
+                            slug: "acme/infra".into(),
+                            remote_key: "github.com/acme/infra".into(),
+                            attachment: AttachmentStatus::Unattached,
+                            local_path: None,
+                        },
+                    ],
                 },
             ],
         };
@@ -451,12 +470,37 @@ mod tests {
                     "archived": true,
                     "parentTeam": "docs",
                     "synced": false,
-                    "sourceRepos": [],
+                    "sourceRepos": [
+                        {"slug": "acme/api", "remoteKey": "github.com/acme/api", "attachment": "missing"},
+                        {"slug": "acme/infra", "remoteKey": "github.com/acme/infra", "attachment": "unattached"},
+                    ],
                 }],
             }]})
         );
         assert!(!value.to_string().contains("/private"));
         assert_eq!(setup_state_value(&[]), serde_json::json!({"orgs": []}));
+    }
+
+    /// A load error outside the org root, even a sibling with the same prefix, keeps only its
+    /// message; one with no message keeps neither.
+    #[test]
+    fn a_load_error_outside_the_org_drops_its_path() {
+        assert_eq!(
+            org_relative("/private/ctx", "/private/ctx/teams.yml: bad"),
+            "teams.yml: bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/private/ctx2/teams.yml: bad"),
+            "bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/elsewhere/org.yml: bad"),
+            "bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/elsewhere/org.yml"),
+            "a registry file failed to load"
+        );
     }
 
     #[test]
