@@ -39,6 +39,9 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
     prepareCalls.push(p);
     return invoke.router!("agent_launch_prepare", p);
   }),
+  agentSessionAwaitReady: vi.fn(async (sessionId: string, timeoutMs: number) =>
+    invoke.router!("agent_session_await_ready", { sessionId, timeoutMs }),
+  ),
 }));
 
 vi.mock("@/shared/lib/agent-session-launcher", async (importOriginal) => {

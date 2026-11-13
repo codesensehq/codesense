@@ -331,6 +331,29 @@ pub(crate) fn pretrust_managed_launch(
     (crate::agents::adapter::desktop(agent.runtime).pretrust)(agent, cwd, session_id)
 }
 
+/// [`pretrust_managed_launch`] off the async executor, for the launch paths that run it
+/// before a spawn: the managed-launch spine and the page's launch prepare. Best-effort like
+/// it; the flags are the CLI's per-launch trust arguments, to be placed by
+/// [`splice_trust_flags`].
+pub(crate) async fn pretrust_flags(
+    agent: &AgentLaunch,
+    cwd: &Path,
+    session_id: &str,
+) -> Vec<String> {
+    let (agent, cwd, session) = (agent.clone(), cwd.to_path_buf(), session_id.to_owned());
+    crate::commands::async_helpers::await_blocking("managed_launch.pretrust", move || {
+        Ok::<Vec<String>, String>(pretrust_managed_launch(&agent, &cwd, &session))
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Put the per-launch trust `flags` among `args`' options, before any operand (a prompt).
+pub(crate) fn splice_trust_flags(args: &mut Vec<String>, flags: Vec<String>) {
+    let options_end = codesense_pty_core::agent_cli::operands_at(args);
+    args.splice(options_end..options_end, flags);
+}
+
 /// Claude's pre-trust: its `.claude.json` in the launch's account home.
 pub(crate) fn pretrust_claude_launch(
     agent: &AgentLaunch,
@@ -1228,6 +1251,24 @@ mod tests {
     }
 
     // ---------- env-mutation helpers (tests only) ----------
+
+    #[test]
+    fn splice_trust_flags_before_operands() {
+        // A prompt operand after the options' own `--` stays last.
+        let mut args: Vec<String> = ["--model", "m", "--", "do the task"]
+            .map(String::from)
+            .to_vec();
+        splice_trust_flags(&mut args, vec!["-c".into(), "trust=1".into()]);
+        assert_eq!(args, ["--model", "m", "-c", "trust=1", "--", "do the task"]);
+        // No operand: the flags go last.
+        let mut args = vec!["--model".to_string(), "m".to_string()];
+        splice_trust_flags(&mut args, vec!["-c".into(), "trust=1".into()]);
+        assert_eq!(args, ["--model", "m", "-c", "trust=1"]);
+        // Nothing to add changes nothing.
+        let mut args = vec!["--".to_string(), "x".to_string()];
+        splice_trust_flags(&mut args, Vec::new());
+        assert_eq!(args, ["--", "x"]);
+    }
 
     fn env_mutex() -> &'static std::sync::Mutex<()> {
         static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();

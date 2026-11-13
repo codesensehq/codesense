@@ -368,7 +368,7 @@
       "name": "onInboxChanged",
       "owner": "Surface",
       "signature": "onInboxChanged(\n      cb: (change?: {\n        changes?: Array<{\n          team: { org: string; team: string };\n          messageIds: number[];\n        }>;\n      }) => void,\n    ): Unsubscribe;",
-      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. Absent for session refreshes.",
+      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. A session refresh passes an empty `changes`, which\nnames no inbox rows.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -938,7 +938,7 @@
       "name": "onInboxChanged",
       "owner": "Surface",
       "signature": "onInboxChanged(\n      cb: (change?: {\n        changes?: Array<{\n          team: { org: string; team: string };\n          messageIds: number[];\n        }>;\n      }) => void,\n    ): Unsubscribe;",
-      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. Absent for session refreshes.",
+      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. A session refresh passes an empty `changes`, which\nnames no inbox rows.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -17074,7 +17074,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "08772ec7a9b16ab93159621311996dc994bc145859aeaa6aed75e636495a15c0",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "c2be4a1745b3f88842fa4604412832c842e47b71f4849a9c04b0be7f5fe68234",
     "src-tauri/src/verbs/registry.generated.json": "0ab74204fb59072abf617b9a183b64b6afc8486177d24152b8fab21b452dc49f",
     "src-tauri/src/verbs/registry.rs": "fc559f32c20039ce7a770c3d5b96c92a5d587ee5de647e0ec5c3b52edc5005fb",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

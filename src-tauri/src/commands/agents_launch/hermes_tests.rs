@@ -561,6 +561,8 @@ async fn hermes_interactive_startup_renderer_without_role_uses_literal_tui_query
             .unwrap();
         assert_tui_query(&launch.launch.args, prompt.as_deref());
         assert!(launch.prompt_in_argv);
+        // Startup facts ride argv either way; a task only when one was given.
+        assert_eq!(launch.task_in_argv, prompt.is_some());
         assert!(launch.default_prompt.is_none());
         mcp_scope::remove_scope_config(&id);
         crate::agents::launch::forget_launch_env(&id);
@@ -788,6 +790,7 @@ async fn hermes_interactive_startup_does_not_add_tui_to_headless_preparation() {
         .unwrap();
     assert_eq!(launch.launch.args, before);
     assert!(!launch.prompt_in_argv);
+    assert!(!launch.task_in_argv);
     mcp_scope::remove_scope_config(&id);
     crate::agents::launch::forget_launch_env(&id);
 }

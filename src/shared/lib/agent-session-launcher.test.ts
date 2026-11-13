@@ -187,6 +187,21 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     ]);
   });
 
+  it.each([true, false])(
+    "reports whether the launch line ran under the activity wrapper (%s)",
+    async (activityWrapped) => {
+      const { deps } = makeDeps({
+        launchAgentLine: vi.fn(async () => ({ ok: true, activityWrapped }) as const),
+      });
+      await expect(connectAgentSession(params, deps)).resolves.toMatchObject({ activityWrapped });
+    },
+  );
+
+  it("leaves the wrapper answer out when the launch line's outcome carries none", async () => {
+    const { deps } = makeDeps();
+    await expect(connectAgentSession(params, deps)).resolves.not.toHaveProperty("activityWrapped");
+  });
+
   it("AC-1: when an owned tab already exists, returns it and never spawns a duplicate", async () => {
     const existing = { workspaceId: "test-agent", sessionId: "already" };
     const { deps, calls } = makeDeps({ findExisting: vi.fn(async () => existing) });

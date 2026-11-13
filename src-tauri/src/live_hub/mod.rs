@@ -226,6 +226,43 @@ pub struct LiveHub {
     changes: tokio::sync::watch::Sender<u64>,
     providers: FieldProviders,
 }
+impl LiveHub {
+    /// `session`'s activity snapshot as of the last read of any host, if one holds it.
+    pub(crate) fn activity_snapshot_of(
+        &self,
+        session: &str,
+    ) -> Option<codesense_pty_core::activity::Snapshot> {
+        let model = self.model.lock().unwrap();
+        model.hosts.values().find_map(|(_, activity)| {
+            activity
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|snapshot| snapshot.session == session)
+                .cloned()
+        })
+    }
+
+    /// Hold `activity` as the last read of host `key`, as a refresh would.
+    #[cfg(test)]
+    pub(crate) fn hold_host_activity(&self, key: &str, activity: ActivityRead) {
+        use crate::commands::machines::{
+            RuntimeCounter, RuntimeLayoutReply, RuntimeMemberAddress, RuntimeMemberSlot,
+        };
+        let reply = RuntimeLayoutReply::Unavailable {
+            member: RuntimeMemberAddress {
+                machine_id: key.into(),
+                slot: RuntimeMemberSlot::InProcess,
+            },
+            admission_revision: RuntimeCounter::new(1),
+        };
+        self.model
+            .lock()
+            .unwrap()
+            .hosts
+            .insert(key.into(), (reply, activity));
+    }
+}
 impl Default for LiveHub {
     fn default() -> Self {
         let mut providers = FieldProviders::new([

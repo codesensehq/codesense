@@ -6553,7 +6553,7 @@
       "category": "data-read",
       "signature": "onInboxChanged(\n      cb: (change?: {\n        changes?: Array<{\n          team: { org: string; team: string };\n          messageIds: number[];\n        }>;\n      }) => void,\n    ): Unsubscribe;",
       "wraps": "codesense:inbox-changed listener",
-      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. Absent for session refreshes.",
+      "description": "The change, when the host knows it: `changes` names, per team, the messages a committed\ninbox update re-read (stored, read, archived, reacted to). It names only the frame's own\nteam when the frame is team-scoped. A session refresh passes an empty `changes`, which\nnames no inbox rows.",
       "example": "codesense.onInboxChanged(async () => {\n  const items = await codesense.inbox({ scope: \"team\" });\n  renderInbox(items);\n});",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts"
     },

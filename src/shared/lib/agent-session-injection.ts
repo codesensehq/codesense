@@ -91,8 +91,9 @@ export interface InjectDeps {
   isShellIdle: (sessionId: string) => Promise<boolean>;
   /** Raw write (the `writePty` command). */
   write: (sessionId: string, text: string) => Promise<void>;
-  /** Managed shell launch only, after its idle gate has admitted the write. */
-  writeShell?: (sessionId: string, text: string) => Promise<void>;
+  /** Managed shell launch only, after its idle gate has admitted the write. Says whether the
+   *  line ran under the activity wrapper (the host sees the CLI's first hook). */
+  writeShell?: (sessionId: string, text: string) => Promise<ShellWrite>;
   /**
    * SW-GS-30 — reliable submit (the `submit_pty_line` command): settle → write →
    * confirm-from-output → discrete-Enter nudge. Passed the RAW line (it owns the
@@ -100,11 +101,18 @@ export interface InjectDeps {
    * every nudge. Used only by the opt-in `{ submit:true }` path.
    */
   submit: (sessionId: string, line: string) => Promise<{ submitted: boolean }>;
-  submitShell?: (sessionId: string, line: string) => Promise<{ submitted: boolean }>;
+  submitShell?: (sessionId: string, line: string) => Promise<{ submitted: boolean } & ShellWrite>;
+}
+
+/** How a shell-gate line reached the shell: `activityWrapped` is true when it ran under the
+ *  activity wrapper, so the host observes the CLI it starts. A line typed raw is never
+ *  observed. */
+export interface ShellWrite {
+  activityWrapped?: boolean;
 }
 
 export type InjectOutcome =
-  | { ok: true }
+  | ({ ok: true } & ShellWrite)
   // SW-GS-30 `not-submitted`: the `{ submit:true }` path wrote the line but the
   // agent never left its prompt after the bounded nudges (paste-held / unresponsive)
   // — distinct from `agent-busy` (the line was never written, agent mid-turn).
@@ -124,18 +132,26 @@ export function sessionExists(sessionId: string): boolean {
   return tab !== undefined && tab.exit === undefined;
 }
 
+/** The agent CLIs whose typed launch line runs under the activity wrapper, so the host sees
+ *  their first lifecycle hook and can say when they are input-ready. */
+export const ACTIVITY_WRAPPED_CLIS = ["claude", "codex"] as const;
+type ActivityWrappedCli = (typeof ACTIVITY_WRAPPED_CLIS)[number];
+
+/** Whether `cli` is one of {@link ACTIVITY_WRAPPED_CLIS}. */
+export function isActivityWrappedCli(cli: string | undefined): cli is ActivityWrappedCli {
+  return (ACTIVITY_WRAPPED_CLIS as readonly string[]).includes(cli ?? "");
+}
+
 function managedLaunchTarget(
   sessionId: string,
   text: string,
 ):
-  | { target: NonNullable<ReturnType<typeof sessionTarget>>; provider: "claude" | "codex" }
+  | { target: NonNullable<ReturnType<typeof sessionTarget>>; provider: ActivityWrappedCli }
   | undefined {
   const first = /^(?:'([^']*)'|([^\s"'`;|&<>]+))(?:\s|$)/.exec(text.trimStart());
   const provider = (first?.[1] ?? first?.[2])?.split("/").at(-1);
   const target = sessionTarget(getViewerState().terminalLayout, sessionId);
-  return target && (provider === "claude" || provider === "codex")
-    ? { target, provider }
-    : undefined;
+  return target && isActivityWrappedCli(provider) ? { target, provider } : undefined;
 }
 
 export const defaultInjectDeps: InjectDeps = {
@@ -149,15 +165,19 @@ export const defaultInjectDeps: InjectDeps = {
     const launch = managedLaunchTarget(sessionId, text);
     if (launch) {
       await terminalLaunchActivityLine(launch.target, launch.provider, text);
-    } else {
-      await writePty(sessionId, text);
+      return { activityWrapped: true };
     }
+    await writePty(sessionId, text);
+    return { activityWrapped: false };
   },
   submitShell: (sessionId, line) => {
     const launch = managedLaunchTarget(sessionId, line);
     return launch
-      ? terminalLaunchActivityLine(launch.target, launch.provider, line, true)
-      : submitPtyLine(sessionId, line);
+      ? terminalLaunchActivityLine(launch.target, launch.provider, line, true).then((r) => ({
+          ...r,
+          activityWrapped: true,
+        }))
+      : submitPtyLine(sessionId, line).then((r) => ({ ...r, activityWrapped: false }));
   },
   submit: (sessionId, line) => submitPtyLine(sessionId, line),
 };
@@ -231,19 +251,25 @@ export async function injectAgentLine(
   // and nudges a held (paste-batched) line. A line that never submits after the
   // bounded nudges is legible, not a false `{ok:true}`.
   if (opts.submit) {
-    const { submitted } = await (
-      gate === "shell" && deps.submitShell ? deps.submitShell : deps.submit
+    const { submitted, activityWrapped } = await (
+      gate === "shell" && deps.submitShell
+        ? deps.submitShell
+        : (id: string, text: string): Promise<{ submitted: boolean } & ShellWrite> =>
+            deps.submit(id, text)
     )(sessionId, shellLine);
-    return submitted ? { ok: true } : { ok: false, reason: "not-submitted" };
+    return submitted
+      ? { ok: true, ...(activityWrapped === undefined ? {} : { activityWrapped }) }
+      : { ok: false, reason: "not-submitted" };
   }
 
   // Default fast path: the line + Enter (`\r`) in ONE write — same as the chat box
   // (the proven submit path). See ENTER_KEY docs for why \n and a separate \r both fail.
-  await (gate === "shell" && deps.writeShell ? deps.writeShell : deps.write)(
-    sessionId,
-    shellLine + ENTER_KEY,
-  );
-  return { ok: true };
+  const entered = shellLine + ENTER_KEY;
+  const { activityWrapped } =
+    gate === "shell" && deps.writeShell
+      ? await deps.writeShell(sessionId, entered)
+      : await deps.write(sessionId, entered).then((): ShellWrite => ({}));
+  return activityWrapped === undefined ? { ok: true } : { ok: true, activityWrapped };
 }
 
 /**
