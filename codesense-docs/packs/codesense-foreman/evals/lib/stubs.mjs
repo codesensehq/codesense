@@ -5,7 +5,7 @@ import path from "node:path";
 import { CARDS, CONFIG } from "./fixture.mjs";
 
 const F = "foreman";
-const SELF = "foreman-session-1";
+const SELF = CONFIG.self;
 
 const good = {
   "onboard-repo"({ fx, turns }) {
@@ -14,7 +14,7 @@ const good = {
     fx.tool(F, "open_workspace", {
       target: "team-workspace",
       name: "Setup",
-      agent: "guide-claude",
+      agent: `guide-${CONFIG.runtime}`,
       initial_prompt: "/codesense-setup",
       mode: "visible-unfocused",
       launched_by: SELF,

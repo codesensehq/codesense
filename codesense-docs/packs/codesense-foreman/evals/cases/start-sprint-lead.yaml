@@ -6,6 +6,7 @@ input:
   turns:
     - "start sprint 1"
     - "start sprint 1"
+# Script: the launches, their form and the order of calls, never the wording.
 expected:
   agent_from: sprintLeadAgent
   target: team-workspace
@@ -14,4 +15,10 @@ expected:
   forbidden_tools:
     - start_remote_agent_task
     - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: says-lead-started
+    ask: "The first reply says the sprint 1 lead started."
+  - id: says-already-running
+    ask: "The second reply says sprint 1 already has a lead running, and starts nothing."
 grader: script

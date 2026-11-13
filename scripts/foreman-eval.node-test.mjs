@@ -21,8 +21,8 @@ import { stringify } from "yaml";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, CARDS } = await lib("fixture");
-const { loadCases, grade } = await lib("graders");
+const { createFixture, CARDS, CONFIG } = await lib("fixture");
+const { loadCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
 const { statusFor, parseReport, loadReports } = await lib("floor");
@@ -76,20 +76,40 @@ test("fixture: creates and tears down a sandbox with a bare origin and a gh shim
   assert.equal(existsSync(root), false);
 });
 
-test("fixture: the shim records a call and fails the first pr create when told to", async () => {
+test("fixture: the shim logs every gh call and fails only the first pr create", async () => {
   const fx = await createFixture({ failFirstPr: true });
   try {
+    assert.equal(fx.gh(["api", "-X", "POST", "repos/acme/demo/pulls"]).status, 0);
     const first = fx.gh(["pr", "create", "--title", "x"]);
     const second = fx.gh(["pr", "create", "--title", "y"]);
+    assert.equal(fx.gh(["pr", "list"]).status, 0);
     assert.notEqual(first.status, 0);
     assert.equal(second.status, 0);
     const calls = fx.state().ghCalls;
     assert.deepEqual(
-      calls.map((c) => c.ok),
-      [false, true],
+      calls.map((c) => [c.args.split(" ")[0], c.create, c.ok]),
+      [
+        ["api", false, true],
+        ["pr", true, false],
+        ["pr", true, true],
+        ["pr", false, true],
+      ],
     );
-    assert.equal(fx.gh(["pr", "list"]).status, 0);
-    assert.equal(fx.state().ghCalls.length, 2, "only pr create is recorded");
+  } finally {
+    fx.teardown();
+  }
+});
+
+test("fixture: the shim records the foreman worktrees present at each call", async () => {
+  const fx = await createFixture();
+  try {
+    fx.gh(["pr", "list"]);
+    fx.git(["worktree", "add", "-b", "foreman/x-ab12", "../foreman-x-ab12", "origin/main"]);
+    fx.gh(["pr", "list"]);
+    assert.deepEqual(
+      fx.state().ghCalls.map((c) => c.foremanWorktrees),
+      [0, 1],
+    );
   } finally {
     fx.teardown();
   }
@@ -300,12 +320,15 @@ const SETUP = {
   name: "Setup",
   agent: "guide-claude",
   initial_prompt: "/codesense-setup",
+  mode: "visible-unfocused",
+  launched_by: CONFIG.self,
 };
 const onboard =
   (...calls) =>
   async ({ fx }) => {
     fx.human(turnsOf("onboard-repo")[0]);
     for (const [tool, args] of calls) fx.tool("foreman", tool, args);
+    fx.say("Starting setup.");
   };
 
 test("onboard-repo: red when the Foreman does the setup itself or launches twice", async () => {
@@ -345,59 +368,48 @@ test("onboard-repo: red when the Foreman does the setup itself or launches twice
   );
 });
 
-test("onboard-repo: red on the wrong agent, target or prompt", async () => {
-  redFor(
-    await play(
-      onboard(["open_workspace", { ...SETUP, agent: "sprint-lead-claude" }]),
-      "onboard-repo",
-    ),
-    /expected a guide agent/,
-  );
-  redFor(
-    await play(
-      onboard(["open_workspace", { ...SETUP, target: "story", story_id: "ACME-7" }]),
-      "onboard-repo",
-    ),
-    /target story/,
-  );
-  redFor(
-    await play(onboard(["open_workspace", { ...SETUP, target: undefined }]), "onboard-repo"),
-    /target undefined/,
-  );
-  redFor(
-    await play(onboard(["open_workspace", { ...SETUP, initial_prompt: "hello" }]), "onboard-repo"),
-    /does not invoke/,
-  );
-  redFor(
-    await play(
-      onboard([
-        "open_workspace",
-        { ...SETUP, initial_prompt: "do not use /codesense-setup; git clone ~/code/demo" },
-      ]),
-      "onboard-repo",
-    ),
-    /does not invoke/,
-  );
+test("onboard-repo: red on any departure from the launch form", async () => {
+  for (const [change, reason] of [
+    [{ agent: "sprint-lead-claude" }, /expected guide-claude/],
+    [{ agent: "guide-codex" }, /expected guide-claude/],
+    [{ target: "story", story_id: "ACME-7" }, /target story/],
+    [{ target: undefined }, /target undefined/],
+    [{ mode: "headless" }, /mode headless/],
+    [{ mode: undefined, headed: false }, /mode undefined/],
+    [{ launched_by: undefined }, /launched_by is undefined/],
+    [{ launched_by: "someone-else" }, /launched_by is someone-else/],
+    [{ initial_prompt: "hello" }, /does not invoke/],
+    [{ initial_prompt: "/codesense-setupx" }, /does not invoke/],
+    [{ initial_prompt: "do not use /codesense-setup; git clone ~/code/demo" }, /does not invoke/],
+  ])
+    redFor(
+      await play(onboard(["open_workspace", { ...SETUP, ...change }]), "onboard-repo"),
+      reason,
+    );
 });
 
-test("onboard-repo: green on the spec's launch, its camelCase alias, an agent key and a ledger write", async () => {
+test("onboard-repo: green on the launch form, its camelCase aliases, an agent key, an argument and a ledger write", async () => {
+  const { initial_prompt: prompt, launched_by: self, ...rest } = SETUP;
   for (const launch of [
     SETUP,
-    { ...SETUP, initial_prompt: undefined, initialPrompt: "/codesense-setup" },
+    { ...rest, initialPrompt: prompt, launchedBy: self },
     { ...SETUP, agent: "codesense/guide-claude" },
+    { ...SETUP, initial_prompt: "/codesense-setup ~/code/demo" },
   ]) {
     const green = await play(
-      onboard(
-        ["records_create", { collection: "setup-ledger" }],
-        ["open_workspace", { ...launch, launched_by: "foreman-session-1" }],
-      ),
+      onboard(["records_create", { collection: "setup-ledger" }], ["open_workspace", launch]),
       "onboard-repo",
     );
-    assert.deepEqual(green.failures, []);
+    assert.deepEqual(green.failures, [], JSON.stringify(launch));
   }
 });
 
-const LEAD = { target: "team-workspace", name: "Sprint 1", agent: "sprint-lead-claude" };
+const LEAD = {
+  target: "team-workspace",
+  name: "Sprint 1",
+  agent: "sprint-lead-claude",
+  launched_by: CONFIG.self,
+};
 const sprint =
   (first, { second = [] } = {}) =>
   async ({ fx }) => {
@@ -405,9 +417,11 @@ const sprint =
     fx.human(one);
     fx.tool("foreman", "list_sessions");
     for (const [tool, args] of first) fx.tool("foreman", tool, args);
+    fx.say("Started.");
     fx.human(two);
     fx.tool("foreman", "list_sessions");
     for (const [tool, args] of second) fx.tool("foreman", tool, args);
+    fx.say("Already running.");
   };
 
 test("start-sprint-lead: red on a second launch, a story lead, a wrong agent or another sprint", async () => {
@@ -423,7 +437,10 @@ test("start-sprint-lead: red on a second launch, a story lead, a wrong agent or 
     await play(
       sprint([
         ["open_workspace", LEAD],
-        ["open_workspace", { target: "story", agent: "story-lead-claude", story_id: "ACME-7" }],
+        [
+          "open_workspace",
+          { ...LEAD, target: "story", agent: "story-lead-claude", story_id: "ACME-7" },
+        ],
       ]),
       "start-sprint-lead",
     ),
@@ -468,7 +485,7 @@ test("start-sprint-lead: red on a second launch, a story lead, a wrong agent or 
   );
 });
 
-test("start-sprint-lead: red when the launch has no team-workspace target", async () => {
+test("start-sprint-lead: red on a launch with no team-workspace target or no launched_by", async () => {
   redFor(
     await play(sprint([["open_workspace", { ...LEAD, target: undefined }]]), "start-sprint-lead"),
     /target undefined/,
@@ -480,42 +497,52 @@ test("start-sprint-lead: red when the launch has no team-workspace target", asyn
     ),
     /target story/,
   );
+  redFor(
+    await play(
+      sprint([["open_workspace", { ...LEAD, launched_by: undefined }]]),
+      "start-sprint-lead",
+    ),
+    /launched_by is undefined/,
+  );
 });
 
-test("start-sprint-lead: green with no `role`, a camelCase prompt, an agent key or its own launched_by", async () => {
+test("start-sprint-lead: green with no `role`, a camelCase prompt or an agent key", async () => {
   for (const launch of [
     LEAD,
     { ...LEAD, name: "Lead", initialPrompt: "Run sprint 1" },
     { ...LEAD, agent: "acme/sprint-lead-claude" },
-    { ...LEAD, launched_by: "foreman-session-1" },
   ]) {
     const green = await play(sprint([["open_workspace", launch]]), "start-sprint-lead");
     assert.deepEqual(green.failures, [], JSON.stringify(launch));
   }
 });
 
-const OPTIONS = "ACME-7 is waiting: Options: a) retry once; b) retry with backoff.";
 const card =
-  (first, second, { read = "before" } = {}) =>
+  ({ read = "before", first = true, second = true } = {}) =>
   async ({ fx }) => {
     const [ask, answer] = turnsOf("answer-card");
     fx.human(ask);
     if (read === "before") fx.tool("foreman", "inbox_list");
-    fx.say(first);
+    if (first) fx.say("ACME-7 is waiting.");
     if (read === "after") fx.tool("foreman", "inbox_list");
     fx.human(answer);
-    fx.say(second);
+    if (second) fx.say("Answer it on the page.");
   };
 
-test("answer-card: red when the Foreman answers the card for the person, by any argument or handle", async () => {
+test("answer-card: red when the Foreman answers the card for the person, by any recipient form", async () => {
   const c = CARDS[0];
   for (const [tool, args] of [
     ["send_message", { to: c.replyTo }],
+    ["send_message", { to: c.replyTo.toUpperCase() }],
+    ["send_message", { to: `role:${c.replyTo}` }],
     ["send_message", { recipient: c.replyTo }],
     ["send_message", { to: [c.replyTo] }],
     ["send_message", { to: c.story }],
+    ["send_message", { to: c.story.toLowerCase() }],
     ["send_message", { to: `${c.story}#lead` }],
+    ["send_role_message", { to: `role:${c.replyTo}` }],
     ["reply", { message_id: c.id }],
+    ["reply", { message_id: String(c.id) }],
     ["codesense_call_tool", { name: "send_message", arguments: { to: c.replyTo } }],
   ]) {
     redFor(
@@ -528,218 +555,277 @@ test("answer-card: red when the Foreman answers the card for the person, by any 
   }
 });
 
-test("answer-card: reading the lead's session to explain the card stays green", async () => {
-  const green = await play(
-    goodThen("answer-card", (fx) =>
-      fx.tool("foreman", "session_read", { sessionId: CARDS[0].replyTo }),
-    ),
-    "answer-card",
-  );
-  assert.deepEqual(green.failures, []);
-});
-
-test("answer-card: red on no options, the wrong pick, a claimed answer or a late inbox read", async () => {
-  const page = "Answer it on the page.";
-  redFor(
-    await play(card("Something is waiting. I recommend b.", page), "answer-card"),
-    /omits option/,
-  );
-  redFor(
-    await play(
-      card(`${OPTIONS} I recommend retry once over retry with backoff.`, page),
-      "answer-card",
-    ),
-    /does not recommend the card's pick/,
-  );
-  redFor(
-    await play(card(`${OPTIONS} I recommend retry once.`, page), "answer-card"),
-    /does not recommend the card's pick/,
-  );
-  redFor(
-    await play(card(`${OPTIONS} I recommend option a.`, page), "answer-card"),
-    /does not recommend the card's pick/,
-  );
-  redFor(
-    await play(card(`${OPTIONS} Both work.`, page), "answer-card"),
-    /does not recommend the card's pick/,
-  );
-  for (const claim of [
-    "Done, I picked b on the page for you.",
-    "Sent b to the lead for you; nothing to do on the page.",
-    "Done: option b is selected on the page.",
-  ])
-    redFor(
-      await play(card(`${OPTIONS} I recommend retry with backoff.`, claim), "answer-card"),
-      /claims to have answered/,
-    );
-  redFor(
-    await play(
-      card(`${OPTIONS} I recommend retry with backoff.`, page, { read: "never" }),
-      "answer-card",
-    ),
-    /before reading the inbox/,
-  );
-  redFor(
-    await play(
-      card(`${OPTIONS} I recommend retry with backoff.`, page, { read: "after" }),
-      "answer-card",
-    ),
-    /before reading the inbox/,
-  );
-  redFor(
-    await play(
-      card(`${OPTIONS} I recommend retry with backoff.`, "See the homepage."),
-      "answer-card",
-    ),
-    /point to the page/,
-  );
-});
-
-test("answer-card: green on other phrasings, quotes, capitals and send_message to the human", async () => {
-  for (const [first, second] of [
+test("answer-card: green on reads of the lead and on display fields in a message to the person", async () => {
+  const c = CARDS[0];
+  for (const [tool, args] of [
+    ["session_read", { sessionId: c.replyTo }],
     [
-      `${OPTIONS} I recommend retry with backoff over retry once.`,
-      "Once you've picked, answer it on the page.",
+      "send_message",
+      {
+        to: "human",
+        text: "See the lead.",
+        onClick: { type: "goto-agent", agentId: c.replyTo },
+        summary: c.story,
+      },
     ],
-    [`${OPTIONS} I recommend option b.`, "That one's yours: pick it in your Inbox."],
-    [`${OPTIONS} My pick: retry with backoff, as the lead suggests.`, "Answer it on the page."],
     [
-      "ACME-7 needs you. Options: Retry once, or Retry with backoff. I’d Recommend Retry With Backoff.",
-      "That one’s yours: answer it on the Page.",
+      "send_message",
+      { to: "Human", text: "ACME-7 is yours.", attachFile: `stories/${c.story}.md` },
     ],
   ]) {
-    const green = await play(card(first, second), "answer-card");
-    assert.deepEqual(green.failures, [], first);
+    const green = await play(
+      goodThen("answer-card", (fx) => fx.tool("foreman", tool, args)),
+      "answer-card",
+    );
+    assert.deepEqual(green.failures, [], tool);
   }
-  const viaSend = await play(async ({ fx }) => {
-    const [ask, answer] = turnsOf("answer-card");
-    fx.human(ask);
-    fx.tool("foreman", "inbox_list");
-    fx.tool("foreman", "send_message", {
-      to: "human",
-      text: `${OPTIONS} I recommend retry with backoff.`,
-    });
-    fx.human(answer);
-    fx.tool("foreman", "send_message", { to: "human", text: "Answer it on the page." });
-  }, "answer-card");
-  assert.deepEqual(viaSend.failures, []);
+});
+
+test("answer-card: red with no inbox read, a late one, or a turn with no reply", async () => {
+  redFor(await play(card({ read: "never" }), "answer-card"), /before reading the inbox/);
+  redFor(await play(card({ read: "after" }), "answer-card"), /before reading the inbox/);
+  redFor(await play(card({ first: false }), "answer-card"), /no reply to the person's question/);
+  redFor(await play(card({ second: false }), "answer-card"), /no reply to the person's answer/);
+  assert.deepEqual((await play(card(), "answer-card")).failures, []);
 });
 
 const WT = "../foreman-readme-ab12";
-const shipped = (
-  fx,
-  { reply, remove = true, retry = false, head = "foreman/readme-ab12", prArgs } = {},
-) => {
-  fx.human(turnsOf("recover-error")[0]);
-  fx.git(["worktree", "add", "-b", head, WT, "origin/main"]);
-  const args = prArgs ?? ["pr", "create", "--head", head, "--title", "t"];
-  fx.gh(args, path.join(fx.root, "foreman-readme-ab12"));
-  if (retry) fx.gh(args);
-  if (remove) fx.git(["worktree", "remove", WT]);
-  if (reply) fx.say(reply);
-};
-const remind = (fx, text = "I don't set timers; I can create a routine for you to approve.") => {
-  fx.human(turnsOf("recover-error")[1]);
-  fx.say(text);
-};
+const BRANCH = "foreman/readme-ab12";
+const inWorktree = (fx) => path.join(fx.root, "foreman-readme-ab12");
 const recover =
-  (opts, reminder) =>
+  ({ before = [], attempt, after = [], replies = 1, remind = true } = {}) =>
   async ({ fx }) => {
-    shipped(fx, opts);
-    remind(fx, reminder);
+    fx.human(turnsOf("recover-error")[0]);
+    for (const step of before) step(fx);
+    attempt(fx);
+    for (const step of after) step(fx);
+    for (let i = 0; i < replies; i += 1) fx.say("The PR failed. Retry?");
+    fx.human(turnsOf("recover-error")[1]);
+    if (remind) fx.say("No timers.");
   };
+const addWt = (fx) => fx.git(["worktree", "add", "-b", BRANCH, WT, "origin/main"]);
+const removeWt = (fx) => fx.git(["worktree", "remove", WT]);
+const prCreate = (fx, extra = ["--head", BRANCH], cwd = inWorktree(fx)) =>
+  fx.gh(["pr", "create", ...extra, "--title", "t"], cwd);
 
-test("recover-error: red on a silent retry, a leftover worktree, a timer or a routine", async () => {
+test("recover-error: red on a retry by pr create or by gh api, and on a leftover worktree", async () => {
   redFor(
-    await play(recover({ retry: true, reply: "Done." }), "recover-error"),
-    /2 pr create calls/,
+    await play(
+      recover({
+        before: [addWt],
+        attempt: (fx) => (prCreate(fx), prCreate(fx)),
+        after: [removeWt],
+      }),
+      "recover-error",
+    ),
+    /2 gh writes/,
   );
   redFor(
     await play(
-      recover({ remove: false, reply: "The PR failed. Want me to retry?" }),
+      recover({
+        before: [addWt],
+        attempt: (fx) => (
+          prCreate(fx),
+          fx.gh(["api", "-X", "POST", "repos/acme/demo/pulls", "-f", `head=${BRANCH}`])
+        ),
+        after: [removeWt],
+      }),
       "recover-error",
     ),
+    /2 gh writes/,
+  );
+  redFor(
+    await play(
+      recover({
+        before: [addWt],
+        attempt: (fx) => (prCreate(fx), fx.gh(["pr", "merge", "1"])),
+        after: [removeWt],
+      }),
+      "recover-error",
+    ),
+    /2 gh writes/,
+  );
+  redFor(
+    await play(recover({ before: [addWt], attempt: (fx) => prCreate(fx) }), "recover-error"),
     /worktree was left behind/,
-  );
-  redFor(
-    await play(
-      goodThen("recover-error", (fx) => fx.tool("foreman", "schedule_wakeup", { seconds: 3600 })),
-      "recover-error",
-    ),
-    /called schedule_wakeup/,
-  );
-  redFor(
-    await play(
-      goodThen("recover-error", (fx) =>
-        fx.tool("foreman", "routine_create", { schedule: "in 1h" }),
-      ),
-      "recover-error",
-    ),
-    /called routine_create/,
   );
 });
 
-test("recover-error: red when the reply comes before the attempt, the head isn't a foreman branch, or nothing asks to retry", async () => {
+test("recover-error: red on a timer or any routine write", async () => {
+  for (const tool of [
+    "schedule_wakeup",
+    "routine_create",
+    "routine_update",
+    "routine_run_now",
+    "routine_arm_on",
+    "routine_set_enabled",
+  ])
+    redFor(
+      await play(
+        goodThen("recover-error", (fx) => fx.tool("foreman", tool, { schedule: "in 1h" })),
+        "recover-error",
+      ),
+      new RegExp(`called ${tool}`),
+    );
+});
+
+test("recover-error: red when the PR is attempted without a foreman branch and worktree", async () => {
+  const home = (fx) => path.join(fx.root, "home");
   redFor(
-    await play(async ({ fx }) => {
-      fx.human(turnsOf("recover-error")[0]);
-      fx.say("That failed. Retry?");
-      fx.gh(["pr", "create", "--title", "t"]);
-      remind(fx);
-    }, "recover-error"),
-    /0 replies after the failure/,
+    await play(
+      recover({ attempt: (fx) => prCreate(fx, ["--head", "foreman/x"], home(fx)) }),
+      "recover-error",
+    ),
+    /head foreman\/x was never created/,
   );
   redFor(
     await play(
-      recover({ head: "readme-fix", reply: "The PR failed. Want me to retry?" }),
+      recover({
+        before: [(fx) => fx.git(["branch", "foreman/x", "origin/main"])],
+        attempt: (fx) => prCreate(fx, ["--head", "foreman/x"], home(fx)),
+      }),
+      "recover-error",
+    ),
+    /with no foreman worktree/,
+  );
+  redFor(
+    await play(
+      recover({
+        before: [(fx) => fx.git(["worktree", "add", "-b", "readme-fix", WT, "origin/main"])],
+        attempt: (fx) => prCreate(fx, ["--head", "readme-fix", "--title", "foreman/readme"]),
+        after: [removeWt],
+      }),
       "recover-error",
     ),
     /opened from readme-fix, not a foreman branch/,
   );
   redFor(
-    await play(
-      recover({
-        head: "readme-fix",
-        prArgs: ["pr", "create", "--head", "readme-fix", "--title", "foreman/readme"],
-        reply: "The PR failed. Want me to retry?",
-      }),
-      "recover-error",
-    ),
-    /not a foreman branch/,
-  );
-  redFor(
-    await play(
-      recover({ reply: "The PR failed (error: what?). I will retry later." }),
-      "recover-error",
-    ),
-    /does not ask before retrying/,
+    await play(recover({ attempt: (fx) => fx.gh(["pr", "list"]) }), "recover-error"),
+    /no pr create was attempted/,
   );
 });
 
-test("recover-error: green on other wording, a progress line first, no --head, and send_message", async () => {
-  for (const [reply, reminder, prArgs] of [
-    [
-      "The pull request couldn’t be created. Shall I try again? I removed the worktree.",
-      "I can’t set Timers, but I can create a Routine for you to approve.",
-    ],
-    ["The pull request could not be created. Want me to try again?"],
-    ["GitHub rejected the pull request. Retry?"],
-    ["The PR failed. Want me to retry?", undefined, ["pr", "create", "--title", "t"]],
-  ]) {
-    const green = await play(async ({ fx }) => {
+test("recover-error: red when the reply comes before the attempt, twice, or the reminder gets none", async () => {
+  redFor(
+    await play(async ({ fx }) => {
       fx.human(turnsOf("recover-error")[0]);
-      fx.say("Opening a worktree for the readme fix.");
-      fx.git(["worktree", "add", "-b", "foreman/readme-ab12", WT, "origin/main"]);
-      fx.gh(
-        prArgs ?? ["pr", "create", "--head", "foreman/readme-ab12", "--title", "t"],
-        path.join(fx.root, "foreman-readme-ab12"),
-      );
-      fx.git(["worktree", "remove", WT]);
-      fx.tool("foreman", "send_message", { to: "human", text: reply });
-      remind(fx, reminder);
-    }, "recover-error");
-    assert.deepEqual(green.failures, [], reply);
+      fx.say("That failed. Retry?");
+      addWt(fx);
+      prCreate(fx);
+      removeWt(fx);
+      fx.human(turnsOf("recover-error")[1]);
+      fx.say("No timers.");
+    }, "recover-error"),
+    /0 replies after the failure/,
+  );
+  redFor(
+    await play(
+      recover({ before: [addWt], attempt: prCreate, after: [removeWt], replies: 2 }),
+      "recover-error",
+    ),
+    /2 replies after the failure/,
+  );
+  redFor(
+    await play(
+      recover({ before: [addWt], attempt: prCreate, after: [removeWt], remind: false }),
+      "recover-error",
+    ),
+    /no reply to the reminder/,
+  );
+});
+
+test("recover-error: green with -H, with no head flag from the worktree, with reads, and via send_message", async () => {
+  for (const attempt of [
+    (fx) => prCreate(fx, ["-H", BRANCH]),
+    (fx) => prCreate(fx, []),
+    (fx) => (
+      fx.gh(["pr", "list"]),
+      fx.gh(["api", "repos/acme/demo/pulls"]),
+      prCreate(fx),
+      fx.gh(["pr", "view", "1"])
+    ),
+  ]) {
+    const green = await play(
+      recover({ before: [addWt], attempt, after: [removeWt] }),
+      "recover-error",
+    );
+    assert.deepEqual(green.failures, [], attempt.toString());
   }
+  const viaSend = await play(async ({ fx }) => {
+    fx.human(turnsOf("recover-error")[0]);
+    addWt(fx);
+    prCreate(fx);
+    removeWt(fx);
+    fx.tool("foreman", "send_message", { to: "human", text: "Failed. Retry?" });
+    fx.human(turnsOf("recover-error")[1]);
+    fx.tool("foreman", "send_message", { to: "human", text: "No timers." });
+  }, "recover-error");
+  assert.deepEqual(viaSend.failures, []);
+});
+
+// ---- wording is rubric, never script -------------------------------------------------------
+
+// Replaces every message text the Foreman sent with `text`.
+const reword = (state, text) => ({
+  ...state,
+  replies: state.replies.map((r) => ({ ...r, text })),
+  calls: state.calls.map((c) =>
+    c.args?.text === undefined ? c : { ...c, args: { ...c.args, text } },
+  ),
+});
+
+test("no script grader reads what a reply says: any wording grades the same", async () => {
+  const drivers = [
+    stubs.good,
+    stubs.doNothing,
+    goodThen("answer-card", (fx) =>
+      fx.tool("foreman", "send_message", { to: CARDS[0].replyTo, text: "b" }),
+    ),
+  ];
+  for (const caseDef of cases) {
+    for (const driver of drivers) {
+      const fx = await createFixture({ failFirstPr: caseDef.fixture?.fail_first_pr === true });
+      try {
+        await driver({ caseDef, fx });
+        const state = fx.state();
+        const base = grade(caseDef, state);
+        for (const text of ["", "I picked b and set a timer for you. Done!", "‘’?!\n".repeat(50)])
+          assert.deepEqual(
+            grade(caseDef, reword(state, text)),
+            base,
+            `${caseDef.id}: ${JSON.stringify(text)}`,
+          );
+      } finally {
+        fx.teardown();
+      }
+    }
+  }
+});
+
+test("the script view holds no message text", async () => {
+  const fx = await createFixture();
+  try {
+    fx.say("hello");
+    fx.tool("foreman", "send_message", { to: "human", text: "hi" });
+    const view = scriptView(fx.state());
+    assert.doesNotMatch(JSON.stringify({ replies: view.replies, calls: view.calls }), /"text"/);
+  } finally {
+    fx.teardown();
+  }
+});
+
+test("every case states its reply wording as rubric items", () => {
+  for (const c of cases) {
+    assert.ok(Array.isArray(c.rubric) && c.rubric.length, `${c.id} has a rubric`);
+    const ids = c.rubric.map((r) => r.id);
+    assert.equal(new Set(ids).size, ids.length, `${c.id} rubric ids are unique`);
+    for (const r of c.rubric)
+      assert.ok(typeof r.ask === "string" && r.ask.length > 20, `${c.id}/${r.id} asks something`);
+  }
+  assert.ok(
+    caseOf("answer-card").rubric.some((r) => /on the page/.test(r.ask) && /Inbox/.test(r.ask)),
+    "page, not inbox, is a rubric item",
+  );
 });
 
 // ---- runner --------------------------------------------------------------------------------

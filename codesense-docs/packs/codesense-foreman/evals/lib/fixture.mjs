@@ -18,11 +18,18 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-export const CONFIG = { team: "acme", sprintLeadAgent: "sprint-lead-claude", repo: "~/code/demo" };
+// `self` is the Foreman's own session id: what it passes as `launched_by`.
+export const CONFIG = {
+  team: "acme",
+  runtime: "claude",
+  self: "foreman-session-1",
+  sprintLeadAgent: "sprint-lead-claude",
+  repo: "~/code/demo",
+};
 
 export const CARDS = [
   {
-    id: "card-1",
+    id: 4101, // an inbox message id, a number as in the real `reply`
     story: "ACME-7",
     from: "acme-7-lead",
     replyTo: "acme-7-lead",
@@ -46,25 +53,25 @@ const ALIASES = { initialPrompt: "initial_prompt", launchedBy: "launched_by", st
 const canonical = (args) =>
   Object.fromEntries(Object.entries(args ?? {}).map(([k, v]) => [ALIASES[k] ?? k, v]));
 
+// Fixture gh: logs every call (with the branch and the foreman-* worktrees present when it ran)
+// and can fail the first `pr create`. Nothing reaches the network.
 const SHIM = `#!/bin/sh
-# Fixture gh: records \`pr create\` and can fail the first one. Nothing else reaches the network.
 d="$(dirname "$0")/.."
 create=false; prev=""
 for a in "$@"; do [ "$prev" = pr ] && [ "$a" = create ] && create=true; prev="$a"; done
-if [ "$create" = true ]; then
-  n=$(( $(cat "$d/seq" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/seq"
-  args="$(printf %s "$*" | tr -d '"\\\\' | tr '\\n\\t\\r' '   ' | tr -d '\\000-\\037')"
-  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -d '"\\\\')"
-  ok=true
-  [ -f "$d/fail-first-pr" ] && ok=false
-  printf '{"seq":%s,"args":"%s","branch":"%s","ok":%s}\\n' "$n" "$args" "$branch" "$ok" >> "$d/gh-calls.jsonl"
-  if [ "$ok" = false ]; then
-    rm "$d/fail-first-pr"
-    echo "gh: could not create the pull request (fixture failure)" >&2
-    exit 1
-  fi
-  echo "https://example.test/acme/demo/pull/1"
+n=$(( $(cat "$d/seq" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/seq"
+args="$(printf %s "$*" | tr -d '"\\\\' | tr '\\n\\t\\r' '   ' | tr -d '\\000-\\037')"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -d '"\\\\')"
+wts="$(git worktree list --porcelain 2>/dev/null | grep -c '^worktree .*/foreman-[^/]*$')"
+ok=true
+[ "$create" = true ] && [ -f "$d/fail-first-pr" ] && ok=false
+printf '{"seq":%s,"args":"%s","create":%s,"branch":"%s","foremanWorktrees":%s,"ok":%s}\\n' "$n" "$args" "$create" "$branch" "$wts" "$ok" >> "$d/gh-calls.jsonl"
+if [ "$ok" = false ]; then
+  rm "$d/fail-first-pr"
+  echo "gh: could not create the pull request (fixture failure)" >&2
+  exit 1
 fi
+[ "$create" = true ] && echo "https://example.test/acme/demo/pull/1"
 exit 0
 `;
 
@@ -119,6 +126,7 @@ function build(root, failFirstPr) {
       .split("\n")
       .filter((l) => l.startsWith("worktree "))
       .map((l) => l.slice(9));
+  const branches = () => gitOk(["branch", "--format=%(refname:short)"]).split("\n").filter(Boolean);
   const before = worktrees();
 
   const seqFile = path.join(root, "seq");
@@ -185,6 +193,7 @@ function build(root, failFirstPr) {
           .map((c) => ({ seq: c.seq, turn: c.turn, text: String(c.args.text ?? "") })),
         ghCalls,
         worktrees: { before, after: worktrees() },
+        branches: branches(),
         turns: [...turns],
         config: { ...fx.config },
         cards: copyCards(),
