@@ -81,6 +81,7 @@ pub(crate) async fn pin(
         caller,
         params.message_id,
         params.position,
+        params.preview,
         params.remove == Some(true),
     )
     .await

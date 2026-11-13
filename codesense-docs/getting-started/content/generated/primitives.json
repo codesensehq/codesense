@@ -1081,7 +1081,7 @@
       "write": true,
       "readOnlyDocsSafe": false,
       "audited": true,
-      "description": "Pin a message of the frame's team into an agent thread at position (0 is first; omitted, last). Pinning a pinned message leaves it in place. Agents pin their own thread with the pin MCP tool.",
+      "description": "Pin a message of the frame's team into an agent thread at position (0 is first; omitted, last), with an optional preview: what the folded pin shows (shortName, value, unit, status, chart, up to 3 lines). Pinning a pinned message leaves it in place; a preview replaces its preview (outcome 'updated'). A thread holds at most 3 pins. Agents pin their own thread with the pin MCP tool.",
       "args": {
         "additionalProperties": true,
         "properties": {
@@ -1099,6 +1099,135 @@
           "position": {
             "minimum": 0,
             "type": "integer"
+          },
+          "preview": {
+            "additionalProperties": false,
+            "properties": {
+              "chart": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "segments"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "segments": {
+                        "items": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "maxItems": 24,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segments",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "progress"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "stack"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "parts": {
+                        "items": {
+                          "properties": {
+                            "label": {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            "value": {
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "parts",
+                      "label"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "lines": {
+                "items": {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "shortName": {
+                "maxLength": 24,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "on-track",
+                  "running",
+                  "needs-you",
+                  "not-updating"
+                ]
+              },
+              "unit": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
           },
           "storyId": {
             "type": "string"
@@ -1126,6 +1255,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -1144,6 +1274,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -1201,6 +1463,27 @@
             "storyId": "DEMO-1",
             "messageId": 42
           }
+        },
+        {
+          "args": {
+            "agentId": "acme/core/dev",
+            "storyId": "DEMO-1",
+            "messageId": 43,
+            "preview": {
+              "shortName": "Checks",
+              "value": "48 passed",
+              "unit": "0 failed",
+              "status": "running",
+              "chart": {
+                "kind": "progress",
+                "percent": 67,
+                "label": "2 of 3 test files run"
+              },
+              "lines": [
+                "Running hub-order.test.ts"
+              ]
+            }
+          }
         }
       ],
       "sourceRef": "src-tauri/src/verbs/registry.generated.json"
@@ -1211,7 +1494,7 @@
       "write": false,
       "readOnlyDocsSafe": true,
       "audited": false,
-      "description": "Read an agent thread's pin list in the frame's team: the thread is the saved agent agentId plus storyId (omit it for a session launched with no story). Pins whose message is archived or withdrawn drop out. Subscribe with codesense.subscribe('pins', {agentId, storyId, onChange}) for live updates.",
+      "description": "Read an agent thread's pin list in the frame's team: the thread is the saved agent agentId plus storyId (omit it for a session launched with no story). At most 3 pins, each with its preview once one is sent. Pins whose message is archived or withdrawn drop out. Subscribe with codesense.subscribe('pins', {agentId, storyId, onChange}) for live updates.",
       "args": {
         "additionalProperties": true,
         "properties": {
@@ -1246,6 +1529,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -1264,6 +1548,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -1330,8 +1746,15 @@
               {
                 "messageId": 42,
                 "position": 0,
-                "pinnedBy": "human",
-                "pinnedAtMs": 1700000000000
+                "pinnedBy": "acme/core/dev",
+                "pinnedAtMs": 1700000000000,
+                "preview": {
+                  "shortName": "QA",
+                  "value": "5 of 5",
+                  "unit": "ACs traced",
+                  "status": "on-track"
+                },
+                "previewAtMs": 1700000060000
               }
             ]
           }
@@ -1389,6 +1812,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -1407,6 +1831,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -1518,6 +2074,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -1536,6 +2093,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -6150,7 +6839,7 @@
     {
       "name": "codesense.inbox.pin",
       "category": "action",
-      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      preview?: {\n        chart?: {\n          kind: \"segments\";\n          label: string;\n          segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n          [key: string]: unknown;\n        } | {\n          kind: \"progress\";\n          label: string;\n          percent: number;\n          [key: string]: unknown;\n        } | {\n          kind: \"stack\";\n          label: string;\n          parts: Array<{\n            label: string;\n            value: number;\n            [key: string]: unknown;\n          }>;\n          [key: string]: unknown;\n        };\n        lines?: string[];\n        shortName?: string;\n        status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n        unit?: string;\n        value?: string;\n      };\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "wraps": "invoke('inbox.pin', args)",
       "description": "metadata · inbox:write · MCP twin pin",
       "example": "// See the exact declaration for codesense.inbox.pin.",
@@ -6159,7 +6848,7 @@
     {
       "name": "codesense.inbox.pins",
       "category": "data-read",
-      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "wraps": "invoke('inbox.pins', args)",
       "description": "read · inbox:read:team",
       "example": "// See the exact declaration for codesense.inbox.pins.",
@@ -6168,7 +6857,7 @@
     {
       "name": "codesense.inbox.reorderPins",
       "category": "action",
-      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "wraps": "invoke('inbox.reorderPins', args)",
       "description": "metadata · inbox:write",
       "example": "// See the exact declaration for codesense.inbox.reorderPins.",
@@ -6177,7 +6866,7 @@
     {
       "name": "codesense.inbox.unpin",
       "category": "action",
-      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "wraps": "invoke('inbox.unpin', args)",
       "description": "metadata · inbox:write · MCP twin pin",
       "example": "// See the exact declaration for codesense.inbox.unpin.",

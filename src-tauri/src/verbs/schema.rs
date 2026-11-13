@@ -131,6 +131,7 @@ pub fn args_schema(name: &str) -> Value {
                 "inbox.pin" => {
                     thread["messageId"] = id;
                     thread["position"] = json!({"type":"integer","minimum":0});
+                    thread["preview"] = pin_preview_schema();
                 }
                 "inbox.unpin" => thread["messageId"] = id,
                 "inbox.reorderPins" => thread["messageIds"] = json!({"type":"array","items":id}),
@@ -246,9 +247,9 @@ pub fn result_schema(name: &str) -> Value {
             json!({"type":"object","properties":{"active":{"type":"array","items":{"type":"string"}}},"required":["active"]})
         }
         "inbox.pins" | "inbox.pin" | "inbox.unpin" | "inbox.reorderPins" => {
-            let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
+            let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
             json!({"oneOf":[
-                {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","unpinned","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
+                {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
                 {"type":"object","properties":{"status":{"const":"invalid"},"message":{"type":"string"}},"required":["status","message"]}
             ]})
         }
@@ -265,4 +266,19 @@ pub fn result_schema(name: &str) -> Value {
             json!({"description":"JSON result of the existing host handler; see get_live_data_contract for its fields."})
         }
     }
+}
+
+/// A pin's optional preview (`weft::pins::PinPreview`): what a folded pin shows.
+fn pin_preview_schema() -> Value {
+    let text = |max: u32| json!({"type":"string","maxLength":max});
+    let status = json!({"enum":["on-track","running","needs-you","not-updating"]});
+    json!({"type":"object","additionalProperties":false,"properties":{
+        "shortName":text(24),"value":text(32),"unit":text(64),"status":status,
+        "chart":{"oneOf":[
+            {"type":"object","properties":{"kind":{"const":"segments"},"segments":{"type":"array","items":status,"minItems":1,"maxItems":24},"label":text(160)},"required":["kind","segments","label"]},
+            {"type":"object","properties":{"kind":{"const":"progress"},"percent":{"type":"number","minimum":0,"maximum":100},"label":text(160)},"required":["kind","percent","label"]},
+            {"type":"object","properties":{"kind":{"const":"stack"},"parts":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"label":text(32),"value":{"type":"number","minimum":0}},"required":["label","value"]}},"label":text(160)},"required":["kind","parts","label"]}
+        ]},
+        "lines":{"type":"array","items":text(160),"maxItems":3}
+    }})
 }

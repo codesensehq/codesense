@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::super::tests::{launch_team, port, sent_id, FakeHost};
 use super::*;
-use crate::weft::pins::ThreadKey;
+use crate::weft::pins::{PinStatus, ThreadKey};
 
 const AGENT: &str = "acme/default/claude-dev";
 
@@ -61,6 +61,7 @@ async fn the_person_pins_unpins_and_reorders_and_each_change_fires_once() {
         PinOp::Pin {
             message_id: a,
             position: None,
+            preview: None,
         },
     )
     .await;
@@ -71,6 +72,7 @@ async fn the_person_pins_unpins_and_reorders_and_each_change_fires_once() {
         PinOp::Pin {
             message_id: b,
             position: Some(0),
+            preview: None,
         },
     )
     .await;
@@ -90,6 +92,7 @@ async fn the_person_pins_unpins_and_reorders_and_each_change_fires_once() {
         PinOp::Pin {
             message_id: a,
             position: None,
+            preview: None,
         },
     )
     .await;
@@ -127,6 +130,7 @@ async fn a_refused_write_reports_invalid_and_fires_nothing() {
         PinOp::Pin {
             message_id: 999,
             position: None,
+            preview: None,
         },
     )
     .await;
@@ -137,6 +141,7 @@ async fn a_refused_write_reports_invalid_and_fires_nothing() {
         PinOp::Pin {
             message_id: a,
             position: None,
+            preview: None,
         },
     )
     .await;
@@ -161,7 +166,7 @@ async fn an_agent_pins_into_its_own_thread_and_a_page_reads_the_same_list() {
     let fake = FakeHost::new();
     fake.launched_from("H1", AGENT, Some("DEMO-1"));
     let view = mail(&fake, "S1", "human", "a live view").await;
-    let pinned = pin_request(&*fake, Some("S1"), view, None, false)
+    let pinned = pin_request(&*fake, Some("S1"), view, None, None, false)
         .await
         .unwrap();
     assert_eq!(outcome(&pinned), Some(PinOutcome::Pinned));
@@ -175,7 +180,7 @@ async fn an_agent_pins_into_its_own_thread_and_a_page_reads_the_same_list() {
         fake.pin_events(),
         vec![("default".to_string(), thread(Some("DEMO-1")))]
     );
-    let removed = pin_request(&*fake, Some("S1"), view, None, true)
+    let removed = pin_request(&*fake, Some("S1"), view, None, None, true)
         .await
         .unwrap();
     assert_eq!(outcome(&removed), Some(PinOutcome::Unpinned));
@@ -189,10 +194,10 @@ async fn every_session_of_the_same_agent_and_story_shares_one_thread() {
     fake.launched_from("H2", AGENT, Some("DEMO-1"));
     let first = mail(&fake, "S1", "human", "first").await;
     let second = mail(&fake, "S2", "human", "second").await;
-    pin_request(&*fake, Some("S1"), first, None, false)
+    pin_request(&*fake, Some("S1"), first, None, None, false)
         .await
         .unwrap();
-    let both = pin_request(&*fake, Some("S2"), second, Some(0), false)
+    let both = pin_request(&*fake, Some("S2"), second, Some(0), None, false)
         .await
         .unwrap();
     assert_eq!(listed(&both), vec![second, first]);
@@ -204,27 +209,104 @@ async fn an_unbound_caller_one_with_no_saved_agent_or_mail_it_is_not_party_to_is
     fake.tab("H3", "S3", "Third", true);
     fake.launched_from("H3", AGENT, Some("DEMO-1"));
     let view = mail(&fake, "S1", "human", "view").await;
-    let unbound = pin_request(&*fake, None, view, None, false).await.unwrap();
+    let unbound = pin_request(&*fake, None, view, None, None, false)
+        .await
+        .unwrap();
     assert!(
         matches!(&unbound, PinResult::Invalid { message } if message.contains("running session"))
     );
-    let stranger = pin_request(&*fake, Some("S9"), view, None, false)
+    let stranger = pin_request(&*fake, Some("S9"), view, None, None, false)
         .await
         .unwrap();
     assert!(
         matches!(stranger, PinResult::Invalid { .. }),
         "{stranger:?}"
     );
-    let no_agent = pin_request(&*fake, Some("S2"), view, None, false)
+    let no_agent = pin_request(&*fake, Some("S2"), view, None, None, false)
         .await
         .unwrap();
     assert!(matches!(&no_agent, PinResult::Invalid { message } if message.contains("saved Agent")));
-    let not_party = pin_request(&*fake, Some("S3"), view, None, false)
+    let not_party = pin_request(&*fake, Some("S3"), view, None, None, false)
         .await
         .unwrap();
     assert!(matches!(&not_party, PinResult::Invalid { message } if message.contains("no message")));
     assert!(fake.pin_events().is_empty());
     assert!(listed(&human(&fake, Some("DEMO-1"), PinOp::Read).await).is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_sends_a_preview_with_its_pin_and_a_fourth_pin_is_refused() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    let views = [
+        mail(&fake, "S1", "human", "qa").await,
+        mail(&fake, "S1", "human", "rounds").await,
+        mail(&fake, "S1", "human", "checks").await,
+        mail(&fake, "S1", "human", "spend").await,
+    ];
+    let preview = |value: &str| PinPreview {
+        short_name: Some("QA".into()),
+        value: Some(value.into()),
+        status: Some(PinStatus::Running),
+        ..PinPreview::default()
+    };
+    pin_request(
+        &*fake,
+        Some("S1"),
+        views[0],
+        None,
+        Some(preview("4 of 5")),
+        false,
+    )
+    .await
+    .unwrap();
+    let updated = pin_request(
+        &*fake,
+        Some("S1"),
+        views[0],
+        None,
+        Some(preview("5 of 5")),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome(&updated), Some(PinOutcome::Updated));
+    match human(&fake, Some("DEMO-1"), PinOp::Read).await {
+        PinResult::Pins { list, .. } => {
+            assert_eq!(list.pins[0].preview, Some(preview("5 of 5")));
+        }
+        other => panic!("{other:?}"),
+    }
+    // The preview update tells pages too.
+    assert_eq!(fake.pin_events().len(), 2);
+
+    for view in &views[1..3] {
+        pin_request(&*fake, Some("S1"), *view, None, None, false)
+            .await
+            .unwrap();
+    }
+    let fourth = pin_request(&*fake, Some("S1"), views[3], None, None, false)
+        .await
+        .unwrap();
+    assert!(
+        matches!(&fourth, PinResult::Invalid { message } if message.contains("at most 3")),
+        "{fourth:?}"
+    );
+    let bad = pin_request(
+        &*fake,
+        Some("S1"),
+        views[0],
+        None,
+        Some(PinPreview {
+            lines: vec!["1".into(), "2".into(), "3".into(), "4".into()],
+            ..PinPreview::default()
+        }),
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(bad, PinResult::Invalid { .. }), "{bad:?}");
+    assert_eq!(fake.pin_events().len(), 4);
 }
 
 #[test]

@@ -1118,12 +1118,36 @@ export const reactAsHuman = (
   remove: boolean | null = null,
 ) => invoke<ReactResult>("react_as_human", { team, messageId, emoji, remove });
 
+/** How a pinned view is doing, as its status dot shows it. */
+export type AgentPinStatus = "on-track" | "running" | "needs-you" | "not-updating";
+
+/** The small chart of a pin preview; `label` says what it shows in words. */
+export type AgentPinChart =
+  | { kind: "segments"; segments: AgentPinStatus[]; label: string }
+  | { kind: "progress"; percent: number; label: string }
+  | { kind: "stack"; parts: Array<{ label: string; value: number }>; label: string };
+
+/** What a folded pin shows of its view. Every field is optional; the engine refuses one
+ *  too large to fold (Rust `PinPreview::check`). */
+export interface AgentPinPreview {
+  shortName?: string;
+  value?: string;
+  unit?: string;
+  status?: AgentPinStatus;
+  chart?: AgentPinChart;
+  /** Up to three key lines, most important first. */
+  lines?: string[];
+}
+
 /** One live pin of an agent thread, in its place in the list (0 is first). */
 export interface AgentPin {
   messageId: number;
   position: number;
   pinnedBy: string;
   pinnedAtMs: number;
+  preview?: AgentPinPreview;
+  /** When the preview was last sent, so a pin that stops updating can say since when. */
+  previewAtMs?: number;
 }
 
 /** An agent thread's pins in one team's store after a read or write; `outcome` is set for
@@ -1136,14 +1160,14 @@ export type PinResult =
       agentId: string;
       storyId: string;
       pins: AgentPin[];
-      outcome?: "pinned" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
     }
   | { status: "invalid"; message: string };
 
 /** What one pins call does to the thread of saved agent `agentId` on `storyId`. */
 export type AgentPinsOp =
   | { op: "read" }
-  | { op: "pin"; messageId: number; position?: number }
+  | { op: "pin"; messageId: number; position?: number; preview?: AgentPinPreview }
   | { op: "unpin"; messageId: number }
   | { op: "reorder"; messageIds: number[] };
 
@@ -1162,6 +1186,7 @@ export const agentPins = (
     messageId: "messageId" in call ? call.messageId : null,
     position: "position" in call ? (call.position ?? null) : null,
     messageIds: "messageIds" in call ? call.messageIds : null,
+    preview: "preview" in call ? (call.preview ?? null) : null,
   });
 
 /** Prepare the `pins` live view of an agent thread for a page's subscription. */

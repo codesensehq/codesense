@@ -17,7 +17,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1333,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1781
+        "wrapperLine": 1806
       },
       "mcp": {
         "name": "accept_role_message",
@@ -35,7 +35,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1334,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1799
+        "wrapperLine": 1824
       },
       "mcp": {
         "name": "ack_role_message",
@@ -53,7 +53,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1649,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 6523
+        "wrapperLine": 6548
       },
       "mcp": {
         "name": "agent_delete",
@@ -71,7 +71,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1654,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 6622
+        "wrapperLine": 6647
       },
       "mcp": {
         "name": "agent_preview",
@@ -89,7 +89,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1648,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 6519
+        "wrapperLine": 6544
       },
       "mcp": {
         "name": "agent_unarchive",
@@ -107,7 +107,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1594,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9607
+        "wrapperLine": 9632
       },
       "mcp": {
         "name": "attach_context_repository",
@@ -125,7 +125,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1424,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2835
+        "wrapperLine": 2860
       },
       "mcp": {
         "name": "cancel_context_operation",
@@ -143,7 +143,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1484,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8695
+        "wrapperLine": 8720
       },
       "mcp": {
         "name": "capture_machine_passphrase",
@@ -161,7 +161,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1332,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1764
+        "wrapperLine": 1789
       },
       "mcp": {
         "name": "claim_role_messages",
@@ -195,7 +195,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1713,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 5467
+        "wrapperLine": 5492
       },
       "mcp": {
         "name": "commit_registry_edit_local",
@@ -213,7 +213,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1496,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8838
+        "wrapperLine": 8863
       },
       "mcp": {
         "name": "connect_machine",
@@ -231,7 +231,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1458,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4703
+        "wrapperLine": 4728
       },
       "mcp": {
         "name": "context_repo_history",
@@ -249,7 +249,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1454,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4623
+        "wrapperLine": 4648
       },
       "mcp": {
         "name": "context_repo_status",
@@ -267,7 +267,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1593,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9569
+        "wrapperLine": 9594
       },
       "mcp": {
         "name": "create_local_organization",
@@ -285,7 +285,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1400,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 3227
+        "wrapperLine": 3252
       },
       "mcp": {
         "name": "delete_content_file",
@@ -303,7 +303,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1596,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9610
+        "wrapperLine": 9635
       },
       "mcp": {
         "name": "detach_context_repository",
@@ -321,7 +321,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1497,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8842
+        "wrapperLine": 8867
       },
       "mcp": {
         "name": "disconnect_machine",
@@ -339,7 +339,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1298,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10152
+        "wrapperLine": 10177
       },
       "mcp": {
         "name": "dismiss_agent_mark",
@@ -357,7 +357,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1353,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2660
+        "wrapperLine": 2685
       },
       "mcp": {
         "name": "end_unowned_terminal_session",
@@ -375,7 +375,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1487,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8781
+        "wrapperLine": 8806
       },
       "mcp": {
         "name": "enroll_private_machine_account",
@@ -393,7 +393,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1420,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2796
+        "wrapperLine": 2821
       },
       "mcp": {
         "name": "forget_missing_workspace",
@@ -411,7 +411,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1618,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 6008
+        "wrapperLine": 6033
       },
       "mcp": {
         "name": "get_active_agent_account",
@@ -429,7 +429,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1290,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1326
+        "wrapperLine": 1351
       },
       "mcp": {
         "name": "get_human_status",
@@ -447,7 +447,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1433,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4422
+        "wrapperLine": 4447
       },
       "mcp": {
         "name": "get_publish_set",
@@ -465,7 +465,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1486,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8793
+        "wrapperLine": 8818
       },
       "mcp": {
         "name": "install_terminal_server",
@@ -483,7 +483,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1608,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 5825
+        "wrapperLine": 5850
       },
       "mcp": {
         "name": "list_agent_accounts",
@@ -501,7 +501,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1289,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1314
+        "wrapperLine": 1339
       },
       "mcp": {
         "name": "list_agent_updates",
@@ -519,7 +519,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1595,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9608
+        "wrapperLine": 9633
       },
       "mcp": {
         "name": "list_context_attachments",
@@ -537,7 +537,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1468,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8629
+        "wrapperLine": 8654
       },
       "mcp": {
         "name": "list_machines",
@@ -555,7 +555,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1483,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8689
+        "wrapperLine": 8714
       },
       "mcp": {
         "name": "list_ssh_sources",
@@ -573,7 +573,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1569,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 3844
+        "wrapperLine": 3869
       },
       "mcp": {
         "name": "list_worktrees",
@@ -591,7 +591,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1401,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 3236
+        "wrapperLine": 3261
       },
       "mcp": {
         "name": "move_content_file",
@@ -663,7 +663,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1354,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8441
+        "wrapperLine": 8466
       },
       "mcp": {
         "name": "prepare_machine_terminal_server_replacement",
@@ -681,7 +681,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1247,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9645
+        "wrapperLine": 9670
       },
       "mcp": {
         "name": "query_context",
@@ -699,7 +699,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1515,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 3758
+        "wrapperLine": 3783
       },
       "mcp": {
         "name": "read_epic_repos",
@@ -717,7 +717,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1536,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8115
+        "wrapperLine": 8140
       },
       "mcp": {
         "name": "read_run_evidence",
@@ -735,7 +735,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1534,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8118
+        "wrapperLine": 8143
       },
       "mcp": {
         "name": "read_run_work_product",
@@ -753,7 +753,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1331,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1754
+        "wrapperLine": 1779
       },
       "mcp": {
         "name": "register_role",
@@ -771,7 +771,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1335,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1814
+        "wrapperLine": 1839
       },
       "mcp": {
         "name": "release_role",
@@ -789,7 +789,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1494,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8819
+        "wrapperLine": 8844
       },
       "mcp": {
         "name": "remove_machine",
@@ -807,7 +807,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1352,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2657
+        "wrapperLine": 2682
       },
       "mcp": {
         "name": "restart_terminal_server",
@@ -825,7 +825,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1489,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8208
+        "wrapperLine": 8233
       },
       "mcp": {
         "name": "resolve_machine_identity",
@@ -843,7 +843,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1355,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8482
+        "wrapperLine": 8507
       },
       "mcp": {
         "name": "restart_machine_terminal_server",
@@ -861,7 +861,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1498,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8846
+        "wrapperLine": 8871
       },
       "mcp": {
         "name": "retry_machine",
@@ -879,7 +879,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1642,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10015
+        "wrapperLine": 10040
       },
       "mcp": {
         "name": "role_save",
@@ -897,7 +897,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1641,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10013
+        "wrapperLine": 10038
       },
       "mcp": {
         "name": "roles_list",
@@ -915,7 +915,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1451,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4536
+        "wrapperLine": 4561
       },
       "mcp": {
         "name": "route_file_to_context",
@@ -933,7 +933,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1259,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9330
+        "wrapperLine": 9355
       },
       "mcp": {
         "name": "routine_arm_on",
@@ -951,7 +951,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1248,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9285
+        "wrapperLine": 9310
       },
       "mcp": {
         "name": "routine_get",
@@ -969,7 +969,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1260,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9335
+        "wrapperLine": 9360
       },
       "mcp": {
         "name": "routine_handover_release",
@@ -987,7 +987,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1246,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9283
+        "wrapperLine": 9308
       },
       "mcp": {
         "name": "routine_list",
@@ -1005,7 +1005,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1261,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9347
+        "wrapperLine": 9372
       },
       "mcp": {
         "name": "routine_refresh_on_machine",
@@ -1023,7 +1023,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1254,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9630
+        "wrapperLine": 9655
       },
       "mcp": {
         "name": "routine_result",
@@ -1041,7 +1041,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1250,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9300
+        "wrapperLine": 9325
       },
       "mcp": {
         "name": "routine_run_now",
@@ -1059,7 +1059,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1251,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9308
+        "wrapperLine": 9333
       },
       "mcp": {
         "name": "routine_runs",
@@ -1077,7 +1077,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1249,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9292
+        "wrapperLine": 9317
       },
       "mcp": {
         "name": "routine_set_enabled",
@@ -1095,7 +1095,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1488,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8803
+        "wrapperLine": 8828
       },
       "mcp": {
         "name": "save_machine",
@@ -1113,7 +1113,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1687,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4866
+        "wrapperLine": 4891
       },
       "mcp": {
         "name": "save_source_repo_attachment",
@@ -1131,7 +1131,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1336,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1833
+        "wrapperLine": 1858
       },
       "mcp": {
         "name": "send_role_message",
@@ -1149,7 +1149,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1320,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4047
+        "wrapperLine": 4072
       },
       "mcp": {
         "name": "session_read",
@@ -1167,7 +1167,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1619,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 6016
+        "wrapperLine": 6041
       },
       "mcp": {
         "name": "set_active_agent_account",
@@ -1185,7 +1185,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1516,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 3765
+        "wrapperLine": 3790
       },
       "mcp": {
         "name": "set_epic_repos",
@@ -1203,7 +1203,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1491,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8812
+        "wrapperLine": 8837
       },
       "mcp": {
         "name": "set_machine_auto_connect",
@@ -1221,7 +1221,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1490,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8807
+        "wrapperLine": 8832
       },
       "mcp": {
         "name": "set_machine_hidden",
@@ -1239,7 +1239,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1492,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9012
+        "wrapperLine": 9037
       },
       "mcp": {
         "name": "set_machine_remote_mcp_control",
@@ -1257,7 +1257,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1351,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2652
+        "wrapperLine": 2677
       },
       "mcp": {
         "name": "start_terminal_server",
@@ -1275,7 +1275,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1350,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2650
+        "wrapperLine": 2675
       },
       "mcp": {
         "name": "stop_terminal_server",
@@ -1293,7 +1293,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1324,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10276
+        "wrapperLine": 10301
       },
       "mcp": {
         "name": "story_changes",
@@ -1311,7 +1311,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1325,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 10287
+        "wrapperLine": 10312
       },
       "mcp": {
         "name": "story_totals",
@@ -1329,7 +1329,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1349,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 2646
+        "wrapperLine": 2671
       },
       "mcp": {
         "name": "terminal_server_status",
@@ -1347,7 +1347,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1485,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8778
+        "wrapperLine": 8803
       },
       "mcp": {
         "name": "test_machine_connection",
@@ -1365,7 +1365,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1452,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4549
+        "wrapperLine": 4574
       },
       "mcp": {
         "name": "unroute_file_from_context",
@@ -1383,7 +1383,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1493,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 8816
+        "wrapperLine": 8841
       },
       "mcp": {
         "name": "unshare_machine",
@@ -1401,7 +1401,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1635,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9008
+        "wrapperLine": 9033
       },
       "mcp": {
         "name": "update_workspace_base",
@@ -1419,7 +1419,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1321,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 4062
+        "wrapperLine": 4087
       },
       "mcp": {
         "name": "why_line",
@@ -1437,7 +1437,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1756,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9888
+        "wrapperLine": 9913
       },
       "mcp": {
         "name": "workspace_chat_read",
@@ -1455,7 +1455,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1755,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 9873
+        "wrapperLine": 9898
       },
       "mcp": {
         "name": "workspace_chat_send",
@@ -1489,7 +1489,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1173,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1922
+        "wrapperLine": 1947
       },
       "mcp": {
         "name": "wv_settle_approval",
@@ -1507,7 +1507,7 @@
         "file": "src-tauri/src/lib.rs",
         "line": 1174,
         "wrapperFile": "src/tauri/commands.ts",
-        "wrapperLine": 1926
+        "wrapperLine": 1951
       },
       "mcp": {
         "name": "wv_upsert_watermark",
@@ -1525,7 +1525,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1617,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5936,
+      "wrapperLine": 5961,
       "acknowledged": false,
       "rationale": null
     },
@@ -1535,7 +1535,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1691,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5256,
+      "wrapperLine": 5281,
       "acknowledged": false,
       "rationale": null
     },
@@ -1545,7 +1545,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1415,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4232,
+      "wrapperLine": 4257,
       "acknowledged": false,
       "rationale": null
     },
@@ -1555,7 +1555,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1680,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3251,
+      "wrapperLine": 3276,
       "acknowledged": false,
       "rationale": null
     },
@@ -1565,7 +1565,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1646,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6512,
+      "wrapperLine": 6537,
       "acknowledged": false,
       "rationale": null
     },
@@ -1575,7 +1575,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1652,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6544,
+      "wrapperLine": 6569,
       "acknowledged": false,
       "rationale": null
     },
@@ -1585,7 +1585,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1651,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6537,
+      "wrapperLine": 6562,
       "acknowledged": false,
       "rationale": null
     },
@@ -1595,7 +1595,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1655,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6708,
+      "wrapperLine": 6733,
       "acknowledged": false,
       "rationale": null
     },
@@ -1605,7 +1605,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1656,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6740,
+      "wrapperLine": 6765,
       "acknowledged": false,
       "rationale": null
     },
@@ -1615,7 +1615,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1650,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6529,
+      "wrapperLine": 6554,
       "acknowledged": false,
       "rationale": null
     },
@@ -1625,7 +1625,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1296,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6502,
+      "wrapperLine": 6527,
       "acknowledged": false,
       "rationale": null
     },
@@ -1635,7 +1635,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1645,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6494,
+      "wrapperLine": 6519,
       "acknowledged": false,
       "rationale": null
     },
@@ -1645,7 +1645,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1305,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1452,
+      "wrapperLine": 1477,
       "acknowledged": false,
       "rationale": null
     },
@@ -1655,7 +1655,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1660,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6815,
+      "wrapperLine": 6840,
       "acknowledged": false,
       "rationale": null
     },
@@ -1665,7 +1665,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1637,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6168,
+      "wrapperLine": 6193,
       "acknowledged": false,
       "rationale": null
     },
@@ -1705,7 +1705,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1659,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6778,
+      "wrapperLine": 6803,
       "acknowledged": false,
       "rationale": null
     },
@@ -1715,7 +1715,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1280,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1157,
+      "wrapperLine": 1181,
       "acknowledged": false,
       "rationale": null
     },
@@ -1725,7 +1725,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1281,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1169,
+      "wrapperLine": 1194,
       "acknowledged": false,
       "rationale": null
     },
@@ -1735,7 +1735,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1304,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1447,
+      "wrapperLine": 1472,
       "acknowledged": false,
       "rationale": null
     },
@@ -1745,7 +1745,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1306,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1469,
+      "wrapperLine": 1494,
       "acknowledged": false,
       "rationale": null
     },
@@ -1755,7 +1755,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1307,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1522,
+      "wrapperLine": 1547,
       "acknowledged": false,
       "rationale": null
     },
@@ -1765,7 +1765,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1303,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1391,
+      "wrapperLine": 1416,
       "acknowledged": false,
       "rationale": null
     },
@@ -1775,7 +1775,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1657,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6761,
+      "wrapperLine": 6786,
       "acknowledged": false,
       "rationale": null
     },
@@ -1785,7 +1785,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1647,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6516,
+      "wrapperLine": 6541,
       "acknowledged": false,
       "rationale": null
     },
@@ -1795,7 +1795,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1653,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6618,
+      "wrapperLine": 6643,
       "acknowledged": false,
       "rationale": null
     },
@@ -1805,7 +1805,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1658,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6770,
+      "wrapperLine": 6795,
       "acknowledged": false,
       "rationale": null
     },
@@ -1815,7 +1815,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1639,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6443,
+      "wrapperLine": 6468,
       "acknowledged": false,
       "rationale": null
     },
@@ -1825,7 +1825,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1409,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5673,
+      "wrapperLine": 5698,
       "acknowledged": false,
       "rationale": null
     },
@@ -1835,7 +1835,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1522,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8089,
+      "wrapperLine": 8114,
       "acknowledged": false,
       "rationale": null
     },
@@ -1845,7 +1845,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1750,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9779,
+      "wrapperLine": 9804,
       "acknowledged": false,
       "rationale": null
     },
@@ -1855,7 +1855,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1138,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3746,
+      "wrapperLine": 3771,
       "acknowledged": false,
       "rationale": null
     },
@@ -1865,7 +1865,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1692,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5273,
+      "wrapperLine": 5298,
       "acknowledged": false,
       "rationale": null
     },
@@ -1875,7 +1875,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1643,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6486,
+      "wrapperLine": 6511,
       "acknowledged": false,
       "rationale": null
     },
@@ -1885,7 +1885,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1644,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6492,
+      "wrapperLine": 6517,
       "acknowledged": false,
       "rationale": null
     },
@@ -1895,7 +1895,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1640,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6481,
+      "wrapperLine": 6506,
       "acknowledged": false,
       "rationale": null
     },
@@ -1905,7 +1905,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1714,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5523,
+      "wrapperLine": 5548,
       "acknowledged": false,
       "rationale": null
     },
@@ -1915,7 +1915,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1524,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9661,
+      "wrapperLine": 9686,
       "acknowledged": false,
       "rationale": null
     },
@@ -1925,7 +1925,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1525,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9679,
+      "wrapperLine": 9704,
       "acknowledged": false,
       "rationale": null
     },
@@ -1935,7 +1935,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1556,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7991,
+      "wrapperLine": 8016,
       "acknowledged": false,
       "rationale": null
     },
@@ -1945,7 +1945,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1615,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5920,
+      "wrapperLine": 5945,
       "acknowledged": false,
       "rationale": null
     },
@@ -1955,7 +1955,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1590,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8169,
+      "wrapperLine": 8194,
       "acknowledged": false,
       "rationale": null
     },
@@ -1965,7 +1965,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1625,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6090,
+      "wrapperLine": 6115,
       "acknowledged": false,
       "rationale": null
     },
@@ -1983,7 +1983,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1577,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4152,
+      "wrapperLine": 4177,
       "acknowledged": false,
       "rationale": null
     },
@@ -1993,7 +1993,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1435,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4436,
+      "wrapperLine": 4461,
       "acknowledged": false,
       "rationale": null
     },
@@ -2003,7 +2003,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1578,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4156,
+      "wrapperLine": 4181,
       "acknowledged": false,
       "rationale": null
     },
@@ -2013,7 +2013,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1429,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4286,
+      "wrapperLine": 4311,
       "acknowledged": false,
       "rationale": null
     },
@@ -2023,7 +2023,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1502,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5564,
+      "wrapperLine": 5589,
       "acknowledged": false,
       "rationale": null
     },
@@ -2033,7 +2033,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1586,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5784,
+      "wrapperLine": 5809,
       "acknowledged": false,
       "rationale": null
     },
@@ -2043,7 +2043,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1389,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3130,
+      "wrapperLine": 3155,
       "acknowledged": false,
       "rationale": null
     },
@@ -2053,7 +2053,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1567,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3835,
+      "wrapperLine": 3860,
       "acknowledged": false,
       "rationale": null
     },
@@ -2063,7 +2063,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1546,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7786,
+      "wrapperLine": 7811,
       "acknowledged": false,
       "rationale": null
     },
@@ -2129,7 +2129,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1672,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10125,
+      "wrapperLine": 10150,
       "acknowledged": false,
       "rationale": null
     },
@@ -2139,7 +2139,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1670,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10089,
+      "wrapperLine": 10114,
       "acknowledged": false,
       "rationale": null
     },
@@ -2149,7 +2149,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1673,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10128,
+      "wrapperLine": 10153,
       "acknowledged": false,
       "rationale": null
     },
@@ -2159,7 +2159,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1671,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10123,
+      "wrapperLine": 10148,
       "acknowledged": false,
       "rationale": null
     },
@@ -2179,7 +2179,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1610,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5831,
+      "wrapperLine": 5856,
       "acknowledged": false,
       "rationale": null
     },
@@ -2189,7 +2189,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1404,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3312,
+      "wrapperLine": 3337,
       "acknowledged": false,
       "rationale": null
     },
@@ -2209,7 +2209,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1603,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7146,
+      "wrapperLine": 7171,
       "acknowledged": false,
       "rationale": null
     },
@@ -2219,7 +2219,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1529,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7716,
+      "wrapperLine": 7741,
       "acknowledged": false,
       "rationale": null
     },
@@ -2229,7 +2229,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1561,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3640,
+      "wrapperLine": 3665,
       "acknowledged": false,
       "rationale": null
     },
@@ -2239,7 +2239,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1095,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10003,
+      "wrapperLine": 10028,
       "acknowledged": false,
       "rationale": null
     },
@@ -2249,7 +2249,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1097,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9950,
+      "wrapperLine": 9975,
       "acknowledged": false,
       "rationale": null
     },
@@ -2259,7 +2259,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1339,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2181,
+      "wrapperLine": 2206,
       "acknowledged": false,
       "rationale": null
     },
@@ -2277,7 +2277,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1338,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2175,
+      "wrapperLine": 2200,
       "acknowledged": false,
       "rationale": null
     },
@@ -2335,7 +2335,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1111,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9999,
+      "wrapperLine": 10024,
       "acknowledged": false,
       "rationale": null
     },
@@ -2345,7 +2345,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1107,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9992,
+      "wrapperLine": 10017,
       "acknowledged": false,
       "rationale": null
     },
@@ -2355,7 +2355,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1113,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10001,
+      "wrapperLine": 10026,
       "acknowledged": false,
       "rationale": null
     },
@@ -2365,7 +2365,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1099,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9953,
+      "wrapperLine": 9978,
       "acknowledged": false,
       "rationale": null
     },
@@ -2375,7 +2375,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1337,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2169,
+      "wrapperLine": 2194,
       "acknowledged": false,
       "rationale": null
     },
@@ -2385,7 +2385,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1101,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9955,
+      "wrapperLine": 9980,
       "acknowledged": false,
       "rationale": null
     },
@@ -2395,7 +2395,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1123,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9942,
+      "wrapperLine": 9967,
       "acknowledged": false,
       "rationale": null
     },
@@ -2405,7 +2405,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1121,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9940,
+      "wrapperLine": 9965,
       "acknowledged": false,
       "rationale": null
     },
@@ -2415,7 +2415,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1119,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9938,
+      "wrapperLine": 9963,
       "acknowledged": false,
       "rationale": null
     },
@@ -2445,7 +2445,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1340,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2186,
+      "wrapperLine": 2211,
       "acknowledged": false,
       "rationale": null
     },
@@ -2455,7 +2455,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1105,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9966,
+      "wrapperLine": 9991,
       "acknowledged": false,
       "rationale": null
     },
@@ -2465,7 +2465,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1103,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9959,
+      "wrapperLine": 9984,
       "acknowledged": false,
       "rationale": null
     },
@@ -2475,7 +2475,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1115,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9964,
+      "wrapperLine": 9989,
       "acknowledged": false,
       "rationale": null
     },
@@ -2485,7 +2485,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1557,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7998,
+      "wrapperLine": 8023,
       "acknowledged": false,
       "rationale": null
     },
@@ -2505,7 +2505,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1407,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3332,
+      "wrapperLine": 3357,
       "acknowledged": false,
       "rationale": null
     },
@@ -2515,7 +2515,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1689,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5293,
+      "wrapperLine": 5318,
       "acknowledged": false,
       "rationale": null
     },
@@ -2525,7 +2525,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1612,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5854,
+      "wrapperLine": 5879,
       "acknowledged": false,
       "rationale": null
     },
@@ -2535,7 +2535,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1427,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4275,
+      "wrapperLine": 4300,
       "acknowledged": false,
       "rationale": null
     },
@@ -2545,7 +2545,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1386,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3105,
+      "wrapperLine": 3130,
       "acknowledged": false,
       "rationale": null
     },
@@ -2555,7 +2555,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1425,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2871,
+      "wrapperLine": 2896,
       "acknowledged": false,
       "rationale": null
     },
@@ -2565,7 +2565,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1422,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2824,
+      "wrapperLine": 2849,
       "acknowledged": false,
       "rationale": null
     },
@@ -2575,7 +2575,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1592,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5794,
+      "wrapperLine": 5819,
       "acknowledged": false,
       "rationale": null
     },
@@ -2585,7 +2585,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1504,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5567,
+      "wrapperLine": 5592,
       "acknowledged": false,
       "rationale": null
     },
@@ -2605,7 +2605,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1597,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9587,
+      "wrapperLine": 9612,
       "acknowledged": false,
       "rationale": null
     },
@@ -2635,7 +2635,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1598,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9603,
+      "wrapperLine": 9628,
       "acknowledged": false,
       "rationale": null
     },
@@ -2645,7 +2645,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1140,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3803,
+      "wrapperLine": 3828,
       "acknowledged": false,
       "rationale": null
     },
@@ -2655,7 +2655,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1576,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4150,
+      "wrapperLine": 4175,
       "acknowledged": false,
       "rationale": null
     },
@@ -2665,7 +2665,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1726,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3340,
+      "wrapperLine": 3365,
       "acknowledged": false,
       "rationale": null
     },
@@ -2675,7 +2675,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1724,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3337,
+      "wrapperLine": 3362,
       "acknowledged": false,
       "rationale": null
     },
@@ -2685,7 +2685,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1562,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3659,
+      "wrapperLine": 3684,
       "acknowledged": false,
       "rationale": null
     },
@@ -2695,7 +2695,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1391,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10244,
+      "wrapperLine": 10269,
       "acknowledged": false,
       "rationale": null
     },
@@ -2705,7 +2705,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1392,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10248,
+      "wrapperLine": 10273,
       "acknowledged": false,
       "rationale": null
     },
@@ -2715,7 +2715,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1512,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3418,
+      "wrapperLine": 3443,
       "acknowledged": false,
       "rationale": null
     },
@@ -2725,7 +2725,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1428,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4283,
+      "wrapperLine": 4308,
       "acknowledged": false,
       "rationale": null
     },
@@ -2735,7 +2735,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1506,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5659,
+      "wrapperLine": 5684,
       "acknowledged": false,
       "rationale": null
     },
@@ -2745,7 +2745,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1439,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4491,
+      "wrapperLine": 4516,
       "acknowledged": false,
       "rationale": null
     },
@@ -2755,7 +2755,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1527,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2115,
+      "wrapperLine": 2140,
       "acknowledged": false,
       "rationale": null
     },
@@ -2765,7 +2765,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1665,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5736,
+      "wrapperLine": 5761,
       "acknowledged": false,
       "rationale": null
     },
@@ -2775,7 +2775,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1663,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5733,
+      "wrapperLine": 5758,
       "acknowledged": false,
       "rationale": null
     },
@@ -2785,7 +2785,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1662,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5732,
+      "wrapperLine": 5757,
       "acknowledged": false,
       "rationale": null
     },
@@ -2795,7 +2795,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1518,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7666,
+      "wrapperLine": 7691,
       "acknowledged": false,
       "rationale": null
     },
@@ -2805,7 +2805,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1550,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7866,
+      "wrapperLine": 7891,
       "acknowledged": false,
       "rationale": null
     },
@@ -2815,7 +2815,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1604,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7043,
+      "wrapperLine": 7068,
       "acknowledged": false,
       "rationale": null
     },
@@ -2825,7 +2825,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1513,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3399,
+      "wrapperLine": 3424,
       "acknowledged": false,
       "rationale": null
     },
@@ -2835,7 +2835,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1520,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8062,
+      "wrapperLine": 8087,
       "acknowledged": false,
       "rationale": null
     },
@@ -2845,7 +2845,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1581,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3637,
+      "wrapperLine": 3662,
       "acknowledged": false,
       "rationale": null
     },
@@ -2855,7 +2855,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1752,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9789,
+      "wrapperLine": 9814,
       "acknowledged": false,
       "rationale": null
     },
@@ -2865,7 +2865,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1560,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3623,
+      "wrapperLine": 3648,
       "acknowledged": false,
       "rationale": null
     },
@@ -2875,7 +2875,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1621,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6100,
+      "wrapperLine": 6125,
       "acknowledged": false,
       "rationale": null
     },
@@ -2885,7 +2885,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1456,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4640,
+      "wrapperLine": 4665,
       "acknowledged": false,
       "rationale": null
     },
@@ -2895,7 +2895,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1539,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8135,
+      "wrapperLine": 8160,
       "acknowledged": false,
       "rationale": null
     },
@@ -2905,7 +2905,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1587,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5789,
+      "wrapperLine": 5814,
       "acknowledged": false,
       "rationale": null
     },
@@ -2915,7 +2915,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1292,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1675,
+      "wrapperLine": 1700,
       "acknowledged": false,
       "rationale": null
     },
@@ -2925,7 +2925,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1282,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1235,
+      "wrapperLine": 1260,
       "acknowledged": false,
       "rationale": null
     },
@@ -2935,7 +2935,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1437,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4469,
+      "wrapperLine": 4494,
       "acknowledged": false,
       "rationale": null
     },
@@ -2945,7 +2945,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1405,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3327,
+      "wrapperLine": 3352,
       "acknowledged": false,
       "rationale": null
     },
@@ -2965,7 +2965,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1509,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5725,
+      "wrapperLine": 5750,
       "acknowledged": false,
       "rationale": null
     },
@@ -2975,7 +2975,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1417,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4245,
+      "wrapperLine": 4270,
       "acknowledged": false,
       "rationale": null
     },
@@ -2985,7 +2985,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1426,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4269,
+      "wrapperLine": 4294,
       "acknowledged": false,
       "rationale": null
     },
@@ -2995,7 +2995,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1418,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4255,
+      "wrapperLine": 4280,
       "acknowledged": false,
       "rationale": null
     },
@@ -3005,7 +3005,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1589,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8164,
+      "wrapperLine": 8189,
       "acknowledged": false,
       "rationale": null
     },
@@ -3015,7 +3015,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1588,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8160,
+      "wrapperLine": 8185,
       "acknowledged": false,
       "rationale": null
     },
@@ -3065,7 +3065,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1616,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5929,
+      "wrapperLine": 5954,
       "acknowledged": false,
       "rationale": null
     },
@@ -3075,7 +3075,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1412,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3078,
+      "wrapperLine": 3103,
       "acknowledged": false,
       "rationale": null
     },
@@ -3085,7 +3085,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1688,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4942,
+      "wrapperLine": 4967,
       "acknowledged": false,
       "rationale": null
     },
@@ -3105,7 +3105,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1548,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7793,
+      "wrapperLine": 7818,
       "acknowledged": false,
       "rationale": null
     },
@@ -3115,7 +3115,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1462,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3089,
+      "wrapperLine": 3114,
       "acknowledged": false,
       "rationale": null
     },
@@ -3125,7 +3125,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1609,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5828,
+      "wrapperLine": 5853,
       "acknowledged": false,
       "rationale": null
     },
@@ -3135,7 +3135,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1402,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3287,
+      "wrapperLine": 3312,
       "acknowledged": false,
       "rationale": null
     },
@@ -3153,7 +3153,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1310,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1635,
+      "wrapperLine": 1660,
       "acknowledged": false,
       "rationale": null
     },
@@ -3163,7 +3163,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1732,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7302,
+      "wrapperLine": 7327,
       "acknowledged": false,
       "rationale": null
     },
@@ -3173,7 +3173,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1731,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7291,
+      "wrapperLine": 7316,
       "acknowledged": false,
       "rationale": null
     },
@@ -3183,7 +3183,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1693,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5349,
+      "wrapperLine": 5374,
       "acknowledged": false,
       "rationale": null
     },
@@ -3193,7 +3193,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1570,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4108,
+      "wrapperLine": 4133,
       "acknowledged": false,
       "rationale": null
     },
@@ -3203,7 +3203,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1734,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7814,
+      "wrapperLine": 7839,
       "acknowledged": false,
       "rationale": null
     },
@@ -3213,7 +3213,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1221,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9757,
+      "wrapperLine": 9782,
       "acknowledged": false,
       "rationale": null
     },
@@ -3243,7 +3243,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1633,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8917,
+      "wrapperLine": 8942,
       "acknowledged": false,
       "rationale": null
     },
@@ -3253,7 +3253,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1535,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8121,
+      "wrapperLine": 8146,
       "acknowledged": false,
       "rationale": null
     },
@@ -3263,7 +3263,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1606,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7072,
+      "wrapperLine": 7097,
       "acknowledged": false,
       "rationale": null
     },
@@ -3273,7 +3273,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1600,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7140,
+      "wrapperLine": 7165,
       "acknowledged": false,
       "rationale": null
     },
@@ -3283,7 +3283,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1309,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1630,
+      "wrapperLine": 1655,
       "acknowledged": false,
       "rationale": null
     },
@@ -3293,7 +3293,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1521,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8012,
+      "wrapperLine": 8037,
       "acknowledged": false,
       "rationale": null
     },
@@ -3303,7 +3303,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1475,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8417,
+      "wrapperLine": 8442,
       "acknowledged": false,
       "rationale": null
     },
@@ -3313,7 +3313,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1480,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8641,
+      "wrapperLine": 8666,
       "acknowledged": false,
       "rationale": null
     },
@@ -3323,7 +3323,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1753,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9794,
+      "wrapperLine": 9819,
       "acknowledged": false,
       "rationale": null
     },
@@ -3333,7 +3333,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1299,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10130,
+      "wrapperLine": 10155,
       "acknowledged": false,
       "rationale": null
     },
@@ -3343,7 +3343,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1295,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10023,
+      "wrapperLine": 10048,
       "acknowledged": false,
       "rationale": null
     },
@@ -3353,7 +3353,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1302,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10140,
+      "wrapperLine": 10165,
       "acknowledged": false,
       "rationale": null
     },
@@ -3363,7 +3363,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1301,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10143,
+      "wrapperLine": 10168,
       "acknowledged": false,
       "rationale": null
     },
@@ -3373,7 +3373,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1300,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10135,
+      "wrapperLine": 10160,
       "acknowledged": false,
       "rationale": null
     },
@@ -3403,7 +3403,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1583,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5746,
+      "wrapperLine": 5771,
       "acknowledged": false,
       "rationale": null
     },
@@ -3413,7 +3413,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1543,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7765,
+      "wrapperLine": 7790,
       "acknowledged": false,
       "rationale": null
     },
@@ -3423,7 +3423,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1553,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7933,
+      "wrapperLine": 7958,
       "acknowledged": false,
       "rationale": null
     },
@@ -3461,7 +3461,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1473,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8325,
+      "wrapperLine": 8350,
       "acknowledged": false,
       "rationale": null
     },
@@ -3471,7 +3471,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1471,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8425,
+      "wrapperLine": 8450,
       "acknowledged": false,
       "rationale": null
     },
@@ -3481,7 +3481,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1469,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8458,
+      "wrapperLine": 8483,
       "acknowledged": false,
       "rationale": null
     },
@@ -3491,7 +3491,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1283,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1258,
+      "wrapperLine": 1283,
       "acknowledged": false,
       "rationale": null
     },
@@ -3501,7 +3501,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1286,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1271,
+      "wrapperLine": 1296,
       "acknowledged": false,
       "rationale": null
     },
@@ -3511,7 +3511,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1284,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1263,
+      "wrapperLine": 1288,
       "acknowledged": false,
       "rationale": null
     },
@@ -3521,7 +3521,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1285,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1267,
+      "wrapperLine": 1292,
       "acknowledged": false,
       "rationale": null
     },
@@ -3531,7 +3531,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1666,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10076,
+      "wrapperLine": 10101,
       "acknowledged": false,
       "rationale": null
     },
@@ -3541,7 +3541,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1738,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7489,
+      "wrapperLine": 7514,
       "acknowledged": false,
       "rationale": null
     },
@@ -3551,7 +3551,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1737,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7406,
+      "wrapperLine": 7431,
       "acknowledged": false,
       "rationale": null
     },
@@ -3561,7 +3561,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1220,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9754,
+      "wrapperLine": 9779,
       "acknowledged": false,
       "rationale": null
     },
@@ -3571,7 +3571,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1393,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10253,
+      "wrapperLine": 10278,
       "acknowledged": false,
       "rationale": null
     },
@@ -3591,7 +3591,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1322,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10299,
+      "wrapperLine": 10324,
       "acknowledged": false,
       "rationale": null
     },
@@ -3601,7 +3601,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1388,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3115,
+      "wrapperLine": 3140,
       "acknowledged": false,
       "rationale": null
     },
@@ -3611,7 +3611,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1602,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9931,
+      "wrapperLine": 9956,
       "acknowledged": false,
       "rationale": null
     },
@@ -3621,7 +3621,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1387,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3112,
+      "wrapperLine": 3137,
       "acknowledged": false,
       "rationale": null
     },
@@ -3631,7 +3631,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1481,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8648,
+      "wrapperLine": 8673,
       "acknowledged": false,
       "rationale": null
     },
@@ -3641,7 +3641,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1206,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2132,
+      "wrapperLine": 2157,
       "acknowledged": false,
       "rationale": null
     },
@@ -3651,7 +3651,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1634,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8964,
+      "wrapperLine": 8989,
       "acknowledged": false,
       "rationale": null
     },
@@ -3661,7 +3661,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1620,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6024,
+      "wrapperLine": 6049,
       "acknowledged": false,
       "rationale": null
     },
@@ -3671,7 +3671,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1735,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7843,
+      "wrapperLine": 7868,
       "acknowledged": false,
       "rationale": null
     },
@@ -3681,7 +3681,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1528,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7711,
+      "wrapperLine": 7736,
       "acknowledged": false,
       "rationale": null
     },
@@ -3691,7 +3691,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1695,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5414,
+      "wrapperLine": 5439,
       "acknowledged": false,
       "rationale": null
     },
@@ -3701,7 +3701,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1559,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3610,
+      "wrapperLine": 3635,
       "acknowledged": false,
       "rationale": null
     },
@@ -3711,7 +3711,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1632,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6831,
+      "wrapperLine": 6856,
       "acknowledged": false,
       "rationale": null
     },
@@ -3721,7 +3721,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1740,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7441,
+      "wrapperLine": 7466,
       "acknowledged": false,
       "rationale": null
     },
@@ -3759,7 +3759,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1627,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5893,
+      "wrapperLine": 5918,
       "acknowledged": false,
       "rationale": null
     },
@@ -3769,7 +3769,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1743,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7320,
+      "wrapperLine": 7345,
       "acknowledged": false,
       "rationale": null
     },
@@ -3779,7 +3779,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1390,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3132,
+      "wrapperLine": 3157,
       "acknowledged": false,
       "rationale": null
     },
@@ -3789,7 +3789,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1733,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7340,
+      "wrapperLine": 7365,
       "acknowledged": false,
       "rationale": null
     },
@@ -3799,7 +3799,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1736,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7382,
+      "wrapperLine": 7407,
       "acknowledged": false,
       "rationale": null
     },
@@ -3819,7 +3819,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1538,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8133,
+      "wrapperLine": 8158,
       "acknowledged": false,
       "rationale": null
     },
@@ -3829,7 +3829,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1537,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8129,
+      "wrapperLine": 8154,
       "acknowledged": false,
       "rationale": null
     },
@@ -3839,7 +3839,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1533,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8105,
+      "wrapperLine": 8130,
       "acknowledged": false,
       "rationale": null
     },
@@ -3849,7 +3849,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1541,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8144,
+      "wrapperLine": 8169,
       "acknowledged": false,
       "rationale": null
     },
@@ -3859,7 +3859,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1696,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4949,
+      "wrapperLine": 4974,
       "acknowledged": false,
       "rationale": null
     },
@@ -3869,7 +3869,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1245,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2957,
+      "wrapperLine": 2982,
       "acknowledged": false,
       "rationale": null
     },
@@ -3879,7 +3879,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1394,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3161,
+      "wrapperLine": 3186,
       "acknowledged": false,
       "rationale": null
     },
@@ -3889,7 +3889,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1613,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5865,
+      "wrapperLine": 5890,
       "acknowledged": false,
       "rationale": null
     },
@@ -3899,7 +3899,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1668,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10080,
+      "wrapperLine": 10105,
       "acknowledged": false,
       "rationale": null
     },
@@ -3919,7 +3919,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1507,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5714,
+      "wrapperLine": 5739,
       "acknowledged": false,
       "rationale": null
     },
@@ -3929,7 +3929,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1139,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3781,
+      "wrapperLine": 3806,
       "acknowledged": false,
       "rationale": null
     },
@@ -3939,7 +3939,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1142,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3829,
+      "wrapperLine": 3854,
       "acknowledged": false,
       "rationale": null
     },
@@ -3949,7 +3949,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1694,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5392,
+      "wrapperLine": 5417,
       "acknowledged": false,
       "rationale": null
     },
@@ -3959,7 +3959,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1141,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3816,
+      "wrapperLine": 3841,
       "acknowledged": false,
       "rationale": null
     },
@@ -3979,7 +3979,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1088,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10188,
+      "wrapperLine": 10213,
       "acknowledged": false,
       "rationale": null
     },
@@ -3989,7 +3989,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1090,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10194,
+      "wrapperLine": 10219,
       "acknowledged": false,
       "rationale": null
     },
@@ -3999,7 +3999,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1089,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10190,
+      "wrapperLine": 10215,
       "acknowledged": false,
       "rationale": null
     },
@@ -4017,7 +4017,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1470,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8475,
+      "wrapperLine": 8500,
       "acknowledged": false,
       "rationale": null
     },
@@ -4027,7 +4027,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1667,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10077,
+      "wrapperLine": 10102,
       "acknowledged": false,
       "rationale": null
     },
@@ -4037,7 +4037,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1623,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6075,
+      "wrapperLine": 6100,
       "acknowledged": false,
       "rationale": null
     },
@@ -4047,7 +4047,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1739,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7511,
+      "wrapperLine": 7536,
       "acknowledged": false,
       "rationale": null
     },
@@ -4057,7 +4057,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1690,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5487,
+      "wrapperLine": 5512,
       "acknowledged": false,
       "rationale": null
     },
@@ -4067,7 +4067,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1482,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8655,
+      "wrapperLine": 8680,
       "acknowledged": false,
       "rationale": null
     },
@@ -4077,7 +4077,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1416,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4235,
+      "wrapperLine": 4260,
       "acknowledged": false,
       "rationale": null
     },
@@ -4087,7 +4087,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1566,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3677,
+      "wrapperLine": 3702,
       "acknowledged": false,
       "rationale": null
     },
@@ -4097,7 +4097,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1611,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5842,
+      "wrapperLine": 5867,
       "acknowledged": false,
       "rationale": null
     },
@@ -4107,7 +4107,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1406,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3330,
+      "wrapperLine": 3355,
       "acknowledged": false,
       "rationale": null
     },
@@ -4127,7 +4127,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1472,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8429,
+      "wrapperLine": 8454,
       "acknowledged": false,
       "rationale": null
     },
@@ -4137,7 +4137,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1278,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1300,
+      "wrapperLine": 1325,
       "acknowledged": false,
       "rationale": null
     },
@@ -4147,7 +4147,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1343,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2962,
+      "wrapperLine": 2987,
       "acknowledged": false,
       "rationale": null
     },
@@ -4157,7 +4157,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1243,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2221,
+      "wrapperLine": 2246,
       "acknowledged": false,
       "rationale": null
     },
@@ -4167,7 +4167,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1508,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5664,
+      "wrapperLine": 5689,
       "acknowledged": false,
       "rationale": null
     },
@@ -4177,7 +4177,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1684,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3284,
+      "wrapperLine": 3309,
       "acknowledged": false,
       "rationale": null
     },
@@ -4187,7 +4187,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1678,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3262,
+      "wrapperLine": 3287,
       "acknowledged": false,
       "rationale": null
     },
@@ -4197,7 +4197,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1455,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4632,
+      "wrapperLine": 4657,
       "acknowledged": false,
       "rationale": null
     },
@@ -4207,7 +4207,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1342,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2210,
+      "wrapperLine": 2235,
       "acknowledged": false,
       "rationale": null
     },
@@ -4217,7 +4217,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1669,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10082,
+      "wrapperLine": 10107,
       "acknowledged": false,
       "rationale": null
     },
@@ -4227,7 +4227,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1682,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3270,
+      "wrapperLine": 3295,
       "acknowledged": false,
       "rationale": null
     },
@@ -4237,7 +4237,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1601,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9929,
+      "wrapperLine": 9954,
       "acknowledged": false,
       "rationale": null
     },
@@ -4247,7 +4247,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1679,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3256,
+      "wrapperLine": 3281,
       "acknowledged": false,
       "rationale": null
     },
@@ -4257,7 +4257,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1686,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4853,
+      "wrapperLine": 4878,
       "acknowledged": false,
       "rationale": null
     },
@@ -4267,7 +4267,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1341,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2192,
+      "wrapperLine": 2217,
       "acknowledged": false,
       "rationale": null
     },
@@ -4277,7 +4277,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1697,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4989,
+      "wrapperLine": 5014,
       "acknowledged": false,
       "rationale": null
     },
@@ -4287,7 +4287,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1701,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5038,
+      "wrapperLine": 5063,
       "acknowledged": false,
       "rationale": null
     },
@@ -4307,7 +4307,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1403,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3309,
+      "wrapperLine": 3334,
       "acknowledged": false,
       "rationale": null
     },
@@ -4317,7 +4317,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1348,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2590,
+      "wrapperLine": 2615,
       "acknowledged": false,
       "rationale": null
     },
@@ -4327,7 +4327,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1495,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8831,
+      "wrapperLine": 8856,
       "acknowledged": false,
       "rationale": null
     },
@@ -4337,7 +4337,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1430,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4292,
+      "wrapperLine": 4317,
       "acknowledged": false,
       "rationale": null
     },
@@ -4347,7 +4347,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1431,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4296,
+      "wrapperLine": 4321,
       "acknowledged": false,
       "rationale": null
     },
@@ -4357,7 +4357,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1479,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8378,
+      "wrapperLine": 8403,
       "acknowledged": false,
       "rationale": null
     },
@@ -4375,7 +4375,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1265,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9468,
+      "wrapperLine": 9493,
       "acknowledged": false,
       "rationale": null
     },
@@ -4385,7 +4385,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1256,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9320,
+      "wrapperLine": 9345,
       "acknowledged": false,
       "rationale": null
     },
@@ -4395,7 +4395,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1258,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9325,
+      "wrapperLine": 9350,
       "acknowledged": false,
       "rationale": null
     },
@@ -4405,7 +4405,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1255,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9632,
+      "wrapperLine": 9657,
       "acknowledged": false,
       "rationale": null
     },
@@ -4415,7 +4415,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1257,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9323,
+      "wrapperLine": 9348,
       "acknowledged": false,
       "rationale": null
     },
@@ -4425,7 +4425,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1263,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9463,
+      "wrapperLine": 9488,
       "acknowledged": false,
       "rationale": null
     },
@@ -4435,7 +4435,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1270,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9558,
+      "wrapperLine": 9583,
       "acknowledged": false,
       "rationale": null
     },
@@ -4445,7 +4445,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1268,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10177,
+      "wrapperLine": 10202,
       "acknowledged": false,
       "rationale": null
     },
@@ -4455,7 +4455,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1267,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9551,
+      "wrapperLine": 9576,
       "acknowledged": false,
       "rationale": null
     },
@@ -4465,7 +4465,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1312,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9424,
+      "wrapperLine": 9449,
       "acknowledged": false,
       "rationale": null
     },
@@ -4475,7 +4475,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1311,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9422,
+      "wrapperLine": 9447,
       "acknowledged": false,
       "rationale": null
     },
@@ -4485,7 +4485,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1314,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9440,
+      "wrapperLine": 9465,
       "acknowledged": false,
       "rationale": null
     },
@@ -4495,7 +4495,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1313,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9432,
+      "wrapperLine": 9457,
       "acknowledged": false,
       "rationale": null
     },
@@ -4505,7 +4505,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1269,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9554,
+      "wrapperLine": 9579,
       "acknowledged": false,
       "rationale": null
     },
@@ -4515,7 +4515,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1262,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9350,
+      "wrapperLine": 9375,
       "acknowledged": false,
       "rationale": null
     },
@@ -4525,7 +4525,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1252,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9314,
+      "wrapperLine": 9339,
       "acknowledged": false,
       "rationale": null
     },
@@ -4535,7 +4535,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1266,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9542,
+      "wrapperLine": 9567,
       "acknowledged": false,
       "rationale": null
     },
@@ -4545,7 +4545,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1264,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9466,
+      "wrapperLine": 9491,
       "acknowledged": false,
       "rationale": null
     },
@@ -4555,7 +4555,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1253,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9318,
+      "wrapperLine": 9343,
       "acknowledged": false,
       "rationale": null
     },
@@ -4565,7 +4565,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1457,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4652,
+      "wrapperLine": 4677,
       "acknowledged": false,
       "rationale": null
     },
@@ -4575,7 +4575,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1316,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9455,
+      "wrapperLine": 9480,
       "acknowledged": false,
       "rationale": null
     },
@@ -4585,7 +4585,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1317,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9458,
+      "wrapperLine": 9483,
       "acknowledged": false,
       "rationale": null
     },
@@ -4595,7 +4595,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1315,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9453,
+      "wrapperLine": 9478,
       "acknowledged": false,
       "rationale": null
     },
@@ -4605,7 +4605,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1318,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9461,
+      "wrapperLine": 9486,
       "acknowledged": false,
       "rationale": null
     },
@@ -4615,7 +4615,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1410,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5684,
+      "wrapperLine": 5709,
       "acknowledged": false,
       "rationale": null
     },
@@ -4625,7 +4625,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1575,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4125,
+      "wrapperLine": 4150,
       "acknowledged": false,
       "rationale": null
     },
@@ -4645,7 +4645,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1555,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7968,
+      "wrapperLine": 7993,
       "acknowledged": false,
       "rationale": null
     },
@@ -4665,7 +4665,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1511,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3370,
+      "wrapperLine": 3395,
       "acknowledged": false,
       "rationale": null
     },
@@ -4693,7 +4693,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1308,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1545,
+      "wrapperLine": 1570,
       "acknowledged": false,
       "rationale": null
     },
@@ -4713,7 +4713,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1742,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7545,
+      "wrapperLine": 7570,
       "acknowledged": false,
       "rationale": null
     },
@@ -4723,7 +4723,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1741,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7534,
+      "wrapperLine": 7559,
       "acknowledged": false,
       "rationale": null
     },
@@ -4733,7 +4733,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1360,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2994,
+      "wrapperLine": 3019,
       "acknowledged": false,
       "rationale": null
     },
@@ -4743,7 +4743,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1357,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3037,
+      "wrapperLine": 3062,
       "acknowledged": false,
       "rationale": null
     },
@@ -4753,7 +4753,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1356,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2973,
+      "wrapperLine": 2998,
       "acknowledged": false,
       "rationale": null
     },
@@ -4763,7 +4763,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1361,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3025,
+      "wrapperLine": 3050,
       "acknowledged": false,
       "rationale": null
     },
@@ -4773,7 +4773,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1330,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4034,
+      "wrapperLine": 4059,
       "acknowledged": false,
       "rationale": null
     },
@@ -4783,7 +4783,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1319,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4088,
+      "wrapperLine": 4113,
       "acknowledged": false,
       "rationale": null
     },
@@ -4793,7 +4793,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1326,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4006,
+      "wrapperLine": 4031,
       "acknowledged": false,
       "rationale": null
     },
@@ -4803,7 +4803,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1624,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6083,
+      "wrapperLine": 6108,
       "acknowledged": false,
       "rationale": null
     },
@@ -4813,7 +4813,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1358,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3048,
+      "wrapperLine": 3073,
       "acknowledged": false,
       "rationale": null
     },
@@ -4823,7 +4823,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1359,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2986,
+      "wrapperLine": 3011,
       "acknowledged": false,
       "rationale": null
     },
@@ -4843,7 +4843,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1629,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5896,
+      "wrapperLine": 5921,
       "acknowledged": false,
       "rationale": null
     },
@@ -4853,7 +4853,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1545,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7781,
+      "wrapperLine": 7806,
       "acknowledged": false,
       "rationale": null
     },
@@ -4863,7 +4863,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1526,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2110,
+      "wrapperLine": 2135,
       "acknowledged": false,
       "rationale": null
     },
@@ -4873,7 +4873,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1291,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1639,
+      "wrapperLine": 1664,
       "acknowledged": false,
       "rationale": null
     },
@@ -4891,7 +4891,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1551,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7874,
+      "wrapperLine": 7899,
       "acknowledged": false,
       "rationale": null
     },
@@ -4901,7 +4901,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1573,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2672,
+      "wrapperLine": 2697,
       "acknowledged": false,
       "rationale": null
     },
@@ -4911,7 +4911,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1607,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7077,
+      "wrapperLine": 7102,
       "acknowledged": false,
       "rationale": null
     },
@@ -4921,7 +4921,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1605,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7048,
+      "wrapperLine": 7073,
       "acknowledged": false,
       "rationale": null
     },
@@ -4931,7 +4931,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1580,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3631,
+      "wrapperLine": 3656,
       "acknowledged": false,
       "rationale": null
     },
@@ -4941,7 +4941,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1574,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2665,
+      "wrapperLine": 2690,
       "acknowledged": false,
       "rationale": null
     },
@@ -4961,7 +4961,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1323,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4069,
+      "wrapperLine": 4094,
       "acknowledged": false,
       "rationale": null
     },
@@ -4971,7 +4971,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1446,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4718,
+      "wrapperLine": 4743,
       "acknowledged": false,
       "rationale": null
     },
@@ -4981,7 +4981,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1447,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4729,
+      "wrapperLine": 4754,
       "acknowledged": false,
       "rationale": null
     },
@@ -4991,7 +4991,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1445,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4711,
+      "wrapperLine": 4736,
       "acknowledged": false,
       "rationale": null
     },
@@ -5001,7 +5001,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1442,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4519,
+      "wrapperLine": 4544,
       "acknowledged": false,
       "rationale": null
     },
@@ -5011,7 +5011,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1708,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5121,
+      "wrapperLine": 5146,
       "acknowledged": false,
       "rationale": null
     },
@@ -5021,7 +5021,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1706,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5103,
+      "wrapperLine": 5128,
       "acknowledged": false,
       "rationale": null
     },
@@ -5031,7 +5031,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1705,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5093,
+      "wrapperLine": 5118,
       "acknowledged": false,
       "rationale": null
     },
@@ -5041,7 +5041,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1702,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5052,
+      "wrapperLine": 5077,
       "acknowledged": false,
       "rationale": null
     },
@@ -5051,7 +5051,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1709,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5134,
+      "wrapperLine": 5159,
       "acknowledged": false,
       "rationale": null
     },
@@ -5061,7 +5061,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1703,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5071,
+      "wrapperLine": 5096,
       "acknowledged": false,
       "rationale": null
     },
@@ -5071,7 +5071,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1704,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5087,
+      "wrapperLine": 5112,
       "acknowledged": false,
       "rationale": null
     },
@@ -5081,7 +5081,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1707,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5114,
+      "wrapperLine": 5139,
       "acknowledged": false,
       "rationale": null
     },
@@ -5091,7 +5091,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1712,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5162,
+      "wrapperLine": 5187,
       "acknowledged": false,
       "rationale": null
     },
@@ -5101,7 +5101,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1710,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5149,
+      "wrapperLine": 5174,
       "acknowledged": false,
       "rationale": null
     },
@@ -5111,7 +5111,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1711,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5153,
+      "wrapperLine": 5178,
       "acknowledged": false,
       "rationale": null
     },
@@ -5121,7 +5121,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1441,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4507,
+      "wrapperLine": 4532,
       "acknowledged": false,
       "rationale": null
     },
@@ -5131,7 +5131,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1328,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10225,
+      "wrapperLine": 10250,
       "acknowledged": true,
       "rationale": "Only a person in the native app can loosen the local accepted spend cap. MCP and embedded pages may request a raise but cannot accept it."
     },
@@ -5141,7 +5141,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1327,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10217,
+      "wrapperLine": 10242,
       "acknowledged": true,
       "rationale": "Native-only human Save writes and accepts the cap; MCP edits remain pending when they loosen a cap. Embedded pages cannot call this command."
     },
@@ -5151,7 +5151,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1329,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10237,
+      "wrapperLine": 10262,
       "acknowledged": true,
       "rationale": "Only a person in the native app can apply a pending rate reduction or price an unpriced model. Exposing acceptance to MCP defeats spend caps."
     },
@@ -5161,7 +5161,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1614,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 5913,
+      "wrapperLine": 5938,
       "acknowledged": false,
       "rationale": null
     },
@@ -5171,7 +5171,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1477,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8382,
+      "wrapperLine": 8407,
       "acknowledged": false,
       "rationale": null
     },
@@ -5181,7 +5181,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1413,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4219,
+      "wrapperLine": 4244,
       "acknowledged": false,
       "rationale": null
     },
@@ -5191,7 +5191,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1476,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8420,
+      "wrapperLine": 8445,
       "acknowledged": false,
       "rationale": null
     },
@@ -5201,7 +5201,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1414,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 4226,
+      "wrapperLine": 4251,
       "acknowledged": false,
       "rationale": null
     },
@@ -5221,7 +5221,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1531,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7724,
+      "wrapperLine": 7749,
       "acknowledged": false,
       "rationale": null
     },
@@ -5241,7 +5241,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1244,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2967,
+      "wrapperLine": 2992,
       "acknowledged": false,
       "rationale": null
     },
@@ -5251,7 +5251,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1565,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3687,
+      "wrapperLine": 3712,
       "acknowledged": false,
       "rationale": null
     },
@@ -5261,7 +5261,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1419,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2784,
+      "wrapperLine": 2809,
       "acknowledged": false,
       "rationale": null
     },
@@ -5271,7 +5271,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1367,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2398,
+      "wrapperLine": 2423,
       "acknowledged": false,
       "rationale": null
     },
@@ -5281,7 +5281,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1346,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2574,
+      "wrapperLine": 2599,
       "acknowledged": false,
       "rationale": null
     },
@@ -5291,7 +5291,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1373,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2487,
+      "wrapperLine": 2512,
       "acknowledged": false,
       "rationale": null
     },
@@ -5301,7 +5301,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1383,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2526,
+      "wrapperLine": 2551,
       "acknowledged": false,
       "rationale": null
     },
@@ -5311,7 +5311,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1369,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2413,
+      "wrapperLine": 2438,
       "acknowledged": false,
       "rationale": null
     },
@@ -5321,7 +5321,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1370,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8554,
+      "wrapperLine": 8579,
       "acknowledged": false,
       "rationale": null
     },
@@ -5331,7 +5331,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1366,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2436,
+      "wrapperLine": 2461,
       "acknowledged": false,
       "rationale": null
     },
@@ -5341,7 +5341,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1377,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2501,
+      "wrapperLine": 2526,
       "acknowledged": false,
       "rationale": null
     },
@@ -5351,7 +5351,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1371,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2439,
+      "wrapperLine": 2464,
       "acknowledged": false,
       "rationale": null
     },
@@ -5361,7 +5361,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1375,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2495,
+      "wrapperLine": 2520,
       "acknowledged": false,
       "rationale": null
     },
@@ -5379,7 +5379,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1372,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8904,
+      "wrapperLine": 8929,
       "acknowledged": false,
       "rationale": null
     },
@@ -5389,7 +5389,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1376,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2498,
+      "wrapperLine": 2523,
       "acknowledged": false,
       "rationale": null
     },
@@ -5399,7 +5399,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1374,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2484,
+      "wrapperLine": 2509,
       "acknowledged": false,
       "rationale": null
     },
@@ -5409,7 +5409,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1345,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2565,
+      "wrapperLine": 2590,
       "acknowledged": false,
       "rationale": null
     },
@@ -5419,7 +5419,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1478,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8385,
+      "wrapperLine": 8410,
       "acknowledged": false,
       "rationale": null
     },
@@ -5429,7 +5429,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1378,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2506,
+      "wrapperLine": 2531,
       "acknowledged": false,
       "rationale": null
     },
@@ -5439,7 +5439,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1382,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2523,
+      "wrapperLine": 2548,
       "acknowledged": false,
       "rationale": null
     },
@@ -5449,7 +5449,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1379,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2509,
+      "wrapperLine": 2534,
       "acknowledged": false,
       "rationale": null
     },
@@ -5459,7 +5459,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1381,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2518,
+      "wrapperLine": 2543,
       "acknowledged": false,
       "rationale": null
     },
@@ -5469,7 +5469,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1380,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2512,
+      "wrapperLine": 2537,
       "acknowledged": false,
       "rationale": null
     },
@@ -5489,7 +5489,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1294,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1689,
+      "wrapperLine": 1714,
       "acknowledged": false,
       "rationale": null
     },
@@ -5499,7 +5499,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1287,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1279,
+      "wrapperLine": 1304,
       "acknowledged": false,
       "rationale": null
     },
@@ -5509,7 +5509,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1751,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9784,
+      "wrapperLine": 9809,
       "acknowledged": false,
       "rationale": null
     },
@@ -5519,7 +5519,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1344,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2970,
+      "wrapperLine": 2995,
       "acknowledged": false,
       "rationale": null
     },
@@ -5529,7 +5529,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1523,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9697,
+      "wrapperLine": 9722,
       "acknowledged": false,
       "rationale": null
     },
@@ -5539,7 +5539,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1474,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 8343,
+      "wrapperLine": 8368,
       "acknowledged": false,
       "rationale": null
     },
@@ -5559,7 +5559,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1514,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3410,
+      "wrapperLine": 3435,
       "acknowledged": false,
       "rationale": null
     },
@@ -5569,7 +5569,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1347,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2576,
+      "wrapperLine": 2601,
       "acknowledged": false,
       "rationale": null
     },
@@ -5579,7 +5579,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1530,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7720,
+      "wrapperLine": 7745,
       "acknowledged": false,
       "rationale": null
     },
@@ -5613,7 +5613,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1622,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 6029,
+      "wrapperLine": 6054,
       "acknowledged": false,
       "rationale": null
     },
@@ -5631,7 +5631,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1288,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1290,
+      "wrapperLine": 1315,
       "acknowledged": false,
       "rationale": null
     },
@@ -5641,7 +5641,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1760,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9910,
+      "wrapperLine": 9935,
       "acknowledged": false,
       "rationale": null
     },
@@ -5651,7 +5651,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1758,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9901,
+      "wrapperLine": 9926,
       "acknowledged": false,
       "rationale": null
     },
@@ -5661,7 +5661,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1759,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9905,
+      "wrapperLine": 9930,
       "acknowledged": false,
       "rationale": null
     },
@@ -5671,7 +5671,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1757,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 9895,
+      "wrapperLine": 9920,
       "acknowledged": false,
       "rationale": null
     },
@@ -5681,7 +5681,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1676,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 10159,
+      "wrapperLine": 10184,
       "acknowledged": false,
       "rationale": null
     },
@@ -5691,7 +5691,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1397,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3195,
+      "wrapperLine": 3220,
       "acknowledged": false,
       "rationale": null
     },
@@ -5701,7 +5701,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1398,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3208,
+      "wrapperLine": 3233,
       "acknowledged": false,
       "rationale": null
     },
@@ -5711,7 +5711,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1568,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3841,
+      "wrapperLine": 3866,
       "acknowledged": false,
       "rationale": null
     },
@@ -5721,7 +5721,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1423,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2887,
+      "wrapperLine": 2912,
       "acknowledged": false,
       "rationale": null
     },
@@ -5731,7 +5731,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1399,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3218,
+      "wrapperLine": 3243,
       "acknowledged": false,
       "rationale": null
     },
@@ -5741,7 +5741,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1728,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3343,
+      "wrapperLine": 3368,
       "acknowledged": false,
       "rationale": null
     },
@@ -5751,7 +5751,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1744,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 7328,
+      "wrapperLine": 7353,
       "acknowledged": false,
       "rationale": null
     },
@@ -5761,7 +5761,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1395,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3173,
+      "wrapperLine": 3198,
       "acknowledged": false,
       "rationale": null
     },
@@ -5801,7 +5801,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1396,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 3187,
+      "wrapperLine": 3212,
       "acknowledged": false,
       "rationale": null
     },
@@ -5819,7 +5819,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1171,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1880,
+      "wrapperLine": 1905,
       "acknowledged": false,
       "rationale": null
     },
@@ -5829,7 +5829,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1209,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2160,
+      "wrapperLine": 2185,
       "acknowledged": false,
       "rationale": null
     },
@@ -5847,7 +5847,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1155,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1948,
+      "wrapperLine": 1973,
       "acknowledged": false,
       "rationale": null
     },
@@ -5857,7 +5857,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1154,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1941,
+      "wrapperLine": 1966,
       "acknowledged": false,
       "rationale": null
     },
@@ -5883,7 +5883,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1204,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2105,
+      "wrapperLine": 2130,
       "acknowledged": false,
       "rationale": null
     },
@@ -5893,7 +5893,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1201,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2024,
+      "wrapperLine": 2049,
       "acknowledged": false,
       "rationale": null
     },
@@ -5903,7 +5903,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1172,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1871,
+      "wrapperLine": 1896,
       "acknowledged": false,
       "rationale": null
     },
@@ -5913,7 +5913,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1202,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 2036,
+      "wrapperLine": 2061,
       "acknowledged": false,
       "rationale": null
     },
@@ -5931,7 +5931,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1195,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1969,
+      "wrapperLine": 1994,
       "acknowledged": false,
       "rationale": null
     },
@@ -5941,7 +5941,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1198,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1998,
+      "wrapperLine": 2023,
       "acknowledged": false,
       "rationale": null
     },
@@ -5951,7 +5951,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1194,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1958,
+      "wrapperLine": 1983,
       "acknowledged": false,
       "rationale": null
     },
@@ -5961,7 +5961,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1196,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1979,
+      "wrapperLine": 2004,
       "acknowledged": false,
       "rationale": null
     },
@@ -5971,7 +5971,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1224,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1903,
+      "wrapperLine": 1928,
       "acknowledged": false,
       "rationale": null
     },
@@ -5997,7 +5997,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1150,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1875,
+      "wrapperLine": 1900,
       "acknowledged": false,
       "rationale": null
     },
@@ -6007,7 +6007,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1177,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1917,
+      "wrapperLine": 1942,
       "acknowledged": false,
       "rationale": null
     },
@@ -6017,7 +6017,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1225,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1910,
+      "wrapperLine": 1935,
       "acknowledged": false,
       "rationale": null
     },
@@ -6027,7 +6027,7 @@
       "file": "src-tauri/src/lib.rs",
       "line": 1176,
       "wrapperFile": "src/tauri/commands.ts",
-      "wrapperLine": 1884,
+      "wrapperLine": 1909,
       "acknowledged": false,
       "rationale": null
     }

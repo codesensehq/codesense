@@ -1951,7 +1951,31 @@ describe("agents read model verbs", () => {
     await expect(
       runBridgeCommand("inbox.reorderPins", { agentId: "a", messageIds: "7" }, DOC),
     ).rejects.toThrow(/messageIds/);
+    for (const preview of ["5 of 5", ["QA"], null]) {
+      await expect(
+        runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, preview }, DOC),
+      ).rejects.toThrow(/inbox.pin: preview/);
+    }
     expect(mockAgentPins).not.toHaveBeenCalled();
+  });
+
+  it("hands a pin's preview to the engine as the page sent it", async () => {
+    mockAgentPins.mockResolvedValue({ status: "invalid", message: "unused" });
+    const preview = {
+      shortName: "QA",
+      value: "5 of 5",
+      unit: "ACs traced",
+      status: "on-track",
+      chart: { kind: "segments", segments: ["on-track", "needs-you"], label: "1 of 2" },
+      lines: ["AC 5 green on the merged head"],
+    };
+    await runBridgeCommand("inbox.pin", { agentId: "a", messageId: 7, preview }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "a", null, {
+      op: "pin",
+      messageId: 7,
+      position: undefined,
+      preview,
+    });
   });
 
   it("a pins subscription prepares the thread's view in the doc's team", async () => {

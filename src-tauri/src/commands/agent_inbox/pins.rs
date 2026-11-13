@@ -11,7 +11,7 @@ use super::{
 };
 use crate::commands::dashboard_launch::LaunchTeam;
 use crate::weft::inbox;
-use crate::weft::pins::{self, Pin, PinOutcome, ThreadKey};
+use crate::weft::pins::{self, Pin, PinOutcome, PinPreview, ThreadKey};
 
 /// Tells the viewer a thread's pin list changed, with [`PinsChanged`] as its payload.
 /// Mirrored in `src/tauri/events.ts`.
@@ -39,7 +39,7 @@ impl PinsChanged {
 }
 
 /// A thread's live pins in one team's store, in list order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PinList {
     pub org: String,
@@ -50,7 +50,7 @@ pub(crate) struct PinList {
 }
 
 /// The outcome of a pins read or write.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub(crate) enum PinResult {
     /// The list after the call; `outcome` is set for a pin or unpin.
@@ -79,6 +79,7 @@ pub(crate) enum PinOp {
     Pin {
         message_id: i64,
         position: Option<u32>,
+        preview: Option<PinPreview>,
     },
     Unpin {
         message_id: i64,
@@ -121,7 +122,15 @@ async fn pins_in(
                 PinOp::Pin {
                     message_id,
                     position,
-                } => Some(pins::pin_add(store, &thread, message_id, &by, position)?),
+                    preview,
+                } => Some(pins::pin_add(
+                    store,
+                    &thread,
+                    message_id,
+                    &by,
+                    position,
+                    preview.as_ref(),
+                )?),
                 PinOp::Unpin { message_id } => Some(pins::pin_remove(store, &thread, message_id)?),
                 PinOp::Reorder { message_ids } => {
                     pins::pins_reorder(store, &thread, &message_ids)?;
@@ -170,12 +179,14 @@ pub(crate) async fn pins_from_human(
 
 /// An agent pins (or, `remove`, unpins) message `message_id` in its own thread: the saved
 /// agent and story its session was launched with, in the store of the team it was
-/// launched in. There is no thread argument, so it can name no other thread.
+/// launched in. There is no thread argument, so it can name no other thread. A `preview`
+/// on a message already pinned replaces that pin's preview.
 pub(crate) async fn pin_request<'a>(
     host: &dyn InboxHost,
     session_id: impl Into<Caller<'a>>,
     message_id: i64,
     position: Option<u32>,
+    preview: Option<PinPreview>,
     remove: bool,
 ) -> Result<PinResult, String> {
     let sessions = host.sessions().await?;
@@ -200,6 +211,7 @@ pub(crate) async fn pin_request<'a>(
         PinOp::Pin {
             message_id,
             position,
+            preview,
         }
     };
     pins_in(host, own, thread, op, handle, true).await
@@ -218,6 +230,7 @@ pub async fn agent_pins(
     message_id: Option<i64>,
     position: Option<u32>,
     message_ids: Option<Vec<i64>>,
+    preview: Option<PinPreview>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
     let op = match op.as_str() {
@@ -225,6 +238,7 @@ pub async fn agent_pins(
         "pin" => PinOp::Pin {
             message_id: need_id()?,
             position,
+            preview,
         },
         "unpin" => PinOp::Unpin {
             message_id: need_id()?,

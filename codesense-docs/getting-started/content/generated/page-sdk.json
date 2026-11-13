@@ -1987,7 +1987,7 @@
     {
       "name": "inbox.pin",
       "owner": "VerbMethods",
-      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      preview?: {\n        chart?: {\n          kind: \"segments\";\n          label: string;\n          segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n          [key: string]: unknown;\n        } | {\n          kind: \"progress\";\n          label: string;\n          percent: number;\n          [key: string]: unknown;\n        } | {\n          kind: \"stack\";\n          label: string;\n          parts: Array<{\n            label: string;\n            value: number;\n            [key: string]: unknown;\n          }>;\n          [key: string]: unknown;\n        };\n        lines?: string[];\n        shortName?: string;\n        status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n        unit?: string;\n        value?: string;\n      };\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "description": "metadata · inbox:write · MCP twin pin",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "metadata",
@@ -2011,6 +2011,135 @@
           "position": {
             "minimum": 0,
             "type": "integer"
+          },
+          "preview": {
+            "additionalProperties": false,
+            "properties": {
+              "chart": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "segments"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "segments": {
+                        "items": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "maxItems": 24,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segments",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "progress"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "stack"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "parts": {
+                        "items": {
+                          "properties": {
+                            "label": {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            "value": {
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "parts",
+                      "label"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "lines": {
+                "items": {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "shortName": {
+                "maxLength": 24,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "on-track",
+                  "running",
+                  "needs-you",
+                  "not-updating"
+                ]
+              },
+              "unit": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
           },
           "storyId": {
             "type": "string"
@@ -2038,6 +2167,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -2056,6 +2186,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -2113,7 +2375,7 @@
     {
       "name": "inbox.pins",
       "owner": "VerbMethods",
-      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "description": "read · inbox:read:team",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -2154,6 +2416,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -2172,6 +2435,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -2229,7 +2624,7 @@
     {
       "name": "inbox.reorderPins",
       "owner": "VerbMethods",
-      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "description": "metadata · inbox:write",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "metadata",
@@ -2279,6 +2674,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -2297,6 +2693,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -2354,7 +2882,7 @@
     {
       "name": "inbox.unpin",
       "owner": "VerbMethods",
-      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
       "description": "metadata · inbox:write · MCP twin pin",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "metadata",
@@ -2401,6 +2929,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -2419,6 +2948,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -7484,6 +8145,135 @@
             "minimum": 0,
             "type": "integer"
           },
+          "preview": {
+            "additionalProperties": false,
+            "properties": {
+              "chart": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "segments"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "segments": {
+                        "items": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "maxItems": 24,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segments",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "progress"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "stack"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "parts": {
+                        "items": {
+                          "properties": {
+                            "label": {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            "value": {
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "parts",
+                      "label"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "lines": {
+                "items": {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "shortName": {
+                "maxLength": 24,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "on-track",
+                  "running",
+                  "needs-you",
+                  "not-updating"
+                ]
+              },
+              "unit": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "storyId": {
             "type": "string"
           },
@@ -7510,6 +8300,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -7528,6 +8319,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -7624,6 +8547,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -7642,6 +8566,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -7747,6 +8803,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -7765,6 +8822,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -7867,6 +9056,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -7885,6 +9075,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -12064,6 +13386,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -12082,6 +13405,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -14254,7 +15709,7 @@
     {
       "verb": "inbox.pin",
       "tier": "metadata",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"position\":{\"minimum\":0,\"type\":\"integer\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"position\":{\"minimum\":0,\"type\":\"integer\"},\"preview\":{\"additionalProperties\":false,\"properties\":{\"chart\":{\"oneOf\":[{\"properties\":{\"kind\":{\"const\":\"segments\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"segments\":{\"items\":{\"enum\":[\"on-track\",\"running\",\"needs-you\",\"not-updating\"]},\"maxItems\":24,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"kind\",\"segments\",\"label\"],\"type\":\"object\"},{\"properties\":{\"kind\":{\"const\":\"progress\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"number\"}},\"required\":[\"kind\",\"percent\",\"label\"],\"type\":\"object\"},{\"properties\":{\"kind\":{\"const\":\"stack\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"parts\":{\"items\":{\"properties\":{\"label\":{\"maxLength\":32,\"type\":\"string\"},\"value\":{\"minimum\":0,\"type\":\"number\"}},\"required\":[\"label\",\"value\"],\"type\":\"object\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"kind\",\"parts\",\"label\"],\"type\":\"object\"}]},\"lines\":{\"items\":{\"maxLength\":160,\"type\":\"string\"},\"maxItems\":3,\"type\":\"array\"},\"shortName\":{\"maxLength\":24,\"type\":\"string\"},\"status\":{\"enum\":[\"on-track\",\"running\",\"needs-you\",\"not-updating\"]},\"unit\":{\"maxLength\":64,\"type\":\"string\"},\"value\":{\"maxLength\":32,\"type\":\"string\"}},\"type\":\"object\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
       "description": "metadata · inbox:write · MCP twin pin",
       "denyExample": "denied: grant",
       "result": {
@@ -14270,6 +15725,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -14288,6 +15744,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -14360,6 +15948,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -14378,6 +15967,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -14450,6 +16171,7 @@
               "outcome": {
                 "enum": [
                   "pinned",
+                  "updated",
                   "unpinned",
                   "unchanged"
                 ]
@@ -14468,6 +16190,138 @@
                     },
                     "position": {
                       "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
                       "type": "integer"
                     }
                   },
@@ -15220,8 +17074,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "fb72b8a5de3bda07f4aa7fc9660ee30f286cdd56b9ebd097b22d70329ebf89e9",
-    "src-tauri/src/verbs/registry.generated.json": "c95d88d1d63c9ec3bcecf391103602cd75f5bb196bf2dd56678b964e78791589",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "08772ec7a9b16ab93159621311996dc994bc145859aeaa6aed75e636495a15c0",
+    "src-tauri/src/verbs/registry.generated.json": "0ab74204fb59072abf617b9a183b64b6afc8486177d24152b8fab21b452dc49f",
     "src-tauri/src/verbs/registry.rs": "fc559f32c20039ce7a770c3d5b96c92a5d587ee5de647e0ec5c3b52edc5005fb",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",

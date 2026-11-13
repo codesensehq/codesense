@@ -46,6 +46,8 @@ pub fn rows(
                     "order": pin.position,
                     "pinnedBy": pin.pinned_by,
                     "pinnedAtMs": pin.pinned_at_ms,
+                    "preview": pin.preview,
+                    "previewAtMs": pin.preview_at_ms,
                     "org": team.org,
                     "team": team.team,
                     "agentId": thread.agent_id,
@@ -142,8 +144,19 @@ mod tests {
             position,
             pinned_by: "human".into(),
             pinned_at_ms: 1,
+            preview: None,
+            preview_at_ms: None,
         };
-        let rows = rows(&key, &team, &thread, &[pin(7, 0), pin(3, 1)]);
+        let mut previewed = pin(3, 1);
+        previewed.preview = Some(crate::weft::pins::PinPreview {
+            value: Some("48 passed".into()),
+            ..Default::default()
+        });
+        previewed.preview_at_ms = Some(2);
+        let rows = rows(&key, &team, &thread, &[pin(7, 0), previewed]);
+        assert_eq!(rows[0].1["preview"], Value::Null);
+        assert_eq!(rows[1].1["preview"]["value"], "48 passed");
+        assert_eq!(rows[1].1["previewAtMs"], 2);
         assert!(rows
             .iter()
             .all(|(scope, _)| scope.as_deref() == Some(key.as_str())));

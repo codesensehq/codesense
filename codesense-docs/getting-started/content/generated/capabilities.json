@@ -791,7 +791,7 @@
   },
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/registry.generated.json": "c95d88d1d63c9ec3bcecf391103602cd75f5bb196bf2dd56678b964e78791589",
+    "src-tauri/src/verbs/registry.generated.json": "0ab74204fb59072abf617b9a183b64b6afc8486177d24152b8fab21b452dc49f",
     "src-tauri/src/verbs/registry.rs": "fc559f32c20039ce7a770c3d5b96c92a5d587ee5de647e0ec5c3b52edc5005fb",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"

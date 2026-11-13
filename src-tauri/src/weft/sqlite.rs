@@ -437,7 +437,8 @@ CREATE TABLE IF NOT EXISTS wv_reactions (
 
 -- An agent thread's pin list: messages of this store pinned into the thread keyed by
 -- the saved agent and story its session was launched with (story '' when none).
--- `position` orders the thread's pins from 0. Written only by `weft::pins`.
+-- `position` orders the thread's pins from 0. `preview` is the optional JSON headline
+-- a folded pin shows, sent at `preview_at`. Written only by `weft::pins`.
 CREATE TABLE IF NOT EXISTS wv_pins (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id   TEXT    NOT NULL,
@@ -446,6 +447,8 @@ CREATE TABLE IF NOT EXISTS wv_pins (
     position   INTEGER NOT NULL,
     pinned_by  TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
+    preview    TEXT,
+    preview_at INTEGER,
     UNIQUE (agent_id, story_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS wv_pins_by_message ON wv_pins (message_id);

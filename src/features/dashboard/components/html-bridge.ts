@@ -99,6 +99,7 @@ import {
   type MetadataEdit,
   type FrontmatterValue,
   type LongRateArgs,
+  type AgentPinPreview,
 } from "@/tauri/commands";
 import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
@@ -1366,8 +1367,21 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("inbox.pin: position, if present, must be a whole number from 0");
     }
     const position = a.position == null ? undefined : (a.position as number);
+    // The engine checks the preview's fields; here only its shape.
+    if (
+      "preview" in a &&
+      (typeof a.preview !== "object" || !a.preview || Array.isArray(a.preview))
+    ) {
+      throw new Error("inbox.pin: preview, if present, must be an object");
+    }
+    const preview = a.preview as AgentPinPreview | undefined;
     return inboxWrite(ctx, "inbox.pin", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "pin", messageId: id, position }),
+      agentPins(team, agentId, storyId, {
+        op: "pin",
+        messageId: id,
+        position,
+        ...(preview ? { preview } : {}),
+      }),
     );
   },
   "inbox.unpin": async (args, ctx) => {
