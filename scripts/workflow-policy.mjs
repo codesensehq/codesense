@@ -57,6 +57,15 @@ const MAIN_ONLY = `${PUSH_ONLY} or ${SCHEDULED}, and ${ON_MAIN},`;
 // begins with this term is true off pull requests whatever follows.
 const OFF_PULL_REQUESTS = "github.event_name != 'pull_request' ||";
 const NEVER_SKIPPED_ON = ["merge_group", "push", "schedule"];
+// The one exception: rust.yml's test jobs also skip a change that touches nothing Rust can see,
+// as its changes job decides. They lead with these terms, so they run when that job says
+// anything but rust=false, failure included; what follows must still begin with OFF_PULL_REQUESTS.
+const RUST_PATH_FILTER = {
+  file: "rust.yml",
+  job: "changes",
+  jobs: ["rust-macos", "rust-linux"],
+  terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
+};
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -223,10 +232,26 @@ export function workflowPolicy(text, file = "") {
       !flakyIssues &&
       Object.hasOwn(job, "if")
     ) {
-      const condition = String(job.if)
+      let condition = String(job.if)
         .trim()
         .replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
         .trim();
+      const terms = topLevelConjuncts(condition);
+      const needs = [job.needs ?? []].flat();
+      const pathFiltered =
+        file === RUST_PATH_FILTER.file &&
+        RUST_PATH_FILTER.jobs.includes(name) &&
+        needs.includes(RUST_PATH_FILTER.job) &&
+        RUST_PATH_FILTER.terms.every((term, i) => terms[i] === term);
+      if (pathFiltered) {
+        const rest = terms.slice(RUST_PATH_FILTER.terms.length);
+        // Nothing more, or one term that runs off pull requests.
+        condition = !rest.length
+          ? OFF_PULL_REQUESTS
+          : rest.length === 1
+            ? topLevelConjuncts(rest[0])[0]
+            : "";
+      }
       if (!condition.startsWith(OFF_PULL_REQUESTS))
         errors.push(
           `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge_group, push and schedule always run it`,

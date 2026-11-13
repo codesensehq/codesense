@@ -25,15 +25,54 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
+  changes:
+    name: Rust changes
+    # A merge group or pull request that changes nothing the Rust jobs build, run or read skips
+    # them. GitHub reports a job skipped by its if as a success, so the required checks still
+    # pass (a workflow skipped by a paths filter would leave them pending). The Rust jobs run
+    # unless this job says rust=false, so its failure runs them too. Scheduled and manual runs
+    # always test.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history without file contents: enough to diff a pull request or merge group.
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Find Rust-relevant changes
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            merge_group) range="$GROUP_BASE..$GROUP_HEAD" ;;
+            *) echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          node scripts/rust-changes.mjs "$range" >> "$GITHUB_OUTPUT"
+
   rust-macos:
     name: Rust (macOS arm64)
     # macOS runners are scarce: on a pull request this job runs only with the ci:macos label, never
     # on a Dependabot pull request, and not again when another label is added. GitHub counts a
     # skipped required job as passing on the pull request, which is acceptable only because the
     # merge queue reruns this job on merge_group, where it always runs (as on the nightly schedule and
-    # workflow_dispatch); nothing merges without it. workflow-policy keeps the leading
-    # github.event_name != 'pull_request' || so that holds.
-    if: github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))
+    # workflow_dispatch); nothing merges without it, unless the change touches nothing Rust can
+    # see (the changes job). workflow-policy keeps the github.event_name != 'pull_request' || so
+    # that holds.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: macos-15
     # Room for a full compile of the set, most of which the dependency cache does not
     # cover, followed by tests and doctests.
@@ -151,6 +190,8 @@ jobs:
 
   rust-linux:
     name: Rust (Linux)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
