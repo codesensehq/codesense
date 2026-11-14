@@ -520,7 +520,12 @@ fn a_foreman_page_launches_only_the_foreman_and_its_guide() {
         Dispatcher::default().dispatch_frame(record, "openWorkspace", args, &Policy::default(), 0)
     };
     let target = json!({"kind":"team-workspace","name":"foreman"});
-    for agent in ["foreman-claude", "guide-claude"] {
+    for agent in [
+        "foreman-claude",
+        "guide-claude",
+        "guide-codex",
+        "guide-opencode",
+    ] {
         assert!(!matches!(
             open(&record, json!({"target": target, "agent": agent})),
             Decision::Deny { .. }

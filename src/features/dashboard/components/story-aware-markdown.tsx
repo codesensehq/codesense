@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { fileContentCache } from "@/shared/lib/file-content-cache";
 import { parseTeamKey } from "@/shared/lib/team-key";
@@ -22,35 +22,63 @@ export const NO_STORY_PAGE_NOTE =
 
 /**
  * The story type of the `.md` at `filePath`, read from its front matter: `undefined` until it is
- * read, then the type or `null`. The text comes from the viewer's file cache when it holds a
- * current read, else from one read that fills the cache for the markdown viewer behind it.
+ * read, then the type or `null`. A current entry in the viewer's file cache answers on the first
+ * render, so a warm open paints its viewer at once; otherwise one read fills the cache for the
+ * markdown viewer behind it.
  */
 function useStoryType(filePath: string, refreshKey: number | undefined) {
+  const version = refreshKey ?? 0;
+  const cached = fileContentCache.get(filePath);
+  const cachedText = cached?.refreshKey === version ? cached.content : undefined;
+  const warm = useMemo(
+    () => (cachedText === undefined ? undefined : storyTypeOfMarkdown(cachedText)),
+    [cachedText],
+  );
   const [read, setRead] = useState<{
     path: string;
     type: ReturnType<typeof storyTypeOfMarkdown>;
   }>();
+  const cold = warm === undefined;
   useEffect(() => {
+    if (!cold) return;
     let cancelled = false;
     const done = (text: string) => {
       if (!cancelled) setRead({ path: filePath, type: storyTypeOfMarkdown(text) });
     };
-    const cached = fileContentCache.get(filePath);
-    if (cached && cached.refreshKey === (refreshKey ?? 0)) done(cached.content);
-    else
-      readFile(filePath).then(
-        (text) => {
-          fileContentCache.set(filePath, text, refreshKey ?? 0);
-          done(text);
-        },
-        // A file that can't be read is the markdown viewer's to report.
-        () => done(""),
-      );
+    readFile(filePath).then(
+      (text) => {
+        fileContentCache.set(filePath, text, version);
+        done(text);
+      },
+      // A file that can't be read is the markdown viewer's to report.
+      () => done(""),
+    );
     return () => {
       cancelled = true;
     };
-  }, [filePath, refreshKey]);
+  }, [filePath, version, cold]);
+  if (!cold) return warm;
   return read?.path === filePath ? read.type : undefined;
+}
+
+/**
+ * The page's fragment for `filePath`. A link's anchor (the host's pending hash) rides along; once the
+ * host has consumed it, the page keeps the anchor it was opened at, so its route doesn't change.
+ */
+function useStoryPageHash(filePath: string, pendingHash: string | null | undefined) {
+  const [route, setRoute] = useState(() => ({
+    path: filePath,
+    hash: storyPageHash(filePath, pendingHash),
+  }));
+  if (
+    route.path !== filePath ||
+    (pendingHash && route.hash !== storyPageHash(filePath, pendingHash))
+  ) {
+    const next = { path: filePath, hash: storyPageHash(filePath, pendingHash) };
+    setRoute(next);
+    return next.hash;
+  }
+  return route.hash;
 }
 
 /**
@@ -58,19 +86,37 @@ function useStoryType(filePath: string, refreshKey: number | undefined) {
  * team's story page (`story_page:` in teams.yml) in this same tab, with the file named in the page's
  * URL fragment, so every way of opening the file lands here and opening it again focuses the tab. Any
  * other markdown file, and a story file whose team has no page, is the markdown viewer as before; the
- * latter says why.
+ * latter says why. A host that names no team (the worktree editor) has no story page to choose, so it
+ * is the markdown viewer, with no read and no note.
  */
-export function StoryAwareMarkdown({
-  onFrameShortcut,
-  ...props
-}: CommonViewerProps & { filePath: string } & MarkdownExtras & {
+type Props = CommonViewerProps & { filePath: string } & MarkdownExtras & {
     onFrameShortcut?: FrameShortcutHandler;
-  }) {
+  };
+
+export function StoryAwareMarkdown(props: Props) {
   const team = props.hostTeamKey ? parseTeamKey(props.hostTeamKey) : null;
-  const page = useOrgStore((state) =>
-    team?.teamName ? teamStoryPage(state.orgs, team.orgSlug, team.teamName) : null,
-  );
+  if (!team?.teamName) {
+    const { onFrameShortcut: _unused, ...md } = props;
+    return <MarkdownViewer {...md} />;
+  }
+  return <TeamMarkdown {...props} org={team.orgSlug} team={team.teamName} />;
+}
+
+function TeamMarkdown({
+  onFrameShortcut,
+  org,
+  team,
+  ...props
+}: Props & { org: string; team: string }) {
+  const page = useOrgStore((state) => teamStoryPage(state.orgs, org, team));
   const type = useStoryType(props.filePath, props.refreshKey);
+  const hash = useStoryPageHash(props.filePath, props.pendingHash);
+  const opensPage = Boolean(page && type);
+  const { pendingHash, onPendingHashConsumed } = props;
+  useEffect(() => {
+    // The page carries the anchor now; the host's request for this file is done.
+    if (opensPage && pendingHash) onPendingHashConsumed?.();
+  }, [opensPage, pendingHash, onPendingHashConsumed]);
 
   if (page && type === undefined) return <div data-testid="story-detect" className="flex-1" />;
   if (page && type) {
@@ -83,7 +129,7 @@ export function StoryAwareMarkdown({
         onNavigate={props.onNavigate}
         changedPaths={props.changedPaths}
         viewStateKey={props.viewStateKey}
-        pendingHash={storyPageHash(props.filePath)}
+        pendingHash={hash}
         onFrameShortcut={onFrameShortcut}
       />
     );
