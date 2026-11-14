@@ -213,7 +213,12 @@ export type BridgeContext = {
 };
 
 /** Pages name selectors; the host alone resolves them into granted view keys. */
-async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeContext) {
+async function subscriptionView(
+  args: Record<string, unknown>,
+  ctx?: BridgeContext,
+  /** False when leaving: name the view without preparing (registering) it. */
+  prepare = true,
+) {
   if (args.order !== undefined && (args.topic !== "agentList" || args.order !== "status"))
     throw new Error("invalid: agentList order must be status");
   if (args.topic === "files")
@@ -223,6 +228,12 @@ async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeConte
   if (args.topic === "pins") {
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
+    if (!prepare) {
+      // The host's view key for the thread (`live_hub::pins::view_key` and
+      // `ThreadKey::new`): the saved agent is the id before `@`.
+      const agent = agentId.split("@")[0].trim();
+      return { viewKey: `pins:${team.org}/${team.team}:${agent}:${storyId?.trim() ?? ""}` };
+    }
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
   if (args.topic === "agentDefinitions") {
@@ -881,7 +892,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
-    await (await ctx?.liveFrame?.())?.unsubscribe(String(a.topic), await subscriptionView(a, ctx));
+    await (
+      await ctx?.liveFrame?.()
+    )?.unsubscribe(String(a.topic), await subscriptionView(a, ctx, false));
     return null;
   },
   setUiState: async (args, ctx) => {

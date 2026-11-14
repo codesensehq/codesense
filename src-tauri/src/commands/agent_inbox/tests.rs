@@ -5913,3 +5913,21 @@ async fn read_media_refuses_what_the_message_does_not_serve() {
         );
     }
 }
+
+#[test]
+fn a_pin_thread_comes_from_the_registry_record_never_a_tab_tag() {
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    let state = DashboardLaunchState::new(2);
+    state.register("SW-1#bare", "sess-bare", Some("codesense"));
+    let bare = state.snapshot().remove(0);
+    assert_eq!(bare.agent_revision, None);
+    assert_eq!(registry_thread(&bare), None);
+
+    let mut named = bare.clone();
+    named.agent_revision = Some("acme/api/backend@4".into());
+    named.meta.story = Some("DEMO-1".into());
+    assert_eq!(
+        registry_thread(&named),
+        Some(("acme/api/backend".to_string(), Some("DEMO-1".to_string())))
+    );
+}
