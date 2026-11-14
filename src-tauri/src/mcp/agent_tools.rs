@@ -344,9 +344,11 @@ pub struct AgentDraft {
     /// always there.
     #[serde(default, alias = "mcp_servers")]
     pub mcp_servers: Option<Vec<String>>,
-    /// Codex bridge tool names (unqualified, exact); null/omitted grants all,
-    /// [] grants none. Local Codex only; remote preparation refuses explicit lists.
-    /// The generated CodeSense alias always auto-approves, including on-request
+    /// Bridge tool names (unqualified, exact); null/omitted grants all,
+    /// [] grants none. Local launches only; remote preparation refuses explicit lists.
+    /// Claude denies every other served tool by name and always keeps signal_done,
+    /// read_messages, reply and the other tools every agent needs. On Codex the
+    /// generated CodeSense alias always auto-approves, including on-request
     /// and untrusted agents. Shell/filesystem sandbox settings and other MCP
     /// servers are unchanged. Native enabled_tools and the captured relay grant
     /// both enforce this list; codesense_call_tool needs wrapper and target enabled.
@@ -526,8 +528,9 @@ pub struct AgentUpdateParams {
     pub launch: Option<String>,
     #[serde(default, alias = "mcp_servers")]
     pub mcp_servers: Option<Vec<String>>,
-    /// Replaces Codex's bridge tool list. Omit to keep it, null to allow all,
-    /// [] to allow none. Local Codex only. Native enabled_tools and the relay grant
+    /// Replaces the bridge tool list. Omit to keep it, null to allow all,
+    /// [] to allow none. Local launches only. Claude's per-tool denies, Codex's
+    /// native enabled_tools and the relay grant
     /// enforce it; by-name dispatch needs wrapper and target enabled. Generated
     /// bridge aliases always auto-approve without changing the CLI shell/filesystem
     /// sandbox or other MCP servers. Unknown or excluded required tools warn.

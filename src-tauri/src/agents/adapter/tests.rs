@@ -11,7 +11,7 @@ use super::*;
 fn bridge_tool_allowlist_enforcement_is_a_cli_capability() {
     assert!(desktop(AgentCli::Codex).enforces_bridge_tool_allowlist);
     assert!(desktop(AgentCli::OpenCode).enforces_bridge_tool_allowlist);
-    assert!(!desktop(AgentCli::Claude).enforces_bridge_tool_allowlist);
+    assert!(desktop(AgentCli::Claude).enforces_bridge_tool_allowlist);
 }
 
 /// The placeholder names in a session-log glob, panicking on malformed braces or names

@@ -158,9 +158,23 @@ fn bridge_tool_launch_profile_follows_the_runtime_capability() {
                 .contains(&"signal_done".into())),
         }
 
-        let profile = launch_profile(&draft("bridge-reviewer", AgentCli::Claude), &key);
-        assert_eq!(profile.bridge_tools, None);
-        assert!(profile.effective_bridge_tools.is_empty());
+        // Claude enforces the list too, and keeps its always-on tools whatever it says.
+        let mut definition = draft("bridge-reviewer", AgentCli::Claude);
+        definition.mcp.bridge_tools = tools.clone();
+        let profile = launch_profile(&definition, &key);
+        assert_eq!(profile.bridge_tools, tools);
+        for kept in ["signal_done", "read_messages", "reply"] {
+            assert!(
+                profile.effective_bridge_tools.contains(&kept.into()),
+                "{kept}"
+            );
+        }
+        assert_eq!(
+            profile
+                .effective_bridge_tools
+                .contains(&"codesense_overview".into()),
+            tools.is_none()
+        );
     }
 }
 

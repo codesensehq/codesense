@@ -316,7 +316,10 @@ revision: 7</code></pre>
               <td><code>mcp.bridge_tools</code> <span class="arce-opt">opt</span></td>
               <td>string array · <code>null</code></td>
               <td>
-                Applies to local Codex and OpenCode launches. A remote agent with an explicit
+                Applies to local Claude, Codex and OpenCode launches. Claude gets a
+                per-tool <code>deny</code> for each served tool the list leaves out and
+                always keeps <code>signal_done</code>, <code>read_messages</code>,
+                <code>reply</code> and the other tools every agent needs. A remote agent with an explicit
                 list is refused, so a restriction is never silently dropped; a remote agent with
                 no list (omitted or <code>null</code>) has the full tool set. Exact, unqualified tool names; 1–128 ASCII
                 letters, digits, underscores or hyphens, without duplicates or

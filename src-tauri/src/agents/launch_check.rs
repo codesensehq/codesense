@@ -249,9 +249,10 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
                 "bridge_tools is not enforced by this runtime; the requested list controls tool exposure only"
             }.into(),
         });
+        let always_on = super::permissions::always_on_bridge_tools(resolved.account.policy.runtime);
         let missing: Vec<_> = ["signal_done", "read_messages", "reply"]
             .into_iter()
-            .filter(|name| !tools.iter().any(|tool| tool == name))
+            .filter(|name| !tools.iter().any(|tool| tool == name) && !always_on.contains(*name))
             .collect();
         if !missing.is_empty() {
             out.push(LaunchWarning { code: LaunchWarningCode::BridgeToolsExcluded,
