@@ -59,6 +59,8 @@ const FORBIDDEN = [
   "create_local_organization",
 ];
 const mcp = (name) => `mcp__codesense__${name}`;
+// The one tool beyond CodeSense's: a recorded GitHub MCP git-access method opens the PR with it.
+const GITHUB_PR = "mcp__github__create_pull_request";
 
 // Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
 // system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
@@ -85,10 +87,14 @@ test("the root prompt is the spec, under 2.2k tokens, passed as the agent's syst
 test("the agent allows exactly the Foreman's tools and refuses the rest", () => {
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
-    assert.ok(/^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule), rule);
+    assert.ok(
+      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule) ||
+        rule === GITHUB_PR,
+      rule,
+    );
   }
   const tools = allow.filter((rule) => rule.startsWith("mcp__")).sort();
-  assert.deepEqual(tools, TOOLS.map(mcp).sort());
+  assert.deepEqual(tools, [...TOOLS.map(mcp), GITHUB_PR].sort());
   for (const name of FORBIDDEN) {
     assert.ok(deny.includes(mcp(name)), `${name} is denied`);
     assert.ok(!allow.includes(mcp(name)), `${name} is not allowed`);
@@ -346,7 +352,7 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
     "at most 12 lines",
     "120k context",
     "You never relaunch yourself",
-    "You set no timers",
+    "set no timers",
     "I don't set timers.",
     "never launch a story lead or a specialist",
     "never answer a needs-you card for the person",
@@ -407,6 +413,9 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "`sprint: backlog`",
     "`planning`",
     "gh pr create",
+    "tools/git-access.md",
+    "its PR tool",
+    "no `gh`; name the pushed branch",
     "With no remote",
     "one command to merge",
     "never touch the canonical clone",
@@ -504,7 +513,7 @@ test("waiting: the chat surface's open needs-you cards only, and its view as a d
     "open cards only",
     `inbox_list {kind:"needs-you", limit:50}`,
     "story id",
-    "The person answers on the page",
+    "they answer on the page",
     "needs-you view",
     "never a copy",
   ]) {
@@ -574,7 +583,7 @@ test("a team's story-create scripts run inside a foreman-* worktree", () => {
 test("the spec's worktree, sprint-lead, story-script and handoff forms read literally", () => {
   for (const phrase of [
     "`../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
-    "launched by you for sprint <n>",
+    "launched by you for it",
     "Commit and push what the skill didn't",
     "`reply` once with `Foreman handoff:`",
   ]) {

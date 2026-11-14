@@ -11,7 +11,7 @@ import path from "node:path";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, fixtureFor, PRIOR_BRANCH, CONFIG } = await lib("fixture");
+const { createFixture, fixtureFor, PRIOR_BRANCH, CONFIG, GIT_ACCESS_PATH } = await lib("fixture");
 const { loadCases, loadExtraCases, grade } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval } = await lib("runner");
@@ -21,6 +21,9 @@ const EXTRA = [
   "handoff",
   "new-story-docs",
   "new-story-generic",
+  "new-story-git-access-credentials",
+  "new-story-git-access-gh",
+  "new-story-git-access-none",
   "new-story-no-remote",
   "new-story-scripted",
   "setup-handback",
@@ -137,6 +140,7 @@ function makeStory(
   fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
   if (base === "origin/main") {
     fx.git(["-C", wt, "push", "-u", "origin", branch]);
+    fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
     fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
   }
   if (!keep) fx.git(["worktree", "remove", wt]);
@@ -788,4 +792,81 @@ test("new-story: a pull request head given as owner:branch or -H<branch> is the 
     }, "new-story-generic");
     assert.deepEqual(result.failures, []);
   }
+});
+
+// ---- git access ---------------------------------------------------------------------------
+
+// The story flow of the generic case, ending where a driver chooses: read the record, or not;
+// open the PR, or not.
+const gitAccessStory =
+  ({ read = true, pr = false, push = true } = {}) =>
+  async ({ caseDef, fx }) => {
+    const [request, create] = caseDef.input.turns;
+    const branch = "foreman/dark-mode-ab12";
+    const wt = WT_OF(branch);
+    const dir = path.join(fx.root, wt.slice(3));
+    fx.human(request);
+    fx.say("Create · Change · Not now?");
+    fx.human(create);
+    fx.git(["remote"]);
+    fx.git(["worktree", "list"]);
+    fx.git(["ls-remote", "--heads", "origin"]);
+    fx.git(["worktree", "add", "-b", branch, wt, "origin/main"]);
+    fx.tool(F, "get_story_format");
+    fx.write(
+      path.join(dir, "stories", "dark-mode-ab12.md"),
+      "---\ntype: story\nstatus: planning\nsprint: backlog\n---\n# x\n",
+    );
+    fx.tool(F, "validate_story", { path: `${wt}/stories/dark-mode-ab12.md` });
+    fx.git(["-C", wt, "add", "stories"]);
+    fx.write(path.join(fx.root, `${wt.slice(3)}.msg`), "Add the story\n");
+    fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
+    if (push) fx.git(["-C", wt, "push", "-u", "origin", branch]);
+    if (read) fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    if (pr) fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
+    fx.git(["worktree", "remove", wt]);
+    fx.say("Done.");
+  };
+
+test("git access: a recorded gh method opens the pull request with gh", async () => {
+  const id = "new-story-git-access-gh";
+  assert.deepEqual((await play(gitAccessStory({ pr: true }), id)).failures, []);
+  redFor(await play(gitAccessStory({ pr: false }), id), /0 pr create calls, expected 1/);
+  redFor(
+    await play(gitAccessStory({ pr: true, read: false }), id),
+    /never read the recorded git-access method/,
+  );
+});
+
+test("git access: with none recorded, or plain git credentials, push and hand over with zero gh calls", async () => {
+  for (const id of ["new-story-git-access-none", "new-story-git-access-credentials"]) {
+    assert.deepEqual((await play(gitAccessStory(), id)).failures, [], id);
+    redFor(await play(gitAccessStory({ pr: true }), id), /1 gh calls with no gh git-access method/);
+    redFor(
+      await play(gitAccessStory({ read: false }), id),
+      /never read the recorded git-access method/,
+    );
+    redFor(
+      await play(gitAccessStory({ push: false }), id),
+      /0 foreman branches pushed, expected 1/,
+    );
+  }
+});
+
+test("git access: the fixture serves the record for gh and credentials, and nothing for none", async () => {
+  for (const [method, text] of [
+    ["gh", /Method: gh/],
+    ["credentials", /own git credentials/],
+    ["none", undefined],
+  ]) {
+    const fx = await createFixture({ git_access: method });
+    try {
+      const got = fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+      if (text) assert.match(got.text, text);
+      else assert.equal(got.text, undefined);
+    } finally {
+      fx.teardown();
+    }
+  }
+  await assert.rejects(() => createFixture({ git_access: "token" }), /unknown git_access/);
 });

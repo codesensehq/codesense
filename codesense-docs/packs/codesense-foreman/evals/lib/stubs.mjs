@@ -4,10 +4,13 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ANSWERED_CARD, CARDS, CONFIG, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS, stepDone } from "./fixture.mjs";
+import { ANSWERED_CARD, CARDS, CONFIG, GIT_ACCESS_PATH, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS, stepDone } from "./fixture.mjs";
 
 const F = "foreman";
 const SELF = CONFIG.self;
+
+// Before a pull request: the recorded git-access method. True when it is `gh`.
+const opensWithGh = (fx) => /\bgh\b/.test(fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH }).text ?? "");
 
 const good = {
   "onboard-repo"({ fx, turns }) {
@@ -79,12 +82,15 @@ const good = {
         fx.git(["-C", `../${wt}`, "commit", "-s", "-F", `../${wt}.msg`]);
         if (hasRemote) fx.git(["-C", `../${wt}`, "push", "-u", "origin", branch]);
       }
-      if (hasRemote) fx.gh(["pr", "create", "--head", branch, "--title", title, "--body", "Adds the dark mode story."], dir);
+      const viaGh = hasRemote && opensWithGh(fx);
+      if (viaGh) fx.gh(["pr", "create", "--head", branch, "--title", title, "--body", "Adds the dark mode story."], dir);
       fx.git(["worktree", "remove", `../${wt}`]);
       fx.say(
-        hasRemote
+        viaGh
           ? `Opened a pull request for "${title}" from ${branch}.`
-          : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
+          : hasRemote
+            ? `Pushed "${title}" on ${branch}. No git-access method here can open a pull request, so the branch is ready for you.`
+            : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
       );
     }
   },
@@ -169,6 +175,7 @@ const good = {
     const dir = path.join(fx.root, wt);
     fx.human(turns[0]);
     fx.git(["worktree", "add", "-b", branch, `../${wt}`, "origin/main"]);
+    opensWithGh(fx);
     const result = fx.gh(["pr", "create", "--head", branch, "--title", "Fix the readme", "--body", "Fixes the readme."], dir);
     fx.git(["worktree", "remove", `../${wt}`]);
     fx.say(`The pull request didn't go through (${result.stderr.trim()}). I cleaned up my worktree. Want me to retry?`);
