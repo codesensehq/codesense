@@ -17,8 +17,8 @@ declare global {
   }
 }
 
-/** Boots with no saved session at all: the very first launch of a profile. */
-async function bootFresh(page: Page) {
+/** Boots with no saved session at all: the first launch of a profile, with the scenario's repos. */
+async function bootFresh(page: Page, url = "/?scenario=noOrg") {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => {
     type Internals = {
@@ -36,7 +36,7 @@ async function bootFresh(page: Page) {
       },
     });
   });
-  await page.goto("/?scenario=noOrg");
+  await page.goto(url);
   await page.waitForFunction(() => Boolean(window.__stores?.useViewerStore));
 }
 
@@ -79,12 +79,26 @@ test("a fresh profile opens the setup page, and the menu row and palette reopen 
   expect(await setupTabs(page)).toBe(1);
 });
 
+const discovered = (page: Page) =>
+  page.waitForFunction(() => window.__stores!.useOrgStore.getState().discoveryComplete === true);
+
 test("a profile that has opened a context repo before does not land on the setup page", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await page.waitForFunction(() => Boolean(window.__stores?.useViewerStore));
-  await page.waitForTimeout(500);
+  await discovered(page);
+  // Discovery is done and the launch decision has run (it follows the restore in the same tick).
+  await page.waitForFunction(() => window.__stores!.useOrgStore.getState().stateLoaded === true);
+  expect(await setupTabs(page)).toBe(0);
+});
+
+test("a profile with a context repo of its own and no saved selection lands on the docs README, not the setup page", async ({
+  page,
+}) => {
+  await bootFresh(page, "/");
+  await discovered(page);
+  await expect.poll(() => active(page)).toMatch(/README\.html$/);
   expect(await setupTabs(page)).toBe(0);
 });

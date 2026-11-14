@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
+import { toast } from "sonner";
+
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import {
+  CODESENSE_DOCS_README,
   CODESENSE_DOCS_SETUP,
   CODESENSE_DOCS_SLUG,
   CODESENSE_DOCS_TEAM,
@@ -42,15 +45,10 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
- * The CodeSense setup page, opened as a tab in the docs team. First launch lands here
- * (not a user's open, so full-screen CLI stays on); the identity menu row and the palette
- * item reopen it. The page owns the agent: an open tab is simply focused (its live agent
- * is reused), and a tab with none launches `/codesense-setup`, which reads the setup
- * ledger and carries on at the first step not done. `resume` adds the `#resume` route,
- * so a fresh launch says `resume` instead of treating the open as a first one.
- * False when the docs repo is not connected.
+ * A page of the docs repo as a tab of its "Getting started" team. False when the docs repo is
+ * not connected.
  */
-export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
+function openDocsPage(relPath: string, options: { keepLayout?: boolean; hash?: string }): boolean {
   const docs = useOrgStore.getState().orgs.find((org) => org.slug === CODESENSE_DOCS_SLUG);
   if (!docs) return false;
   const org = useOrgStore.getState();
@@ -60,10 +58,37 @@ export function openCodesenseSetup(options: { resume?: boolean; landing?: boolea
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
   if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return false;
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-  const path = `${docs.org_root.replace(/[/\\]+$/, "")}/${CODESENSE_DOCS_SETUP}`;
+  const path = `${docs.org_root.replace(/[/\\]+$/, "")}/${relPath}`;
   useViewerStore.getState().openFile(teamKey, "", path, {
-    ...(options.landing ? { keepLayout: true } : {}),
-    ...(options.resume ? { hash: "#resume" } : {}),
+    ...(options.keepLayout ? { keepLayout: true } : {}),
+    ...(options.hash ? { hash: options.hash } : {}),
   });
   return true;
+}
+
+/**
+ * The docs README, as a landing (not the user's open: full-screen CLI stays on). A launch
+ * that lands in the docs for a profile with a context repo of its own but no saved selection
+ * opens this, so it never lands on an empty docs team.
+ */
+export function openCodesenseDocsReadme(): boolean {
+  return openDocsPage(CODESENSE_DOCS_README, { keepLayout: true });
+}
+
+/**
+ * The CodeSense setup page, opened as a tab in the docs team. First launch lands here
+ * (not a user's open, so full-screen CLI stays on); the identity menu row and the palette
+ * item reopen it. The page owns the agent: an open tab is simply focused (its live agent
+ * is reused), and a tab with none launches `/codesense-setup`, which reads the setup
+ * ledger and carries on at the first step not done. `resume` adds the `#resume` route,
+ * so a fresh launch says `resume` instead of treating the open as a first one.
+ * False when the docs repo is not connected; a reopen (not a landing) says so in a toast.
+ */
+export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
+  const opened = openDocsPage(CODESENSE_DOCS_SETUP, {
+    keepLayout: options.landing,
+    hash: options.resume ? "#resume" : undefined,
+  });
+  if (!opened && !options.landing) toast.info("CodeSense docs aren't connected yet");
+  return opened;
 }

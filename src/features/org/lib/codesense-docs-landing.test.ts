@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
-import { openCodesenseSetup } from "./codesense-docs-landing";
+import { openCodesenseDocsReadme, openCodesenseSetup } from "./codesense-docs-landing";
+
+const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
 
 const ROOT = "/home/.codesense/users/guest/codesense-docs";
 const SETUP = `${ROOT}/getting-started/content/guide/index.html`;
@@ -20,6 +23,7 @@ const docs = {
 
 describe("openCodesenseSetup", () => {
   beforeEach(() => {
+    toastInfo.mockClear();
     useOrgStore.setState({
       orgs: [docs] as never,
       activeOrgSlug: null,
@@ -58,9 +62,34 @@ describe("openCodesenseSetup", () => {
     expect(useViewerStore.getState().layoutMode).not.toBe("console");
   });
 
-  it("does nothing without the docs repo", () => {
+  it("does nothing without the docs repo, and says so", () => {
     useOrgStore.setState({ orgs: [] });
-    expect(openCodesenseSetup()).toBe(false);
+    expect(openCodesenseSetup({ resume: true })).toBe(false);
     expect(useViewerStore.getState().activeTab[KEY]).toBeUndefined();
+    expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining("docs aren't connected"));
+  });
+
+  it("a landing without the docs repo stays quiet", () => {
+    useOrgStore.setState({ orgs: [] });
+    expect(openCodesenseSetup({ landing: true })).toBe(false);
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe("openCodesenseDocsReadme", () => {
+  it("opens the README as a landing, in the docs team", () => {
+    useOrgStore.setState({ orgs: [docs] as never, activeOrgSlug: null, activeTeamName: null });
+    useViewerStore.setState({
+      openedTeams: [],
+      activeTab: {},
+      openTabs: {},
+      layoutMode: "console",
+      terminalVisible: true,
+    });
+    expect(openCodesenseDocsReadme()).toBe(true);
+    expect(useViewerStore.getState().activeTab[KEY]).toBe(
+      `${ROOT}/getting-started/content/README.html`,
+    );
+    expect(useViewerStore.getState().layoutMode).toBe("console");
   });
 });

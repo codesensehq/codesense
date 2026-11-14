@@ -6,8 +6,12 @@ import { toast } from "sonner";
 
 import { discoverLocalOrgs } from "@/shared/api/org";
 import { ensureCodesenseDocs, ensureSampleRepo } from "@/tauri/commands";
-import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
-import { afterPersistedSelectionRestored, openCodesenseSetup } from "../lib/codesense-docs-landing";
+import { CODESENSE_DOCS_SLUG, pickLaunchOrg } from "@/shared/lib/codesense-docs";
+import {
+  afterPersistedSelectionRestored,
+  openCodesenseDocsReadme,
+  openCodesenseSetup,
+} from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -186,6 +190,9 @@ export function useOrgDiscovery() {
             setActiveOrg(launch.slug);
           }
           if (launch.firstLaunch) openCodesenseSetup({ landing: true });
+          // Docs only because nothing was selected, with a repo of the person's own: the README.
+          else if (launch.slug === CODESENSE_DOCS_SLUG && restored === null)
+            openCodesenseDocsReadme();
         });
       } catch (error) {
         reportTransient(error);

@@ -306,6 +306,15 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
     expect(useViewerStore.getState().layoutMode).toBe("console");
   });
 
+  it("own context repo but no saved selection: lands in the docs with the README open, not the setup page", async () => {
+    discoverMock.mockResolvedValue([docsSummary, ownSummary]);
+    renderHook(() => useOrgDiscovery());
+    await settle();
+    const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
+    expect(useOrgStore.getState().activeOrgSlug).toBe(CODESENSE_DOCS_SLUG);
+    expect(useViewerStore.getState().activeTab[teamKey]).toBe(README);
+  });
+
   it("later launch: reopens the last opened context repo, not the docs, and opens no setup page", async () => {
     useOrgStore.setState({
       activeOrgSlug: "local/acme",
