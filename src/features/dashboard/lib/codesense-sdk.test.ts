@@ -67,7 +67,8 @@ const CHAT_CORE_DTS = join(
 );
 const SAME_KEYS = `type Same<A extends PropertyKey, B extends PropertyKey> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;`;
 
-describe("codesense.d.ts kit.chat", () => {
+// Each case builds its own TypeScript program, which takes several seconds on a CI runner.
+describe("codesense.d.ts kit.chat", { timeout: 30_000 }, () => {
   const contract = (body: string) =>
     declared(`
       import type * as Core from ${JSON.stringify(CHAT_CORE_DTS.replace(/\.d\.ts$/, ""))};
