@@ -287,15 +287,30 @@ const TABLE = {
         { note: "found" },
       ]),
     ),
+    // The read gates the write; the write goes to the team the `team` step switched to (this
+    // step needs it, and reads the same org and team), so it doesn't switch again.
+    calls: Object.fromEntries(
+      ["check-credentials", "check-gh-cli", "check-mcp-server", "check-token-tool"].map((a) => [
+        a,
+        ["run_in_terminal_tab", "create_content_file"],
+      ]),
+    ),
+    relies: "team",
     rerun: { note: "found" },
   },
   // One repo with no clone keeps the step open; a bound clone that is gone is missing again.
   clone: {
     before: [{}, { repos: "unattached" }, { repos: "missing" }],
     after: { "clone-repo": { repos: "attached" }, "bind-clone": { repos: "attached" } },
+    calls: { "clone-repo": ["clone_repo"], "bind-clone": ["attach_source_repo_path"] },
     rerun: { repos: "attached" },
   },
 };
+/** Whether `id` needs `target`, directly or through the steps it needs. */
+function needsStep(id, target) {
+  const needs = index().steps.find((e) => e.id === id)?.needs ?? [];
+  return needs.includes(target) || needs.some((n) => needsStep(n, target));
+}
 const RANK = ["unknown", "missing", "partial", "done"];
 
 /** The step's state from what its verify probes read: the most-done of them. */
@@ -323,18 +338,36 @@ test("the step table: each card is offered until done, each act ends done, and a
       const own = s.act.find((a) => a.id === act);
       const chain = [own, ...(own.then ?? []).map((n) => s.act.find((a) => a.id === n))];
       assert.deepEqual(
-        chain.map((a) => a.verb.tool),
+        chain.map((a) => a.verb?.tool ?? "run_in_terminal_tab"),
         row.calls[act],
         `${id}/${act}`,
       );
       const write = chain.findIndex((a) =>
-        ["create_content_file", "set_epic_repos"].includes(a.verb.tool),
+        ["create_content_file", "set_epic_repos"].includes(a.verb?.tool),
       );
       const switched = chain.findIndex(
-        (a) => a.verb.tool === "set_active_team" || a.verb.args?.activate === true,
+        (a) => a.verb?.tool === "set_active_team" || a.verb?.args?.activate === true,
       );
-      if (write >= 0)
+      if (write >= 0 && !row.relies)
         assert.ok(switched >= 0 && switched < write, `${id}/${act} switches team before it writes`);
+      if (write >= 0 && row.relies) {
+        // No switch of its own: the write's team is the one the `team` step made active.
+        assert.equal(switched, -1, `${id}/${act} relies on ${row.relies}, so it doesn't switch`);
+        assert.ok(needsStep(id, row.relies), `${id} needs ${row.relies}`);
+        assert.match(
+          chain[write].verb.args.path,
+          /^\{\{probe\.repos\.org_root\}\}\/\{\{probe\.repos\.team\}\}\/content\//,
+        );
+        const probe = s.probe.find((p) => p.id === "repos");
+        const theirs = step(row.relies).probe.find((p) => p.id === "teams");
+        assert.deepEqual(
+          probe.pick,
+          theirs.pick,
+          `${id} reads the same org and team as ${row.relies}`,
+        );
+        assert.equal(probe.yields.org_root, theirs.yields.org_root);
+        assert.equal(probe.yields.team, theirs.yields.team);
+      }
     }
   }
 });
