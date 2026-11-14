@@ -483,7 +483,7 @@ fn check_parts(manifest: &PackManifest, report: &mut PackReport) {
             ));
         }
     }
-    let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut edges: BTreeMap<&str, Vec<&str>> = Default::default();
     for part in &manifest.parts {
         let includes: &[String] = match part {
             Part::Preset { includes, .. } => includes,

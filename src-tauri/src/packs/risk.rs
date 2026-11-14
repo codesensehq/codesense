@@ -187,7 +187,7 @@ fn part_facts(manifest: &PackManifest, facts: &mut RiskFacts) {
                 let origin = match (&source.npm, &source.git) {
                     (Some(npm), _) => format!("npm:{npm}"),
                     (None, Some(git)) => git.clone(),
-                    (None, None) => String::new(),
+                    (None, None) => Default::default(),
                 };
                 facts.network_fetches.push(FetchFact {
                     part: id.clone(),
