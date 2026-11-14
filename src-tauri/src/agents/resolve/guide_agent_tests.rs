@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs. The same
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs and the
+/// Foreman hand-back's `send_role_message`. The same
 /// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
 const PHASE_1: [&str; 27] = [
     "who_am_i",

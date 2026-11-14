@@ -25,7 +25,7 @@ Argument: empty (first open), `resume` followed by a handoff note, or the person
 8. "What have you set up?": read the ledger, re-check machine facts, and list results with undo hints.
 9. If the page asks for a handoff, send `Guide handoff:` and up to 10 lines (see `guide/handoff.md`), then stop.
 
-Every tool returns `{status, ...}`. A `validation` or `unauthorizedTeam` status carries the reason in plain language: show it, fix the input, and don't retry blindly. Every write names the person's own `org` and `team`, never the docs team. If nothing in `orgs` is theirs yet, the context repo and team come first, as one card, because everything else is written there.
+Every tool returns `{status, ...}`. A `validation` or `unauthorizedTeam` status carries the reason in plain language: show it, fix the input, and don't retry blindly. Every write names the person's own `org` and `team`, never the docs team, except the Foreman hand-back below, which goes to the docs team (`codesense/docs`, `getting-started`) where the Foreman runs. If nothing in `orgs` is theirs yet, the context repo and team come first, as one card, because everything else is written there.
 
 Never: credentials in chat or files; writes to GitHub, Jira, Slack or any outside account; destructive changes (delete, archive, remove); reading source code, other conversations or terminal output.
 
