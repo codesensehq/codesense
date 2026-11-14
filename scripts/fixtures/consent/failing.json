@@ -1,0 +1,121 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_13",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"orgs\": []}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_local_organization",
+            "native_id": "toolu_14",
+            "is_error": false,
+            "input": "{\"name\": \"acme\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_15",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create the web team?**\\n\\ncard: team \\u00b7 local-write \\u00b7 create-team=Create web | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 101}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_16",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_17",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 102, \"text\": \"Create web\", \"inReplyTo\": 101, \"from\": \"human\"}]}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_18",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 7,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_19",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Add acme/web?**\\n\\ncard: source-repos \\u00b7 local-write \\u00b7 add-source-repo=Add acme/web | none=Skip\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 103}"
+          }
+        ]
+      },
+      {
+        "index": 8,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__add_source_repo",
+            "native_id": "toolu_20",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"team\": \"web\", \"url\": \"https://github.com/acme/web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      }
+    ]
+  }
+}
