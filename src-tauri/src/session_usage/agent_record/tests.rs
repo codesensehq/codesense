@@ -173,6 +173,107 @@ fn an_unknown_or_empty_handle_is_refused() {
     assert!(empty.err().unwrap().contains("handle must not be empty"));
 }
 
+/// A session of the saved agent `agent` on `story`, recorded at `at` with one priced call of
+/// `input` tokens.
+fn chain_session(dir: &Path, handle: &str, agent: &str, story: &str, at: i64, input: u64) {
+    chain_session_of(dir, handle, agent, story, at, input, "claude-sonnet-5-5");
+}
+
+/// [`chain_session`] on `model`, which may have no rate.
+fn chain_session_of(
+    dir: &Path,
+    handle: &str,
+    agent: &str,
+    story: &str,
+    at: i64,
+    input: u64,
+    model: &str,
+) {
+    let mut store = UsageStore::open(&dir.join("usage.sqlite")).unwrap();
+    let mut record = SessionRecord::new(format!("tab-{handle}"));
+    record.handle = Some(handle.into());
+    record.agent = Some(agent.into());
+    record.story_id = Some(story.into());
+    record.cli = Some(AgentCli::Claude.to_string());
+    record.model = Some(model.into());
+    record.recorded_at_ms = at;
+    store.write_session_record(&record).unwrap();
+    let call = event(
+        &format!("e-{handle}"),
+        &format!("tab-{handle}"),
+        model,
+        at,
+        Tokens {
+            input,
+            output: 10,
+            ..Default::default()
+        },
+    );
+    store.ingest(&[call]).unwrap();
+}
+
+#[test]
+fn a_handoff_chain_sums_its_sessions_and_leaves_other_agents_and_stories_out() {
+    let (dir, _store) = store();
+    chain_session(dir.path(), "dev-1", "dev@3", "STORY-A", AT, 100);
+    chain_session(dir.path(), "dev-2", "dev@3", "STORY-A", AT + 1_000, 200);
+    // A later revision of the same saved agent is still the same agent.
+    chain_session(dir.path(), "dev-3", "dev@4", "STORY-A", AT + 2_000, 400);
+    // Another agent on the same story, and the same agent on another story.
+    chain_session(dir.path(), "qa-1", "qa@1", "STORY-A", AT + 500, 1_000);
+    chain_session(dir.path(), "dev-other", "dev@3", "STORY-B", AT + 700, 2_000);
+    // A session after the one asked about is not its predecessor.
+    chain_session(dir.path(), "dev-4", "dev@4", "STORY-A", AT + 3_000, 4_000);
+
+    let half = half(dir.path(), "dev-3");
+    let record = assemble("dev-3", &half, None, None);
+    assert_eq!(
+        record["chain"],
+        json!(["tab-dev-1", "tab-dev-2", "tab-dev-3"])
+    );
+    assert_eq!(record["sessionId"], "tab-dev-3");
+    assert_eq!(record["tokens"]["input"], 700);
+    assert_eq!(record["tokens"]["output"], 30);
+    let sum: f64 = ["dev-1", "dev-2", "dev-3"]
+        .iter()
+        .map(|h| json!(usage_row(dir.path(), &format!("tab-{h}")).cost_usd).as_f64().unwrap())
+        .sum();
+    assert!((record["costUsd"].as_f64().unwrap() - sum).abs() < 1e-9);
+    assert_eq!(record["firstAtMs"], AT);
+    assert_eq!(record["lastAtMs"], AT + 2_000);
+}
+
+#[test]
+fn a_chain_reads_the_files_of_every_session_in_it() {
+    let (dir, _store) = store();
+    chain_session(dir.path(), "dev-1", "dev", "STORY-A", AT, 100);
+    chain_session(dir.path(), "dev-2", "dev", "STORY-A", AT + 1_000, 100);
+    chain_session(dir.path(), "qa-1", "qa", "STORY-A", AT + 500, 100);
+    let half = half(dir.path(), "dev-2");
+    let commits: Vec<CommitFacts> = vec![
+        ("c1".into(), vec!["a.rs".into()], vec!["tab-dev-1".into()]),
+        ("c2".into(), vec!["a.rs".into(), "b.rs".into()], vec!["tab-dev-2".into()]),
+        ("c3".into(), vec!["q.rs".into()], vec!["tab-qa-1".into()]),
+    ];
+    let record = assemble("dev-2", &half, Some(&commits), None);
+    assert_eq!(
+        record["files"],
+        json!([
+            {"path": "a.rs", "commits": ["c1", "c2"]},
+            {"path": "b.rs", "commits": ["c2"]},
+        ])
+    );
+}
+
+#[test]
+fn a_session_with_no_story_or_agent_is_its_own_chain() {
+    let (dir, _store) = store();
+    launched(dir.path(), AgentCli::Claude, "solo", "claude-sonnet-5-5", None);
+    let half = half(dir.path(), "solo");
+    let record = assemble("solo", &half, None, None);
+    assert_eq!(record["chain"], json!(["tab-solo"]));
+}
+
 fn page(shas: &[&str], next: Option<&str>) -> CommitPage {
     CommitPage {
         commits: shas
@@ -253,3 +354,34 @@ async fn unreadable_commits_keep_what_was_read_and_mark_files_unavailable() {
     );
 }
 
+#[test]
+fn an_unpriced_earlier_session_leaves_the_priced_sum_of_the_rest_and_names_its_model() {
+    let (dir, _store) = store();
+    chain_session_of(dir.path(), "dev-1", "dev", "STORY-A", AT, 100, "no-price");
+    chain_session(dir.path(), "dev-2", "dev", "STORY-A", AT + 1_000, 200);
+    chain_session(dir.path(), "dev-3", "dev", "STORY-A", AT + 2_000, 400);
+    let half = half(dir.path(), "dev-3");
+    let record = assemble("dev-3", &half, None, None);
+    let priced: f64 = ["dev-2", "dev-3"]
+        .iter()
+        .map(|h| json!(usage_row(dir.path(), &format!("tab-{h}")).cost_usd).as_f64().unwrap())
+        .sum();
+    assert!((record["costUsd"].as_f64().unwrap() - priced).abs() < 1e-9);
+    assert_eq!(record["unpricedModels"], json!(["no-price"]));
+    assert!(record["unavailable"]["cost"].as_str().unwrap().contains("priced part"));
+    // The tokens still count every session in the chain.
+    assert_eq!(record["tokens"]["input"], 700);
+}
+
+#[test]
+fn a_chain_with_nothing_priced_has_no_cost() {
+    let (dir, _store) = store();
+    chain_session_of(dir.path(), "dev-1", "dev", "STORY-A", AT, 100, "no-price");
+    chain_session_of(dir.path(), "dev-2", "dev", "STORY-A", AT + 1_000, 200, "no-price");
+    let half = half(dir.path(), "dev-2");
+    let record = assemble("dev-2", &half, None, None);
+    assert_eq!(record["costUsd"], Value::Null);
+    assert_eq!(record["unpricedModels"], json!(["no-price"]));
+    let why = record["unavailable"]["cost"].as_str().unwrap();
+    assert!(!why.contains("priced part"), "{why}");
+}
