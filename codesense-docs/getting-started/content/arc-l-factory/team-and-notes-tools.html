@@ -98,7 +98,7 @@
       </section>
       <section id="source-repos" data-search="Source repos">
         <h2>Source repos</h2>
-        <p>CodeSense never clones. Clone with git yourself, then bind the folder.</p>
+        <p>Clone with git yourself, then bind the folder, or let <code>clone_repo</code> run a GitHub clone in a visible tab and bind it.</p>
         <h3 id="tool-add_source_repo"><code>add_source_repo</code></h3>
         <p>Adds a source repo to a team. Pass <code>org</code>, <code>team</code> and exactly one of <code>url</code> (https, git@, <code>host/owner/repo</code> or GitHub shorthand <code>owner/repo</code>, tracked on the team) or <code>path</code> (an absolute folder on this machine, bound as the repo's local clone). A folder is tracked as the repo its <code>upstream</code> remote names, else <code>origin</code>, else <code>local/&lt;folder&gt;</code>; <code>remoteName</code> in the result says which. A folder inside a git repository must be that repository's root. Add by <code>url</code> and bind the clone later with <code>attach_source_repo_path</code>. A bad URL or folder, a duplicate or an invalid identity returns <code>validation</code>.</p>
         <pre data-tool-example="add_source_repo"><code>{
@@ -118,6 +118,18 @@
     &quot;team&quot;: &quot;engineering&quot;,
     &quot;repo&quot;: &quot;acme/app&quot;,
     &quot;path&quot;: &quot;/Users/me/code/app&quot;
+  }
+}</code></pre>
+        <h3 id="tool-clone_repo"><code>clone_repo</code></h3>
+        <p>Clones a GitHub repo a team tracks and binds the clone, in a tab the person can watch. Pass <code>org</code>, <code>team</code>, <code>repo</code> (<code>owner/name</code>), <code>path</code> (the absolute folder to clone into, <code>&lt;parent&gt;/&lt;name&gt;</code>) and <code>workspaceId</code> (an open workspace that hosts the tab). Every input is checked before anything runs. <code>repo</code> is ASCII <code>owner/name</code>, with no URL, <code>@</code>, <code>:</code> or space. <code>path</code> is absolute, at most 1,024 bytes, uses only letters, digits, <code>.</code>, <code>_</code>, <code>-</code>, space and <code>/</code>, and has no <code>..</code>, <code>.</code>, empty or trailing segment. Its last segment equals the repo's name, so it sits directly under its parent. The parent exists, is a directory and has no symlink in its path. The target is absent or an empty directory. A refusal names the rule and opens no tab. Then <code>gh repo clone</code> runs as a fixed argument vector, with no shell, and once the clone has finished, the folder is bound the way <code>attach_source_repo_path</code> binds it. <code>created</code> in the reply is true only when the call created the folder. Pass <code>stop: true</code> with <code>repo</code> and <code>path</code> to remove a folder this tool created; a folder that was already there is never removed.</p>
+        <pre data-tool-example="clone_repo"><code>{
+  &quot;tool&quot;: &quot;clone_repo&quot;,
+  &quot;arguments&quot;: {
+    &quot;org&quot;: &quot;acme/context&quot;,
+    &quot;team&quot;: &quot;engineering&quot;,
+    &quot;repo&quot;: &quot;acme/app&quot;,
+    &quot;path&quot;: &quot;/Users/me/code/app&quot;,
+    &quot;workspaceId&quot;: &quot;generic:/Users/me/code&quot;
   }
 }</code></pre>
       </section>

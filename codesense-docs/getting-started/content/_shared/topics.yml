@@ -279,6 +279,7 @@
         "set_private_items_use",
         "add_source_repo",
         "attach_source_repo_path",
+        "clone_repo",
         "get_publish_set",
         "notes_list",
         "notes_search",
