@@ -64,13 +64,15 @@ export const SETUP_VERBS = [
   "clone_repo",
 ];
 
-// What a probe may read: each tool's arguments and the result fields it returns, as its MCP
-// description and handler give them (`[]` is a list's entry, `.*` any field of a record).
+// What a probe may read: each tool's arguments and the result fields its handler serialises
+// (`[]` is a list's entry, `.*` any field of a record). The fields come from the Rust, not the
+// tool's description, and `probe-tools.node-test.mjs` reads the handlers to hold them there.
 // A probe on a tool listed here takes only those arguments, and picks and yields only those
 // fields. A tool the guide's steps don't probe yet is unlisted; its probe is checked when
 // it is added.
 export const PROBE_TOOLS = {
-  // `describe_setup` takes no arguments; its `data` holds these.
+  // `describe_setup` takes no arguments; its `data` is `SetupState` (`mcp/setup_tools.rs`).
+  // A repo's `attachment` is `attached`, `missing` (bound, the clone is gone) or `unattached`.
   describe_setup: {
     params: [],
     fields: [
@@ -80,11 +82,15 @@ export const PROBE_TOOLS = {
       "orgs[].displayName",
       "orgs[].orgRoot",
       "orgs[].remoteUrl",
+      "orgs[].loadErrors[]",
       "orgs[].teams[].name",
       "orgs[].teams[].archived",
-      "orgs[].teams[].parent",
-      "orgs[].teams[].sourceRepos[].repo",
-      "orgs[].teams[].sourceRepos[].status",
+      "orgs[].teams[].parentTeam",
+      "orgs[].teams[].starterPage",
+      "orgs[].teams[].synced",
+      "orgs[].teams[].sourceRepos[].slug",
+      "orgs[].teams[].sourceRepos[].remoteKey",
+      "orgs[].teams[].sourceRepos[].attachment",
       "orgs[].teams[].sourceRepos[].localPath",
     ],
   },

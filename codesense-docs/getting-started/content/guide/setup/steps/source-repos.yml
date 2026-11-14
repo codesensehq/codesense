@@ -9,8 +9,8 @@ probe:
   - id: repos
     check: { tool: describe_setup }
     pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
-    yields: { org: "orgs[].slug", team: "orgs[].teams[].name", status: "orgs[].teams[].sourceRepos[].status" }
-    map: { attached: done, unattached: partial, none: missing }
+    yields: { org: "orgs[].slug", team: "orgs[].teams[].name", attachment: "orgs[].teams[].sourceRepos[].attachment" }
+    map: { attached: done, missing: partial, unattached: partial, none: missing }
 ask:
   text: >-
     **Add these repos?** I'll add each one to your team's list of source repos. That only

@@ -73,7 +73,7 @@ files:
     sha256: 400849ce8611708e7c654f96f30a0e0fffbe37571ea2d1218f871373ffe40300
     exec: false
   - path: setup/steps/source-repos.yml
-    sha256: af464fd82d23a625f1a08c1daaea590e1de40b2bf35fcc41beec92b428906314
+    sha256: 678ae556a62bea75777df28bb2a9332940546eabb8d5d63cc41dfe942da873be
     exec: false
   - path: setup/steps/team.yml
     sha256: e814992e532f978da0463615836d058aa8295a1132853a8897d148e6162437f4
