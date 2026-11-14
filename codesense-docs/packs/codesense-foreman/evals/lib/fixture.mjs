@@ -57,6 +57,13 @@ export const ANSWERED_CARD = {
   state: "answered",
   answer: "a",
 };
+// What the scripted guide stub does, for the setup hand-off cases. The real setup agent belongs to
+// the onboarding work; this walks the ledger's steps and ends with the hand-back line the setup
+// skill's `foreman-handback` block names (a test ties the two together).
+export const SETUP_STEPS = ["team", "source-repos", "gh"];
+export const HANDBACK_PREFIX = "Setup done:";
+export const HANDBACK_ROLE = "codesense-foreman";
+const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, gh signed in`;
 const copyCards = (mixed = false) => JSON.parse(JSON.stringify(mixed ? [ANSWERED_CARD, ...CARDS] : CARDS));
 
 // Dropped from the sandbox env: anything that could reach a real account, and every inherited
@@ -148,7 +155,10 @@ Run both from the story's worktree:
 //   inbox: "mixed": the needs-you list also holds an answered card.
 //   pre_sessions: rows already live before the Foreman starts (real list_sessions fields).
 //   rename_launched: sessions the Foreman launched show a new display name.
-const KEYS = ["fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+//   ledger: rows already in the private setup-ledger ({step, state}).
+//   guide: "complete": the scripted guide stub runs when the Foreman launches a guide-* session
+//     with a /codesense-setup prompt.
+const KEYS = ["ledger", "guide", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -196,6 +206,8 @@ export async function createFixture(options = {}) {
   for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched"])
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);
   if (!Array.isArray(options.pre_sessions ?? [])) throw new Error("pre_sessions must be a list");
+  if (!Array.isArray(options.ledger ?? [])) throw new Error("ledger must be a list");
+  if (![undefined, "complete"].includes(options.guide)) throw new Error("guide must be complete");
   const opts = {
     failFirstPr: options.fail_first_pr === true,
     storyTeam: options.story_team ?? "generic",
@@ -205,6 +217,8 @@ export async function createFixture(options = {}) {
     mixedInbox: options.inbox === "mixed",
     preSessions: options.pre_sessions ?? [],
     renameLaunched: options.rename_launched === true,
+    ledger: options.ledger ?? [],
+    guide: options.guide,
   };
   const root = mkdtempSync(path.join(os.tmpdir(), `foreman-eval-${process.pid}-`));
   try {
@@ -311,6 +325,9 @@ function build(root, opts) {
     sessions.push({ id: "session-child-1", launched_by: "foreman", turn: 0, agent: CONFIG.sprintLeadAgent, name: "Sprint 1", team: CONFIG.team });
   const turns = [];
   let turn = 0;
+  const ledger = opts.ledger.map((r) => ({ ...r }));
+  const guideCards = [];
+  const roleMessages = [];
 
   const nextCall = (caller, name, args, extra = {}) => {
     const record = { seq: nextSeq(), turn, caller, tool: name, args: args ?? {}, ...extra };
@@ -337,6 +354,24 @@ function build(root, opts) {
     return out;
   };
 
+  const agentOf = (session) => String(session.agent ?? "").split("/").pop();
+  // The scripted guide: resume skips the steps the ledger shows done. Its first card is the first
+  // step left; each step it finishes goes in the ledger; a full run ends with the hand-back message.
+  const runGuide = (session) => {
+    const resume = /^\/codesense-setup\s+resume\b/.test(String(session.initial_prompt));
+    const done = (step) => ledger.some((r) => r.step === step && r.state === "done");
+    const todo = SETUP_STEPS.filter((step) => !(resume && done(step)));
+    guideCards.push({ session: session.id, step: todo[0] ?? null });
+    for (const step of todo) {
+      nextCall(session.id, "records_create", { collection: "setup-ledger", fields: { step, state: "done" } });
+      ledger.push({ step, state: "done" });
+    }
+    // Launched by another session, the setup skill hands back before it ends.
+    const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, text: HANDBACK_TEXT });
+    roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, from: session.id, kind: "setup-done", claimed: false });
+    nextCall(session.id, "signal_done", { status: "success" });
+  };
+
   const fx = {
     root,
     env,
@@ -358,6 +393,7 @@ function build(root, opts) {
         const { launched_by: launchedByArg, ...rest } = record.args;
         const session = { id: `session-${sessions.length + 1}`, turn, ...rest, launched_by: caller, launched_by_arg: launchedByArg };
         sessions.push(session);
+        if (opts.guide && /^guide-/.test(agentOf(session)) && /^\/codesense-setup\b/.test(String(session.initial_prompt ?? ""))) runGuide(session);
         return { status: "launched", handle: session.id };
       }
       // Only fields the real list_sessions has. A rename shows in `displayName` alone.
@@ -374,6 +410,22 @@ function build(root, opts) {
           })),
         };
       if (tool === "inbox_list") return { cards: copyCards(opts.mixedInbox) };
+      if (tool === "records_list" && record.args.collection === "setup-ledger") return { records: ledger.map((r) => ({ ...r })) };
+      if (tool === "records_create" && record.args.collection === "setup-ledger") {
+        ledger.push({ ...record.args.fields });
+        return { status: "created" };
+      }
+      if (tool === "list_orgs_teams")
+        return opts.storyTeam === "docs"
+          ? [{ org: "codesense/docs", team: "getting-started", synced: true }]
+          : [{ org: "codesense/docs", team: "getting-started", synced: true }, { org: CONFIG.team, team: CONFIG.team, synced: true }];
+      if (tool === "list_source_repos") return { repos: opts.storyTeam === "docs" ? [] : [{ org: CONFIG.team, team: CONFIG.team, repo: "acme/demo" }] };
+      if (tool === "claim_role_messages") {
+        const mine = roleMessages.filter((m) => m.role === record.args.role && !m.claimed);
+        for (const m of mine) m.claimed = true;
+        return { deliveries: mine.map((m, i) => ({ deliveryId: i + 1, messageId: m.seq, role: m.role, claimToken: `claim-${m.seq}`, text: HANDBACK_TEXT, from: m.from })) };
+      }
+      if (tool === "ack_role_message") return {};
       if (tool === "describe_setup")
         // The real tool's shape: the active org and team, and every org with its teams.
         return opts.storyTeam === "docs"
@@ -433,6 +485,9 @@ function build(root, opts) {
         turns: [...turns],
         config: { ...fx.config },
         cards: copyCards(opts.mixedInbox),
+        ledger: ledger.map((r) => ({ ...r })),
+        guideCards: guideCards.map((c) => ({ ...c })),
+        roleMessages: roleMessages.map((m) => ({ ...m })),
         env: { PATH: env.PATH, HOME: env.HOME },
       };
     },

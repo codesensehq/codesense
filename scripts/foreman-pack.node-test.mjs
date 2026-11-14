@@ -65,9 +65,10 @@ const mcp = (name) => `mcp__codesense__${name}`;
 // 2.69 bytes a token. Four bytes a token undercounted by a third.
 const BYTES_PER_TOKEN = 2.65;
 const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
-const ROOT_CAP = 2000;
+// 2k until the setup rules (offer, resume, hand-back) went in; flagged in that PR.
+const ROOT_CAP = 2200;
 
-test("the root prompt is the spec, under 2k tokens, passed as the agent's system prompt", () => {
+test("the root prompt is the spec, under 2.2k tokens, passed as the agent's system prompt", () => {
   const at = agent.args.indexOf("--append-system-prompt");
   assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(
@@ -413,6 +414,29 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
+});
+
+test("setup: offer once, launch the guide on a yes, resume, and take it back with a Set up: line", () => {
+  for (const phrase of [
+    "Set me up",
+    "list_orgs_teams",
+    "list_source_repos",
+    "offer setup once",
+    "Set up now · Not now",
+    "`setup-ledger`",
+    'agent:"guide-claude"',
+    'initial_prompt:"/codesense-setup"',
+    'mode:"visible-unfocused"',
+    "`/codesense-setup resume`",
+    "`Setup done:`",
+    "`claim_role_messages`",
+    "`ack_role_message`",
+    "`Set up:`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  // The Foreman makes no setup call itself; it hands over.
+  assert.ok(spec.includes("make no setup call"), "it only hands over");
 });
 
 test("sprint leads: look for a live one on any machine, then launch the team's sprint agent from its config", () => {

@@ -109,3 +109,14 @@ proposal. Preview before saving, and ask before creating or enabling anything.
 
 Call `describe_setup` one last time. Report what this run changed, what is still left,
 and anything that is waiting on the user in the app, such as a workspace to attach.
+
+## 7. Hand back
+
+When the arguments start with `resume`, skip every step the `setup-ledger` shows done and start at the
+first one that isn't.
+
+<!-- foreman-handback -->
+When launched by another session, send `Setup done:` and a one-line summary (team, repos, sign-ins) with
+`send_role_message` to `role:codesense-foreman` before you call `signal_done`. If you were started by hand,
+skip this.
+<!-- /foreman-handback -->

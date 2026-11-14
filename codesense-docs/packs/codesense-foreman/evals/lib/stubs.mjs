@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ANSWERED_CARD, CARDS, CONFIG } from "./fixture.mjs";
+import { ANSWERED_CARD, CARDS, CONFIG, SETUP_STEPS } from "./fixture.mjs";
 
 const F = "foreman";
 const SELF = CONFIG.self;
@@ -100,6 +100,44 @@ const good = {
     fx.git(["worktree", "list"]);
     fx.say("Foreman handoff:\nHome team: acme\nOpen worktrees: foreman-x\nLive children: session-child-1 (ACME-7)\nUnanswered cards I raised: none\nLast request: hand off now (test)");
     fx.tool(F, "signal_done", { status: "success" });
+  },
+  // The setup hand-off, in foreman.md's forms. One script serves every setup case; the fixture
+  // decides what the ledger, the inbox and the sessions hold.
+  setup({ fx, turns }) {
+    for (const turn of turns) {
+      fx.human(turn);
+      const ledger = fx.tool(F, "records_list", { collection: "setup-ledger" }).records;
+      if (/set me up|resume setup/i.test(turn)) {
+        const started = ledger.some((r) => r.step !== "foreman-offer");
+        const complete = SETUP_STEPS.every((step) => ledger.some((r) => r.step === step && r.state === "done"));
+        fx.tool(F, "open_workspace", {
+          target: "team-workspace",
+          name: "Setup",
+          agent: `guide-${CONFIG.runtime}`,
+          initial_prompt: started && !complete ? "/codesense-setup resume" : "/codesense-setup",
+          mode: "visible-unfocused",
+          launched_by: SELF,
+        });
+        fx.say(started ? "Resuming setup where it left off." : `Starting setup for ${CONFIG.repo}.`);
+        // Mail wakes the Foreman: the guide's hand-back.
+        const { deliveries } = fx.tool(F, "claim_role_messages", { role: "codesense-foreman" });
+        for (const d of deliveries) {
+          fx.tool(F, "ack_role_message", { deliveryId: d.deliveryId, claimToken: d.claimToken, receiptId: `receipt-${d.deliveryId}` });
+          const done = fx.tool(F, "records_list", { collection: "setup-ledger" }).records.filter((r) => r.state === "done").map((r) => r.step);
+          fx.say(`Set up: ${done.join(", ")}.`);
+        }
+      } else {
+        const orgs = fx.tool(F, "list_orgs_teams");
+        const repos = fx.tool(F, "list_source_repos").repos;
+        if (orgs.length > 1 && repos.length) fx.say("Hi. What can I do for you?");
+        else
+          fx.tool(F, "reply", {
+            kind: "needs-you",
+            text: "You have no team or repo yet. Set up now?",
+            options: ["Set up now", "Not now"],
+          });
+      }
+    }
   },
   "waiting-on-me"({ fx, turns }) {
     fx.human(turns[0]);
