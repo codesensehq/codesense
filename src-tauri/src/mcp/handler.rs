@@ -29,6 +29,7 @@ use crate::shared::secret_scan::redact_secrets;
 
 use super::agent_tools;
 use super::avatar_tools;
+use super::clone_repo;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
@@ -7992,19 +7993,31 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<OpenTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        // The trusted-side gate runs BEFORE any work — a refusal never has a side
+        // effect. A headed open is a first-class visible tab (focused).
+        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
+        ok_json(self.open_tab_in_workspace(params, None).await?)
+    }
+
+    /// Open a tab in an open workspace and return `{handle, headed, kind}`. A shell
+    /// by default; with `argv`, a tab whose first process is that argument vector,
+    /// run directly with no shell in front of it. The caller has admitted the tool.
+    async fn open_tab_in_workspace(
+        &self,
+        params: OpenTerminalTabParams,
+        argv: Option<Vec<String>>,
+    ) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
-        use crate::commands::pty::{AttachWarmArgs, SpawnPtySize};
+        use crate::commands::pty::{AttachWarmArgs, SpawnPtyArgs, SpawnPtySize};
         use crate::commands::pty_layout::{
             app_viewer, open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
         };
         use codesense_pty_core::domain::PtySessionId;
         use codesense_pty_core::layout::{OpenTab, Placement, Tags, WorkspaceDescriptor};
 
-        // The trusted-side gate runs BEFORE any work — a refusal never has a side
-        // effect. A headed open is a first-class visible tab (focused).
-        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
         let headed = params.headed.unwrap_or(true);
 
         // Only an OPEN workspace is addressable — resolved against the app's
@@ -8095,19 +8108,39 @@ impl CodesenseHandler {
             index: None,
             activate: headed,
         };
-        let spawn = TabSpawn::Warm(AttachWarmArgs {
-            target_cwd: ws.cwd.clone(),
-            size: SpawnPtySize {
-                cols: AGENT_COLS,
-                rows: AGENT_ROWS,
-            },
-            story_id: ws.story_id.clone(),
-            workspace_id: Some(ws.id.clone()),
-            epic_id: None,
-            scrollback: None,
-            starship_preset: None,
-            shell_integration: None,
-        });
+        let size = SpawnPtySize {
+            cols: AGENT_COLS,
+            rows: AGENT_ROWS,
+        };
+        let spawn = match argv {
+            None => TabSpawn::Warm(AttachWarmArgs {
+                target_cwd: ws.cwd.clone(),
+                size,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                starship_preset: None,
+                shell_integration: None,
+            }),
+            Some(command_argv) => TabSpawn::Cold(Box::new(SpawnPtyArgs {
+                command: Default::default(),
+                command_argv: Some(command_argv),
+                cwd: ws.cwd.clone(),
+                size,
+                interactive: Some(false),
+                starship_preset: None,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                shell_integration: None,
+                env_remove: None,
+                account: None,
+                environment_binding: None,
+                native_launch: None,
+            })),
+        };
         open_layout_tab(
             self.app_handle.clone(),
             crate::commands::machines::LOCAL_MACHINE_ID.into(),
@@ -8126,7 +8159,7 @@ impl CodesenseHandler {
         // restores it, and mail addressed to it still reaches the tab. Best-effort.
         crate::commands::dashboard_launch::tag_bound_launch(&self.app_handle, &session_id).await;
 
-        ok_json(serde_json::json!({
+        Ok(serde_json::json!({
             "handle": handle,
             "headed": headed,
             "kind": ws.kind,
@@ -9825,6 +9858,122 @@ impl CodesenseHandler {
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
         envelope_json(&reply)
+    }
+
+    #[tool(
+        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; its last segment equals the repo's name (so it sits directly under its parent); the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `gh repo clone <repo> <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `gh` must be installed and signed in. Returns { status:\"ok\", data:{ repo, path, created, tab, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path) or the binding was refused. Pass `stop: true` with `repo` and `path` to remove a folder an earlier clone_repo call created; a folder that was already there is never removed, and the reply is { status:\"ok\", data:{ removed } }. An unknown team returns { status:\"unauthorizedTeam\" }."
+    )]
+    async fn clone_repo(
+        &self,
+        Parameters(params): Parameters<clone_repo::CloneRepoParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.admit_local_setup_mutation("clone_repo")?;
+        let refuse = |message: String| {
+            envelope_json(&tool_envelope::ToolEnvelope::<serde_json::Value>::Validation { message })
+        };
+        // Validation comes first: nothing below runs for a refused input.
+        let parent = clone_repo::parent_of(&params.path);
+        if params.stop == Some(true) {
+            // The folder holds the clone by now, so a Stop checks the text rules only.
+            return match clone_repo::validate_text(&params.repo, parent, &params.path) {
+                Ok(path) => envelope_json(&tool_envelope::ToolEnvelope::Ok(
+                    clone_repo::records().stop(&path),
+                )),
+                Err(refusal) => refuse(refusal.to_string()),
+            };
+        }
+        let valid = match clone_repo::validate_clone(&params.repo, parent, &params.path) {
+            Ok(valid) => valid,
+            Err(refusal) => return refuse(refusal.to_string()),
+        };
+        let (Some(org), Some(team), Some(workspace_id)) =
+            (&params.org, &params.team, &params.workspace_id)
+        else {
+            return refuse("clone_repo needs org, team and workspaceId".to_string());
+        };
+        let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
+            .await
+            .map_err(|m| ErrorData::invalid_params(m, None))?;
+        let (coord, active_team) = self.attachment_state()?;
+        let env = commands::source_repo_add::AttachmentEnv {
+            app: &self.app_handle,
+            coord: &coord,
+            active_team: active_team.inner(),
+            home: &home,
+            user_id,
+        };
+        // The repo must be one the team tracks, so a clone is never made that
+        // can't be bound.
+        if let Err(error) = setup_tools::tracked_repo(&home, user_id, org, team, &params.repo).await
+        {
+            return match setup_tools::refusal::<serde_json::Value>(error) {
+                Ok(envelope) => envelope_json(&envelope),
+                Err(message) => Err(ErrorData::internal_error(message, None)),
+            };
+        }
+        let gh = self
+            .app_handle
+            .try_state::<DependencyManager>()
+            .and_then(|deps| DependencyManager::status(&deps).gh.path);
+        let Some(gh) = gh else {
+            return refuse(
+                "gh is not installed or was not found; install it and sign in first".to_string(),
+            );
+        };
+        let tab = self
+            .open_tab_in_workspace(
+                OpenTerminalTabParams {
+                    workspace_id: workspace_id.clone(),
+                    headed: Some(true),
+                    name: Some(format!("clone {}", params.repo)),
+                },
+                Some(clone_repo::clone_argv(&gh, &valid)),
+            )
+            .await?;
+        // Only a folder this call is creating is ours to remove on Stop.
+        if valid.creates {
+            clone_repo::records().note_created(&valid.path);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !clone_repo::finished(&valid.path) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let mut started = clone_repo::CloneStarted {
+            repo: params.repo.clone(),
+            path: params.path.clone(),
+            created: valid.creates,
+            tab,
+            attached: false,
+            source: None,
+            note: None,
+        };
+        if !clone_repo::finished(&valid.path) {
+            started.note = Some(
+                "the clone has not finished; read the tab, then call attach_source_repo_path"
+                    .to_string(),
+            );
+            return envelope_json(&tool_envelope::ToolEnvelope::Ok(started));
+        }
+        let attached = setup_tools::attach_source_repo_path(
+            &env,
+            setup_tools::AttachSourceRepoPathParams {
+                org: org.clone(),
+                team: team.clone(),
+                repo: params.repo.clone(),
+                path: params.path.clone(),
+            },
+        )
+        .await
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        match attached {
+            tool_envelope::ToolEnvelope::Ok(source) => {
+                started.attached = true;
+                started.source = Some(source);
+            }
+            tool_envelope::ToolEnvelope::Validation { message } => started.note = Some(message),
+            _ => started.note = Some("the clone could not be bound".to_string()),
+        }
+        envelope_json(&tool_envelope::ToolEnvelope::Ok(started))
     }
 
     #[tool(
@@ -17365,6 +17514,7 @@ pub(crate) mod tests {
         "rename_workspace",
         "add_source_repo",
         "attach_source_repo_path",
+        "clone_repo",
         "remove_source_repo",
         // Tool-discovery meta tools (find a tool by keyword; dispatch any tool by name).
         "codesense_search_tools",
