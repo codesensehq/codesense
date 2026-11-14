@@ -205,8 +205,11 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
           title={unavailable?.[value]}
           onClick={() => onChange(value)}
           className={cn(
-            "px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-50",
-            mode === value ? "bg-accent font-medium" : "enabled:hover:bg-accent/60",
+            // The ring is drawn inside the button: the group's overflow-hidden would clip it.
+            "px-2 py-0.5 focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
+            mode === value
+              ? "bg-primary font-medium text-primary-foreground"
+              : "enabled:hover:bg-accent/60",
           )}
         >
           {label}
@@ -277,8 +280,10 @@ function SideToggle({
           aria-pressed={picked === side}
           onClick={() => onPick(side)}
           className={cn(
-            "px-2 py-0.5",
-            picked === side ? "bg-accent font-medium" : "hover:bg-accent/60",
+            "px-2 py-0.5 focus-visible:outline-offset-[-2px]",
+            picked === side
+              ? "bg-primary font-medium text-primary-foreground"
+              : "hover:bg-accent/60",
           )}
         >
           {sideLabel(sides, side)}
@@ -476,13 +481,18 @@ function SideBySide({
   );
 }
 
-function CodeSkeleton({ prefix }: { prefix: string }) {
+/** The body while a side is read: it pulses only where motion is welcome, and says so to a
+ *  screen reader. */
+function CodeSkeleton({ prefix, label = "Loading the diff" }: { prefix: string; label?: string }) {
   return (
     <div
-      aria-hidden
       data-testid={`${prefix}-code-skeleton`}
-      className="h-full w-full animate-pulse rounded bg-muted/40"
-    />
+      className="h-full w-full rounded bg-muted/40 motion-safe:animate-pulse"
+    >
+      <span role="status" className="sr-only">
+        {label}
+      </span>
+    </div>
   );
 }
 

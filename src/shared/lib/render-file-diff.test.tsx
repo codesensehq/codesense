@@ -517,3 +517,33 @@ describe("renderFileDiff — the code mode switch only where it applies", () => 
     expect(screen.getByRole("button", { name: "Structural" })).toBeEnabled();
   });
 });
+
+describe("renderFileDiff — the switches and the skeleton (critique D3, D4, D9)", () => {
+  it("the pressed segment uses the primary pair, and each segment draws its focus ring inside the group", () => {
+    atWidth(899);
+    render(
+      renderFileDiff(
+        args("/repo/page.html", { modes: { html: "side-by-side" } }, { onModeChange: vi.fn() }),
+      ),
+    );
+    for (const group of [
+      screen.getByTestId("file-diff-mode-switch"),
+      screen.getByRole("group", { name: "Side shown" }),
+    ]) {
+      const buttons = within(group).getAllByRole("button");
+      const pressed = buttons.find((b) => b.getAttribute("aria-pressed") === "true")!;
+      expect(pressed.className).toContain("bg-primary");
+      expect(pressed.className).toContain("text-primary-foreground");
+      expect(pressed.className).not.toMatch(/(^|\s)bg-accent(\s|$)/);
+      for (const b of buttons) expect(b.className).toContain("focus-visible:outline-offset-[-2px]");
+    }
+  });
+
+  it("the loading skeleton pulses only where motion is welcome, and says it is loading", () => {
+    render(renderFileDiff(args("/repo/a.ts", { state: { kind: "loading" } })));
+    const skeleton = screen.getByTestId("file-diff-code-skeleton");
+    expect(skeleton.className).toContain("motion-safe:animate-pulse");
+    expect(skeleton.className).not.toMatch(/(^|\s)animate-pulse/);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the diff");
+  });
+});
