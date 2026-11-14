@@ -37,6 +37,8 @@
   const CHECK_MS = 750;
   const CHECK_TRIES = 20;
   const SETTLE_MS = 300;
+  // How long a confirmed stop may take to show in the roster before the switch or clear gives up.
+  const EXIT_MS = 20000;
 
   const COPY = {
     lead: 'CodeSense setup',
@@ -128,6 +130,8 @@
     loginTimer: null,
     pending: null,
     problem: null,
+    busy: false,
+    marked: new Set(),
   };
 
   // ---- alerts: keyed notices between the header and the chat ----
@@ -223,11 +227,17 @@
     };
   }
 
-  // ---- who the guide is: the guide agents' sessions, newest live one first ----
-  const isGuide = (row) =>
-    Boolean(row) &&
-    typeof row.agent === 'string' &&
-    Object.values(AGENT).some((id) => row.agent === id || row.agent.endsWith(`/${id}`));
+  // ---- who the guide is: the chosen runtime's guide sessions, newest live one first ----
+  // Only the docs team's guide for the chosen runtime: another runtime's guide, or a team's own agent
+  // that happens to share the name, is not this conversation.
+  const isGuide = (row) => {
+    const id = AGENT[S.runtime];
+    return (
+      Boolean(id) &&
+      Boolean(row) &&
+      (row.agent === id || row.agent === `${DOCS.org}/${DOCS.team}/${id}`)
+    );
+  };
   const joinable = (row) =>
     Boolean(row) && row.state !== 'exited' && row.effectiveStatus !== 'crashed' && row.needsYouKind !== 'startup';
   const newest = (rows) =>
@@ -249,6 +259,7 @@
 
   // ---- setup state: the model follows it ----
   async function readSetupDone() {
+    const was = S.done;
     try {
       const state = await cs.invoke('setupState');
       const orgs = Array.isArray(state && state.orgs) ? state.orgs : [];
@@ -261,6 +272,7 @@
       // An unread state is treated as "still setting up": the stronger model.
       S.done = false;
     }
+    if (S.done !== was) paintChip();
     return S.done;
   }
   const modelFor = (runtime) => (MODEL[runtime] ? MODEL[runtime][S.done ? 'after' : 'setup'] : undefined);
@@ -326,7 +338,9 @@
     clearTimeout(S.loginTimer);
     const shown = notices.has('login');
     notice('login', null);
-    if (shown && S.reads) S.reads.poke();
+    if (!shown) return;
+    paintChip();
+    if (S.reads) S.reads.poke();
   }
   function showLogin() {
     if (notices.has('login')) return;
@@ -357,6 +371,7 @@
         ),
       ),
     );
+    paintChip();
   }
   function openTerminal() {
     const chat = S.chat;
@@ -473,19 +488,27 @@
       wrap.replaceChildren();
       return;
     }
-    const model = modelFor(S.runtime);
-    const more = [model ? MODEL_NAME[model] : null, 'your login'].filter(Boolean).join(' · ');
     const choices = S.list.filter((item) => AGENT[item.id]).length;
     const button = el(
       'button',
       { type: 'button', class: 'rt', id: 'rt', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' },
-      el('span', {}, NAME[S.runtime], el('span', { class: 'rt-more' }, ` · ${more}`)),
+      el('span', { class: 'rt-name' }),
       el('span', { class: 'chg' }, choices > 1 ? 'Change' : 'Details'),
     );
     const panel = el('div', { class: 'pop', role: 'dialog', 'aria-label': "Choose the setup agent's CLI", id: 'rt-pop', hidden: true });
     paintRuntimePanel(panel);
     wrap.replaceChildren(button, panel);
     popover(button, panel);
+    paintChip();
+  }
+  // The chip's words: the runtime, the model the next launch runs, and "your login" unless the sign-in
+  // notice says that login may be missing.
+  function paintChip() {
+    const name = document.querySelector('#rt .rt-name');
+    if (!name || !S.runtime) return;
+    const model = modelFor(S.runtime);
+    const more = [model ? MODEL_NAME[model] : null, notices.has('login') ? null : 'your login'].filter(Boolean).join(' · ');
+    name.replaceChildren(NAME[S.runtime], more ? el('span', { class: 'rt-more' }, ` · ${more}`) : null);
   }
   function paintRuntimePanel(panel) {
     const choose = (id) => {
@@ -598,10 +621,28 @@
     });
     S.chat.subscribe(() => {
       if (leadSpoke()) hideLogin();
+      markShownRead();
     });
     reads.poke();
     return S.chat;
   }
+  // The person reads the guide here, so its messages on the page do not wait in the Inbox as unread.
+  function markShownRead() {
+    const chat = S.chat;
+    if (!chat || document.visibilityState === 'hidden') return;
+    const handles = chat.leadHandles();
+    const ids = chat
+      .thread()
+      .filter((row) => row.unread === true && row.toHuman === true && !S.marked.has(row.messageId) && chatKit.thread.sideOf(row, handles) === 'lead')
+      .map((row) => row.messageId);
+    if (!ids.length) return;
+    ids.forEach((id) => S.marked.add(id));
+    Promise.resolve(cs.invoke('markRead', { messageIds: ids })).catch(() => {
+      // Unmarked rows only stay unread in the Inbox; the page goes on.
+    });
+  }
+  document.addEventListener('visibilitychange', markShownRead);
+
   function unmountChat() {
     hideLogin();
     if (S.chat) S.chat.unmount();
@@ -616,30 +657,70 @@
     // The opener is unprompted: a person with no live setup agent gets one that speaks first.
     if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
   }
+  // Stops the live guide and waits for the roster to show it gone, so the next launch can't bind to it
+  // or be answered with it. False, with the reason shown, when the stop is cancelled, refused or slow.
   async function stopLive() {
     const chat = S.chat;
-    if (!chat || !chat.controls().stop) return;
+    const row = chat && chat.lead();
+    if (!row) return true;
+    notice('stop', null);
+    let result;
     try {
-      await chat.stopLead();
+      result = await chat.stopLead();
     } catch (error) {
       problem('stop', `Couldn't stop it: ${whyOf(error)}.`);
+      return false;
+    }
+    if (!(result && result.stopped === true)) {
+      problem('stop', `Couldn't stop it: ${(result && (result.message || result.status)) || 'it was not stopped'}.`);
+      return false;
+    }
+    notice('stopping', el('div', { class: 'alert info', role: 'status' }, el('span', { class: 'g' }, '…'), el('span', {}, `Stopping ${NAME[S.runtime]}…`), el('span')));
+    const gone = await exited(row);
+    notice('stopping', null);
+    if (!gone) problem('stop', `${NAME[S.runtime]} hasn't stopped yet. Try again in a moment.`);
+    return gone;
+  }
+  function exited(row) {
+    const reads = S.reads;
+    const same = (other) => (row.sessionId ? other.sessionId === row.sessionId : other.handle === row.handle);
+    const out = () => !reads.latestSessions().some((other) => same(other) && other.state !== 'exited');
+    return new Promise((resolve) => {
+      if (out()) return resolve(true);
+      const timer = setTimeout(() => done(false), EXIT_MS);
+      const off = reads.on('sessions', () => out() && done(true));
+      function done(value) {
+        clearTimeout(timer);
+        off();
+        resolve(value);
+      }
+    });
+  }
+  // A switch or clear runs once at a time; a refused stop keeps the runtime and the conversation.
+  async function restart(before) {
+    if (S.busy) return;
+    S.busy = true;
+    try {
+      if (!(await stopLive())) return;
+      if (before) before();
+      unmountChat();
+      await startChat();
+    } finally {
+      S.busy = false;
     }
   }
-  async function switchTo(id) {
+  function switchTo(id) {
     closeAll();
     S.pending = null;
-    await stopLive();
-    S.runtime = id;
-    remember(id);
-    paintRuntime();
-    unmountChat();
-    await startChat();
+    return restart(() => {
+      S.runtime = id;
+      remember(id);
+      paintRuntime();
+    });
   }
-  async function clearConversation() {
+  function clearConversation() {
     notice('clear', null);
-    await stopLive();
-    unmountChat();
-    await startChat();
+    return restart();
   }
 
   // ---- no CLI: the empty state ----

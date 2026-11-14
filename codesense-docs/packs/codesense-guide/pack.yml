@@ -50,13 +50,13 @@ files:
     sha256: 9c9356fa16cfb788be809dd4d154f02dd008159a6ac0033960b402d515bed3f3
     exec: false
   - path: content/guide/guide.js
-    sha256: 103009a69a51543d94b569a0f8c06654a96b76479945b86a382bb0a8b3ab3719
+    sha256: 86bdd104c37c72bc5c7476c2d64113a6f94f6b04040014d2ecfb4b5409ccd009
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
     exec: false
   - path: content/guide/index.html
-    sha256: a206c47b6508f9a998e7455724db0cba28385e9c55e4d91a5c5723f18d8213f0
+    sha256: cb9885fbdd6740e1747b81a335a5a5e113004304c0b155b31d6c3fbc1bff9aef
     exec: false
   - path: docs/README.md
     sha256: ba5b6709d14bdb7b6f26d93d03b2346ad6fb3d65965eff63bf77c817ea3aee59
