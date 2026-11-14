@@ -591,6 +591,18 @@ describe("kit.chat page layout and activity", () => {
     expect(activityRow(s.el)!.textContent).toContain("Checking this Mac");
   });
 
+  it("activity.text shows the page's own line while the peer is idle, and drops it with the line", async () => {
+    const s = setup([lead("idle")]);
+    let line: string | null = "Installing the CLI";
+    mountOn(s, { activity: { text: () => line } });
+    await flush();
+    expect(activityRow(s.el)!.textContent).toContain("Installing the CLI");
+    line = null;
+    await s.reads.sessions();
+    await flush();
+    expect(activityRow(s.el)).toBeNull();
+  });
+
   it("the activity row sits after the thread and keeps its node while nothing about it changes", async () => {
     const s = setup(
       [running("Checking this Mac")],
