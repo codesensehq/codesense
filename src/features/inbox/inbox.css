@@ -2473,3 +2473,38 @@ button.ibx-media-open {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+
+/* A pin just made or restored drops into place and glows once; with reduced motion it keeps a
+   still accent wash and the word New instead. Both clear on the next click or key press. */
+.ibx-pk-new {
+  display: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ibx-accent-ink);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ibx-pk[data-new="true"] {
+    animation:
+      ibx-pin-drop 260ms var(--ibx-ease),
+      ibx-pin-glow 1800ms var(--ibx-ease);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ibx-pk[data-new="true"] {
+    background: var(--ibx-accent-wash);
+    box-shadow: inset 0 0 0 1px var(--ibx-accent-line);
+  }
+  .ibx-pk[data-new="true"] .ibx-pk-new {
+    display: inline;
+  }
+}
+@keyframes ibx-pin-drop {
+  from {
+    transform: translateY(-6px);
+  }
+}
+@keyframes ibx-pin-glow {
+  from {
+    box-shadow: 0 0 0 3px var(--ibx-accent-wash);
+  }
+}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { agentPins, type AgentPin, type InboxTeam } from "@/tauri/commands";
 
@@ -43,6 +43,8 @@ export type PersonPins = {
   note: PinNote | null;
   /** What the polite live region says now. */
   live: string;
+  /** The pin just made or restored: marked new until the next click or key press. */
+  fresh: number | null;
 };
 
 /**
@@ -75,6 +77,18 @@ export function usePersonPins({
   const [note, setNote] = useState<PinNote | null>(null);
   const [live, setLive] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<number | null>(null);
+  // The new pin stays marked until the person's next click or key press: input events, no timer.
+  useEffect(() => {
+    if (fresh === null) return;
+    const clear = () => setFresh(null);
+    window.addEventListener("keydown", clear, { capture: true, once: true });
+    window.addEventListener("pointerdown", clear, { capture: true, once: true });
+    return () => {
+      window.removeEventListener("keydown", clear, { capture: true });
+      window.removeEventListener("pointerdown", clear, { capture: true });
+    };
+  }, [fresh]);
   const byId = useMemo(() => new Map(pins.map((p) => [p.messageId, p])), [pins]);
   const thread = team && agentId ? { team, agentId, storyId } : null;
 
@@ -94,6 +108,7 @@ export function usePersonPins({
         const done = op === "pin" ? "pinned" : op === "unpin" ? "unpinned" : "restored";
         setLive(liveText(done, pinTitleOf(m, sender(m)), r.pins.length));
         setNote(op === "unpin" ? { mid, kind: "undo", message: m } : null);
+        setFresh(op === "unpin" ? null : messageId);
         return true;
       } catch {
         const kind =
@@ -154,6 +169,7 @@ export function usePersonPins({
     },
     note,
     live,
+    fresh,
   };
 }
 

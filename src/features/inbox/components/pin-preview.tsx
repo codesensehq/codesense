@@ -69,8 +69,13 @@ export const PinPreview = forwardRef<
     onOpen: () => void;
     /** The message's own card, for a pin with no preview. */
     own?: OwnPinCard | null;
+    /** Just pinned: it drops in and glows once, or with reduced motion keeps a still wash
+     *  and the word New, until the next click or key press. */
+    fresh?: boolean;
   }
->(function PinPreview({ pin, shape, title, tall, open, onOpen, own = null }, ref) {
+>(function PinPreview({ pin, shape, title, tall, open, onOpen, own = null, fresh = false }, ref) {
+  const isNew = fresh ? { "data-new": "true" } : {};
+  const newWord = fresh ? <span className="ibx-pk-new">New</span> : null;
   if (!pin.preview && own) {
     const Glyph = own.kind === "quote" ? Quote : LayoutDashboard;
     return (
@@ -83,9 +88,11 @@ export const PinPreview = forwardRef<
         data-testid={`chat-overlay-pin-${pin.messageId}`}
         aria-expanded={open}
         onClick={onOpen}
+        {...isNew}
       >
         <Glyph className="ibx-pk-g" aria-hidden size={12} />
         <span className="ibx-pk-t">{title}</span>
+        {newWord}
         {shape !== "line" && (
           <span className="ibx-pk-ls">
             <span className="ibx-pk-l ibx-pk-meta">{own.meta}</span>
@@ -112,9 +119,11 @@ export const PinPreview = forwardRef<
       data-testid={`chat-overlay-pin-${pin.messageId}`}
       aria-expanded={open}
       onClick={onOpen}
+      {...isNew}
     >
       <span className="ibx-pk-d" aria-hidden />
       <span className="ibx-pk-t">{name}</span>
+      {newWord}
       {p.value && (
         <span className="ibx-pk-v">
           <b>{p.value}</b>

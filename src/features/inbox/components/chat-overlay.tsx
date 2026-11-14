@@ -28,7 +28,7 @@ import { goToSession } from "../actions";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { usePersonPins } from "../hooks/use-person-pins";
-import { pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
+import { capLabel, pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useSessionInbox } from "../hooks/use-session-inbox";
@@ -356,7 +356,12 @@ export function ChatOverlay({
           {layout.record === "own-line" && record}
         </header>
         {pins.length > 0 && (
-          <div className="ibx-ov-pins" data-shape={pinShape} role="group" aria-label="Pinned">
+          <div
+            className="ibx-ov-pins"
+            data-shape={pinShape}
+            role="group"
+            aria-label={`Pinned, ${capLabel(pins.length).replace(" pinned", "")}`}
+          >
             {pins.map((p) => (
               <PinPreview
                 key={p.messageId}
@@ -368,6 +373,7 @@ export function ChatOverlay({
                 shape={pinShape}
                 title={pinTitle(p.messageId)}
                 own={ownCard(p)}
+                fresh={personPins?.fresh === p.messageId}
                 tall={tall}
                 open={p.messageId === openPin}
                 onOpen={() => setOpenPin(p.messageId === openPin ? null : p.messageId)}

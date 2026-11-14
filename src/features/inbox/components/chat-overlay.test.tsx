@@ -646,6 +646,19 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(card).toHaveTextContent("Dashboard from Login timeout lead");
   });
 
+  it("the new pin is marked new until the next click or key press, with no timer, and the strip says the count", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    expect(screen.getByRole("group", { name: "Pinned, 2 of 3" })).toBeInTheDocument();
+    fireEvent.click(pinOf(4));
+    const fresh = await screen.findByTestId("chat-overlay-pin-4");
+    expect(fresh).toHaveAttribute("data-new", "true");
+    expect(within(fresh).getByText("New")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Pinned, 3 of 3" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(screen.getByTestId("chat-overlay-pin-4")).not.toHaveAttribute("data-new");
+  });
+
   it("a pin that fails keeps its state and offers Try again", async () => {
     await renderOverlay(420, 700);
     await screen.findByTestId("chat-overlay-pin-3");
