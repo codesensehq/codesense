@@ -414,3 +414,23 @@ describe("the consent card line", () => {
     expect(parseCardLine("card: a · read · x=Go")?.text).toBe("");
   });
 });
+
+describe("deliveryMark with the messageDelivery topic", () => {
+  it("the topic's row decides once it is there: queued until told or read, then delivered", () => {
+    // The roster says told, but the topic is the message's own state: still queued.
+    const told = lead({ mailNotice: "told", notifiedAt: new Date(SENT + 1000).toISOString() });
+    expect(mark({ lead: told, delivery: { state: "queued" } })).toBe("queued");
+    expect(mark({ delivery: { state: "delivered" } })).toBe("delivered");
+  });
+
+  it("an idle send and a lead that wrote since are still Delivered", () => {
+    expect(mark({ busyAtSend: false, delivery: { state: "queued" } })).toBe("delivered");
+    expect(mark({ newestLeadAt: SENT + 1, delivery: { state: "queued" } })).toBe("delivered");
+  });
+
+  it("with no row (no topic, or not this kind of message) it falls back to today's marks", () => {
+    const told = lead({ mailNotice: "told", notifiedAt: new Date(SENT + 1000).toISOString() });
+    expect(mark({ lead: told, delivery: null })).toBe("delivered");
+    expect(mark({ delivery: undefined })).toBe("queued");
+  });
+});

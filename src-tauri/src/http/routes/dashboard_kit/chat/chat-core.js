@@ -5,9 +5,11 @@
 export const isBusy=lead=>Boolean(lead)&&lead.state!=='idle';
 // Queued or Delivered for one sent message. busyAtSend is whether the lead was busy when it went (read once, at the send); lead is its sessions() row now; newestLeadAt is the time of the lead's newest thread message.
 // A busy send is Queued until the lead's inbox notice says it was told after the send (mailNotice 'told' with notifiedAt at or after sentAt), or the notice came at or after the send and the unread count is back to 0 (told, then read: mailNotice is null again), or the lead has written since.
-export function deliveryMark({sentAt,busyAtSend,lead,newestLeadAt=0}){
+// delivery is the message's own row on the messageDelivery topic ({state:'queued'|'delivered'}), when the host pushes it: then it decides, not the roster's notice. Without one (an older host, or a message the topic does not list) the roster rule above stands.
+export function deliveryMark({sentAt,busyAtSend,lead,newestLeadAt=0,delivery=null}){
  if(!busyAtSend)return 'delivered';
  if(Number.isFinite(newestLeadAt)&&newestLeadAt>sentAt)return 'delivered';
+ if(delivery&&typeof delivery.state==='string')return delivery.state==='delivered'?'delivered':'queued';
  if(!lead)return 'queued';
  const notified=Date.parse(lead.notifiedAt);
  if(!Number.isFinite(notified)||notified<sentAt)return 'queued';
