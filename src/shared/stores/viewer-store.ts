@@ -1596,6 +1596,8 @@ export interface ViewerSettings {
   // question, a crash) while the window is in the background. The dock badge
   // counts those tabs either way. Optional — undefined reads as `true` (on).
   osNotifications?: boolean;
+  // Open the Foreman tab whenever CodeSense starts. Optional — undefined reads as `true`.
+  openForemanOnStart?: boolean;
   // An OS notification when an agent finishes a turn of 30s or more that the user
   // was away for (window in the background, or its tab never in view). Optional —
   // undefined reads as `true` (on).
