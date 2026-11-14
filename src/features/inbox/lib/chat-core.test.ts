@@ -423,9 +423,14 @@ describe("deliveryMark with the messageDelivery topic", () => {
     expect(mark({ delivery: { state: "delivered" } })).toBe("delivered");
   });
 
-  it("an idle send and a lead that wrote since are still Delivered", () => {
+  it("an idle send is still Delivered at once, whatever the row says", () => {
     expect(mark({ busyAtSend: false, delivery: { state: "queued" } })).toBe("delivered");
-    expect(mark({ newestLeadAt: SENT + 1, delivery: { state: "queued" } })).toBe("delivered");
+  });
+
+  it("delivered means told: a busy lead posting mid-turn leaves a queued row Queued", () => {
+    expect(mark({ newestLeadAt: SENT + 1, delivery: { state: "queued" } })).toBe("queued");
+    // Without a row the lead's later message still delivers it, as before.
+    expect(mark({ newestLeadAt: SENT + 1, delivery: null })).toBe("delivered");
   });
 
   it("with no row (no topic, or not this kind of message) it falls back to today's marks", () => {

@@ -91,8 +91,8 @@
   var isBusy = (lead) => Boolean(lead) && lead.state !== "idle";
   function deliveryMark({ sentAt, busyAtSend, lead, newestLeadAt = 0, delivery = null }) {
     if (!busyAtSend) return "delivered";
-    if (Number.isFinite(newestLeadAt) && newestLeadAt > sentAt) return "delivered";
     if (delivery && typeof delivery.state === "string") return delivery.state === "delivered" ? "delivered" : "queued";
+    if (Number.isFinite(newestLeadAt) && newestLeadAt > sentAt) return "delivered";
     if (!lead) return "queued";
     const notified = Date.parse(lead.notifiedAt);
     if (!Number.isFinite(notified) || notified < sentAt) return "queued";
