@@ -64,6 +64,63 @@ export const SETUP_VERBS = [
   "clone_repo",
 ];
 
+// What a probe may read: each tool's arguments and the result fields it returns, as its MCP
+// description and handler give them (`[]` is a list's entry, `.*` any field of a record).
+// A probe on a tool listed here takes only those arguments, and picks and yields only those
+// fields. A tool the guide's steps don't probe yet is unlisted; its probe is checked when
+// it is added.
+export const PROBE_TOOLS = {
+  // `describe_setup` takes no arguments; its `data` holds these.
+  describe_setup: {
+    params: [],
+    fields: [
+      "activeOrg",
+      "activeTeam",
+      "orgs[].slug",
+      "orgs[].displayName",
+      "orgs[].orgRoot",
+      "orgs[].remoteUrl",
+      "orgs[].teams[].name",
+      "orgs[].teams[].archived",
+      "orgs[].teams[].parent",
+      "orgs[].teams[].sourceRepos[].repo",
+      "orgs[].teams[].sourceRepos[].status",
+      "orgs[].teams[].sourceRepos[].localPath",
+    ],
+  },
+  // `list_source_repos` takes no arguments and reads the session's own org only.
+  list_source_repos: {
+    params: [],
+    fields: [
+      "activeOrg",
+      "activeTeam",
+      "primary[]",
+      "byTeam[].team",
+      "byTeam[].sourceRepos[]",
+      "sourceRepoIdentities[].team",
+      "sourceRepoIdentities[].slug",
+      "sourceRepoIdentities[].attachment",
+      "sourceRepoIdentities[].localPath",
+    ],
+  },
+  // `records_list` has no filter argument: a probe picks rows by their fields.
+  records_list: {
+    params: ["org", "team", "collection", "window"],
+    fields: ["total", "rows[].id", "rows[].title", "rows[].fields.*"],
+  },
+};
+
+const returns = (tool, field) =>
+  PROBE_TOOLS[tool].fields.some((f) =>
+    f.endsWith(".*")
+      ? field.startsWith(f.slice(0, -1)) && field.length > f.length - 1
+      : f === field,
+  );
+
+// The verbs that write a file, and the argument naming it. A relative path lands in whatever
+// team the app has active, so it must start from a probed value.
+const PATH_ARGS = { create_content_file: "path", set_epic_repos: "epicFilePath" };
+
 // A team ledger row is shared through git. These key names and value shapes are the ones
 // that would carry a path, a username or a secret into it.
 const PRIVATE_KEY = /path|dir|folder|home|user|account|token|secret|password|credential|key/i;
@@ -103,6 +160,71 @@ export function stepRuleErrors(step, where) {
       errors.push(`${where}: act ${act.id} is read but runs a command`);
     if (act.consent === "read" && SETUP_VERBS.includes(act.verb?.tool))
       errors.push(`${where}: act ${act.id} is read but calls ${act.verb.tool}, a setup verb`);
+  }
+
+  for (const act of acts)
+    if (act.verb?.tool === "run_in_terminal_tab")
+      errors.push(
+        `${where}: act ${act.id} calls run_in_terminal_tab as a verb; a command goes in run, where it is fixed`,
+      );
+
+  // `{{probe.<id>.<name>}}` names a value an earlier probe yields.
+  const yielded = new Set();
+  const probeErrors = (name, what) => {
+    const [root, id, value] = name.split(".");
+    if (root === "probe" && !yielded.has(`${id}.${value}`)) errors.push(what(id));
+  };
+  for (const probe of step.probe ?? []) {
+    const { tool, ...args } = probe.check;
+    const known = PROBE_TOOLS[tool];
+    if (known) {
+      for (const arg of Object.keys(args))
+        if (!known.params.includes(arg))
+          errors.push(`${where}: probe ${probe.id} passes ${arg}, which ${tool} does not take`);
+      for (const field of Object.keys(probe.pick ?? {}))
+        if (!returns(tool, field))
+          errors.push(
+            `${where}: probe ${probe.id} picks on ${field}, which ${tool} does not return`,
+          );
+      for (const field of Object.values(probe.yields ?? {}))
+        if (!returns(tool, field))
+          errors.push(`${where}: probe ${probe.id} yields ${field}, which ${tool} does not return`);
+    }
+    for (const name of templates(args))
+      probeErrors(
+        name,
+        () => `${where}: probe ${probe.id} uses {{${name}}}, which no earlier probe yields`,
+      );
+    for (const value of Object.keys(probe.yields ?? {})) yielded.add(`${probe.id}.${value}`);
+  }
+
+  for (const act of acts) {
+    for (const name of templates({ args: act.verb?.args, open_url: act.open_url }))
+      probeErrors(
+        name,
+        (id) => `${where}: act ${act.id} uses {{${name}}}, which probe ${id} does not yield`,
+      );
+    const pathArg = PATH_ARGS[act.verb?.tool];
+    const path = act.verb?.args?.[pathArg];
+    if (pathArg && !(typeof path === "string" && /^\{\{\s*probe\./.test(path)))
+      errors.push(
+        `${where}: act ${act.id}: ${act.verb.tool} ${pathArg} must start with a {{probe.…}} value, never a relative or bare path`,
+      );
+  }
+
+  // A list input is the whole value of an argument, never part of a string.
+  for (const [name, spec] of Object.entries(step.inputs ?? {})) {
+    if (!spec.list) continue;
+    const strings = [];
+    const walk = (v) => {
+      if (typeof v === "string") strings.push(v);
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    };
+    walk([acts.map((a) => [a.verb, a.open_url]), step.record?.fields]);
+    for (const value of strings)
+      if (templates(value).includes(name) && value.trim() !== `{{${name}}}`)
+        errors.push(`${where}: input ${name} is a list; pass it whole as "{{${name}}}"`);
   }
 
   for (const act of acts) {
@@ -170,6 +292,9 @@ export function stepRuleErrors(step, where) {
       // only an input the step marks shareable.
       for (const name of templates(value)) {
         const root = name.split(".")[0];
+        // A probe value can be a folder or a login whatever its field is called.
+        if (root === "probe")
+          errors.push(`${where}: record uses {{${name}}}, a probe value; a team row holds none`);
         if (inputs.includes(root) && !step.inputs[root].shareable)
           errors.push(
             `${where}: record uses {{${name}}}, an input not marked shareable; a team row holds only shareable inputs`,

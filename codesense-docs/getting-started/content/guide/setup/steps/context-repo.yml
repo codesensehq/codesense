@@ -7,15 +7,17 @@ summary: >-
   Nothing is recorded until your team exists; the team's setup log then gets this step's row.
 probe:
   - id: orgs
-    check: { tool: describe_setup, exclude_org: codesense/docs }
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs } }
+    yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot" }
     map: { user_org: done, only_docs: missing, unreadable: unknown }
 ask:
   text: >-
     **Create your team folder?** Your stories, products and setup log live in a context repo of
     your own: a git folder on this Mac. I'll create it where you say, add your first team and a
-    setup log to it, and write nothing to the CodeSense docs. If you already have a context
-    repo, connect it instead; when it has a remote, changes I make there go back as a pull
-    request for you to review, never straight to the remote.
+    setup log to it, switch CodeSense to it, and write nothing to the CodeSense docs. If you
+    already have a context repo, connect it instead. Nothing is committed or pushed: what I
+    add waits in that folder as changes for you to review and commit.
   options:
     - { label: Create it, act: create-local-organization }
     - { label: Connect mine, act: attach-context-repository }
@@ -39,12 +41,12 @@ act:
     then: [create-team, write-ledger-schema]
   - id: create-team
     consent: local-write
-    what: create your first team in that context repo
+    what: create your first team in that context repo and switch CodeSense to it
     where: your context repo
     why: so repos, products and stories are filed under it
     verb:
       tool: create_team
-      args: { org: "{{probe.orgs.org}}", name: "{{team}}" }
+      args: { org: "{{probe.orgs.org}}", name: "{{team}}", activate: true }
   - id: write-ledger-schema
     consent: local-write
     what: add the setup log's schema to your team
@@ -53,7 +55,7 @@ act:
     verb:
       tool: create_content_file
       args:
-        path: "{{probe.orgs.team_content_dir}}/schema/setup-ledger.yaml"
+        path: "{{probe.orgs.org_root}}/{{team}}/content/schema/setup-ledger.yaml"
         content_from: guide/setup/ledger/setup-ledger.yaml
         onCollision: fail
   - id: attach-context-repository
@@ -69,4 +71,4 @@ record:
   scope: team
   fields: { created: a context repo and its first team }
   secret: never
-undo: Detach the context repo under Repos; the folder and its history stay, and nothing was pushed.
+undo: Detach the context repo under Repos; the folder and its history stay, and nothing was committed or pushed.

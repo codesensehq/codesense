@@ -7,13 +7,16 @@ summary: >-
 needs: [team]
 probe:
   - id: repos
-    check: { tool: list_source_repos }
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields: { org: "orgs[].slug", team: "orgs[].teams[].name", status: "orgs[].teams[].sourceRepos[].status" }
     map: { attached: done, unattached: partial, none: missing }
 ask:
   text: >-
     **Add these repos?** I'll add each one to your team's list of source repos. That only
     records that the team uses it. If you already have a clone on this Mac, I can bind that
-    folder instead. If your context repo has a remote, the change goes back as a pull request.
+    folder instead. Nothing is committed or pushed: the change waits in your context repo's
+    folder for you to review and commit.
   options:
     - { label: Add them, act: add-source-repo }
     - { label: Bind my clone, act: attach-source-repo-path }

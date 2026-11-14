@@ -53,7 +53,8 @@
         "properties": {
           "pattern": { "type": "string", "pattern": "^\\^.*\\$$" },
           "label": { "type": "string" },
-          "shareable": { "type": "boolean" }
+          "shareable": { "type": "boolean" },
+          "list": { "type": "boolean" }
         }
       }
     },
@@ -93,6 +94,27 @@
           "type": "object",
           "required": ["tool"],
           "properties": { "tool": { "type": "string", "minLength": 1 } }
+        },
+        "pick": {
+          "description": "Which entry of the tool's result the probe reads: a result field to the value it must have, or {not: value}. More than one match means asking the person which.",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": ["string", "number", "boolean"] },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["not"],
+                "properties": { "not": { "type": ["string", "number", "boolean"] } }
+              }
+            ]
+          }
+        },
+        "yields": {
+          "description": "The values `{{probe.<id>.<name>}}` may use: each name to a field the tool returns, read from the picked entry.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
         },
         "map": {
           "type": "object",

@@ -13,7 +13,7 @@ Until CodeSense has products of its own, a product is one epic plus a row in the
 
 ## Where the files go
 
-A step's change goes to your team's content folder in the context repo. When that context repo has a remote, the guide leaves shared changes for you to review as a pull request; it never pushes to the remote itself. The first card asks for the context repo and the first team together, because everything else is written there.
+A step's change goes to your team in the context repo: the team list, or the team's content folder, `<context repo>/<team>/content`. Nothing is committed or pushed. The changes wait in the context repo's folder as uncommitted edits, for you to review, commit and push when you choose. The first card asks for the context repo and the first team together, and switches CodeSense to that team, because everything else is written there.
 
 ## The setup log
 
@@ -21,4 +21,4 @@ After each finished step the guide adds one row to the `setup-ledger` collection
 
 ## Reading a step file
 
-A step file lists its acts. An act names one tool to call, with its arguments, or one command to run. A click allows that act, plus the acts it lists under `then`, once each; a tool marked `repeat` can be used that many times for one card, for example to add several repos. Anything else needs a new card. `node scripts/setup-consent-check.mjs <export>` checks a recorded session against these rules.
+A step file starts with its probes: each calls one tool, `pick` chooses which entry of the result it reads (never the CodeSense docs), and `yields` names the values an act may use, such as your org and its folder. A step file then lists its acts. An act names one tool to call, with its arguments, or one command to run. A click allows that act, plus the acts it lists under `then`, once each; a tool marked `repeat` can be used that many times for one card, for example to add several repos. Anything else needs a new card. `node scripts/setup-consent-check.mjs <export>` checks a recorded session against these rules.

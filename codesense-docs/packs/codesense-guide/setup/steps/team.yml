@@ -7,13 +7,16 @@ summary: >-
 needs: [context-repo]
 probe:
   - id: teams
-    check: { tool: describe_setup, exclude_org: codesense/docs }
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot", team: "orgs[].teams[].name" }
     map: { user_team: done, no_user_team: missing, unreadable: unknown }
 ask:
   text: >-
     **Name your team.** Pick a short lowercase name, like the group you ship with. I'll create
-    it in your context repo and add the setup log to it. If that context repo has a remote,
-    these shared files go back as a pull request for you to review, not straight to the remote.
+    it in your context repo, switch CodeSense to it and add the setup log to it. Nothing is
+    committed or pushed: the new files wait in your context repo's folder for you to review
+    and commit.
   options:
     - { label: Create it, act: create-team }
     - { label: Not now, act: none }
@@ -23,12 +26,12 @@ inputs:
 act:
   - id: create-team
     consent: local-write
-    what: create your team and add the setup log's schema
+    what: create your team, switch CodeSense to it and add the setup log's schema
     where: your context repo
     why: so repos, products and stories are filed under it, and setup is recorded there
     verb:
       tool: create_team
-      args: { org: "{{probe.teams.org}}", name: "{{team}}" }
+      args: { org: "{{probe.teams.org}}", name: "{{team}}", activate: true }
     then: [write-ledger-schema]
   - id: write-ledger-schema
     consent: local-write
@@ -38,7 +41,7 @@ act:
     verb:
       tool: create_content_file
       args:
-        path: "{{probe.teams.team_content_dir}}/schema/setup-ledger.yaml"
+        path: "{{probe.teams.org_root}}/{{team}}/content/schema/setup-ledger.yaml"
         content_from: guide/setup/ledger/setup-ledger.yaml
         onCollision: fail
 verify: { probe: teams, expect: done }

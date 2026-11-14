@@ -4,7 +4,9 @@ title: Add your repos
 summary: Tracks your repos on the team.
 probe:
   - id: repos
-    check: { tool: list_source_repos }
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs } }
+    yields: { org: "orgs[].slug", team: "orgs[].teams[].name" }
     map: { attached: done, none: missing }
 ask:
   text: "**Add these repos?**"
@@ -17,7 +19,11 @@ act:
     what: add each repo to the team
     where: your context repo
     why: so stories can name them
-    verb: { tool: add_source_repo, args: { org: "{{probe.repos.org}}", team: "{{probe.repos.team}}", url: "{{repo}}" } }
+    verb:
+      {
+        tool: add_source_repo,
+        args: { org: "{{probe.repos.org}}", team: "{{probe.repos.team}}", url: "{{repo}}" },
+      }
     repeat: 3
 inputs:
   repo: { pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", shareable: true }

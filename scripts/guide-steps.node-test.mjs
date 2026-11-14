@@ -58,6 +58,7 @@ const ghAuth = () => ({
     {
       id: "status",
       check: { tool: "probe_environment", check: "gh_auth", host: "github.com" },
+      yields: { account: "account" },
       map: {
         signed_in: "done",
         signed_out: "missing",
@@ -228,6 +229,12 @@ test("a team ledger record may not name or hold a path, username or secret", () 
   const byTemplate = teamStep();
   byTemplate.record.fields = { note: "{{probe.status.account}}" };
   has(check([byTemplate]), "holds a path, a username or a secret");
+  // A probe value can be a path or a login whatever its field is called (orgRoot is a
+  // folder), so a team row holds none at all.
+  const byProbe = teamStep();
+  byProbe.probe[0].yields = { root: "orgs[].orgRoot" };
+  byProbe.record.fields = { created: "{{probe.teams.root}}" };
+  has(check([byProbe]), "record uses {{probe.teams.root}}, a probe value; a team row holds none");
   // A team row names an input only when the step marks it shareable (#120 L3): an input can
   // be a folder or a login whatever its name is.
   const unmarked = teamStep();
@@ -422,6 +429,7 @@ test("the docs bundle carries the step index, the steps and the ledger schema", 
 test("then runs more acts on one click: same class, verbs only, no chains", () => {
   const withThen = () => {
     const step = teamStep();
+    step.probe[0].yields = { root: "orgs[].orgRoot" };
     step.act[0].then = ["schema"];
     step.act.push({
       id: "schema",
@@ -429,7 +437,10 @@ test("then runs more acts on one click: same class, verbs only, no chains", () =
       what: "write the setup log's schema",
       where: "your team",
       why: "so setup can be recorded",
-      verb: { tool: "create_content_file", args: { path: "{{team}}" } },
+      verb: {
+        tool: "create_content_file",
+        args: { path: "{{probe.teams.root}}/{{team}}/content/schema/setup-ledger.yaml" },
+      },
     });
     return step;
   };
@@ -472,4 +483,108 @@ test("repeat lets one click use a verb up to that many times, on a verb act only
     repeat: 2,
   };
   has(check([run]), "act create repeats but has no verb");
+});
+
+test("a verb act may not call run_in_terminal_tab: a command goes in run, where it is fixed", () => {
+  const step = teamStep();
+  step.inputs.c = { pattern: "^.+$" };
+  step.act[0].verb = { tool: "run_in_terminal_tab", args: { command: "{{c}}" } };
+  step.act[0].repeat = 10;
+  has(check([step]), "act create calls run_in_terminal_tab as a verb; a command goes in run");
+  // The engine's clone_repo stays a verb: it checks its own arguments.
+  const clone = teamStep();
+  clone.act[0].verb = { tool: "clone_repo", args: { repo: "{{team}}" } };
+  assert.deepEqual(check([clone]), []);
+});
+
+test("a probe yields only fields its tool returns, and takes only the tool's arguments", () => {
+  const ok = teamStep();
+  ok.probe[0].pick = { "orgs[].slug": { not: "codesense/docs" }, "orgs[].teams[].archived": false };
+  ok.probe[0].yields = { org: "orgs[].slug", root: "orgs[].orgRoot", team: "orgs[].teams[].name" };
+  ok.act[0].verb.args = { org: "{{probe.teams.org}}", name: "{{team}}" };
+  assert.deepEqual(check([ok]), []);
+  const made = teamStep();
+  made.probe[0].yields = { dir: "orgs[].team_content_dir" };
+  has(
+    check([made]),
+    "probe teams yields orgs[].team_content_dir, which describe_setup does not return",
+  );
+  const picked = teamStep();
+  picked.probe[0].pick = { "orgs[].org": "x" };
+  has(check([picked]), "probe teams picks on orgs[].org, which describe_setup does not return");
+  const arg = teamStep();
+  arg.probe[0].check.exclude_org = "codesense/docs";
+  has(check([arg]), "probe teams passes exclude_org, which describe_setup does not take");
+  const undeclared = teamStep();
+  undeclared.act[0].verb.args = { org: "{{probe.teams.org}}", name: "{{team}}" };
+  has(check([undeclared]), "uses {{probe.teams.org}}, which probe teams does not yield");
+  const unknown = teamStep();
+  unknown.act[0].verb.args = { org: "{{probe.nope.org}}", name: "{{team}}" };
+  has(check([unknown]), "uses {{probe.nope.org}}, which probe nope does not yield");
+  // records_list takes org, team and collection; a key it lacks is refused.
+  const ledger = teamStep();
+  ledger.probe = [
+    { ...ok.probe[0] },
+    {
+      id: "row",
+      check: {
+        tool: "records_list",
+        org: "{{probe.teams.org}}",
+        team: "{{probe.teams.team}}",
+        collection: "setup-ledger",
+      },
+      pick: { "rows[].fields.step": "team", "rows[].fields.state": "done" },
+      map: { recorded: "done", none: "missing" },
+    },
+  ];
+  assert.deepEqual(check([ledger]), []);
+  ledger.probe[1].check.step = "team";
+  has(check([ledger]), "probe row passes step, which records_list does not take");
+  // A probe's arguments may use an earlier probe only.
+  const later = teamStep();
+  later.probe = [{ ...ledger.probe[1], check: { ...ledger.probe[1].check } }, ok.probe[0]];
+  delete later.probe[0].check.step;
+  has(check([later]), "probe row uses {{probe.teams.org}}, which no earlier probe yields");
+});
+
+test("a write's path starts from a probe value, never a relative or bare path", () => {
+  const write = (path) => {
+    const step = teamStep();
+    step.probe[0].yields = { root: "orgs[].orgRoot", team: "orgs[].teams[].name" };
+    step.act[0].verb = { tool: "create_content_file", args: { path, content: "x" } };
+    return check([step]);
+  };
+  assert.deepEqual(write("{{probe.teams.root}}/{{probe.teams.team}}/content/a.md"), []);
+  for (const bad of [
+    "content/a.md",
+    "/home/user/a.md",
+    "{{team}}/content/a.md",
+    "a/{{probe.teams.root}}",
+  ])
+    has(write(bad), "create_content_file path must start with a {{probe.…}} value");
+  const epic = teamStep();
+  epic.inputs.repos = { pattern: "^[a-z]+/[a-z]+$", list: true };
+  epic.act[0].verb = {
+    tool: "set_epic_repos",
+    args: { epicFilePath: "x/README.md", repos: "{{repos}}" },
+  };
+  has(check([epic]), "set_epic_repos epicFilePath must start with a {{probe.…}} value");
+});
+
+test("a list input is passed whole, as the list, never inside a longer string", () => {
+  const step = (repos) => {
+    const s = teamStep();
+    s.probe[0].yields = { root: "orgs[].orgRoot" };
+    s.inputs.repos = { pattern: "^[a-z]+/[a-z]+$", list: true, shareable: true };
+    s.act[0].verb = {
+      tool: "set_epic_repos",
+      args: { epicFilePath: "{{probe.teams.root}}/web/content/p/README.md", repos },
+    };
+    return s;
+  };
+  assert.deepEqual(check([step("{{repos}}")]), []);
+  has(check([step("{{repos}},acme/extra")]), 'input repos is a list; pass it whole as "{{repos}}"');
+  const inRow = step("{{repos}}");
+  inRow.record.fields = { created: "repos {{repos}}" };
+  has(check([inRow]), 'input repos is a list; pass it whole as "{{repos}}"');
 });

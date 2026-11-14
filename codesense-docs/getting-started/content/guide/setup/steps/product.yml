@@ -6,14 +6,24 @@ summary: >-
   repos, plus a row in the setup log. The step file switches to the product tool when it ships.
 needs: [team]
 probe:
+  - id: teams
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot", team: "orgs[].teams[].name" }
+    map: { user_team: done, no_user_team: missing, unreadable: unknown }
   - id: product
-    check: { tool: records_list, collection: setup-ledger, step: product }
+    check:
+      tool: records_list
+      org: "{{probe.teams.org}}"
+      team: "{{probe.teams.team}}"
+      collection: setup-ledger
+    pick: { "rows[].fields.step": product, "rows[].fields.state": done }
     map: { recorded: done, none: missing, unreadable: unknown }
 ask:
   text: >-
     **What's the product called?** I'll create one epic with that name in your team, list the
-    repos you told me about on it, and note it in the setup log. If your context repo has a
-    remote, the new files go back as a pull request for you to review.
+    repos you told me about on it, and note it in the setup log. Nothing is committed or
+    pushed: the new files wait in your context repo's folder for you to review and commit.
   options:
     - { label: Create it, act: create-epic }
     - { label: Not now, act: none }
@@ -21,8 +31,9 @@ ask:
 inputs:
   product: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", label: "Product name, a lowercase name", shareable: true }
   repos:
-    pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:, ?[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)*$"
-    label: Its repos as owner/name, separated by commas
+    pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    label: Its repos, each as owner/name
+    list: true
     shareable: true
 act:
   - id: create-epic
@@ -33,7 +44,7 @@ act:
     verb:
       tool: create_content_file
       args:
-        path: "{{probe.product.team_content_dir}}/{{product}}/README.md"
+        path: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
         content: "---\ntype: epic\ntitle: {{product}}\nstatus: in-progress\n---\n# {{product}}\n"
         onCollision: fail
     then: [set-epic-repos]
@@ -45,7 +56,7 @@ act:
     verb:
       tool: set_epic_repos
       args:
-        epicFilePath: "{{probe.product.team_content_dir}}/{{product}}/README.md"
+        epicFilePath: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
         repos: "{{repos}}"
 verify: { probe: product, expect: done }
 record:
