@@ -45,25 +45,29 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
- * A page of the docs repo as a tab of its "Getting started" team. False when the docs repo is
- * not connected.
+ * A page of the docs repo as a tab of its "Getting started" team. Says why when it can't: the
+ * docs repo is not connected, or its team can't be selected.
  */
-function openDocsPage(relPath: string, options: { keepLayout?: boolean; hash?: string }): boolean {
+function openDocsPage(
+  relPath: string,
+  options: { keepLayout?: boolean; hash?: string },
+): "opened" | "no-docs" | "no-team" {
   const docs = useOrgStore.getState().orgs.find((org) => org.slug === CODESENSE_DOCS_SLUG);
-  if (!docs) return false;
+  if (!docs) return "no-docs";
   const org = useOrgStore.getState();
   if (org.activeOrgSlug !== CODESENSE_DOCS_SLUG || org.activeTeamName !== CODESENSE_DOCS_TEAM) {
     org.setActiveTeamIn(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
   }
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
-  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return false;
+  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM)
+    return "no-team";
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
   const path = `${docs.org_root.replace(/[/\\]+$/, "")}/${relPath}`;
   useViewerStore.getState().openFile(teamKey, "", path, {
     ...(options.keepLayout ? { keepLayout: true } : {}),
     ...(options.hash ? { hash: options.hash } : {}),
   });
-  return true;
+  return "opened";
 }
 
 /**
@@ -72,7 +76,7 @@ function openDocsPage(relPath: string, options: { keepLayout?: boolean; hash?: s
  * opens this, so it never lands on an empty docs team.
  */
 export function openCodesenseDocsReadme(): boolean {
-  return openDocsPage(CODESENSE_DOCS_README, { keepLayout: true });
+  return openDocsPage(CODESENSE_DOCS_README, { keepLayout: true }) === "opened";
 }
 
 /**
@@ -82,13 +86,17 @@ export function openCodesenseDocsReadme(): boolean {
  * is reused), and a tab with none launches `/codesense-setup`, which reads the setup
  * ledger and carries on at the first step not done. `resume` adds the `#resume` route,
  * so a fresh launch says `resume` instead of treating the open as a first one.
- * False when the docs repo is not connected; a reopen (not a landing) says so in a toast.
+ * False when the page can't open; a reopen (not a landing) says why in a toast.
  */
 export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
-  const opened = openDocsPage(CODESENSE_DOCS_SETUP, {
+  const result = openDocsPage(CODESENSE_DOCS_SETUP, {
     keepLayout: options.landing,
     hash: options.resume ? "#resume" : undefined,
   });
-  if (!opened && !options.landing) toast.info("CodeSense docs aren't connected yet");
-  return opened;
+  if (result !== "opened" && !options.landing) {
+    toast.info(
+      result === "no-docs" ? "CodeSense docs aren't connected yet" : "Couldn't open the setup page",
+    );
+  }
+  return result === "opened";
 }

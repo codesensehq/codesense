@@ -69,6 +69,15 @@ describe("openCodesenseSetup", () => {
     expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining("docs aren't connected"));
   });
 
+  it("with the docs connected but their team not selectable, it says that, not that the docs are missing", () => {
+    const real = useOrgStore.getState().setActiveTeamIn;
+    useOrgStore.setState({ setActiveTeamIn: () => {} } as never);
+    expect(openCodesenseSetup({ resume: true })).toBe(false);
+    useOrgStore.setState({ setActiveTeamIn: real });
+    expect(toastInfo).toHaveBeenCalledTimes(1);
+    expect(toastInfo).toHaveBeenCalledWith("Couldn't open the setup page");
+  });
+
   it("a landing without the docs repo stays quiet", () => {
     useOrgStore.setState({ orgs: [] });
     expect(openCodesenseSetup({ landing: true })).toBe(false);
