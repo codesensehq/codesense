@@ -545,6 +545,37 @@ fn a_stale_record_is_cleared_only_for_its_own_tab() {
 }
 
 #[test]
+fn an_older_calls_git_exit_leaves_a_newer_clone_on_record() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = CloneRecords::default();
+    note_created(&records, &path, Some("tab-1"));
+    // A newer call finds tab-1 exited with no folder, clears it and reserves its own.
+    records.forget_tab(&path, "tab-1");
+    note_created(&records, &path, Some("tab-2"));
+    // The older call reaches its own exit handling afterwards.
+    records.forget_exited(&path, Some("tab-1"));
+    assert_eq!(records.tab_of(&path).as_deref(), Some("tab-2"));
+    records.forget_exited(&path, Some("tab-2"));
+    assert!(!records.is_recorded(&path));
+}
+
+#[test]
+fn a_stop_before_the_tab_opens_keeps_the_reservation() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = CloneRecords::default();
+    assert!(records.reserve(&path, true));
+    // No tab to close yet: Stop says so and keeps the record, so it can be retried.
+    assert_eq!(records.stop(&path), kept("starting"));
+    assert!(records.is_recorded(&path));
+    records.set_tab(&path, Some("tab-1"));
+    std::fs::create_dir(&path).unwrap();
+    assert!(records.stop(&path).removed);
+    assert!(!records.is_recorded(&path));
+}
+
+#[test]
 fn a_reservation_carries_no_tab_until_the_tab_opens() {
     let (_dir, home) = home();
     let path = home.join("api");
