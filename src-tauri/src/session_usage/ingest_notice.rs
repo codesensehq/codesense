@@ -58,7 +58,7 @@ impl Debouncer {
                 pending.armed = false;
                 std::mem::take(&mut pending.ids)
             };
-            sink(ids.into_iter().collect());
+            sink(Vec::from_iter(ids));
         });
     }
 }

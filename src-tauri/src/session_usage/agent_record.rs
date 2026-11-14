@@ -113,13 +113,14 @@ async fn read_page(
         only: Some(vec![story_changes::Only::Commits]),
     };
     let page = story_changes::read(home, &params, scope).await?;
+    let unavailable = BTreeMap::get(&page.unavailable, "commits").map(Clone::clone);
+    let mut commits = Vec::new();
+    for commit in page.commits {
+        Vec::push(&mut commits, (commit.sha, commit.files, commit.session_ids));
+    }
     Ok(CommitPage {
-        unavailable: BTreeMap::get(&page.unavailable, "commits").cloned(),
-        commits: page
-            .commits
-            .into_iter()
-            .map(|commit| (commit.sha, commit.files, commit.session_ids))
-            .collect(),
+        unavailable,
+        commits,
         next: page.next_cursor,
     })
 }
@@ -182,7 +183,9 @@ pub(crate) fn assemble(
     };
     let mut unpriced_models = BTreeSet::new();
     for session in &report.sessions {
-        unpriced_models.extend(session.unpriced_models.iter().cloned());
+        for model in &session.unpriced_models {
+            BTreeSet::insert(&mut unpriced_models, model.clone());
+        }
     }
     // The priced sum, with `unpricedModels` naming what it leaves out (as `session_usage` does);
     // null only when nothing has a price.
