@@ -27,6 +27,7 @@ import {
 } from "../model";
 import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
+import type { DeliveryMark } from "../lib/delivery-marks";
 
 import { GroupRow, GroupChatPane, groupKey, type GroupRoom } from "./group-chat";
 /** The latest message `key` sent, which a Reply to them answers. */
@@ -524,6 +525,7 @@ export function Conversation({
   quick = false,
   newFrom = null,
   empty = null,
+  marks,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -533,6 +535,8 @@ export function Conversation({
   newFrom?: string | null;
   /** Shown in place of the messages while there are none. */
   empty?: React.ReactNode;
+  /** Queued or Delivered for a message the person sent (null: no mark). */
+  marks?: (m: ConversationMessage) => DeliveryMark | null;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -584,6 +588,7 @@ export function Conversation({
                   m={m}
                   plain={quick}
                   grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
+                  mark={marks?.(m) ?? null}
                 />
               </Fragment>
             );
@@ -618,8 +623,11 @@ export function Bubble({
   m,
   plain = false,
   grouped = false,
+  mark = null,
 }: {
   m: ConversationMessage;
+  /** Queued or Delivered, for a message the person sent. */
+  mark?: DeliveryMark | null;
   /** Follows the sender's previous message closely: no sender and time of its own (how it came
    *  and where replies go are still said). */
   grouped?: boolean;
@@ -640,7 +648,7 @@ export function Bubble({
   // A grouped message drops who and when, but keeps every mark its line would carry.
   const repliesTo = repliesViaKey(m);
   const claim = claimBadge(m, dir);
-  const meta = !grouped || term || repliesTo !== null || claim !== null;
+  const meta = !grouped || term || repliesTo !== null || claim !== null || mark !== null;
   return (
     <div className={cls} data-mid={msgKey(m)}>
       {meta && (
@@ -670,6 +678,11 @@ export function Bubble({
             </>
           )}
           {term && <TypedVia />}
+          {mark && (
+            <span className="ibx-mark" data-mark={mark}>
+              {mark === "queued" ? "Queued" : "Delivered"}
+            </span>
+          )}
           <ClaimVia badge={claim} />
           <RepliesVia to={repliesTo} dir={dir} team={m.team} />
         </div>

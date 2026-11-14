@@ -555,6 +555,8 @@ declare namespace CodesenseSdk {
     next?: boolean | { edit?: boolean };
     /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
+    /** The chat links its stylesheet (`/kit/v1/chat.css`, every rule under the chat's `.cs-chat` root) once per page. `false` keeps the page's own chat rules. Each mount takes its own element ids: the first chat on a page keeps the plain ones (`sv-composer-input`, `sv-status`, …), the next carry `-2`, `-3`; unmount gives the ids back. Default `true`. */
+    styles?: boolean;
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
     timers?: { slowMs: number; failMs: number };
     /** Builds the launch prompt from the first message. Default: the text itself. */
