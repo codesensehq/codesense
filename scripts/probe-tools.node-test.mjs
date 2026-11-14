@@ -150,11 +150,46 @@ test("records_list: every registry field is a key the list operation writes", ()
       assert.ok(keys.has(key), `records_list writes no ${key} (${field})`);
 });
 
+test("read_epic_repos: the registry takes the arguments its params struct reads", () => {
+  const handler = rust("mcp/handler.rs");
+  const at = handler.indexOf("pub struct ReadEpicReposParams");
+  const params = structs(
+    handler.slice(handler.lastIndexOf("\n#[", at), at + 400),
+  ).ReadEpicReposParams.map((f) => f.name);
+  assert.deepEqual(PROBE_TOOLS.read_epic_repos.params, params);
+  // It answers with the bare list of owner/repo slugs.
+  assert.match(
+    fnBody(handler, "async fn read_epic_repos("),
+    /ok_json\(serde_json::json!\(repos\)\)/,
+  );
+  assert.deepEqual(PROBE_TOOLS.read_epic_repos.fields, ["[]"]);
+});
+
+test("the guide may call every tool a step probes, on every runtime", () => {
+  for (const runtime of ["claude", "codex", "opencode"]) {
+    const agent = readFileSync(
+      join(PACKS_ROOT, `codesense-guide/agents/guide-${runtime}/agent.yaml`),
+      "utf8",
+    );
+    for (const tool of Object.keys(PROBE_TOOLS))
+      assert.match(
+        agent,
+        new RegExp(`^\\s*- (?:mcp__codesense__)?${tool}$`, "m"),
+        `guide-${runtime} may call ${tool}`,
+      );
+  }
+});
+
 test("the source-repos step maps every attachment state describe_setup reports", () => {
   const variants = [
     ...block(SETUP, SETUP.indexOf("pub enum AttachmentStatus")).matchAll(/^\s*(\w+),/gm),
   ].map(([, v]) => v[0].toLowerCase() + v.slice(1));
   assert.deepEqual(variants.sort(), ["attached", "missing", "unattached"]);
+  // The registry lists the values a probe may map, so the step lint checks the map against them.
+  assert.deepEqual(
+    [...PROBE_TOOLS.describe_setup.values["orgs[].teams[].sourceRepos[].attachment"]].sort(),
+    variants,
+  );
   const s = parse(
     readFileSync(join(PACKS_ROOT, "codesense-guide/setup/steps/source-repos.yml"), "utf8"),
   );

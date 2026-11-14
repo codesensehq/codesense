@@ -106,7 +106,7 @@ const teamStep = () => ({
     {
       id: "teams",
       check: { tool: "describe_setup" },
-      map: { some: "done", none: "missing" },
+      map: { found: "done", none: "missing", unreadable: "unknown" },
     },
   ],
   ask: {
@@ -534,7 +534,7 @@ test("a probe yields only fields its tool returns, and takes only the tool's arg
         collection: "setup-ledger",
       },
       pick: { "rows[].fields.step": "team", "rows[].fields.state": "done" },
-      map: { recorded: "done", none: "missing" },
+      map: { found: "done", none: "missing", unreadable: "unknown" },
     },
   ];
   assert.deepEqual(check([ledger]), []);
@@ -545,6 +545,52 @@ test("a probe yields only fields its tool returns, and takes only the tool's arg
   later.probe = [{ ...ledger.probe[1], check: { ...ledger.probe[1].check } }, ok.probe[0]];
   delete later.probe[0].check.step;
   has(check([later]), "probe row uses {{probe.teams.org}}, which no earlier probe yields");
+});
+
+test("a probe maps what it can read: its outcomes, or its field's values, and all of them", () => {
+  assert.deepEqual(check([teamStep()]), []);
+  const stray = teamStep();
+  stray.probe[0].map.some = "done";
+  has(check([stray]), "probe teams maps some, which it never reads (found, none, unreadable)");
+  const short = teamStep();
+  delete short.probe[0].map.unreadable;
+  has(check([short]), "probe teams does not map unreadable");
+  // A yielded field whose values the registry lists is mapped value by value, in place of found.
+  const valued = teamStep();
+  valued.probe[0].yields = { attachment: "orgs[].teams[].sourceRepos[].attachment" };
+  valued.probe[0].map = {
+    attached: "done",
+    unattached: "done",
+    none: "missing",
+    unreadable: "unknown",
+  };
+  has(check([valued]), "probe teams does not map missing");
+  valued.probe[0].map.missing = "partial";
+  assert.deepEqual(check([valued]), []);
+  valued.probe[0].map.found = "done";
+  has(check([valued]), "probe teams maps found, which it never reads");
+});
+
+test("a probe's argument is an earlier probe's value or an input", () => {
+  const s = teamStep();
+  s.probe.push({
+    id: "epic",
+    check: { tool: "read_epic_repos", epicFilePath: "/x/{{product}}/README.md" },
+    map: { found: "done", none: "missing", unreadable: "missing" },
+  });
+  has(check([s]), "probe epic uses {{product}}, which is not an input or a probe result");
+  s.inputs.product = { pattern: "^[a-z]+$", shareable: true };
+  assert.deepEqual(check([s]), []);
+});
+
+test("verify names one probe or several, each a probe of the step", () => {
+  const s = teamStep();
+  s.verify = { probe: ["teams"], expect: "done" };
+  assert.deepEqual(check([s]), []);
+  s.verify.probe = ["teams", "nope"];
+  has(check([s]), "verify names unknown probe nope");
+  s.verify.probe = [];
+  assert.ok(check([s]).length > 0, "an empty list is refused");
 });
 
 test("a write's path starts from a probe value, never a relative or bare path", () => {

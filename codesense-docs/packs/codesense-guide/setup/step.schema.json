@@ -59,11 +59,22 @@
       }
     },
     "verify": {
+      "description": "The step's state: the most-done state its verify probes read. The agent reads it before the card, so a re-run skips a done step, and after the act to check it worked. A probe that only a new session can read (a ledger row) sits beside one that reads the act's own result.",
       "type": "object",
       "additionalProperties": false,
       "required": ["probe", "expect"],
       "properties": {
-        "probe": { "type": "string", "minLength": 1 },
+        "probe": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
         "expect": { "enum": ["done", "missing", "partial", "unknown"] }
       }
     },
@@ -117,6 +128,7 @@
           "additionalProperties": { "type": "string", "minLength": 1 }
         },
         "map": {
+          "description": "What the probe reads to a state. The keys are `found` (the pick matched an entry, or with no pick the tool answered), `none` (nothing matched, or an argument has no value yet) and `unreadable` (the tool failed); a probe that yields a field with a fixed set of values maps each value in place of `found`, and across several entries the least-done state counts. The pack build checks the keys against the tool's registry.",
           "type": "object",
           "minProperties": 1,
           "additionalProperties": { "enum": ["done", "missing", "partial", "unknown"] }

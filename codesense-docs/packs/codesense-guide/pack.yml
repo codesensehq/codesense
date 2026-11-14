@@ -22,13 +22,13 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: 1faa0503c1be63c6132020f9cb8bb4af48bb66a1ba9536f89389f7e3fa5421a3
+    sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: 1faa0503c1be63c6132020f9cb8bb4af48bb66a1ba9536f89389f7e3fa5421a3
+    sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: 1faa0503c1be63c6132020f9cb8bb4af48bb66a1ba9536f89389f7e3fa5421a3
+    sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
     exec: false
   - path: CHANGELOG.md
     sha256: 938e4e8b502275881a6617f2ea96bfa7dc695f435bf83cc84108c73d53362236
@@ -46,10 +46,10 @@ files:
     sha256: 0d94957543a4d3373e506d955bd3e73b96d287454d105d28c17785b23f7737d4
     exec: false
   - path: commands/codesense-setup.md
-    sha256: 1faa0503c1be63c6132020f9cb8bb4af48bb66a1ba9536f89389f7e3fa5421a3
+    sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
     exec: false
   - path: content/guide/core-steps.md
-    sha256: d2748b6f83dc53a75c78354212a5a96f7991c8c03a169f12b01b5d2904f14fc4
+    sha256: 906d8903bed5521e844b28249ef50aa681d781be9b92555a727c0c332d634115
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
@@ -61,20 +61,20 @@ files:
     sha256: 64e8d67d2dfcbf127787fe10e9145e8d0af29fc071ed531b8ec0f1335d557e5c
     exec: false
   - path: setup/step.schema.json
-    sha256: 54a13174ea78e2db51cadabcda02b398a81c50b5a2aa821e79f9b2b5ee863ec4
+    sha256: cdd471b031373f3ad3b989a7cbb550956fe3e63c05cd8690ab0c1c691c807e72
     exec: false
   - path: setup/steps/context-repo.yml
-    sha256: bb2ad417b0d3f56e1468e34c60ca2d427e17a6a9fae5ef79bc83c86a8be9c7ed
+    sha256: 02d11a3b909b6eec6085124a0a4fdfe867a43a874f106f8d116388144cd16b53
     exec: false
   - path: setup/steps/index.yml
     sha256: f716ba453e5cae1bbe5360676e8baac1c6e357e18340b04cfa8392af0e6fb90a
     exec: false
   - path: setup/steps/product.yml
-    sha256: 400849ce8611708e7c654f96f30a0e0fffbe37571ea2d1218f871373ffe40300
+    sha256: c12bdc64156912971b9571f1cb1eb0776d05c4a22538972a56d553a0317d7cf8
     exec: false
   - path: setup/steps/source-repos.yml
-    sha256: a00e774c458d55f58957dd5688cda6b071fdef6c79ef9f13051c994438c44acc
+    sha256: e2e59362b42384c8798671f10afaea639ebea3f2634fb29b4f7e033c1a463eac
     exec: false
   - path: setup/steps/team.yml
-    sha256: e814992e532f978da0463615836d058aa8295a1132853a8897d148e6162437f4
+    sha256: f0dc41eb8d11f4a44fc0a41147eed59dd6039da0bb18dc5d640b7e319139821a
     exec: false

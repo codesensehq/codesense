@@ -65,11 +65,11 @@ export const SETUP_VERBS = [
 ];
 
 // What a probe may read: each tool's arguments and the result fields its handler serialises
-// (`[]` is a list's entry, `.*` any field of a record). The fields come from the Rust, not the
-// tool's description, and `probe-tools.node-test.mjs` reads the handlers to hold them there.
-// A probe on a tool listed here takes only those arguments, and picks and yields only those
-// fields. A tool the guide's steps don't probe yet is unlisted; its probe is checked when
-// it is added.
+// (`[]` is a list's entry, `.*` any field of a record), and for a field with a fixed set of
+// values, those values. The fields come from the Rust, not the tool's description, and
+// `probe-tools.node-test.mjs` reads the handlers to hold them there. A probe on a tool listed
+// here takes only those arguments, and picks, yields and maps only those fields and values. A
+// tool the guide's steps don't probe yet is unlisted; its probe is checked when it is added.
 export const PROBE_TOOLS = {
   // `describe_setup` takes no arguments; its `data` is `SetupState` (`mcp/setup_tools.rs`).
   // A repo's `attachment` is `attached`, `missing` (bound, the clone is gone) or `unattached`.
@@ -93,6 +93,7 @@ export const PROBE_TOOLS = {
       "orgs[].teams[].sourceRepos[].attachment",
       "orgs[].teams[].sourceRepos[].localPath",
     ],
+    values: { "orgs[].teams[].sourceRepos[].attachment": ["attached", "missing", "unattached"] },
   },
   // `list_source_repos` takes no arguments and reads the session's own org only.
   list_source_repos: {
@@ -114,7 +115,18 @@ export const PROBE_TOOLS = {
     params: ["org", "team", "collection", "window"],
     fields: ["total", "rows[].id", "rows[].title", "rows[].fields.*"],
   },
+  // `read_epic_repos` answers with the epic's `owner/repo` list, and fails when the path is not
+  // an epic the session can read.
+  read_epic_repos: { params: ["epicFilePath"], fields: ["[]"] },
 };
+
+// What a probe reads, before its map turns it into a state: `found` (its pick matched an
+// entry, or with no pick the tool answered), `none` (nothing matched, or an argument has no
+// value yet: an earlier probe found nothing or the person hasn't given the input) and
+// `unreadable` (the tool failed). A probe that yields a field the registry lists values for
+// reads that field's value in place of `found`; across several entries the least-done state
+// counts. Every map names each of these, so no state is left for the agent to guess.
+export const PROBE_OUTCOMES = ["found", "none", "unreadable"];
 
 const returns = (tool, field) =>
   PROBE_TOOLS[tool].fields.some((f) =>
@@ -195,12 +207,32 @@ export function stepRuleErrors(step, where) {
       for (const field of Object.values(probe.yields ?? {}))
         if (!returns(tool, field))
           errors.push(`${where}: probe ${probe.id} yields ${field}, which ${tool} does not return`);
+      const valued = Object.values(probe.yields ?? {}).filter((f) => known.values?.[f]);
+      if (valued.length > 1)
+        errors.push(`${where}: probe ${probe.id} yields ${valued.join(" and ")}; it maps one`);
+      const reads = valued.length
+        ? ["none", "unreadable", ...known.values[valued[0]]]
+        : PROBE_OUTCOMES;
+      for (const key of Object.keys(probe.map ?? {}))
+        if (!reads.includes(key))
+          errors.push(
+            `${where}: probe ${probe.id} maps ${key}, which it never reads (${reads.join(", ")})`,
+          );
+      for (const key of reads)
+        if (!(key in (probe.map ?? {})))
+          errors.push(`${where}: probe ${probe.id} does not map ${key}`);
     }
-    for (const name of templates(args))
+    for (const name of templates(args)) {
       probeErrors(
         name,
         () => `${where}: probe ${probe.id} uses {{${name}}}, which no earlier probe yields`,
       );
+      const root = name.split(".")[0];
+      if (root !== "probe" && !(root in (step.inputs ?? {})))
+        errors.push(
+          `${where}: probe ${probe.id} uses {{${name}}}, which is not an input or a probe result`,
+        );
+    }
     for (const value of Object.keys(probe.yields ?? {})) yielded.add(`${probe.id}.${value}`);
   }
 
@@ -261,8 +293,8 @@ export function stepRuleErrors(step, where) {
   if (changes && !step.ask)
     errors.push(`${where}: a step that changes something needs an ask card`);
 
-  if (step.verify && !probeIds.includes(step.verify.probe))
-    errors.push(`${where}: verify names unknown probe ${step.verify.probe}`);
+  for (const id of [step.verify?.probe ?? []].flat())
+    if (!probeIds.includes(id)) errors.push(`${where}: verify names unknown probe ${id}`);
 
   const inputs = Object.keys(step.inputs ?? {});
   for (const [name, spec] of Object.entries(step.inputs ?? {})) {

@@ -10,7 +10,7 @@ probe:
     check: { tool: describe_setup }
     pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
     yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot", team: "orgs[].teams[].name" }
-    map: { user_team: done, no_user_team: missing, unreadable: unknown }
+    map: { found: done, none: missing, unreadable: unknown }
   - id: product
     check:
       tool: records_list
@@ -18,7 +18,7 @@ probe:
       team: "{{probe.teams.team}}"
       collection: setup-ledger
     pick: { "rows[].fields.step": product, "rows[].fields.state": done }
-    map: { recorded: done, none: missing, unreadable: unknown }
+    map: { found: done, none: missing, unreadable: unknown }
 ask:
   text: >-
     **What's the product called?** I'll create one epic with that name in your team, list the

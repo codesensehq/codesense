@@ -10,7 +10,7 @@ probe:
     check: { tool: describe_setup }
     pick: { "orgs[].slug": { not: codesense/docs } }
     yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot" }
-    map: { user_org: done, only_docs: missing, unreadable: unknown }
+    map: { found: done, none: missing, unreadable: unknown }
 ask:
   text: >-
     **Create your team folder?** Your stories, products and setup log live in a context repo of

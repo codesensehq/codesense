@@ -7,7 +7,7 @@ probe:
     check: { tool: describe_setup }
     pick: { "orgs[].slug": { not: codesense/docs } }
     yields: { org: "orgs[].slug", team: "orgs[].teams[].name" }
-    map: { attached: done, none: missing }
+    map: { found: done, none: missing, unreadable: unknown }
 ask:
   text: "**Add these repos?**"
   options:
