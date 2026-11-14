@@ -1480,8 +1480,6 @@ function DiffCodeControls({
   );
 }
 
-/** Whether a file's diff is the code diff the code controls drive: any
- *  non-markdown file, and markdown shown as Source. */
 /** Whether a file's diff can draw rendered pages here (so its view options offer
  *  Side by side | Source): an HTML, SVG or Excalidraw file read as text, or a raster
  *  image whose bytes this surface holds for every present side. */
@@ -1495,6 +1493,8 @@ function drawsPages(
   return rendersInline(path, { before: "", after: "", status, imageBytes }, state);
 }
 
+/** Whether a file's diff is the code diff the code controls drive: any
+ *  non-markdown file, and markdown shown as Source. */
 function readsAsCode(path: string, modes: FileDiffModes): boolean {
   if (getViewerFileType(path) === "markdown") return modes.markdown === "source";
   if (rendersFromText(path)) return modes.html === "source";

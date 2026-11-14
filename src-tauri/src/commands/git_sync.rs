@@ -4151,8 +4151,6 @@ mod tests {
         );
     }
 
-    /// (Task 4 — AC-4) A binary file in a commit returns `binary: true` + empty
-    /// content, as everywhere.
     /// The rendered diff's raster sides: before at the merge-base, after on disk; at a
     /// commit, its first parent and itself; a rename reads before at the old path.
     #[test]
@@ -4237,6 +4235,8 @@ mod tests {
         assert!(sides.too_large);
     }
 
+    /// (Task 4 — AC-4) A binary file in a commit returns `binary: true` + empty
+    /// content, as everywhere.
     #[test]
     fn source_commit_file_redline_binary_empties_content() {
         let (_dir, path) = repo_with_main(&[("keep.md", "k\n")]);
