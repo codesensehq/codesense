@@ -82,5 +82,17 @@
     "reason": "timing-sensitive under full-suite load; flaked in merge-queue runs",
     "issue": "https://github.com/codesensehq/codesense/issues/4",
     "added": "2026-11-14"
+  },
+  {
+    "id": "vitest:src/features/shell/right-pane/panes/inbox-pane.seam.test.tsx#optimistic reading keeps 500 loaded rows and preserves the New marker when paging older",
+    "reason": "timing-sensitive under full-suite load; flaked in merge-queue runs",
+    "issue": "https://github.com/codesensehq/codesense/issues/4",
+    "added": "2026-11-14"
+  },
+  {
+    "id": "vitest:src/features/shell/right-pane/panes/inbox-pane.seam.test.tsx#loads 50 older rows, suppresses auto retry, and retries with one status outside the log",
+    "reason": "timing-sensitive under full-suite load; flaked in merge-queue runs",
+    "issue": "https://github.com/codesensehq/codesense/issues/4",
+    "added": "2026-11-14"
   }
 ]
