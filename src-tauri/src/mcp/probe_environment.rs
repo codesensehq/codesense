@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! `probe_environment`: a read-only look at this Mac for the setup guide.
 //!
 //! It answers which agent CLIs, git and `gh` are installed, whether `gh` is signed in
@@ -50,7 +51,7 @@ pub fn probe_gh_auth(gh: Option<&str>, timeout: Duration) -> Value {
 /// taken; any other line, including a masked or unmasked token line, is dropped unread.
 pub fn parse_gh_auth(success: bool, output: &str) -> Value {
     let mut account: Option<String> = None;
-    let mut scopes: Vec<String> = Vec::new();
+    let mut scopes: Vec<String> = Default::default();
     let mut failed = false;
     let mut on_github = false;
     for line in output.lines() {
@@ -75,7 +76,7 @@ pub fn parse_gh_auth(success: bool, output: &str) -> Value {
     json!({
         "signed_in": signed_in,
         "account": if signed_in { account } else { None },
-        "scopes": if signed_in { scopes } else { Vec::new() },
+        "scopes": if signed_in { scopes } else { vec![] },
     })
 }
 
@@ -137,7 +138,7 @@ fn run_with_timeout(path: &Path, args: &[&str], timeout: Duration) -> Option<(bo
             Err(_) => return None,
         }
     };
-    let mut text = String::new();
+    let mut text: String = Default::default();
     if let Some(mut out) = child.stdout.take() {
         let _ = out.by_ref().take(64 * 1024).read_to_string(&mut text);
     }
