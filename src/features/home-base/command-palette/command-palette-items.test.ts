@@ -127,6 +127,16 @@ describe("buildStaticItems", () => {
     expect(noTeam.some((i) => decodeSelection(i.id)?.kind === "open-foreman")).toBe(true);
   });
 
+  it("marks the Foreman row only while its mail waits", () => {
+    const row = (waiting: boolean) =>
+      buildStaticItems({ ...inputs, foremanMailWaiting: waiting }).find(
+        (i) => decodeSelection(i.id)?.kind === "open-foreman",
+      );
+    expect(row(false)?.waiting).toBe(false);
+    expect(row(true)?.waiting).toBe(true);
+    expect(row(true)?.sublabel).toContain("mail waiting");
+  });
+
   it("always offers the Scratch space (SLW-PT-21)", () => {
     const item = buildStaticItems({ ...inputs, canAttach: false }).find(
       (i) => decodeSelection(i.id)?.kind === "open-scratch-space",

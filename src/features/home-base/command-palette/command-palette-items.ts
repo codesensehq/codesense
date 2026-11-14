@@ -160,6 +160,8 @@ export interface StaticIndexInputs {
   /** SW-RM-UI-1: the machine registry is available, so "Add machine…" can run —
    *  a palette command renders nothing until searched, so it adds no friction. */
   canAddMachine: boolean;
+  /** Foreman mail waits and no Foreman is live: the Foreman row shows a dot. */
+  foremanMailWaiting?: boolean;
   /** How many of the user's routines need them; shown on the Routines row above 0. */
   routinesNeedingYou: number;
   /** The custom right panes the active team sees, offered as "Open pane: …" (empty
@@ -255,7 +257,10 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
   items.push({
     id: encodeSelection({ kind: "open-foreman" }),
     label: "Foreman",
-    sublabel: "action · open the Foreman",
+    sublabel: inputs.foremanMailWaiting
+      ? "action · open the Foreman · mail waiting"
+      : "action · open the Foreman",
+    waiting: inputs.foremanMailWaiting === true,
     tier: CP_TIER.action,
   });
   if (inputs.canAttach) {
