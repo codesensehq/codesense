@@ -144,11 +144,30 @@ describe("kit.chat stylesheet", () => {
     const emitted = new Set<string>();
     for (const file of readdirSync(join(KIT_DIR, "chat")).filter((f) => f.endsWith(".js"))) {
       const text = readFileSync(join(KIT_DIR, "chat", file), "utf8");
-      for (const match of text.matchAll(/class:'([^'$]*)'/g))
-        for (const name of match[1]!.split(/\s+/).filter(Boolean)) emitted.add(name);
+      // Every way the modules set a class: a quoted literal, a template literal (its ${...} parts
+      // are values, named below), a ternary of two literals, and setAttribute('class', ...).
+      const found = [
+        ...text.matchAll(/class:'([^'$]*)'/g),
+        ...text.matchAll(/class:`([^`]*)`/g),
+        ...text.matchAll(/class:\([^?]*\)[^?]*\?'([^']*)':'([^']*)'/g),
+        ...text.matchAll(/class:[^,]*\?`([^`]*)`:'([^']*)'/g),
+        ...text.matchAll(/setAttribute\('class','([^']*)'/g),
+      ];
+      for (const match of found)
+        for (const part of match.slice(1))
+          for (const name of part
+            .replace(/\$\{[^}]*\}/g, " ")
+            .split(/\s+/)
+            .filter(Boolean))
+            emitted.add(name);
     }
+    // The values a message's side takes (the page variant is styled as [data-variant=page]).
+    for (const name of ["lead", "you", "other"]) emitted.add(name);
     // cs-avatar is the kit stylesheet's own; the rest are the chat's.
     emitted.delete("cs-avatar");
+    // The root is styled as .cs-chat itself (it carries both classes).
+    emitted.delete("chatcol");
+    emitted.delete("page");
     expect(emitted.size).toBeGreaterThan(25);
     const styled = selectors(css).join(" ");
     for (const name of emitted) expect(styled, `.${name}`).toContain(`.${name}`);
