@@ -1,0 +1,32 @@
+step_format: 1
+id: repos
+title: Add your repos
+summary: Tracks your repos on the team.
+probe:
+  - id: repos
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs } }
+    yields: { org: "orgs[].slug", team: "orgs[].teams[].name" }
+    map: { found: done, none: missing, unreadable: unknown }
+ask:
+  text: "**Add these repos?**"
+  options:
+    - { label: Add them, act: add-source-repo }
+    - { label: Not now, act: none }
+act:
+  - id: add-source-repo
+    consent: local-write
+    what: add each repo to the team
+    where: your context repo
+    why: so stories can name them
+    verb:
+      {
+        tool: add_source_repo,
+        args: { org: "{{probe.repos.org}}", team: "{{probe.repos.team}}", url: "{{repo}}" },
+      }
+    repeat: 3
+inputs:
+  repo: { pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", shareable: true }
+verify: { probe: repos, expect: done }
+record: { scope: team, fields: { created: "source repos" }, secret: never }
+undo: Remove the repos from the team's list.

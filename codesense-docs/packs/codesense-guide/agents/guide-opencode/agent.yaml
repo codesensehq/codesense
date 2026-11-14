@@ -44,4 +44,5 @@ mcp:
     - open_workspace
     - set_epic_repos
     - read_epic_repos
+    - set_active_team
 revision: 1

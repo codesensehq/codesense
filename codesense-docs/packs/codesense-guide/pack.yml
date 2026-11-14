@@ -22,44 +22,59 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: 3d84494e9a427f9e7feaf0ec9ff22982681c7e0802e22e920639040302f432a5
+    sha256: 7e53abc86c5ced612778233d910e34b3e6f40868931183db82fa656d39a9bbc4
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: 3d84494e9a427f9e7feaf0ec9ff22982681c7e0802e22e920639040302f432a5
+    sha256: 7e53abc86c5ced612778233d910e34b3e6f40868931183db82fa656d39a9bbc4
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: 3d84494e9a427f9e7feaf0ec9ff22982681c7e0802e22e920639040302f432a5
+    sha256: 7e53abc86c5ced612778233d910e34b3e6f40868931183db82fa656d39a9bbc4
     exec: false
   - path: CHANGELOG.md
-    sha256: 1614f9071daad5e4ad06d57852c6f8fada52966e9b37834344252edac00549b7
+    sha256: 938e4e8b502275881a6617f2ea96bfa7dc695f435bf83cc84108c73d53362236
     exec: false
   - path: LICENSE
     sha256: d0d1bba570c135a2a51273d7261df49c4ce5d63332a304d03626c5836cbbec4f
     exec: false
   - path: agents/guide-claude/agent.yaml
-    sha256: d11579b8e7e744097690723b1fb1abfc41d48ed1e5bd01ee28cfaae447299a5f
+    sha256: bc73d32eca21398c6ec66652946644cf27dd7375d7a614cb597f2cb9f002edc5
     exec: false
   - path: agents/guide-codex/agent.yaml
-    sha256: f4b1ef69c7fb88957e99a7a926b09f3f2022c941c0c895998592cae790ec1b3a
+    sha256: ed709c2cd7d9c392a67e210afbc9aadaf7b031a363c58070b8cf0fb227ec5b0b
     exec: false
   - path: agents/guide-opencode/agent.yaml
-    sha256: c14f2a3b9bdaeea8c4db333de1c0bf78a8b9c1c3adcb2c0bd58634a06b1e4299
+    sha256: 7d6307b5583140c585a9916c433c4aaa8b76317c1aa6d1a4828d019893d59634
     exec: false
   - path: commands/codesense-setup.md
-    sha256: 3d84494e9a427f9e7feaf0ec9ff22982681c7e0802e22e920639040302f432a5
+    sha256: 7e53abc86c5ced612778233d910e34b3e6f40868931183db82fa656d39a9bbc4
+    exec: false
+  - path: content/guide/core-steps.md
+    sha256: 540e2911d027d3e876888da9a11a7166020b780aff5a649d5e16e731fd5ce057
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
     exec: false
   - path: docs/README.md
-    sha256: ba5b6709d14bdb7b6f26d93d03b2346ad6fb3d65965eff63bf77c817ea3aee59
+    sha256: 87f6e5404853f5d3f799f53254924a0890d617de0eb20195bc3ad89148bac5e5
     exec: false
   - path: setup/ledger/setup-ledger.yaml
     sha256: 64e8d67d2dfcbf127787fe10e9145e8d0af29fc071ed531b8ec0f1335d557e5c
     exec: false
   - path: setup/step.schema.json
-    sha256: 94357231037c7eeee981b8e8cb570be9c133318698a49b5ad862b43cef556ca9
+    sha256: cdd471b031373f3ad3b989a7cbb550956fe3e63c05cd8690ab0c1c691c807e72
+    exec: false
+  - path: setup/steps/context-repo.yml
+    sha256: 02d11a3b909b6eec6085124a0a4fdfe867a43a874f106f8d116388144cd16b53
     exec: false
   - path: setup/steps/index.yml
-    sha256: 6b039c8d2bd218cc83d310a5f606160b88d7f6eed928703604b4f41c98a96574
+    sha256: f716ba453e5cae1bbe5360676e8baac1c6e357e18340b04cfa8392af0e6fb90a
+    exec: false
+  - path: setup/steps/product.yml
+    sha256: c8b5a916a7bf37e99a5cc438ef4046f4e296d37783ea12cb070e1207d3f874fb
+    exec: false
+  - path: setup/steps/source-repos.yml
+    sha256: e2e59362b42384c8798671f10afaea639ebea3f2634fb29b4f7e033c1a463eac
+    exec: false
+  - path: setup/steps/team.yml
+    sha256: 1998dbcee849e73687bfba152ecad672097609429db34a37f99d43f29a99d7d4
     exec: false

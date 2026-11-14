@@ -1,0 +1,95 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__probe_environment",
+            "native_id": "toolu_1",
+            "is_error": false,
+            "input": "{\"check\": \"gh_auth\"}",
+            "result": "{\"status\": \"signed_out\"}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_2",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Sign in to GitHub?** You sign in in your browser.\\n\\ncard: gh-auth \\u00b7 install-or-sign-in \\u00b7 sign-in=Do it | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 201}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_3",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 202, \"from\": \"human\", \"text\": \"Do it\", \"inReplyTo\": 201}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__run_in_terminal_tab",
+            "native_id": "toolu_4",
+            "is_error": false,
+            "input": "{\"handle\": \"t1\", \"command\": \"gh auth login --hostname github.com --git-protocol https --web\"}",
+            "result": "{\"submitted\": true}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_terminal_tab",
+            "native_id": "toolu_5",
+            "is_error": false,
+            "input": "{\"handle\": \"t1\"}",
+            "result": "{\"text\": \"Logged in\"}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__run_in_terminal_tab",
+            "native_id": "toolu_6",
+            "is_error": false,
+            "input": "{\"handle\": \"t1\", \"command\": \"gh auth login --hostname github.com --git-protocol https --web\"}",
+            "result": "{\"submitted\": true}"
+          }
+        ]
+      }
+    ]
+  }
+}

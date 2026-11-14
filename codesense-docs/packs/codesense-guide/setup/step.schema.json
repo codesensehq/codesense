@@ -52,16 +52,29 @@
         "required": ["pattern"],
         "properties": {
           "pattern": { "type": "string", "pattern": "^\\^.*\\$$" },
-          "label": { "type": "string" }
+          "label": { "type": "string" },
+          "shareable": { "type": "boolean" },
+          "list": { "type": "boolean" }
         }
       }
     },
     "verify": {
+      "description": "The step's state: the most-done state its verify probes read. The agent reads it before the card, so a re-run skips a done step, and after the act to check it worked. A probe that only a new session can read (a ledger row) sits beside one that reads the act's own result.",
       "type": "object",
       "additionalProperties": false,
       "required": ["probe", "expect"],
       "properties": {
-        "probe": { "type": "string", "minLength": 1 },
+        "probe": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
         "expect": { "enum": ["done", "missing", "partial", "unknown"] }
       }
     },
@@ -93,7 +106,29 @@
           "required": ["tool"],
           "properties": { "tool": { "type": "string", "minLength": 1 } }
         },
+        "pick": {
+          "description": "Which entry of the tool's result the probe reads: a result field to the value it must have, or {not: value}. More than one match means asking the person which.",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": ["string", "number", "boolean"] },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["not"],
+                "properties": { "not": { "type": ["string", "number", "boolean"] } }
+              }
+            ]
+          }
+        },
+        "yields": {
+          "description": "The values `{{probe.<id>.<name>}}` may use: each name to a field the tool returns, read from the picked entry.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
         "map": {
+          "description": "What the probe reads to a state. The keys are `found` (the pick matched an entry, or with no pick the tool answered), `none` (nothing matched, or an argument has no value yet) and `unreadable` (the tool failed); a probe that yields a field with a fixed set of values maps each value in place of `found`, and across several entries the least-done state counts. The pack build checks the keys against the tool's registry.",
           "type": "object",
           "minProperties": 1,
           "additionalProperties": { "enum": ["done", "missing", "partial", "unknown"] }
@@ -130,6 +165,12 @@
           }
         },
         "open_url": { "type": "string", "pattern": "^https://" },
+        "then": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "uniqueItems": true
+        },
+        "repeat": { "type": "integer", "minimum": 1, "maximum": 10 },
         "wait": {
           "type": "object",
           "additionalProperties": false,
