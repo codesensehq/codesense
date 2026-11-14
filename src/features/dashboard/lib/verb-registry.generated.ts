@@ -451,6 +451,26 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "Host projection subscription, inbox cursor paging or shared slot UI topics"
   },
   {
+    "name": "pin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null
+  },
+  {
+    "name": "pins",
+    "class": "read",
+    "grant": "inbox:read:team",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team"
+  },
+  {
     "name": "postMessage",
     "class": "send",
     "grant": "inbox:write",
@@ -609,6 +629,16 @@ export const VERB_REGISTRY = [
     "action": true,
     "mcpTwin": "records_write",
     "presentationOnlyReason": null
+  },
+  {
+    "name": "reorderPins",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position"
   },
   {
     "name": "replyAsHuman",
@@ -831,6 +861,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "sessionRecord",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly."
+  },
+  {
     "name": "sessionUsage",
     "class": "read",
     "grant": "sessions:read",
@@ -921,6 +961,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "setupState",
+    "class": "read",
+    "grant": "machines:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": "describe_setup",
+    "presentationOnlyReason": null
+  },
+  {
     "name": "showMenu",
     "class": "read",
     "grant": "sessions:read",
@@ -989,6 +1039,16 @@ export const VERB_REGISTRY = [
     "action": true,
     "mcpTwin": null,
     "presentationOnlyReason": "Host operation bound to the rendered dashboard; no identical MCP binding"
+  },
+  {
+    "name": "unpin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null
   },
   {
     "name": "unsubscribe",

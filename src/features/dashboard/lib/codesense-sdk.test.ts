@@ -59,6 +59,58 @@ function declared(usage: string) {
   };
 }
 
+// The kit chat's page-facing types against the module the kit serves, in this file's isolated program so the
+// page globals stay out of the app's own type check. Equal keys both ways, and each core rule assignable both ways.
+const CHAT_CORE_DTS = join(
+  process.cwd(),
+  "src-tauri/src/http/routes/dashboard_kit/chat/chat-core.d.ts",
+);
+const SAME_KEYS = `type Same<A extends PropertyKey, B extends PropertyKey> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;`;
+
+// Each case builds its own TypeScript program, which takes several seconds on a CI runner.
+describe("codesense.d.ts kit.chat", { timeout: 30_000 }, () => {
+  const contract = (body: string) =>
+    declared(`
+      import type * as Core from ${JSON.stringify(CHAT_CORE_DTS.replace(/\.d\.ts$/, ""))};
+      ${SAME_KEYS}
+      type Core_ = CodesenseSdk.KitChat["core"];
+      ${body}
+      export {};
+    `).usageDiagnostics;
+
+  it("types exactly the rules chat-core exports, with signatures that agree", () => {
+    expect(
+      contract(`
+        const keys: Same<keyof Core_, keyof typeof Core> = true;
+        const typed: Core_ = {} as typeof Core;
+        const served: typeof Core = {} as Core_;
+        void [keys, typed, served];
+      `),
+    ).toEqual([]);
+  });
+
+  it("fails when a core rule has no type, or a type has no rule", () => {
+    expect(
+      contract(`const keys: Same<keyof Core_ | "extra", keyof typeof Core> = true; void keys;`),
+    ).not.toEqual([]);
+    expect(
+      contract(
+        `const keys: Same<Exclude<keyof Core_, "isBusy">, keyof typeof Core> = true; void keys;`,
+      ),
+    ).not.toEqual([]);
+  });
+
+  it("types exactly the members the kit chat serves", () => {
+    expect(
+      contract(`
+        const keys: Same<keyof CodesenseSdk.KitChat, "mount" | "pinToBottom" | "core" | "thread"> = true;
+        const pin: Same<keyof ReturnType<CodesenseSdk.KitChat["pinToBottom"]>, "onContentChanged" | "release" | "reset"> = true;
+        void [keys, pin];
+      `),
+    ).toEqual([]);
+  });
+});
+
 describe("codesense.d.ts", () => {
   const { diagnostics, usageDiagnostics, members, nestedMembers } = declared(`
     codesense.kit!.virtualList?.({

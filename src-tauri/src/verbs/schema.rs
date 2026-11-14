@@ -14,6 +14,9 @@ pub fn args_schema(name: &str) -> Value {
     if name == "whyLine" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::attribution::why_line::Params)).expect("why line schema");
     }
+    if name == "sessionRecord" {
+        return json!({"type":"object","properties":{"handle":{"type":"string","minLength":1}},"required":["handle"],"additionalProperties":false});
+    }
     if name == "sessionRead" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::session_usage::session_read::Params)).expect("session read schema");
     }
@@ -123,6 +126,22 @@ pub fn args_schema(name: &str) -> Value {
         "getWorkspaceStatus" => json!({"storyId":string()}),
         "commands.register" => json!({"ids":{"type":"array","items":string()}}),
         "commands.run" => json!({"id":string(),"args":{}}),
+        "pins" | "pin" | "unpin" | "reorderPins" => {
+            let id = json!({"type":"integer","minimum":1,"maximum":9_007_199_254_740_991_i64});
+            let mut thread =
+                json!({"agentId":string(),"storyId":string(),"org":string(),"team":string()});
+            match name {
+                "pin" => {
+                    thread["messageId"] = id;
+                    thread["position"] = json!({"type":"integer","minimum":0});
+                    thread["preview"] = pin_preview_schema();
+                }
+                "unpin" => thread["messageId"] = id,
+                "reorderPins" => thread["messageIds"] = json!({"type":"array","items":id}),
+                _ => {}
+            }
+            thread
+        }
         _ => json!({}),
     };
     let required: &[&str] = match name {
@@ -153,6 +172,9 @@ pub fn args_schema(name: &str) -> Value {
         "closeWorkspace" => &["target"],
         "commands.register" => &["ids"],
         "commands.run" => &["id"],
+        "pins" => &["agentId"],
+        "pin" | "unpin" => &["agentId", "messageId"],
+        "reorderPins" => &["agentId", "messageIds"],
         _ => &[],
     };
     let mut schema = json!({"type":"object","properties":properties,"required":required,"additionalProperties":true});
@@ -227,6 +249,13 @@ pub fn result_schema(name: &str) -> Value {
         "commands.register" => {
             json!({"type":"object","properties":{"active":{"type":"array","items":{"type":"string"}}},"required":["active"]})
         }
+        "pins" | "pin" | "unpin" | "reorderPins" => {
+            let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
+            json!({"oneOf":[
+                {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
+                {"type":"object","properties":{"status":{"const":"invalid"},"message":{"type":"string"}},"required":["status","message"]}
+            ]})
+        }
         "closeTerminalTab" => {
             json!({"type":"object","properties":{"closed":{"type":"boolean"}},"required":["closed"]})
         }
@@ -240,4 +269,19 @@ pub fn result_schema(name: &str) -> Value {
             json!({"description":"JSON result of the existing host handler; see get_live_data_contract for its fields."})
         }
     }
+}
+
+/// A pin's optional preview (`weft::pins::PinPreview`): what a folded pin shows.
+fn pin_preview_schema() -> Value {
+    let text = |max: u32| json!({"type":"string","maxLength":max});
+    let status = json!({"enum":["on-track","running","needs-you","not-updating"]});
+    json!({"type":"object","additionalProperties":false,"properties":{
+        "shortName":text(24),"value":text(32),"unit":text(64),"status":status,
+        "chart":{"oneOf":[
+            {"type":"object","properties":{"kind":{"const":"segments"},"segments":{"type":"array","items":status,"minItems":1,"maxItems":24},"label":text(160)},"required":["kind","segments","label"]},
+            {"type":"object","properties":{"kind":{"const":"progress"},"percent":{"type":"number","minimum":0,"maximum":100},"label":text(160)},"required":["kind","percent","label"]},
+            {"type":"object","properties":{"kind":{"const":"stack"},"parts":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"label":text(32),"value":{"type":"number","minimum":0}},"required":["label","value"]}},"label":text(160)},"required":["kind","parts","label"]}
+        ]},
+        "lines":{"type":"array","items":text(160),"maxItems":3}
+    }})
 }

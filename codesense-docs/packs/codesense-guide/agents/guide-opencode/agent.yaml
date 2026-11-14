@@ -28,6 +28,7 @@ mcp:
     - probe_environment
     - reply
     - send_message
+    - send_role_message
     - signal_progress
     - signal_done
     - create_local_organization

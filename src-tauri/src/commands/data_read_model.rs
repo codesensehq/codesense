@@ -193,6 +193,19 @@ pub async fn story_changes<R: tauri::Runtime>(
     session_usage::story_changes::current(&params, &scope).await
 }
 
+/// One agent's session record by launch handle (the bridge's `sessionRecord({handle})`): the
+/// figures `session_usage` and `story_changes` give for its session.
+#[tauri::command]
+pub async fn session_record<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    params: session_usage::agent_record::Params,
+    frame_id: Option<String>,
+    page: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let scope = crate::context_repo::caller_scope::for_management_view(&app, page.as_deref(), frame_id.as_deref())?;
+    session_usage::agent_record::current(&params, session_usage::launch_stories(&app), &scope).await
+}
+
 /// Many stories' cached totals, shared with the MCP story_totals verb.
 #[tauri::command]
 pub async fn story_totals<R: tauri::Runtime>(
@@ -260,6 +273,99 @@ pub async fn setup<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<serde_
     Ok(crate::attribution::setup::local(&doctor))
 }
 
+/// This Mac's orgs, their teams and each team's source repos, read-only (the page's
+/// `setupState()`). The same read as `describe_setup`'s `orgs`, without local paths or its
+/// attribution and scratch parts.
+#[tauri::command]
+pub async fn setup_state<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+    let (home, user_id) = crate::commands::route_to_context::resolve_ambient(&app).await?;
+    await_blocking("setup_state", move || {
+        let principal = crate::domain::Principal::from(user_id);
+        setup_state_from(crate::mcp::setup_tools::describe_orgs(&home, &principal))
+    })
+    .await
+}
+
+/// The page's answer, or a message free of local paths: the read's own error names them, so
+/// it goes to the log instead.
+fn setup_state_from(
+    read: Result<Vec<crate::mcp::setup_tools::SetupOrg>, String>,
+) -> Result<serde_json::Value, String> {
+    match read {
+        Ok(orgs) => Ok(setup_state_value(&orgs)),
+        Err(error) => {
+            log::warn!("setup_state: cannot read the orgs: {error}");
+            Err("unavailable: cannot read the setup on this machine".into())
+        }
+    }
+}
+
+/// `{orgs: [{slug, displayName, loadErrors, teams: [{name, archived, parentTeam, starterPage?,
+/// synced, sourceRepos: [{slug, remoteKey, attachment}]}]}]}`.
+fn setup_state_value(orgs: &[crate::mcp::setup_tools::SetupOrg]) -> serde_json::Value {
+    let orgs: Vec<serde_json::Value> = orgs
+        .iter()
+        .map(|org| {
+            let teams: Vec<serde_json::Value> = org
+                .teams
+                .iter()
+                .map(|team| {
+                    let repos: Vec<serde_json::Value> = team
+                        .source_repos
+                        .iter()
+                        .map(|repo| {
+                            serde_json::json!({
+                                "slug": repo.slug,
+                                "remoteKey": repo.remote_key,
+                                "attachment": repo.attachment,
+                            })
+                        })
+                        .collect();
+                    let mut row = serde_json::json!({
+                        "name": team.name,
+                        "archived": team.archived,
+                        "parentTeam": team.parent_team,
+                        "synced": team.synced,
+                        "sourceRepos": repos,
+                    });
+                    if let Some(page) = &team.starter_page {
+                        row["starterPage"] = serde_json::json!(page);
+                    }
+                    row
+                })
+                .collect();
+            serde_json::json!({
+                "slug": org.slug,
+                "displayName": org.display_name,
+                "loadErrors": org
+                    .load_errors
+                    .iter()
+                    .map(|error| org_relative(&org.org_root, error))
+                    .collect::<Vec<_>>(),
+                "teams": teams,
+            })
+        })
+        .collect();
+    serde_json::json!({ "orgs": orgs })
+}
+
+/// A registry load error (`<path>: <message>`) with its path made relative to the org, so no
+/// local path reaches a page. A path outside the org keeps only the message.
+fn org_relative(org_root: &str, error: &str) -> String {
+    match error
+        .strip_prefix(org_root)
+        .and_then(|rest| rest.strip_prefix(['/', '\\']))
+    {
+        Some(relative) => relative.to_string(),
+        None => error
+            .split_once(": ")
+            .map_or("a registry file failed to load", |(_, message)| message)
+            .to_string(),
+    }
+}
+
 /// One joined session, from the same backend as the MCP session_read verb.
 #[tauri::command]
 pub async fn session_read<R: tauri::Runtime>(
@@ -319,6 +425,124 @@ pub async fn session_read_model_rates() -> Result<Vec<session_usage::StoredRate>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page's setup read carries names, flags and repo identities, and no local paths.
+    #[test]
+    fn setup_state_lists_orgs_teams_and_repos_without_local_paths() {
+        use crate::mcp::setup_tools::{AttachmentStatus, SetupOrg, SetupRepo, SetupTeam};
+        let org = SetupOrg {
+            slug: "acme/ctx".into(),
+            display_name: "Acme".into(),
+            org_root: "/private/ctx".into(),
+            remote_url: Some("git@example.com:acme/ctx.git".into()),
+            load_errors: vec!["/private/ctx/teams.yml: invalid YAML at line 3".into()],
+            teams: vec![
+                SetupTeam {
+                    name: "docs".into(),
+                    archived: false,
+                    parent_team: None,
+                    starter_page: Some("README.md".into()),
+                    synced: true,
+                    source_repos: vec![SetupRepo {
+                        slug: "acme/web".into(),
+                        remote_key: "github.com/acme/web".into(),
+                        attachment: AttachmentStatus::Attached,
+                        local_path: Some("/private/web".into()),
+                    }],
+                },
+                SetupTeam {
+                    name: "ops".into(),
+                    archived: true,
+                    parent_team: Some("docs".into()),
+                    starter_page: None,
+                    synced: false,
+                    source_repos: vec![
+                        SetupRepo {
+                            slug: "acme/api".into(),
+                            remote_key: "github.com/acme/api".into(),
+                            attachment: AttachmentStatus::Missing,
+                            local_path: Some("/private/api".into()),
+                        },
+                        SetupRepo {
+                            slug: "acme/infra".into(),
+                            remote_key: "github.com/acme/infra".into(),
+                            attachment: AttachmentStatus::Unattached,
+                            local_path: None,
+                        },
+                    ],
+                },
+            ],
+        };
+        let value = setup_state_value(&[org]);
+        assert_eq!(
+            value,
+            serde_json::json!({"orgs": [{
+                "slug": "acme/ctx",
+                "displayName": "Acme",
+                "loadErrors": ["teams.yml: invalid YAML at line 3"],
+                "teams": [{
+                    "name": "docs",
+                    "archived": false,
+                    "parentTeam": null,
+                    "synced": true,
+                    "starterPage": "README.md",
+                    "sourceRepos": [{
+                        "slug": "acme/web",
+                        "remoteKey": "github.com/acme/web",
+                        "attachment": "attached",
+                    }],
+                }, {
+                    "name": "ops",
+                    "archived": true,
+                    "parentTeam": "docs",
+                    "synced": false,
+                    "sourceRepos": [
+                        {"slug": "acme/api", "remoteKey": "github.com/acme/api", "attachment": "missing"},
+                        {"slug": "acme/infra", "remoteKey": "github.com/acme/infra", "attachment": "unattached"},
+                    ],
+                }],
+            }]})
+        );
+        assert!(!value.to_string().contains("/private"));
+        assert_eq!(setup_state_value(&[]), serde_json::json!({"orgs": []}));
+    }
+
+    /// A failed read of the orgs answers without the paths its own error names.
+    #[test]
+    fn a_failed_org_read_answers_without_local_paths() {
+        let error = setup_state_from(Err(
+            "cannot read /Users/ada/.codesense/orgs: permission denied".into(),
+        ))
+        .unwrap_err();
+        assert_eq!(error, "unavailable: cannot read the setup on this machine");
+        assert!(!error.contains("/Users") && !error.contains("ada"));
+        assert_eq!(
+            setup_state_from(Ok(vec![])).unwrap(),
+            serde_json::json!({"orgs": []})
+        );
+    }
+
+    /// A load error outside the org root, even a sibling with the same prefix, keeps only its
+    /// message; one with no message keeps neither.
+    #[test]
+    fn a_load_error_outside_the_org_drops_its_path() {
+        assert_eq!(
+            org_relative("/private/ctx", "/private/ctx/teams.yml: bad"),
+            "teams.yml: bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/private/ctx2/teams.yml: bad"),
+            "bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/elsewhere/org.yml: bad"),
+            "bad"
+        );
+        assert_eq!(
+            org_relative("/private/ctx", "/elsewhere/org.yml"),
+            "a registry file failed to load"
+        );
+    }
 
     #[test]
     fn a_refusal_is_an_error_naming_it_and_ok_is_the_data() {

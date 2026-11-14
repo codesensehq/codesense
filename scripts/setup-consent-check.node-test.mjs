@@ -5,15 +5,20 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { formatCardLine, parseCardLine } from "./lib/card-line.mjs";
+import { parse } from "yaml";
+import {
+  formatCardLine,
+  parseCardLine,
+} from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
+import { stepErrors } from "./lib/pack-steps.mjs";
 import {
   SETUP_VERBS,
+  WRITES_AFTER_HANDBACK,
   checkConsent,
   defaultActVerbs,
   stepActVerbs,
   turnsOf,
 } from "./setup-consent-check.mjs";
-import { stepErrors } from "./lib/pack-steps.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(HERE, "fixtures/consent", `${name}.json`);
@@ -260,6 +265,126 @@ test("the card line format is the kit's: it parses back what it formats and refu
   assert.throws(() => formatCardLine({ step: "x", consent: "read", acts: [] }), TypeError);
 });
 
+test("a correct Foreman hand-back, last and before signal_done, passes", () => {
+  const { errors, calls } = checkConsent(load("handback"));
+  assert.deepEqual(errors, []);
+  assert.equal(calls, 3);
+});
+
+test("each rule on send_role_message has its own failing fixture", () => {
+  const bad = "send_role_message is not the Foreman hand-back:";
+  const cases = {
+    "handback-wrong-role-failing": `turn 11: ${bad} role is "sprint-lead", not codesense-foreman`,
+    "handback-wrong-team-failing": `turn 11: ${bad} team is not codesense/docs / getting-started`,
+    "handback-other-text-failing": `turn 11: ${bad} text does not start with "Setup done:"`,
+    "handback-reply-to-failing": `turn 11: ${bad} replyTo is set`,
+    "handback-attach-file-failing": `turn 11: ${bad} attachFile is set`,
+    "handback-twice-failing": `turn 12: ${bad} a second hand-back (the first was at turn 11)`,
+    "handback-after-done-failing": `turn 12: ${bad} sent after signal_done`,
+    "handback-before-act-failing": "turn 11: add_source_repo came after the hand-back at turn 10",
+    "handback-write-after-failing": "turn 12: records_create came after the hand-back at turn 11",
+  };
+  for (const [name, error] of Object.entries(cases))
+    assert.deepEqual(checkConsent(load(name)).errors, [error], name);
+});
+
+test("the hand-back's role is read as the server reads it: one role: prefix is stripped", () => {
+  const send = (role) =>
+    call(`${P}send_role_message`, {
+      role,
+      team: { org: "codesense/docs", team: "getting-started" },
+      text: "Setup done: ok",
+    });
+  for (const role of [
+    "role:codesense-foreman",
+    " role:codesense-foreman ",
+    "role: codesense-foreman",
+    "codesense-foreman",
+  ])
+    assert.deepEqual(checkConsent(session([send(role)])).errors, [], role);
+  for (const role of ["role:other", "role:role:codesense-foreman", "role:", undefined])
+    assert.equal(checkConsent(session([send(role)])).errors.length, 1, String(role));
+});
+
+test("after the hand-back or signal_done nothing acts, but reads may follow", () => {
+  const hand = call(`${P}send_role_message`, {
+    role: "codesense-foreman",
+    team: { org: "codesense/docs", team: "getting-started" },
+    text: "Setup done: ok",
+  });
+  const done = call(`${P}signal_done`, { outcome: "success" });
+  for (const name of [
+    "open_workspace",
+    "records_create",
+    "records_set_fields",
+    "records_write",
+    "records_delete",
+    "create_team",
+  ]) {
+    assert.equal(
+      checkConsent(session([hand], [call(`${P}${name}`)])).errors[0],
+      `turn 1: ${name} came after the hand-back at turn 0`,
+    );
+    assert.match(
+      checkConsent(session([done], [call(`${P}${name}`)])).errors[0],
+      /came after signal_done/,
+    );
+  }
+  assert.deepEqual(
+    checkConsent(session([hand], [call(`${P}read_messages`)], [call(`${P}records_read`)], [done]))
+      .errors,
+    [],
+  );
+});
+
+// The guide's tools that may follow the hand-back. Every other tool it has must be a setup
+// verb or a write the check refuses after the hand-back, so a new acting tool can't slip by.
+const NOT_ACTING = [
+  "who_am_i",
+  "read_messages",
+  "codesense_overview",
+  "describe_setup",
+  "query_context",
+  "read_content_file",
+  "list_source_repos",
+  "records_list",
+  "probe_environment",
+  "validate_story",
+  "read_epic_repos",
+  "reply",
+  "send_message",
+  "send_role_message",
+  "signal_progress",
+  "signal_done",
+];
+
+test("every guide tool is a read, a message, a setup verb or a write refused after the hand-back", () => {
+  const agentFile = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../codesense-docs/packs/codesense-guide/agents/guide-codex/agent.yaml",
+  );
+  const tools = parse(readFileSync(agentFile, "utf8")).mcp.bridge_tools;
+  assert.ok(tools.length > 0);
+  const known = new Set([...NOT_ACTING, ...SETUP_VERBS, ...WRITES_AFTER_HANDBACK]);
+  assert.deepEqual(
+    tools.filter((tool) => !known.has(tool)),
+    [],
+  );
+});
+
+test("a send_role_message with no hand-back shape fails, under every tool name form", () => {
+  for (const name of [`${P}send_role_message`, "codesense_send_role_message"])
+    assert.equal(
+      checkConsent(session([call(name, { role: "story-lead", text: "hi" })])).errors.length,
+      1,
+    );
+  const wrapped = call(`${P}codesense_call_tool`, {
+    tool: "send_role_message",
+    arguments: { role: "codesense-foreman", text: "Setup done: ok" },
+  });
+  assert.match(checkConsent(session([wrapped])).errors[0], /team is not/);
+});
+
 test("a click read twice is one click", () => {
   const again = session(
     [card(1)],
@@ -323,6 +448,16 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "connect-mine",
     "write-before-switch-failing",
     "switch-other-team-failing",
+    "handback",
+    "handback-wrong-role-failing",
+    "handback-wrong-team-failing",
+    "handback-other-text-failing",
+    "handback-reply-to-failing",
+    "handback-attach-file-failing",
+    "handback-twice-failing",
+    "handback-after-done-failing",
+    "handback-before-act-failing",
+    "handback-write-after-failing",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
+# every setup step is done: a new request starts a fresh run, not a resume.
+id: setup-rerun
+kind: setup
+fixture:
+  ledger:
+    - { step: team, state: done }
+    - { step: source-repos, state: done }
+    - { step: git-access, state: done }
+  guide: complete
+input:
+  turns:
+    - "set me up again"
+# Script: the cards, the launch, the ledger and the hand-back calls. Never the wording.
+expected:
+  offer_cards: 0
+  launches: 1
+  prompt: "/codesense-setup"
+  guide_first_step: team
+  forbidden_tools:
+    - create_team
+    - delete_team
+    - archive_team
+    - add_source_repo
+    - remove_source_repo
+    - attach_source_repo_path
+    - attach_context_repository
+    - detach_context_repository
+    - create_local_organization
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: says-starting
+    ask: "The reply says setup is starting."
+grader: script

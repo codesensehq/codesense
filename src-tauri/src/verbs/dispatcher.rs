@@ -155,7 +155,11 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
         "getWorkspaceStatus" => string("storyId"),
         "sendPrompt" | "stopSession" | "closeTerminalTab" => string("handle"),
         "sendAsHuman" => string("to"),
-        "loadMedia" | "replyAsHuman" | "react" | "openMessage" => args["messageId"]
+        "reorderPins" => args["messageIds"]
+            .as_array()
+            .map(|pins| format!("{} pins", pins.len())),
+        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" => args
+            ["messageId"]
             .as_number()
             .map(|id| format!("message {id}")),
         "archive" | "unarchive" | "markRead" | "markUnread" => args["messageIds"]
@@ -255,10 +259,12 @@ fn check_capability(
     {
         return Err("denied: grant");
     }
-    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds.
+    // A team-workspace open also needs the narrow grant only a bundled Foreman page holds, and
+    // it may start only the agents that grant names.
     if spec.name == "openWorkspace"
         && args["target"]["kind"] == "team-workspace"
-        && !grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
+        && (!grant.iter().any(|g| g == super::foreman_launch::CAPABILITY)
+            || !super::foreman_launch::agent_allowed(args["agent"].as_str()))
     {
         return Err("denied: grant");
     }

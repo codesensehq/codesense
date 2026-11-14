@@ -57,6 +57,8 @@ import {
   setHumanStatus,
   replyAsHuman,
   reactAsHuman,
+  agentPins,
+  agentPinsPrepareView,
   loadInboxMedia,
   markInboxMessagesRead,
   markInboxMessagesUnread,
@@ -76,7 +78,9 @@ import {
   listManagedWorktrees,
   listMachines,
   sessionReadUsage,
+  sessionRecord,
   sessionRead,
+  setupState,
   setupStatus,
   whyLine,
   type WhyLineParams,
@@ -97,6 +101,7 @@ import {
   type MetadataEdit,
   type FrontmatterValue,
   type LongRateArgs,
+  type AgentPinPreview,
 } from "@/tauri/commands";
 import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
@@ -209,13 +214,29 @@ export type BridgeContext = {
 };
 
 /** Pages name selectors; the host alone resolves them into granted view keys. */
-async function subscriptionView(args: Record<string, unknown>, ctx?: BridgeContext) {
+async function subscriptionView(
+  args: Record<string, unknown>,
+  ctx?: BridgeContext,
+  /** False when leaving: name the view without preparing (registering) it. */
+  prepare = true,
+) {
   if (args.order !== undefined && (args.topic !== "agentList" || args.order !== "status"))
     throw new Error("invalid: agentList order must be status");
   if (args.topic === "files")
     return { viewKey: await fileSurfacePrepareView(ctx!.frame!.frameId, args) };
   if (args.topic === "records")
     return { viewKey: await recordsPrepareView(ctx!.frame!.frameId, String(args.collection)) };
+  if (args.topic === "pins") {
+    const { agentId, storyId } = pinThread(args, "subscribe");
+    const team = await inboxTeam(ctx, "pins");
+    if (!prepare) {
+      // The host's view key for the thread (`live_hub::pins::view_key` and
+      // `ThreadKey::new`): the saved agent is the id before `@`.
+      const agent = agentId.split("@")[0].trim();
+      return { viewKey: `pins:${team.org}/${team.team}:${agent}:${storyId?.trim() ?? ""}` };
+    }
+    return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
+  }
   if (args.topic === "agentDefinitions") {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
     liveHub.seed(view);
@@ -545,6 +566,21 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
   throw new Error("inbox: kind, if present, must be 'needs-you' or 'update'");
 }
 
+/** The agent thread a pins call names: a saved agent id and an optional story id. */
+function pinThread(
+  a: Record<string, unknown>,
+  verb: string,
+): { agentId: string; storyId: string | null } {
+  if (typeof a.agentId !== "string" || !a.agentId.trim()) {
+    throw new Error(`${verb}: {agentId} must be a saved agent id`);
+  }
+  const storyId = optionalNonEmptyString(
+    a.storyId ?? undefined,
+    `${verb}: storyId, if present, must be a story id`,
+  );
+  return { agentId: a.agentId.trim(), storyId: storyId ?? null };
+}
+
 /** A required inbox message id. */
 function messageId(value: unknown, verb: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
@@ -848,13 +884,18 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   page: async (args, ctx) => {
     const a = argObject(args, "page");
+    // A pins view is one short list, never paged; preparing it here would only register a view
+    // that no subscription ever releases.
+    if (a.topic === "pins") throw new Error("invalid: the pins topic has no pages");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
     return frame.page(String(a.topic), String(a.cursor), await subscriptionView(a, ctx));
   },
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
-    await (await ctx?.liveFrame?.())?.unsubscribe(String(a.topic), await subscriptionView(a, ctx));
+    await (
+      await ctx?.liveFrame?.()
+    )?.unsubscribe(String(a.topic), await subscriptionView(a, ctx, false));
     return null;
   },
   setUiState: async (args, ctx) => {
@@ -1092,6 +1133,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     ),
   // [describe_setup] this Mac's attribution and capture status: {attribution}.
   setup: () => setupStatus(),
+  // [describe_setup] this Mac's orgs, teams and source repos, read-only: {orgs}. The page
+  // hears `codesense:setup-changed` after any change to them.
+  setupState: () => setupState(),
   // [list_worktrees] this Mac's managed worktrees: {rows, reaped}.
   worktrees: () => listManagedWorktrees(),
   // [session_read_usage] token use and spend per agent session on this Mac, read from its
@@ -1141,6 +1185,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       ctx?.frame?.frameId,
       ctx?.docPath,
     );
+  },
+  // [session_usage + story_changes] one agent's record by launch handle: {handle, sessionId, cli,
+  // model, tokens, costUsd, durationMs, story, files, unavailable}.
+  sessionRecord: (args, ctx) => {
+    const a = argObject(args, "sessionRecord");
+    if (Object.keys(a).some((key) => key !== "handle"))
+      throw new Error("sessionRecord: unknown field");
+    const handle = requiredId(a, ["handle"], "sessionRecord: handle is required");
+    return sessionRecord({ handle }, ctx?.frame?.frameId, ctx?.docPath);
   },
   openDiff: (args, ctx) =>
     openDiff(argObject(args, "openDiff") as unknown as OpenDiffParams, {
@@ -1372,6 +1425,57 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const emoji = a.emoji;
     const remove = typeof a.remove === "boolean" ? a.remove : null;
     return inboxWrite(ctx, "react", a, (team) => reactAsHuman(team, id, emoji, remove));
+  },
+  // An agent thread's pin list (saved agent + story), in the frame's team store. The
+  // person pins into any thread; an agent pins its own with the MCP pin tool.
+  pins: async (args, ctx) => {
+    const a = argObject(args, "pins");
+    const { agentId, storyId } = pinThread(a, "pins");
+    return inboxWrite(ctx, "pins", a, (team) => agentPins(team, agentId, storyId, { op: "read" }));
+  },
+  pin: async (args, ctx) => {
+    const a = argObject(args, "pin");
+    const { agentId, storyId } = pinThread(a, "pin");
+    const id = messageId(a.messageId, "pin");
+    if (a.position != null && (!Number.isSafeInteger(a.position) || (a.position as number) < 0)) {
+      throw new Error("pin: position, if present, must be a whole number from 0");
+    }
+    const position = a.position == null ? undefined : (a.position as number);
+    // The engine checks the preview's fields; here only its shape.
+    if (
+      "preview" in a &&
+      (typeof a.preview !== "object" || !a.preview || Array.isArray(a.preview))
+    ) {
+      throw new Error("pin: preview, if present, must be an object");
+    }
+    const preview = a.preview as AgentPinPreview | undefined;
+    return inboxWrite(ctx, "pin", a, (team) =>
+      agentPins(team, agentId, storyId, {
+        op: "pin",
+        messageId: id,
+        position,
+        ...(preview ? { preview } : {}),
+      }),
+    );
+  },
+  unpin: async (args, ctx) => {
+    const a = argObject(args, "unpin");
+    const { agentId, storyId } = pinThread(a, "unpin");
+    const id = messageId(a.messageId, "unpin");
+    return inboxWrite(ctx, "unpin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
+    );
+  },
+  reorderPins: async (args, ctx) => {
+    const a = argObject(args, "reorderPins");
+    const { agentId, storyId } = pinThread(a, "reorderPins");
+    if (!Array.isArray(a.messageIds)) {
+      throw new Error("reorderPins: {messageIds} must list the thread's pinned message ids");
+    }
+    const messageIds = a.messageIds.map((id) => messageId(id, "reorderPins"));
+    return inboxWrite(ctx, "reorderPins", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
+    );
   },
   dismiss_agent_mark: async (args, ctx) => {
     const a = argObject(args, "dismiss_agent_mark");

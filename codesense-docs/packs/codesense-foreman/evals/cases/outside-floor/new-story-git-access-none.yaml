@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Request to story, outside the floor. No git-access method is recorded: the Foreman pushes the branch and hands it over, and never calls gh.
+id: new-story-git-access-none
+kind: new-story
+fixture:
+  story_team: generic
+  git_access: none
+input:
+  turns:
+    - "make a story for dark mode in the settings page"
+    - "Create"
+# Script: the recorded method read before any pull request; the branch pushed, and zero gh calls.
+expected:
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: one-card
+    ask: "The request gets one confirmation with the choices Create, Change and Not now."
+  - id: hands-over
+    ask: "After Create, the reply says the branch is pushed and names it, says no pull request was opened, and does not mention a failed attempt."
+grader: script

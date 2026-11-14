@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { expect, test } from "@playwright/test";
 
-test("the session Inbox rail respects reduced motion in its shared lenses and composer", async ({
+test("the agent chat overlay respects reduced motion in its conversation and composer", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -20,10 +20,10 @@ test("the session Inbox rail respects reduced motion in its shared lenses and co
                   {
                     id: 1,
                     team: { org: "acme", team: "widgets" },
-                    from: "sess-login-repro",
-                    fromName: "Repro",
-                    to: args.handle,
-                    toName: "Lead",
+                    from: args.handle,
+                    fromName: "Lead",
+                    to: "human",
+                    toName: "You",
                     toRole: null,
                     text: "Please review this change",
                     contentType: "plain",
@@ -47,19 +47,17 @@ test("the session Inbox rail respects reduced motion in its shared lenses and co
   await page.goto("/?agents=team");
   await page.getByRole("button", { name: "Full screen" }).click();
   await page.getByTestId("terminal-grid-caption-inbox-sess-login-lead").click();
-  const rail = page.getByTestId("inbox-rail").first();
-  await expect(rail).toBeVisible();
-  await rail.getByRole("button", { name: "Threads", exact: true }).click();
-  await rail.locator('[data-thread="sess-login-repro"]').click();
-  const composer = rail.locator(".ibx-box");
+  const chat = page.getByTestId("chat-overlay").first();
+  await expect(chat).toBeVisible();
+  const composer = chat.locator(".ibx-box");
   await expect(composer).toBeVisible();
   expect(await composer.evaluate((el) => getComputedStyle(el).transitionDuration)).not.toBe("0s");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect
     .poll(() => composer.evaluate((el) => getComputedStyle(el).transitionDuration))
     .toBe("0s");
-  expect(await rail.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
-  const message = rail.locator(".ibx-m").first();
+  expect(await chat.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+  const message = chat.locator(".ibx-m").first();
   await expect(message).toBeVisible();
   expect(await message.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
 });

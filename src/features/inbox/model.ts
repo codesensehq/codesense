@@ -426,46 +426,6 @@ export function messageRowPreview(
   return plainPreview(m.text);
 }
 
-export type SpoolFilter = "all" | "unread" | "roles" | "terminal";
-
-/**
- * The Mailspool's filter: a chip plus a free-text prompt understanding `from:@x`, `to:@x` /
- * `to:#role`, and anything else as text to find (quotes optional).
- */
-export function filterSpool(
-  messages: readonly ConversationMessage[],
-  me: Self,
-  filter: SpoolFilter,
-  query: string,
-  dir: Directory,
-): ConversationMessage[] {
-  let out = messages.slice();
-  if (filter === "unread") out = out.filter((m) => isUnreadFor(m, me));
-  if (filter === "roles") out = out.filter((m) => m.toRole !== null);
-  if (filter === "terminal") out = out.filter((m) => m.via === "terminal");
-  const terms = query.match(/\S+:"[^"]*"|"[^"]*"|\S+/g) ?? [];
-  const names = (key: string | null) =>
-    key ? `${key} ${isRoleKey(key) ? "" : participant(dir, key).name}`.toLowerCase() : "";
-  for (const raw of terms) {
-    const term = raw.replace(/["“”]/g, "").toLowerCase();
-    if (!term) continue;
-    if (term.startsWith("from:")) {
-      const v = term.slice(5).replace(/^@/, "");
-      out = out.filter((m) => names(m.from).includes(v));
-    } else if (term.startsWith("to:")) {
-      const v = term.slice(3);
-      out = out.filter((m) =>
-        v.startsWith("#")
-          ? m.toRole?.toLowerCase().includes(v.slice(1))
-          : names(m.to).includes(v.replace(/^@/, "")),
-      );
-    } else {
-      out = out.filter((m) => m.text.toLowerCase().includes(term));
-    }
-  }
-  return out;
-}
-
 export function formatClock(ms: number): string {
   if (!Number.isFinite(ms)) return "--:--";
   const d = new Date(ms);
@@ -511,36 +471,6 @@ export function dayHeads(
     prev = day;
     return dayLabel(m.createdAtMs, now);
   });
-}
-
-/** One entry of the Mailspool's windowed list: a day divider or a message line. */
-export type SpoolItem =
-  | { kind: "day"; key: string; label: string }
-  /** `pos`: the line's place among the lines (dividers not counted). */
-  | { kind: "msg"; key: string; m: ConversationMessage; pos: number };
-
-/** The spool as one flat list, oldest first, a divider heading each day. */
-export function spoolItems(
-  messages: readonly ConversationMessage[],
-  now: number = Date.now(),
-): SpoolItem[] {
-  const heads = dayHeads(messages, now);
-  const out: SpoolItem[] = [];
-  const days = new Set<string>();
-  messages.forEach((m, pos) => {
-    const head = heads[pos];
-    const key = msgKey(m);
-    if (head) {
-      // Keyed by its day, so trimming the day's first line keeps the same divider; a day seen
-      // twice (out-of-order times) falls back to the line's own key.
-      let dk = `day:${dayStart(m.createdAtMs)}`;
-      if (days.has(dk)) dk = `day:${key}`;
-      days.add(dk);
-      out.push({ kind: "day", key: dk, label: head });
-    }
-    out.push({ kind: "msg", key, m, pos });
-  });
-  return out;
 }
 
 /**
@@ -719,85 +649,6 @@ export function routingHint(
   if (check.kind === "ended") return { text: check.reason, role: false };
   if (check.kind === "offline") return { text: check.hint, role: false };
   return { text: "Delivered to the inbox. An idle session is woken to read it.", role: false };
-}
-
-export interface WireColumn {
-  key: string;
-  queue: boolean;
-}
-
-/**
- * Lifelines for the Wire lens: `first` (this tab, or the human) on the left, everyone else in
- * order of first appearance (or `order` when given), then a dashed lane per role queue.
- */
-export function wireColumns(
-  messages: readonly ConversationMessage[],
-  first: string | null,
-  order?: readonly string[],
-): WireColumn[] {
-  const seen: string[] = first ? [first] : [];
-  for (const m of messages)
-    for (const k of [m.from, m.to]) if (k && !seen.includes(k)) seen.push(k);
-  const people = order ? order.filter((k) => seen.includes(k) || k === first) : seen;
-  for (const k of seen) if (!people.includes(k)) people.push(k);
-  const roles = [...new Set(messages.filter((m) => m.toRole).map((m) => m.toRole!))];
-  return [
-    ...people.map((key) => ({ key, queue: false })),
-    ...roles.map((r) => ({ key: `#${r}`, queue: true })),
-  ];
-}
-
-export interface WireArrow {
-  message: ConversationMessage;
-  /** Percent offsets across the lifeline grid. */
-  leftPct: number;
-  widthPct: number;
-  tickPct: number;
-  /** "self": a note to oneself, drawn as a loop off its own lifeline. */
-  dir: "r" | "l" | "self";
-  kinds: Array<"term" | "q" | "human">;
-}
-
-export function wireArrows(
-  columns: readonly WireColumn[],
-  messages: readonly ConversationMessage[],
-): WireArrow[] {
-  const n = columns.length;
-  if (n === 0) return [];
-  const colW = 100 / n;
-  const idx = (k: string) => columns.findIndex((c) => c.key === k);
-  const out: WireArrow[] = [];
-  for (const m of messages) {
-    const a = idx(m.from);
-    const b = idx(toKeyOf(m));
-    if (a < 0 || b < 0) continue;
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    const kinds: WireArrow["kinds"] = [];
-    if (m.via === "terminal") kinds.push("term");
-    if (m.toRole) kinds.push("q");
-    if (m.to === HUMAN) kinds.push("human");
-    if (a === b) {
-      out.push({
-        message: m,
-        leftPct: colW * a + colW / 2,
-        widthPct: colW * 0.35,
-        tickPct: colW * a + colW / 2,
-        dir: "self",
-        kinds,
-      });
-      continue;
-    }
-    out.push({
-      message: m,
-      leftPct: colW * lo + colW / 2,
-      widthPct: colW * (hi - lo),
-      tickPct: colW * a + colW / 2,
-      dir: b > a ? "r" : "l",
-      kinds,
-    });
-  }
-  return out;
 }
 
 /** The same team: its org and its name. */

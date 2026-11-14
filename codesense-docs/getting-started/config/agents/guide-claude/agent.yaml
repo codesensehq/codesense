@@ -29,6 +29,7 @@ permissions:
       - mcp__codesense__probe_environment
       - mcp__codesense__reply
       - mcp__codesense__send_message
+      - mcp__codesense__send_role_message
       - mcp__codesense__signal_progress
       - mcp__codesense__signal_done
       - mcp__codesense__create_local_organization

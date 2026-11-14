@@ -234,6 +234,8 @@ export default tseslint.config(
       ".claude/",
       ".agents/",
       "scripts/",
+      // The Foreman page's vendored kit build: generated elsewhere, hash-checked by scripts/foreman-page.mjs.
+      "codesense-docs/packs/codesense-foreman/vendor/",
       // The project website: plain browser JS outside the app.
       "site/",
       // Story proof artifacts (probes, clients, captured logs) are not app source.

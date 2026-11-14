@@ -15,6 +15,7 @@ mod inbox_gate_tests;
 mod inbox_offlock_tests;
 pub(crate) mod machine_stats;
 pub mod pane_sources;
+pub mod pins;
 pub mod projection;
 pub mod run_review;
 #[cfg(test)]
@@ -659,6 +660,7 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 pub fn start(app: &tauri::AppHandle) {
     app.manage(LiveHub::default());
+    app.manage(pins::PinViews::new());
     crate::records::projection::start(app);
     files::start(app);
     app.manage(agent_marks::AgentMarks::default());
@@ -1636,15 +1638,43 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     if paused {
         return;
     }
+    let viewed = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .subscription_view(subscription_id);
     TopicRegistry::unsubscribe(
         &mut app.state::<LiveHub>().model.lock().unwrap().projections,
         subscription_id,
     );
+    drop_unwatched_pins(app, Vec::from_iter(viewed));
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
+}
+/// The last subscriber of a pins view takes the view's refreshes with it: drop each pins view
+/// among `viewed` (topic, view key) that nothing follows any more.
+fn drop_unwatched_pins<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    viewed: Vec<(String, String)>,
+) {
+    for (_, key) in viewed.into_iter().filter(|(topic, _)| topic == pins::TOPIC) {
+        let held = app
+            .state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .has_view_subscribers(pins::TOPIC, &key);
+        if !held {
+            pins::drop_view(app, &key);
+        }
+    }
 }
 pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &str) {
     if let Some(hub) = app.try_state::<LiveHub>() {
-        hub.model.lock().unwrap().projections.drop_owner(owner);
+        let gone = hub.model.lock().unwrap().projections.drop_owner(owner);
+        drop_unwatched_pins(app, gone);
         hub.invalidate(MACHINE_STATS);
     }
 }
@@ -1683,6 +1713,22 @@ pub(crate) fn replace_records<R: tauri::Runtime>(
             kind.map(str::to_owned),
             request_id.map(str::to_owned),
         )?;
+    publish(app, deltas);
+    Ok(())
+}
+
+/// Replace one view of `topic` with `rows` and publish what changed.
+pub(crate) fn replace_view<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    topic: &str,
+    key: &str,
+    rows: Vec<(Option<String>, serde_json::Value)>,
+) -> Result<(), String> {
+    let hub = app.state::<LiveHub>();
+    let deltas = {
+        let mut model = hub.model.lock().map_err(|e| e.to_string())?;
+        TopicRegistry::replace_view(&mut model.projections, topic, key, rows)?
+    };
     publish(app, deltas);
     Ok(())
 }

@@ -29,9 +29,11 @@ use crate::shared::secret_scan::redact_secrets;
 
 use super::agent_tools;
 use super::avatar_tools;
+use super::clone_repo;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
+use super::probe_environment::ProbeEnvironmentParams;
 use super::routine_tools;
 use super::setup_tools;
 #[cfg(test)]
@@ -2414,6 +2416,12 @@ impl CodesenseHandler {
                         "available": status.git.available,
                         "path": status.git.path,
                         "version": status.git.version,
+                    },
+                    "gh": {
+                        "available": status.gh.available,
+                        "path": status.gh.path,
+                        "version": status.gh.version,
+                        "resolving": status.gh.resolving,
                     },
                     // Per-agent status keyed by agent basename (was a single
                     // `claude` field). Each entry is `{available, path, resolving}`;
@@ -6258,6 +6266,22 @@ impl CodesenseHandler {
     }
 
     #[tool(
+        description = "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned."
+    )]
+    async fn probe_environment(
+        &self,
+        Parameters(params): Parameters<ProbeEnvironmentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = crate::mcp::probe_environment::probe_environment_request(
+            self.app_handle.clone(),
+            params,
+        )
+        .await
+        .map_err(|e| ErrorData::invalid_params(format!("probe_environment: {e}"), None))?;
+        ok_json(report)
+    }
+
+    #[tool(
         description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
     )]
     async fn pack_validate(
@@ -6733,6 +6757,23 @@ impl CodesenseHandler {
         let explicit = params.session_id.clone();
         let caller = self.inbox_caller(explicit.as_deref(), connection.as_deref())?;
         super::caller_tools::react(&host, caller, params).await
+    }
+
+    #[tool(
+        description = "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}."
+    )]
+    async fn pin(
+        &self,
+        Parameters(params): Parameters<PinParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use crate::commands::agent_inbox::AppInboxHost;
+        let host = AppInboxHost {
+            app: self.app_handle.clone(),
+        };
+        let connection = self.connection_session();
+        let explicit = params.session_id.clone();
+        let caller = self.inbox_caller(explicit.as_deref(), connection.as_deref())?;
+        super::caller_tools::pin(&host, caller, params).await
     }
 
     // Full description: `feedback_tool::DESCRIPTION`, set in `served_tool_router`.
@@ -7992,19 +8033,31 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<OpenTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        // The trusted-side gate runs BEFORE any work — a refusal never has a side
+        // effect. A headed open is a first-class visible tab (focused).
+        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
+        ok_json(self.open_tab_in_workspace(params, None).await?)
+    }
+
+    /// Open a tab in an open workspace and return `{handle, headed, kind}`. A shell
+    /// by default; with `argv`, a tab whose first process is that argument vector,
+    /// run directly with no shell in front of it. The caller has admitted the tool.
+    async fn open_tab_in_workspace(
+        &self,
+        params: OpenTerminalTabParams,
+        argv: Option<Vec<String>>,
+    ) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
-        use crate::commands::pty::{AttachWarmArgs, SpawnPtySize};
+        use crate::commands::pty::{AttachWarmArgs, SpawnPtyArgs, SpawnPtySize};
         use crate::commands::pty_layout::{
             app_viewer, open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
         };
         use codesense_pty_core::domain::PtySessionId;
         use codesense_pty_core::layout::{OpenTab, Placement, Tags, WorkspaceDescriptor};
 
-        // The trusted-side gate runs BEFORE any work — a refusal never has a side
-        // effect. A headed open is a first-class visible tab (focused).
-        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
         let headed = params.headed.unwrap_or(true);
 
         // Only an OPEN workspace is addressable — resolved against the app's
@@ -8095,19 +8148,39 @@ impl CodesenseHandler {
             index: None,
             activate: headed,
         };
-        let spawn = TabSpawn::Warm(AttachWarmArgs {
-            target_cwd: ws.cwd.clone(),
-            size: SpawnPtySize {
-                cols: AGENT_COLS,
-                rows: AGENT_ROWS,
-            },
-            story_id: ws.story_id.clone(),
-            workspace_id: Some(ws.id.clone()),
-            epic_id: None,
-            scrollback: None,
-            starship_preset: None,
-            shell_integration: None,
-        });
+        let size = SpawnPtySize {
+            cols: AGENT_COLS,
+            rows: AGENT_ROWS,
+        };
+        let spawn = match argv {
+            None => TabSpawn::Warm(AttachWarmArgs {
+                target_cwd: ws.cwd.clone(),
+                size,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                starship_preset: None,
+                shell_integration: None,
+            }),
+            Some(command_argv) => TabSpawn::Cold(Box::new(SpawnPtyArgs {
+                command: Default::default(),
+                command_argv: Some(command_argv),
+                cwd: ws.cwd.clone(),
+                size,
+                interactive: Some(false),
+                starship_preset: None,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                shell_integration: None,
+                env_remove: None,
+                account: None,
+                environment_binding: None,
+                native_launch: None,
+            })),
+        };
         open_layout_tab(
             self.app_handle.clone(),
             crate::commands::machines::LOCAL_MACHINE_ID.into(),
@@ -8126,7 +8199,7 @@ impl CodesenseHandler {
         // restores it, and mail addressed to it still reaches the tab. Best-effort.
         crate::commands::dashboard_launch::tag_bound_launch(&self.app_handle, &session_id).await;
 
-        ok_json(serde_json::json!({
+        Ok(serde_json::json!({
             "handle": handle,
             "headed": headed,
             "kind": ws.kind,
@@ -8342,15 +8415,20 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<CloseTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
+        ok_json(self.close_tab_by_handle(params.handle.trim()).await?)
+    }
+
+    /// Close the tab a handle names, killing what runs in it, and return
+    /// `close_terminal_tab`'s reply. The caller has admitted the tool.
+    async fn close_tab_by_handle(&self, handle: &str) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::machines::{RuntimeSessionReference, LOCAL_MACHINE_ID};
         use crate::commands::pty_layout::terminal_close_tab;
         use codesense_pty_core::layout::{CloseMode, CloseOutcome};
 
-        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
-
-        let handle = params.handle.trim();
         if handle.is_empty() {
             return Err(invalid_err(
                 "close_terminal_tab",
@@ -8377,13 +8455,13 @@ impl CodesenseHandler {
             // NEVER-KNOWN (the handle is forged or belongs to another install).
             // Both close cleanly but a caller should be able to tell them apart.
             if resolved_session.is_some() || known_remote {
-                return ok_json(serde_json::json!({
+                return Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": known_remote,
                 }));
             }
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "unknownHandle",
                 "message": format!("no live terminal tab for handle '{handle}'"),
@@ -8396,7 +8474,7 @@ impl CodesenseHandler {
         // killed before the reply could travel back. Refuse before any work.
         let caller = self.connection_session();
         if is_self_closing_tab(caller.as_deref(), std::iter::once(tab.session.as_str())) {
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "selfClose",
                 "message": "a tab cannot close itself mid-call",
@@ -8417,7 +8495,7 @@ impl CodesenseHandler {
                     CloseOutcome::Killed | CloseOutcome::Backgrounded => true,
                     CloseOutcome::Removed => false,
                 };
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "hadCliRunning": had_cli_running,
                     "remote": is_remote,
@@ -8426,7 +8504,7 @@ impl CodesenseHandler {
             Err(error) if is_already_closed_error(&error) => {
                 // An already-gone session reads as a benign idempotent
                 // close (we HAD it, it's now gone).
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": is_remote,
@@ -9647,7 +9725,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors?, teams:[...]}`; each team has `{name, archived, parent?, starterPage?, synced, sourceRepos:[{repo, status, localPath}]}` (`starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html) where `status` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create."
+        description = "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs, repo}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors, teams:[...]}` (`teams` is empty when `loadErrors` is not); each team has `{name, archived, parentTeam, starterPage?, synced, sourceRepos:[{slug, remoteKey, attachment, localPath}]}` (`parentTeam`: null for a top-level team; `starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html; `slug` is owner/repo; `localPath` is the bound checkout or null) where `attachment` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create."
     )]
     async fn describe_setup(&self) -> Result<CallToolResult, ErrorData> {
         let state = setup_tools::describe_setup(&self.app_handle).await?;
@@ -9821,10 +9899,207 @@ impl CodesenseHandler {
             home: &home,
             user_id,
         };
+        let path = params.path.clone();
         let reply = setup_tools::attach_source_repo_path(&env, params)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
+        // A bound clone is no longer an unfinished one that `clone_repo`'s Stop may remove.
+        if let tool_envelope::ToolEnvelope::Ok(_) = &reply {
+            clone_repo::records().forget(std::path::Path::new(&path));
+        }
         envelope_json(&reply)
+    }
+
+    #[tool(
+        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. git never prompts for a credential (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`): with none it can use, the clone ends at once with `gitExited` and the tab says why. A second clone into a folder whose clone is still on record is refused (rule `busy`). The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, starting (the clone's tab hasn't opened yet; still recorded, so call Stop again), not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }."
+    )]
+    async fn clone_repo(
+        &self,
+        Parameters(params): Parameters<clone_repo::CloneRepoParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.admit_local_setup_mutation("clone_repo")?;
+        let refuse = |message: String| {
+            envelope_json(&tool_envelope::ToolEnvelope::<serde_json::Value>::Validation { message })
+        };
+        let Some(user_home) = clone_repo::home_dir() else {
+            return refuse("clone_repo needs a home folder, and none was found".to_string());
+        };
+        // Validation comes first: nothing below runs for a refused input.
+        let (valid, org, team, workspace_id) = match clone_repo::plan(&params, &user_home) {
+            Err(message) => return refuse(message),
+            Ok(clone_repo::Plan::Stop(path)) => {
+                // Stop the clone before removing its folder, so git isn't still writing.
+                if let Some(tab) = clone_repo::records().tab_of(&path) {
+                    self.close_tab_by_handle(&tab).await?;
+                }
+                let mut stopped = clone_repo::records().stop(&path);
+                // A killed git may still be letting go of the folder; a failed removal
+                // stays on record, so try it again briefly.
+                for _ in 0..4 {
+                    if stopped.reason != Some("remove_failed") {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    stopped = clone_repo::records().stop(&path);
+                }
+                return envelope_json(&tool_envelope::ToolEnvelope::Ok(stopped));
+            }
+            Ok(clone_repo::Plan::Clone {
+                valid,
+                org,
+                team,
+                workspace_id,
+            }) => (valid, org, team, workspace_id),
+        };
+        let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
+            .await
+            .map_err(|m| ErrorData::invalid_params(m, None))?;
+        let (coord, active_team) = self.attachment_state()?;
+        let env = commands::source_repo_add::AttachmentEnv {
+            app: &self.app_handle,
+            coord: &coord,
+            active_team: active_team.inner(),
+            home: &home,
+            user_id,
+        };
+        // The repo must be one the team tracks, so a clone is never made that
+        // can't be bound.
+        if let Err(error) =
+            setup_tools::tracked_repo(&home, user_id, &org, &team, &params.repo).await
+        {
+            return match setup_tools::refusal::<serde_json::Value>(error) {
+                Ok(envelope) => envelope_json(&envelope),
+                Err(message) => Err(ErrorData::internal_error(message, None)),
+            };
+        }
+        // The git CodeSense already resolves for everything else; no `gh`.
+        let git = self
+            .app_handle
+            .try_state::<DependencyManager>()
+            .and_then(|deps| DependencyManager::status(&deps).git.path);
+        let Some(git) = git else {
+            return refuse("git is not installed or was not found; install it first".to_string());
+        };
+        let Some(argv) = clone_repo::clone_argv(&git, &valid) else {
+            return refuse("git's path contains `=`, which can't be run here".to_string());
+        };
+        // A record whose git has exited and left no folder is stale: forget it, but
+        // only while it still names that tab.
+        if let Some(stale) = clone_repo::records().tab_of(&valid.path) {
+            if self.tab_has_exited(&stale).await && std::fs::symlink_metadata(&valid.path).is_err()
+            {
+                clone_repo::records().forget_tab(&valid.path, &stale);
+            }
+        }
+        // Claim the folder before the tab opens: a second clone into it is refused
+        // while this one is on record. Only a folder this call creates is recorded,
+        // so only it is Stop's to remove, and Stop closes this tab first.
+        if !clone_repo::records().reserve(&valid.path, valid.creates) {
+            return refuse(clone_repo::CloneRefusal::Busy.to_string());
+        }
+        let tab = match self
+            .open_tab_in_workspace(
+                OpenTerminalTabParams {
+                    workspace_id,
+                    headed: Some(true),
+                    name: Some(format!("clone {}", params.repo)),
+                },
+                Some(argv),
+            )
+            .await
+        {
+            Ok(tab) => tab,
+            Err(error) => {
+                if valid.creates {
+                    clone_repo::records().forget(&valid.path);
+                }
+                return Err(error);
+            }
+        };
+        let handle = tab
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if valid.creates {
+            clone_repo::records().set_tab(&valid.path, handle.as_deref());
+        }
+        // Wait for the checkout, but not past git exiting, and well inside the
+        // shortest tool timeout a runtime applies.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(clone_repo::CLONE_WAIT_SECS);
+        let mut git_exited = false;
+        while !clone_repo::finished(&valid.path) && std::time::Instant::now() < deadline {
+            if let Some(handle) = &handle {
+                if self.tab_has_exited(handle).await {
+                    git_exited = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let done = clone_repo::finished(&valid.path);
+        let mut started = clone_repo::CloneStarted {
+            repo: params.repo.clone(),
+            path: params.path.clone(),
+            created: valid.creates,
+            tab,
+            git_exited: git_exited && !done,
+            attached: false,
+            source: None,
+            note: None,
+        };
+        if !done {
+            if started.git_exited {
+                // git removes the folder it made when a clone fails; with nothing left,
+                // there is nothing for Stop to remove.
+                if std::fs::symlink_metadata(&valid.path).is_err() {
+                    clone_repo::records().forget_exited(&valid.path, Option::as_deref(&handle));
+                }
+                started.note =
+                    Some("git exited before the clone finished; read the tab for why".to_string());
+            } else {
+                started.note = Some(format!(
+                    "the clone has not finished after {} seconds; read the tab, then call attach_source_repo_path",
+                    clone_repo::CLONE_WAIT_SECS
+                ));
+            }
+            return envelope_json(&tool_envelope::ToolEnvelope::Ok(started));
+        }
+        let attached = setup_tools::attach_source_repo_path(
+            &env,
+            setup_tools::AttachSourceRepoPathParams {
+                org,
+                team,
+                repo: params.repo.clone(),
+                path: params.path.clone(),
+            },
+        )
+        .await
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        match attached {
+            tool_envelope::ToolEnvelope::Ok(source) => {
+                // Bound: the folder is the team's clone now, never Stop's to remove.
+                clone_repo::records().forget(&valid.path);
+                started.attached = true;
+                started.source = Some(source);
+            }
+            tool_envelope::ToolEnvelope::Validation { message } => started.note = Some(message),
+            _ => started.note = Some("the clone could not be bound".to_string()),
+        }
+        envelope_json(&tool_envelope::ToolEnvelope::Ok(started))
+    }
+
+    /// Whether the local tab a handle names has exited. A tab that can't be read
+    /// counts as still running, so the wait falls back to its deadline.
+    async fn tab_has_exited(&self, handle: &str) -> bool {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
+        let live = super::terminal_tabs::LiveTabs::read_local(&self.app_handle).await;
+        let session = self
+            .app_handle
+            .try_state::<DashboardLaunchState>()
+            .and_then(|state| state.resolve(handle));
+        super::terminal_tabs::by_handle(&live.tabs, handle, session.as_deref())
+            .is_some_and(|tab| tab.exited)
     }
 
     #[tool(
@@ -12475,6 +12750,28 @@ pub struct ReactParams {
     #[serde(default)]
     pub remove: Option<bool>,
     /// Omit to react as this connection's verified tab. If supplied, it must name that
+    /// same tab. An unbound connection is refused.
+    #[serde(default, alias = "sessionId")]
+    pub session_id: Option<String>,
+}
+
+/// Pin a message into the caller's own thread, or unpin it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct PinParams {
+    /// The message to pin, from `send_message`, `reply` or `read_messages`.
+    #[serde(alias = "messageId")]
+    pub message_id: i64,
+    /// Where it goes among the pins: 0 is first; omitted or past the end, it goes last.
+    #[serde(default)]
+    pub position: Option<u32>,
+    /// `true` unpins it.
+    #[serde(default)]
+    pub remove: Option<bool>,
+    /// What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.
+    /// On a message already pinned it replaces that pin's preview.
+    #[serde(default)]
+    pub preview: Option<crate::weft::pins::PinPreview>,
+    /// Omit to pin as this connection's verified tab. If supplied, it must name that
     /// same tab. An unbound connection is refused.
     #[serde(default, alias = "sessionId")]
     pub session_id: Option<String>,
@@ -17171,6 +17468,8 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only look at this Mac for the setup guide.
+        "probe_environment",
         // Read-only pack folder validator.
         "pack_validate",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
@@ -17242,6 +17541,7 @@ pub(crate) mod tests {
         "read_messages",
         "reply",
         "react",
+        "pin",
         "who_am_i",
         // Beta feedback from an agent, through the form's path (beta builds only).
         "feedback_send",
@@ -17381,6 +17681,7 @@ pub(crate) mod tests {
         "rename_workspace",
         "add_source_repo",
         "attach_source_repo_path",
+        "clone_repo",
         "remove_source_repo",
         // Tool-discovery meta tools (find a tool by keyword; dispatch any tool by name).
         "codesense_search_tools",
