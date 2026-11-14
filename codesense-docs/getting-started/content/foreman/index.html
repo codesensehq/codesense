@@ -9,7 +9,7 @@
 </head>
 <body>
 <script>
-// vendored story-view build kit-rev:1 sha256:60c2f27985253d17058406d31014359e54f318caa808f9aa2552afb9c2eb9eab
+// vendored story-view build kit-rev:1 sha256:d5d4b5483b5d21fe8cbd3634bb524bc69b41c0606487bf14df1bc2411e9865d3
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -135,7 +135,8 @@ const FOREMAN_COPY=mergeCopy({
  lead:'Foreman',
  header:{done:'',none:'not running: your next message starts it',starting:'starting…',idle:'waiting for you',needs:'needs you in its terminal',unknown:'status unknown · its machine may be offline'},
  placeholder:{running:"It's working; your message waits for its next step",idle:'Message the Foreman',needs:"It's waiting on its terminal; your message waits",unknown:"Your message waits until it's reachable",none:'Message to start the Foreman',starting:'Starting the Foreman; more messages wait for it',failed:'Retry, or add to your kept message',done:''},
- mark:{starting:'Sent · starting the Foreman',held:'Held · sends when the Foreman joins',kept:'Not sent · kept'},
+ mark:{starting:'Sent · starting the Foreman',held:'Held · sends when the Foreman joins',queued:'Queued · goes to the Foreman at its next step',kept:'Not sent · kept'},
+ card:{replyLabel:'Your answer to the Foreman'},
  row:{starting:'Starting the Foreman…',joined:(model,activity)=>`Foreman joined · ${model} · ${activity}`,typing:'The Foreman is typing'},
  failure:{busy:"Couldn't start the Foreman: CodeSense is at its agent limit. Try again in a moment.",denied:why=>`Couldn't start the Foreman: launching was refused (${why}).`,unavailable:why=>`Couldn't start the Foreman: no agent is available (${why}).`,timeout:"The Foreman didn't start in 2 minutes.",exited:'The Foreman stopped right after it started.',
   refused:why=>`Couldn't start the Foreman: ${String(why).replace(/\.$/,'')}.`,other:code=>`Couldn't start the Foreman: ${code}.`},
@@ -235,9 +236,10 @@ const rowTable=copy=>({
  needs:{face:'working',header:copy.header.needs,placeholder:copy.placeholder.needs},
  unknown:{face:'off',header:copy.header.unknown,placeholder:copy.placeholder.unknown},
 });
-const defaultTable=rowTable(CHAT_COPY);
+const tables=new WeakMap();
+const tableOf=copy=>{let table=tables.get(copy);if(!table){table=rowTable(copy);tables.set(copy,table);}return table;};
 function presenceOf(row,{launch,runningSince,done}={},copy=CHAT_COPY){
- let out;const by=copy===CHAT_COPY?defaultTable:rowTable(copy);
+ let out;const by=tableOf(copy);
  if(launch&&launch.state==='failed')out={key:'failed',face:'failed',header:copy.header.failed(failureReason(launch.failure,copy)),placeholder:copy.placeholder.failed};
  else if(launch&&launch.stuck&&(launch.state==='starting'||launch.state==='slow'))out={key:'needs',...by.needs};
  else if(launch&&(launch.state==='starting'||launch.state==='slow'))out={key:'starting',...by.starting};
@@ -273,8 +275,8 @@ function createLaunch({transport,clock,storyId,leadRole,timers,card,onChange=()=
   return rowsOf(list).filter(row=>row.handle===launchResult.handle).sort((a,b)=>rank(a)-rank(b))[0]||null;
  };
  const launchedRow=()=>launchedIn(rows);
- const liveIn=list=>{if(bindLaunched){const row=launchedIn(list);if(joinable(row))return row;}return pickLive(rowsOf(list));};
- const live=()=>liveIn(rows);
+ const hasKept=()=>keepUnsent&&messages.some(item=>item.mark==='kept');
+ const live=()=>{if(bindLaunched){const row=launchedIn(rows);if(joinable(row))return row;}return pickLive(peerRows());};
  const starting=()=>state==='starting'||state==='slow';
  const clearTimers=()=>{if(slowTimer!==null)clock.clearTimeout(slowTimer);if(failTimer!==null)clock.clearTimeout(failTimer);slowTimer=failTimer=null;};
  const enqueue=job=>{chain=chain.then(job,job);return chain;};
@@ -298,8 +300,9 @@ function createLaunch({transport,clock,storyId,leadRole,timers,card,onChange=()=
   const row=live();
   if(!row||!['starting','slow','failed'].includes(state)||(state!=='failed'&&!settled))return false;
   clearTimers();stuck=false;
-  const first=keepUnsent?messages.filter(item=>(item.mark==='starting'||item.mark==='kept')&&promptItems.has(item)):messages.filter(item=>item.mark==='starting'||item.mark==='kept');
-  const held=keepUnsent?[...messages.filter(item=>item.mark==='kept'&&!promptItems.has(item)),...outbox.splice(0)]:outbox.splice(0);
+  const carried=item=>item.mark==='starting'||item.mark==='kept';
+  const first=messages.filter(item=>carried(item)&&(!keepUnsent||promptItems.has(item)));
+  const held=[...(keepUnsent?messages.filter(item=>item.mark==='kept'&&!promptItems.has(item)):[]),...outbox.splice(0)];
   state='joined';failure=null;
   if(first.length){if(launchResult&&launchResult.promptDelivered!==false)first.forEach(item=>{item.mark='sent';item.busyAtSend=false;});else deliver(first,row.handle);}
   for(const item of held)deliver([item],row.handle);
@@ -334,9 +337,9 @@ function createLaunch({transport,clock,storyId,leadRole,timers,card,onChange=()=
  const retryList=()=>[...messages.filter(item=>item.mark==='kept'),...outbox.splice(0)];
  return {
   get state(){return state;},get failure(){return failure;},get stuck(){return stuck;},get sendFailure(){return sendFailure;},get messages(){return messages;},get held(){return outbox.length;},
-  hasHeld:()=>outbox.length>0||(keepUnsent&&messages.some(item=>item.mark==='kept')),
-  hasKept:()=>keepUnsent&&messages.some(item=>item.mark==='kept'),
-  launchedRow,liveIn,
+  hasHeld:()=>outbox.length>0||hasKept(),
+  hasKept,
+  launchedRow,launchedIn,
   send(text){
    const item={id:++ids,text,mark:null,sentAt:clock.now()};messages.push(item);
    const row=live();
@@ -389,9 +392,10 @@ function createSources({transport,clock,peers,sourcesOf}){
  const flight=(id,by)=>{const n=(pending.get(id)||0)+by;if(n>0)pending.set(id,n);else pending.delete(id);};
  const current=()=>[...sourcesOf(peers()),ROLE];
  const merged=()=>mergeThread(...current().map(id=>bySource.get(id)||[]));
- const settled=()=>threadRead&&!current().some(id=>pending.has(id)&&!bySource.has(id));
+ const waiting=()=>current().some(id=>pending.has(id)&&!bySource.has(id));
+ const settled=()=>threadRead&&!waiting();
  const failedNow=()=>current().some(id=>failed.has(id)&&!bySource.has(id));
- const staleAt=()=>{const times=current().filter(id=>failed.has(id)&&failedAt.has(id)).map(id=>failedAt.get(id));return times.length?Math.min(...times):null;};
+ const staleAt=()=>{const times=current().filter(id=>failedAt.has(id)).map(id=>failedAt.get(id));return times.length?Math.min(...times):null;};
  function seen(rows,firstRoster){
   let again=false;
   for(const row of rows){
@@ -405,9 +409,9 @@ function createSources({transport,clock,peers,sourcesOf}){
   return again;
  }
  async function read(mine,onlyNew,onEarly){
-  const sources=sourcesOf(peers());
-  for(const id of asked)if(!sources.includes(id))asked.delete(id);
-  const ids=onlyNew?sources.filter(id=>!asked.has(id)):[...sources,ROLE];
+  const all=current();
+  for(const id of asked)if(!all.includes(id))asked.delete(id);
+  const ids=onlyNew?all.filter(id=>!asked.has(id)):all;
   ids.forEach(id=>{asked.add(id);flight(id,1);});
   const key=current().join('\n');
   if(key!==mergedKey){mergedKey=key;onEarly(merged());}
@@ -416,7 +420,7 @@ function createSources({transport,clock,peers,sourcesOf}){
   const miss=id=>{if(!newer(id))return;missOf.set(id,Math.max(missOf.get(id)||0,mine));failed.add(id);if(!bySource.has(id))asked.delete(id);else if(!failedAt.has(id))failedAt.set(id,clock.now());};
   await Promise.all(ids.map(id=>(id===ROLE?transport.roleThread():transport.threadOf(id)).then(list=>keep(id,list),()=>miss(id)).then(()=>flight(id,-1))));
   mergedKey=current().join('\n');
-  if(!current().some(id=>pending.has(id)&&!bySource.has(id)))threadRead=true;
+  if(!waiting())threadRead=true;
   return merged();
  }
  return {read,seen,settled,failedNow,staleAt};
@@ -608,7 +612,7 @@ function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIM
  const fails=new Map();
  const wrapped={launch:async prompt=>{const result=await transport.launch(prompt);if(result&&result.sessionId)launchSessionId=result.sessionId;return result;},send:(handle,text)=>transport.send(handle,text)};
  const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue,pickLive:target.pick,bindLaunched:target.bindLaunched,keepUnsent:target.keepUnsent});
- const live=()=>target.bindLaunched?launch.liveIn(rows):(target.pick||liveOf)(target.rows(rows));
+ const live=()=>{const own=target.bindLaunched?launch.launchedIn(rows):null;return joinable(own)?own:(target.pick||liveOf)(target.rows(rows));};
  const leadHandles=()=>new Set([...target.rows(rows).map(row=>row.handle),...(target.handles?target.handles(target.rows(rows)):[])]);
  const sources=target.sources?createSources({transport,clock,peers:()=>target.rows(rows),sourcesOf:target.sources}):null;
  const leadCount=()=>{const handles=leadHandles();return thread.filter(row=>sideOf(row,handles)==='lead').length+streams.size;};
@@ -635,7 +639,7 @@ function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIM
  const readRows=()=>{
   if(!sources)return [];
   const retry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{readThread();}},copy.row.retry),stale=sources.staleAt();
-  if(sources.failedNow())return [{id:'unread',sig:'u',make:()=>h('div',{class:'sys danger',role:'alert','data-row':'unread'},h('span',{},copy.row.unread),retry())}];
+  if(sources.failedNow())return [{id:'unread',sig:'u',make:()=>alertRow('unread',copy.row.unread,'',retry())}];
   return stale===null?[]:[{id:'stale',sig:'st|'+stale,make:()=>h('div',{class:'sys warn',role:'status','data-row':'stale'},h('span',{},copy.row.stale(timeLabel(stale))),retry())}];
  };
  function statusItems(){
@@ -727,7 +731,10 @@ function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIM
  async function readSources(onlyNew){
   const mine=++gen,peers=target.rows(rows);
   for(const row of peers)watched.add(row.sessionId);
-  thread=await sources.read(mine,onlyNew,early=>{thread=early;render();});
+  took(await sources.read(mine,onlyNew,early=>{thread=early;render();}));
+ }
+ function took(next){
+  thread=next;
   if(runningSince===0)runningSince=newestFrom(thread,leadHandles());
   for(const row of thread)streams.delete(row.messageId);
   if(awaitBase!==null&&leadCount()>awaitBase)awaitBase=null;
@@ -741,11 +748,7 @@ function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIM
   try{lists=await target.read(peers,transport);}catch(error){if(mine===gen){fails.set('thread',(error&&error.message)||String(error));render();}return;}
   if(mine!==gen)return;
   fails.delete('thread');
-  thread=mergeThread(...lists);
-  if(runningSince===0)runningSince=newestFrom(thread,leadHandles());
-  for(const row of thread)streams.delete(row.messageId);
-  if(awaitBase!==null&&leadCount()>awaitBase)awaitBase=null;
-  render();
+  took(mergeThread(...lists));
  }
  function onRows(next){
   const firstRoster=!gotRows;gotRows=true;
@@ -2124,6 +2127,8 @@ function createForemanBridge(cs,{config}){
    launch,
    send:(handle,text)=>act('sendAsHuman',{to:handle,text}).then(result=>{if(!result||result.status===undefined||result.status==='sent')onSent(handle);return result;}),
    gotoAgent:sessionId=>act('gotoAgent',{agentId:sessionId}),
+   reply:(messageId,text)=>act('replyAsHuman',{messageId,text}),
+   stop:()=>Promise.reject(new Error('stopping the Foreman is not available on this page')),
    stream:typeof cs.onChunk==='function'?listener=>cs.onChunk(listener):null,
    threadOf:handle=>cs.inbox({sessionId:handle}).then(rowsOf),
    roleThread:()=>Promise.resolve([]),

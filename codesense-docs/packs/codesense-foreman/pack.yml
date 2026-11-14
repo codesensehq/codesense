@@ -17,4 +17,4 @@ spec_hash:
 kit:
   file: vendor/story-view.js
   kit_rev: 1
-  sha256: 60c2f27985253d17058406d31014359e54f318caa808f9aa2552afb9c2eb9eab
+  sha256: d5d4b5483b5d21fe8cbd3634bb524bc69b41c0606487bf14df1bc2411e9865d3
