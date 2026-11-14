@@ -32,6 +32,14 @@ test("a pipeline card opens the story page, and opening it again keeps one tab",
   await expect(storyPage(page).first()).toBeVisible();
 });
 
+test("a story file with no workspace opens its page without opening one", async ({ page }) => {
+  await openDemo(page);
+  await expect(page.getByText("No workspace open")).toBeVisible();
+  await page.getByRole("button", { name: /^AID-3Rail list and filters/ }).click();
+  await expect(storyPage(page).first()).toBeVisible();
+  await expect(page.getByText("No workspace open")).toBeVisible();
+});
+
 test("a link to a story in a viewer opens the story page", async ({ page }) => {
   await openDemo(page);
   await page
