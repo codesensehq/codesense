@@ -33,6 +33,7 @@ describe("encode/decode round-trip", () => {
     { kind: "open-shortcuts" },
     { kind: "open-routines" },
     { kind: "open-agents" },
+    { kind: "open-setup" },
     { kind: "open-scratch-space" },
     { kind: "add-machine" },
   ];
@@ -164,6 +165,14 @@ describe("buildStaticItems", () => {
     expect(agents?.tier).toBe(CP_TIER.action);
   });
 
+  it("always offers Set up CodeSense as an action", () => {
+    const setup = buildStaticItems({ ...inputs, canAttach: false }).find(
+      (i) => decodeSelection(i.id)?.kind === "open-setup",
+    );
+    expect(setup?.label).toBe("Set up CodeSense");
+    expect(setup?.tier).toBe(CP_TIER.action);
+  });
+
   it("offers no widget gallery — custom panes are opened by name", () => {
     const labels = buildStaticItems(inputs).map((i) => i.label);
     expect(labels.some((l) => /widget/i.test(l))).toBe(false);
@@ -235,6 +244,7 @@ describe("dispatchSelection", () => {
       openShortcuts: () => calls.push("openShortcuts"),
       openRoutines: () => calls.push("openRoutines"),
       openAgents: () => calls.push("openAgents"),
+      openSetup: () => calls.push("openSetup"),
       openScratchSpace: () => calls.push("openScratchSpace"),
       openForeman: () => calls.push("openForeman"),
       addMachine: () => calls.push("addMachine"),
@@ -318,6 +328,12 @@ describe("dispatchSelection", () => {
     const h = handlers();
     expect(dispatchSelection("open-agents", h, null)).toBe(true);
     expect(h.calls).toEqual(["openAgents"]);
+  });
+
+  it("routes the Set up CodeSense entry to its opener", () => {
+    const h = handlers();
+    expect(dispatchSelection("open-setup", h, null)).toBe(true);
+    expect(h.calls).toEqual(["openSetup"]);
   });
 
   it("routes the generic attach-repo action to the injected target team", () => {

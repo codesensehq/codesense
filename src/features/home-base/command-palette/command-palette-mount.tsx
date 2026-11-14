@@ -50,6 +50,7 @@ import { openManageTeams } from "@/features/shell/manage-teams-virtual-tab";
 import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
+import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
 import { openForeman } from "@/features/foreman/open-foreman";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
@@ -334,6 +335,7 @@ export function CommandPaletteMount() {
       openShortcuts: () => openAppSettings("shortcuts"),
       openRoutines: () => openRoutines(),
       openAgents: () => openAgents(),
+      openSetup: () => openCodesenseSetup({ resume: true }),
       openScratchSpace: () => openScratchSpace(),
       openForeman: () => openForeman(),
       addMachine: () => openMachinesPanel({ mode: "add" }),

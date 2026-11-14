@@ -23,6 +23,7 @@ interface Fake {
   sessions(rows: Row[]): void;
   inbox(handle: string, rows: Row[]): void;
   setupDone(done: boolean): void;
+  subscribed(): boolean;
 }
 declare global {
   interface Window {
@@ -70,6 +71,12 @@ interface Options {
   viewport?: { width: number; height: number };
   /** How many `markRead` calls fail before one goes through. */
   markReadFails?: number;
+  /** The fragment the page is opened at: the app's "Set up CodeSense" reopen opens it at `#resume`. */
+  hash?: string;
+  /** A profile that has begun setup (a context repo of its own, no source repo yet). */
+  begun?: boolean;
+  /** The app's first roster read does not answer until a case delivers rows with `sessions()`. */
+  holdRoster?: boolean;
 }
 
 /** Opens the page over the fake bridge; returns the helpers a case drives it with. */
@@ -88,7 +95,7 @@ async function open(page: Page, options: Options = {}) {
     return route.fulfill({ contentType: "text/html", body: PAGE });
   });
   await page.addInitScript(
-    ({ agents, setupDone: done, stop, markReadFails }) => {
+    ({ agents, setupDone: done, stop, markReadFails, begun, holdRoster }) => {
       let setupDone = done;
       let readFails = markReadFails;
       const calls: Fake["calls"] = [];
@@ -119,6 +126,14 @@ async function open(page: Page, options: Options = {}) {
                       slug: "codesense/docs",
                       teams: [{ name: "getting-started", archived: false, sourceRepos: [] }],
                     },
+                    ...(begun
+                      ? [
+                          {
+                            slug: "acme",
+                            teams: [{ name: "web", archived: false, sourceRepos: [] }],
+                          },
+                        ]
+                      : []),
                   ],
             };
           // Each launch is a new session: guide-1, then guide-2.
@@ -146,7 +161,7 @@ async function open(page: Page, options: Options = {}) {
         },
         onSessions: (cb: (rows: Row[] | null, error?: unknown) => void) => {
           sessionListener = cb;
-          cb(latest);
+          if (!holdRoster) cb(latest);
           return () => {
             sessionListener = null;
           };
@@ -174,6 +189,7 @@ async function open(page: Page, options: Options = {}) {
         setupDone(value: boolean) {
           setupDone = value;
         },
+        subscribed: () => sessionListener !== null,
       };
     },
     {
@@ -181,11 +197,13 @@ async function open(page: Page, options: Options = {}) {
       setupDone: options.setupDone ?? false,
       stop: options.stop ?? "stopped",
       markReadFails: options.markReadFails ?? 0,
+      begun: options.begun ?? false,
+      holdRoster: options.holdRoster ?? false,
     },
   );
   if (options.clock) await page.clock.install({ time: AT });
   await page.setViewportSize(options.viewport ?? { width: 1000, height: 760 });
-  await page.goto("http://guide.test/page");
+  await page.goto(`http://guide.test/page${options.hash ?? ""}`);
   const calls = (verb: string) =>
     page.evaluate((v) => window.__fake.calls.filter((c) => c.verb === v), verb);
   const sessions = (rows: Row[]) => page.evaluate((r) => window.__fake.sessions(r), rows);
@@ -228,7 +246,75 @@ test("once setup is done it asks for the cheaper model, and Codex gets its own s
   const [{ args }] = await calls("openWorkspace");
   expect(args.agent).toBe("guide-codex");
   expect(args.model).toBe("gpt-6-luna");
-  expect(args.initialPrompt).toBe("$codesense-setup");
+  // Setup has progress, so the open is a resume, not a first one.
+  expect(args.initialPrompt).toBe("$codesense-setup resume");
+});
+
+test("a page opened at #resume launches with resume; a first open says nothing more", async ({
+  page,
+}) => {
+  const { calls } = await open(page, { hash: "#resume" });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
+  expect((await calls("openWorkspace"))[0].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
+test("a restored tab with setup progress resumes without the #resume route", async ({ page }) => {
+  const { calls } = await open(page, { begun: true });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
+  expect((await calls("openWorkspace"))[0].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
+test("reopening an open tab (#resume) while the guide is live sends and launches nothing", async ({
+  page,
+}) => {
+  const { live, calls } = await open(page);
+  await live([lead(2, "Hi. Still here.")]);
+  await page.evaluate(() => {
+    window.location.hash = "#resume";
+  });
+  await page.waitForTimeout(400);
+  expect(await calls("openWorkspace")).toHaveLength(1);
+  expect(await calls("sendAsHuman")).toHaveLength(0);
+});
+
+test("reopening an open tab (#resume) after the guide ended launches it with resume", async ({
+  page,
+}) => {
+  const { live, calls, sessions } = await open(page);
+  await live([lead(2, "Hi. Earlier conversation.")]);
+  await sessions([GUIDE("exited")]);
+  await page.evaluate(() => {
+    window.location.hash = "#resume";
+  });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(2);
+  expect((await calls("openWorkspace"))[1].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
+test("a second reopen at the same #resume fragment launches via the host's navigate message", async ({
+  page,
+}) => {
+  const { live, calls, sessions } = await open(page, { hash: "#resume" });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
+  await live([lead(2, "Hi. Earlier conversation.")]);
+  await sessions([GUIDE("exited")]);
+  await page.evaluate(() => {
+    window.postMessage({ type: "codesense:navigate", hash: "#resume", nonce: 1, token: "t" }, "*");
+  });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(2);
+  expect((await calls("openWorkspace"))[1].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
+test("a navigate message before the first roster read launches nothing while a guide is live", async ({
+  page,
+}) => {
+  const { live, calls } = await open(page, { holdRoster: true });
+  await expect.poll(() => page.evaluate(() => window.__fake.subscribed())).toBe(true);
+  await page.evaluate(() => {
+    window.postMessage({ type: "codesense:navigate", hash: "#resume", nonce: 1, token: "t" }, "*");
+  });
+  await live([lead(2, "Hi. Still here.")]);
+  await page.waitForTimeout(400);
+  expect(await calls("openWorkspace")).toHaveLength(0);
 });
 
 test("a consent card shows its class and buttons, and a click replies to that card", async ({

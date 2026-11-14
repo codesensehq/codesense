@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
+import { toast } from "sonner";
+
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
-import { CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
+import {
+  CODESENSE_DOCS_SETUP,
+  CODESENSE_DOCS_SLUG,
+  CODESENSE_DOCS_TEAM,
+} from "@/shared/lib/codesense-docs";
 
 /**
  * Runs `decide` once the org and viewer stores have restored the persisted session, so the
@@ -38,18 +44,58 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
- * A start-up landing: open `path` (the Foreman page or the README) in the CodeSense docs
- * repo's "Getting started" team as the active tab. No modal, no welcome screen.
+ * A page of the docs repo as a tab of its "Getting started" team. Says why when it can't: the
+ * docs repo is not connected, or its team can't be selected. `pathIn` names the page's path
+ * from the docs repo root.
  */
-export function openCodesenseDocsLanding(path: string): void {
+function openDocsPage(
+  pathIn: (docsRoot: string) => string,
+  options: { keepLayout?: boolean; hash?: string },
+): "opened" | "no-docs" | "no-team" {
+  const docs = useOrgStore.getState().orgs.find((org) => org.slug === CODESENSE_DOCS_SLUG);
+  if (!docs) return "no-docs";
   const org = useOrgStore.getState();
   if (org.activeOrgSlug !== CODESENSE_DOCS_SLUG || org.activeTeamName !== CODESENSE_DOCS_TEAM) {
     org.setActiveTeamIn(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
   }
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
-  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return;
+  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM)
+    return "no-team";
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-  const viewer = useViewerStore.getState();
-  // A landing, not the user's open: full-screen CLI stays on.
-  viewer.openFile(teamKey, "", path, { keepLayout: true });
+  useViewerStore.getState().openFile(teamKey, "", pathIn(docs.org_root), {
+    ...(options.keepLayout ? { keepLayout: true } : {}),
+    ...(options.hash ? { hash: options.hash } : {}),
+  });
+  return "opened";
+}
+
+/**
+ * A start-up landing: open `path` (the Foreman page or the README) in the CodeSense docs
+ * repo's "Getting started" team as the active tab. No modal, no welcome screen. A landing,
+ * not the user's open: full-screen CLI stays on.
+ */
+export function openCodesenseDocsLanding(path: string): void {
+  openDocsPage(() => path, { keepLayout: true });
+}
+
+/**
+ * The CodeSense setup page, opened as a tab in the docs team. First launch lands here
+ * (not a user's open, so full-screen CLI stays on); the identity menu row and the palette
+ * item reopen it. The page owns the agent: an open tab is simply focused (its live agent
+ * is reused), and a tab with none launches `/codesense-setup`, which reads the setup
+ * ledger and carries on at the first step not done. `resume` adds the `#resume` route,
+ * so a fresh launch says `resume` instead of treating the open as a first one.
+ * False when the page can't open; a reopen (not a landing) says why in a toast.
+ */
+export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
+  const result = openDocsPage((root) => `${root.replace(/[/\\]+$/, "")}/${CODESENSE_DOCS_SETUP}`, {
+    keepLayout: options.landing,
+    hash: options.resume ? "#resume" : undefined,
+  });
+  if (result !== "opened" && !options.landing) {
+    toast.info(
+      result === "no-docs" ? "CodeSense docs aren't connected yet" : "Couldn't open the setup page",
+    );
+  }
+  return result === "opened";
 }

@@ -125,6 +125,7 @@
     list: [],
     runtime: null,
     done: false,
+    begun: false,
     chat: null,
     reads: null,
     loginTimer: null,
@@ -271,6 +272,8 @@
     try {
       const state = await cs.invoke('setupState');
       const orgs = Array.isArray(state && state.orgs) ? state.orgs : [];
+      // Any context repo beyond the docs means setup has begun: the next open is a resume.
+      S.begun = orgs.some((org) => org.slug !== DOCS.org);
       S.done = orgs.some(
         (org) =>
           org.slug !== DOCS.org &&
@@ -279,6 +282,7 @@
     } catch {
       // An unread state is treated as "still setting up": the stronger model.
       S.done = false;
+      S.begun = false;
     }
     if (S.done !== was) paintChip();
     return S.done;
@@ -288,7 +292,8 @@
   // ---- launch and the transport kit.chat sends through ----
   const promptFor = (text) => {
     const body = String(text || '').trim();
-    const resumed = S.chat && S.chat.thread().length > 0;
+    // The app's "Set up CodeSense" reopen opens this page at #resume; a restored tab with setup progress resumes too.
+    const resumed = (S.chat && S.chat.thread().length > 0) || window.location.hash === '#resume' || S.begun;
     return [SKILL[S.runtime], body || (resumed ? 'resume' : '')].filter(Boolean).join(' ');
   };
   async function openGuide(prompt) {
@@ -660,6 +665,27 @@
     S.chat = null;
     S.reads = null;
   }
+  // Reopening an open tab with no agent live launches one that resumes. The host reports a reopen two
+  // ways: a fragment change, and a `codesense:navigate` message that also arrives when the fragment is
+  // already `#resume` (no `hashchange` then). A live or starting agent makes both a no-op. The guard waits
+  // for the chat's first roster read: before it, no guide is known, so a live one would look absent.
+  function resumeIfIdle() {
+    const chat = S.chat;
+    if (!chat) return;
+    chat.loaded().then(() => {
+      if (S.chat !== chat) return;
+      const controls = chat.controls();
+      if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
+    });
+  }
+  window.addEventListener('hashchange', () => {
+    if (window.location.hash === '#resume') resumeIfIdle();
+  });
+  window.addEventListener('message', (event) => {
+    const data = event && event.data;
+    if (event.source !== window.parent || !data || data.type !== 'codesense:navigate' || data.hash !== '#resume') return;
+    resumeIfIdle();
+  });
   async function startChat() {
     const chat = mountChat();
     await chat.loaded();

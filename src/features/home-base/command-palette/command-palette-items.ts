@@ -46,6 +46,7 @@ export type CommandPaletteSelection =
   | { kind: "open-shortcuts" }
   | { kind: "open-routines" }
   | { kind: "open-agents" }
+  | { kind: "open-setup" }
   | { kind: "open-scratch-space" }
   | { kind: "add-machine" };
 
@@ -75,6 +76,8 @@ export function encodeSelection(sel: CommandPaletteSelection): string {
       return "open-routines";
     case "open-agents":
       return "open-agents";
+    case "open-setup":
+      return "open-setup";
     case "open-scratch-space":
       return "open-scratch-space";
     case "add-machine":
@@ -89,6 +92,7 @@ export function decodeSelection(id: string): CommandPaletteSelection | null {
   if (id === "open-shortcuts") return { kind: "open-shortcuts" };
   if (id === "open-routines") return { kind: "open-routines" };
   if (id === "open-agents") return { kind: "open-agents" };
+  if (id === "open-setup") return { kind: "open-setup" };
   if (id === "open-scratch-space") return { kind: "open-scratch-space" };
   if (id === "add-machine") return { kind: "add-machine" };
   const p = id.split(SEP);
@@ -246,6 +250,13 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
     sublabel: "action · open agents",
     tier: CP_TIER.action,
   });
+  // The setup tab reopens here and picks up where it left off (the first launch opens it).
+  items.push({
+    id: encodeSelection({ kind: "open-setup" }),
+    label: "Set up CodeSense",
+    sublabel: "action · resume setup, onboarding, get started",
+    tier: CP_TIER.action,
+  });
   // The one place that lists what only you see (SLW-PT-21).
   items.push({
     id: encodeSelection({ kind: "open-scratch-space" }),
@@ -378,6 +389,7 @@ export interface CommandPaletteHandlers {
   openShortcuts: () => void;
   openRoutines: () => void;
   openAgents: () => void;
+  openSetup: () => void;
   openScratchSpace: () => void;
   openForeman: () => void;
   addMachine: () => void;
@@ -434,6 +446,9 @@ export function dispatchSelection(
       return true;
     case "open-agents":
       handlers.openAgents();
+      return true;
+    case "open-setup":
+      handlers.openSetup();
       return true;
     case "open-scratch-space":
       handlers.openScratchSpace();
