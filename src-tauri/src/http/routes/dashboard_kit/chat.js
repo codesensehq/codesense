@@ -162,8 +162,8 @@
     const lines = text.split(/\r?\n/);
     let at = lines.length - 1;
     while (at >= 0 && !lines[at].trim()) at--;
-    if (at < 0 || !/^\s*card:/i.test(lines[at])) return null;
-    const rest = lines[at].replace(/^\s*card:\s*/i, "").trim(), first = rest.indexOf(SEP), second = first < 0 ? -1 : rest.indexOf(SEP, first + SEP.length);
+    if (at < 0 || !lines[at].startsWith("card: ")) return null;
+    const rest = lines[at].slice(6).trimEnd(), first = rest.indexOf(SEP), second = first < 0 ? -1 : rest.indexOf(SEP, first + SEP.length);
     if (second < 0) return null;
     const step = rest.slice(0, first), consent = rest.slice(first + SEP.length, second);
     const acts = rest.slice(second + SEP.length).split(" | ").map((part) => {

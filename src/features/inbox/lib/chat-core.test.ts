@@ -338,13 +338,53 @@ describe("the consent card line", () => {
     expect(parsed?.acts).toEqual(labels);
   });
 
-  it("reads the word card in any case and a single act", () => {
-    expect(parseCardLine("Q?\nCard: a · read · open=Open it ")).toEqual({
+  it("reads a single act, and trailing spaces after the line", () => {
+    expect(parseCardLine("Q?\ncard: a · read · open=Open it ")).toEqual({
       text: "Q?",
       step: "a",
       consent: "read",
       acts: [{ act: "open", label: "Open it" }],
     });
+  });
+
+  it("reads exactly `card: ` at column 0: other cases and leading whitespace are not a card", () => {
+    for (const lead of ["Card: ", "CARD: ", " card: ", "  card: ", "\tcard: ", "\u00a0card: "])
+      expect(parseCardLine(`Q?\n${lead}a · read · x=Go`), JSON.stringify(lead)).toBeNull();
+    expect(parseCardLine("Q?\ncard:a · read · x=Go")).toBeNull();
+    expect(parseCardLine("Q?\ncard:  a · read · x=Go")).toBeNull();
+  });
+
+  it("a card line inside a quoted or indented block is not a card", () => {
+    for (const text of [
+      "Q?\n> card: a · read · x=Go",
+      "Q?\n    card: a · read · x=Go",
+      "Q?\n```\n  card: a · read · x=Go",
+      "Q?\n- card: a · read · x=Go",
+    ])
+      expect(parseCardLine(text), text).toBeNull();
+  });
+
+  it("a lookalike for the middle dot separator is not a card", () => {
+    for (const dot of ["\u2022", "\u22c5", "\u2027", "\u2219", "\u0387", "\u00b7\u00b7", "."]) {
+      expect(parseCardLine(`Q?\ncard: a ${dot} read ${dot} x=Go`), dot).toBeNull();
+      expect(parseCardLine(`Q?\ncard: a ${dot} read · x=Go`), dot).toBeNull();
+      expect(parseCardLine(`Q?\ncard: a · read ${dot} x=Go`), dot).toBeNull();
+    }
+    // The separator is the dot with one space either side, and no other spacing.
+    expect(parseCardLine("Q?\ncard: a·read·x=Go")).toBeNull();
+    expect(parseCardLine("Q?\ncard: a  ·  read  ·  x=Go")).toBeNull();
+  });
+
+  it("an over-long line is not a card: too many acts, a long label, a long step", () => {
+    const acts = (n: number) => Array.from({ length: n }, (_, i) => `a${i}=L${i}`).join(" | ");
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(6)}`)).not.toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(7)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(500)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(80)}`)).not.toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(81)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(100_000)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: ${"a".repeat(65)} · read · x=Go`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: ${"a".repeat(100_000)}`)).toBeNull();
   });
 
   it("is not a card line when it is not the last line, or is not well formed", () => {
