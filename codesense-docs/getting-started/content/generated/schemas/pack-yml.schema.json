@@ -96,6 +96,13 @@
       ],
       "type": "object"
     },
+    "Follow": {
+      "enum": [
+        "pinned",
+        "latest-compatible"
+      ],
+      "type": "string"
+    },
     "KitRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -407,9 +414,13 @@
               ]
             },
             "follow": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Follow"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "id": {
@@ -619,7 +630,8 @@
       "enum": [
         "claude",
         "codex",
-        "opencode"
+        "opencode",
+        "hermes"
       ],
       "type": "string"
     }
