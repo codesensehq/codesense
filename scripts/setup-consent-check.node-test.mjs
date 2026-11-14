@@ -324,6 +324,8 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "connect-mine",
     "write-before-switch-failing",
     "switch-other-team-failing",
+    "first-run",
+    "first-run-create",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);
@@ -825,4 +827,117 @@ test("read_terminal_tab must name a handle an open_terminal_tab returned", () =>
   assert.deepEqual(checkConsent(session([open], [read("h9")])).errors, []);
   assert.equal(checkConsent(session([read("h9")])).errors.length, 1);
   assert.equal(checkConsent(session([open], [read("h8")])).errors.length, 1);
+});
+
+// The first run: the team is switched before any repo is tracked, so the listing the switch
+// saw has none. A later describe_setup must be what the switch is read against.
+const SOURCE = "card: source-repos · local-write · add-source-repo=Track it | none=Not now";
+const LEDGER = "orgs/acme-context/web/content/schema/setup-ledger.yaml";
+const ledger = () => call(`${P}create_content_file`, { path: LEDGER, content: "x" }, { ok: true });
+const track = () =>
+  call(`${P}add_source_repo`, { org: "acme/context", team: "web", url: "acme/web" }, { ok: true });
+const create = call(
+  `${P}create_team`,
+  { org: "acme/context", name: "web", activate: true },
+  { ok: true },
+);
+// Open with a listing, switch (or create) on the team card, track a repo, re-read, check git.
+const firstRun = (opening, switching, { reread = true } = {}) =>
+  session(
+    [opening],
+    [card(1, switching === create ? TEAM : TEAMCARD)],
+    [click(2, 1, switching === create ? "Create web" : "Add the setup log")],
+    [switching],
+    [ledger()],
+    [card(3, SOURCE)],
+    [click(4, 3, "Track it")],
+    [track()],
+    ...(reread ? [[describe(teamOf("web", ["acme/web"]))]] : []),
+    [card(5, GIT)],
+    [click(6, 5, "Do it")],
+    [terminal(SIGN_IN)],
+    [save(GOOD)],
+  );
+
+test("a repo tracked after the switch counts once describe_setup is re-read", () => {
+  const first = describe(teamOf("web"));
+  assert.deepEqual(checkConsent(firstRun(first, switchTo("web")), GUIDE).errors, []);
+  assert.deepEqual(
+    checkConsent(firstRun(call(`${P}describe_setup`, {}, setupOf()), create), GUIDE).errors,
+    [],
+  );
+  // Without the re-read the repo still isn't listed.
+  const stale = checkConsent(firstRun(first, switchTo("web"), { reread: false }), GUIDE);
+  assert.match(stale.errors[0], /typed the repo acme\/web/);
+});
+
+test("create_team in an org that lists no team yet still has its folder", () => {
+  const empty = call(`${P}describe_setup`, {}, setupOf());
+  const run = (path) =>
+    checkConsent(
+      session(
+        [empty],
+        [card(1, TEAM)],
+        [click(2, 1, "Create web")],
+        [create],
+        [call(`${P}create_content_file`, { path, content: "x" }, { ok: true })],
+      ),
+      GUIDE,
+    ).errors;
+  assert.deepEqual(run(LEDGER), []);
+  assert.match(
+    run("orgs/acme-context/sales/content/schema/setup-ledger.yaml")[0],
+    /outside the content folder of acme\/context\/web/,
+  );
+});
+
+test("a describe_setup that gives no orgs leaves the last listing, and with none a write fails closed", () => {
+  const docs = "orgs/codesense-docs/getting-started/content/tools/git-access.md";
+  const reread = (result) =>
+    checkConsent(
+      session(
+        [describe()],
+        [card(1, GIT)],
+        [click(2, 1, "Do it")],
+        [terminal(SIGN_IN)],
+        [call(`${P}describe_setup`, {}, result)],
+        [save(docs)],
+      ),
+      GUIDE,
+    ).errors;
+  for (const result of [{ error: "boom" }, { data: { orgs: [] } }, "not json"])
+    assert.match(reread(result)[0], /outside the content folder of acme\/context\/web/);
+  // With no listing at all a file write names no team.
+  const bare = checkConsent(
+    session([card(1, GIT)], [click(2, 1, "Do it")], [terminal(SIGN_IN)], [save(GOOD)]),
+    GUIDE,
+  ).errors;
+  assert.ok(bare.some((e) => /no describe_setup listed a team/.test(e)));
+});
+
+test("a read_terminal_tab handle may come from a clone_repo result, and a made-up one may not", () => {
+  const cloned = call(
+    `${P}clone_repo`,
+    {
+      org: "acme/context",
+      team: "acme",
+      repo: "acme/web",
+      path: "/Users/user/code/web",
+      workspaceId: "root:acme/context",
+    },
+    { data: { handle: "c7" } },
+  );
+  const read = (handle) => call(`${P}read_terminal_tab`, { handle }, { text: "x" });
+  const after = (handle) =>
+    checkConsent(
+      session([card(1, CLONE)], [click(2, 1, "Do it")], [cloned], [read(handle)]),
+      fromSteps,
+    ).errors;
+  assert.deepEqual(after("c7"), []);
+  assert.equal(after("c8").length, 1);
+});
+
+test("the first-run fixtures pass: a switch or a create_team, a repo tracked, a re-read, git-access", () => {
+  for (const name of ["first-run", "first-run-create"])
+    assert.deepEqual(checkConsent(load(name), GUIDE).errors, [], name);
 });

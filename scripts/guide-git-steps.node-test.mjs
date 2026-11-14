@@ -245,3 +245,10 @@ test("on_fail names inputs only, and a copy button needs copy text", () => {
   delete t.on_fail.copy;
   assert.ok(stepRuleErrors(t, "x").some((e) => e.includes("has no copy text")));
 });
+
+test("a class range is a-z, A-Z or 0-9 only, never one that spans punctuation", () => {
+  for (const pattern of ["^[0-z]+$", "^[9-A]+$", "^[Z-a]+$", "^[A-z]+$", "^[a-Z0]+$", "^[a-z-0]+$"])
+    assert.equal(unsafeInput(pattern), true, pattern);
+  for (const pattern of ["^[a-f0-9]{7,40}$", "^[A-Za-z]+$", "^[0-9]+$", "^[a-z0-9-]+$"])
+    assert.equal(unsafeInput(pattern), false, pattern);
+});

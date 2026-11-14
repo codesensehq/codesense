@@ -1,0 +1,212 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_20",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"data\":{\"orgs\":[{\"slug\":\"codesense/docs\",\"orgRoot\":\"orgs/codesense-docs\",\"teams\":[{\"name\":\"getting-started\",\"archived\":false,\"sourceRepos\":[]}]},{\"slug\":\"acme/context\",\"orgRoot\":\"orgs/acme-context\",\"teams\":[]}]}}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_17",
+            "is_error": false,
+            "input": "{\"to\":\"human\",\"kind\":\"needs-you\",\"text\":\"**Set up your team**\\n\\ncard: team · local-write · create-team=Create web | none=Not now\"}",
+            "result": "{\"status\":\"sent\",\"messageId\":507}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_21",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\":[{\"messageId\":510,\"from\":\"human\",\"text\":\"Create web\",\"inReplyTo\":507}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_16",
+            "is_error": false,
+            "input": "{\"org\":\"acme/context\",\"name\":\"web\",\"activate\":true}",
+            "result": "{\"status\":\"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_content_file",
+            "native_id": "toolu_22",
+            "is_error": false,
+            "input": "{\"path\":\"orgs/acme-context/web/content/schema/setup-ledger.yaml\",\"content\":\"x\"}",
+            "result": "{\"status\":\"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_18",
+            "is_error": false,
+            "input": "{\"to\":\"human\",\"kind\":\"needs-you\",\"text\":\"**Add these repos?**\\n\\ncard: source-repos · local-write · add-source-repo=Track it | none=Not now\"}",
+            "result": "{\"status\":\"sent\",\"messageId\":508}"
+          }
+        ]
+      },
+      {
+        "index": 7,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_23",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\":[{\"messageId\":511,\"from\":\"human\",\"text\":\"Track it\",\"inReplyTo\":508}]}"
+          }
+        ]
+      },
+      {
+        "index": 8,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__add_source_repo",
+            "native_id": "toolu_24",
+            "is_error": false,
+            "input": "{\"org\":\"acme/context\",\"team\":\"web\",\"url\":\"acme/web\"}",
+            "result": "{\"status\":\"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 9,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_25",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"data\":{\"orgs\":[{\"slug\":\"codesense/docs\",\"orgRoot\":\"orgs/codesense-docs\",\"teams\":[{\"name\":\"getting-started\",\"archived\":false,\"sourceRepos\":[]}]},{\"slug\":\"acme/context\",\"orgRoot\":\"orgs/acme-context\",\"teams\":[{\"name\":\"web\",\"archived\":false,\"sourceRepos\":[{\"slug\":\"acme/web\"}]}]}]}}"
+          }
+        ]
+      },
+      {
+        "index": 10,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_19",
+            "is_error": false,
+            "input": "{\"to\":\"human\",\"kind\":\"needs-you\",\"text\":\"**How should agents reach your git host?**\\n\\ncard: git-access · local-write · check-credentials=The git credentials I already have | none=Not now\"}",
+            "result": "{\"status\":\"sent\",\"messageId\":509}"
+          }
+        ]
+      },
+      {
+        "index": 11,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_26",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\":[{\"messageId\":512,\"from\":\"human\",\"text\":\"The git credentials I already have\",\"inReplyTo\":509}]}"
+          }
+        ]
+      },
+      {
+        "index": 12,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__open_terminal_tab",
+            "native_id": "toolu_27",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"data\":{\"handle\":\"h1\"}}"
+          }
+        ]
+      },
+      {
+        "index": 13,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__run_in_terminal_tab",
+            "native_id": "toolu_28",
+            "is_error": false,
+            "input": "{\"handle\":\"h1\",\"command\":\"/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/acme/web.git HEAD\"}",
+            "result": "{\"submitted\":true}"
+          }
+        ]
+      },
+      {
+        "index": 14,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_terminal_tab",
+            "native_id": "toolu_29",
+            "is_error": false,
+            "input": "{\"handle\":\"h1\"}",
+            "result": "{\"text\":\"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 15,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_content_file",
+            "native_id": "toolu_30",
+            "is_error": false,
+            "input": "{\"path\":\"orgs/acme-context/web/content/tools/git-access.md\",\"content\":\"# Git access\\n\\nAgents reach the git host with the git credentials already set up on this Mac (a credential helper; SSH keys are not checked). Git's own access was checked with one read of a tracked repo (`git ls-remote` over https, what the clone uses). This file holds no secret.\\n\",\"onCollision\":\"fail\"}",
+            "result": "{\"status\":\"ok\"}"
+          }
+        ]
+      }
+    ]
+  }
+}
