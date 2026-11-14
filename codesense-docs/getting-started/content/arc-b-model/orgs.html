@@ -205,6 +205,12 @@
             that <code>org</code> and <code>team</code> as the optional arguments of any
             team-scoped tool. <code>list_context_attachments</code> lists the connected
             context repos and where each one is.</p>
+          <p><code>probe_environment</code> is a read-only look at this Mac before setup:
+            which agent CLIs, <code>git</code> and <code>gh</code> are installed, whether
+            <code>gh</code> is signed in (its account and scopes), whether an absolute
+            folder (<code>gitRepoPath</code>) is a git repository, and whether named
+            environment variables (<code>envNames</code>) are set. A variable comes back as
+            set or not set, never with its value, and no token is ever returned.</p>
           <p style="color: var(--cs-muted-fg); margin-top: 8px">
             Live schema in
             <a href="../mcp-explorer.html#tool/list_orgs_teams">mcp-explorer</a>.

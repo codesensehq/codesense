@@ -32,6 +32,7 @@ use super::avatar_tools;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
+use super::probe_environment::ProbeEnvironmentParams;
 use super::routine_tools;
 use super::setup_tools;
 #[cfg(test)]
@@ -2414,6 +2415,11 @@ impl CodesenseHandler {
                         "available": status.git.available,
                         "path": status.git.path,
                         "version": status.git.version,
+                    },
+                    "gh": {
+                        "available": status.gh.available,
+                        "path": status.gh.path,
+                        "version": status.gh.version,
                     },
                     // Per-agent status keyed by agent basename (was a single
                     // `claude` field). Each entry is `{available, path, resolving}`;
@@ -6255,6 +6261,22 @@ impl CodesenseHandler {
         )
         .await?;
         ok_json(serde_json::json!(repos))
+    }
+
+    #[tool(
+        description = "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null; `gh_auth` is {signed_in, account, scopes} read from `gh auth status` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder) adds `git_repo` {path, exists, is_repo}; `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false} for this app's environment. An environment variable is only ever reported as set or not, never its value, and no token is returned."
+    )]
+    async fn probe_environment(
+        &self,
+        Parameters(params): Parameters<ProbeEnvironmentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = crate::mcp::probe_environment::probe_environment_request(
+            self.app_handle.clone(),
+            params,
+        )
+        .await
+        .map_err(|e| ErrorData::invalid_params(format!("probe_environment: {e}"), None))?;
+        ok_json(report)
     }
 
     #[tool(
@@ -17117,6 +17139,8 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only look at this Mac for the setup guide.
+        "probe_environment",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
         // command (the session-less picker). The 7th verb
         // (`gs_snapshot`) is the in-memory snapshot primitive.

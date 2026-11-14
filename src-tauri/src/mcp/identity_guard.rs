@@ -119,6 +119,7 @@ const NO_IDENTITY_TOOLS: &[&str] = &[
     "pane_write",
     "prepare_machine_terminal_server_replacement",
     "prepare_remote_workspace",
+    "probe_environment",
     "publish_dashboard",
     "query_context",
     "read_content_file",
