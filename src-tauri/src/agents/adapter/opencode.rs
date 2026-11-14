@@ -58,6 +58,7 @@ pub(super) fn desktop() -> DesktopCli {
         launch_notes: |_| Vec::new(),
         permission_display: None,
         enforces_bridge_tool_allowlist: true,
+        enforces_skill_allowlist: false,
         headless_settings,
         native_permission_rules: Some(crate::agents::adapter::native_permission_rules),
         status_line: None,

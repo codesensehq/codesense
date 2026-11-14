@@ -220,6 +220,7 @@ pub fn agent(id: &str, runtime: AgentCli) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skills: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,

@@ -1595,3 +1595,98 @@ fn a_launch_records_its_cli_version_and_warns_only_outside_the_range() {
     assert_eq!(unknown.cli_version, None);
     assert_eq!(codes(&unknown), 0);
 }
+
+fn claude_with_skills(id: &str, skills: &[&str]) -> Agent {
+    Agent {
+        skills: Some(skills.iter().map(|s| s.to_string()).collect()),
+        ..draft(id, AgentCli::Claude)
+    }
+}
+
+fn skill(cwd: &Path, name: &str) {
+    write(
+        cwd,
+        &format!(".claude/skills/{name}/SKILL.md"),
+        b"# Skill\n",
+    );
+}
+
+#[test]
+fn a_skills_list_turns_off_every_other_skill_the_launch_finds() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        claude_with_skills("lean", &["bmad-code-review"]),
+    );
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(
+        launch.launch.skills,
+        Some(vec!["bmad-code-review".to_string()])
+    );
+    // The startup places bmad-build, which the list leaves out.
+    assert_eq!(
+        launch.generated[0].content["skillOverrides"],
+        json!({ "bmad-build": "off" })
+    );
+    assert!(launch
+        .warnings
+        .iter()
+        .any(|w| w.code == LaunchWarningCode::SkillsNotInManifest
+            && w.message.contains("bmad-code-review")));
+
+    // A context worktree already holds every skill of its team.
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-code-review");
+    skill(&cwd, "bmad-party-mode");
+    write(&cwd, ".claude/skills/notes/README.md", b"not a skill\n");
+    let applied = apply_generated(&launch, "sess-lean", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert_eq!(
+        written["skillOverrides"],
+        json!({ "bmad-build": "off", "bmad-party-mode": "off" })
+    );
+}
+
+#[test]
+fn a_skills_list_survives_a_mode_override() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(home, &alice(), claude_with_skills("lean", &[]));
+    let headless = prep(
+        home,
+        &alice(),
+        &key,
+        PrepareOptions {
+            mode_override: Some(LaunchMode::Headless),
+            ..PrepareOptions::default()
+        },
+    );
+    let settings = &headless.generated[0].content;
+    assert_eq!(settings["permissions"]["defaultMode"], "dontAsk");
+    assert_eq!(settings["skillOverrides"], json!({ "bmad-build": "off" }));
+    assert_eq!(headless.manifest_hash, headless.manifest.compute_hash());
+}
+
+#[test]
+fn without_a_skills_list_a_launch_turns_no_skill_off() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(home, &alice(), draft("open", AgentCli::Claude));
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(launch.launch.skills, None);
+    assert!(launch.generated[0].content.get("skillOverrides").is_none());
+
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-party-mode");
+    let applied = apply_generated(&launch, "sess-open", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert!(written.get("skillOverrides").is_none());
+}

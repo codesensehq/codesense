@@ -128,6 +128,7 @@ pub(crate) fn draft(id: &str, runtime: AgentCli) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skills: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,
@@ -1214,6 +1215,69 @@ fn a_parent_without_sharing_warns_once_and_the_launch_goes_ahead() {
         )]
     );
     assert!(!root.join("parent/config/sharing.yml").exists());
+}
+
+#[test]
+fn a_skills_list_narrows_provides_and_turns_the_rest_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        Agent {
+            skills: Some(Vec::new()),
+            ..draft("lean", AgentCli::Claude)
+        },
+    );
+    let r = resolve(home, &alice(), &key);
+    assert_eq!(r.launch.skills, Some(Vec::new()));
+    assert_eq!(r.provides.skills, Vec::<String>::new());
+    assert_eq!(r.provides.commands, vec!["bmad-help"]);
+    assert_eq!(
+        r.manifest.generated[0].content["skillOverrides"],
+        json!({ "bmad-build": "off" })
+    );
+    assert_eq!(r.manifest.manifest_hash, r.manifest.compute_hash());
+
+    let listed = save(
+        home,
+        &alice(),
+        Agent {
+            skills: Some(vec!["bmad-build".into()]),
+            ..draft("listed", AgentCli::Claude)
+        },
+    );
+    let r = resolve(home, &alice(), &listed);
+    assert_eq!(r.provides.skills, vec!["bmad-build"]);
+    assert!(r.manifest.generated[0]
+        .content
+        .get("skillOverrides")
+        .is_none());
+}
+
+#[test]
+fn a_skills_list_on_a_runtime_that_cannot_enforce_it_warns_and_offers_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        Agent {
+            skills: Some(Vec::new()),
+            startup: vec![".agents/skills/review/".into()],
+            mcp: McpAccess::default(),
+            ..draft("reviewer", AgentCli::Codex)
+        },
+    );
+    let r = resolve(home, &alice(), &key);
+    assert_eq!(r.launch.skills, None);
+    assert_eq!(r.provides.skills, vec!["review"]);
+    assert!(r
+        .warnings
+        .iter()
+        .any(|w| w.code == LaunchWarningCode::SkillsNotEnforced));
 }
 
 #[path = "launch_cwd_tests.rs"]

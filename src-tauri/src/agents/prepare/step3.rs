@@ -48,6 +48,7 @@ fn carrier(entries: Vec<ContextEntry>) -> crate::agents::Agent {
         role: None,
         allow_wake: false,
         resume_after_restart: false,
+        skills: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,

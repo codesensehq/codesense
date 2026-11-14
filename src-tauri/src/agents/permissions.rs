@@ -176,6 +176,58 @@ fn claude_permissions(
     )
 }
 
+/// The Claude setting that sets each skill's listing by name; `"off"` turns one off.
+pub const CLAUDE_SKILL_OVERRIDES: &str = "skillOverrides";
+
+/// Turn off, in Claude launch settings `content`, every skill in `found` that `listed`
+/// does not name. A skill already overridden keeps its entry; nothing is turned on, so
+/// a listed skill keeps its own settings.
+pub fn turn_off_unlisted_skills<'a>(
+    content: &mut Value,
+    listed: &[String],
+    found: impl IntoIterator<Item = &'a str>,
+) {
+    let mut off = found
+        .into_iter()
+        .filter(|name| !listed.iter().any(|skill| skill == name))
+        .peekable();
+    if off.peek().is_none() {
+        return;
+    }
+    let Some(body) = content.as_object_mut() else {
+        return;
+    };
+    let overrides = body
+        .entry(CLAUDE_SKILL_OVERRIDES)
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(overrides) = overrides.as_object_mut() {
+        for name in off {
+            overrides
+                .entry(name.to_string())
+                .or_insert_with(|| json!("off"));
+        }
+    }
+}
+
+/// Turn off, in `manifest`'s launch settings, every skill in `found` (the skills its
+/// files provide) that `listed` does not name, and rehash. The launch adds the skills
+/// it finds in its workspace ([`super::launch::apply_generated`]).
+pub fn turn_off_unlisted_manifest_skills(
+    manifest: &mut super::manifest::StartupManifest,
+    listed: &[String],
+    found: &[String],
+) {
+    for entry in manifest
+        .generated
+        .iter_mut()
+        .filter(|entry| entry.target == GeneratedTarget::LaunchSettings)
+    {
+        turn_off_unlisted_skills(&mut entry.content, listed, found.iter().map(String::as_str));
+        entry.hash = json_hash(&entry.content);
+    }
+    manifest.manifest_hash = manifest.compute_hash();
+}
+
 /// Whether a Claude `deny` or `ask` rule would block a required tool: the
 /// tool itself, the bridge server as a whole (`mcp__codesense`,
 /// `mcp__codesense__*`), or every tool (`*`). Only ever used to warn.
@@ -468,6 +520,7 @@ mod tests {
             avatar: None,
             allow_wake: false,
             resume_after_restart: false,
+            skills: None,
             budget_usd: None,
             revision: 1,
             archived_at: None,

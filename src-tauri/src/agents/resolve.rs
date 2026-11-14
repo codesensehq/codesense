@@ -320,7 +320,7 @@ fn compose_with_reader(
             .collect()
     })
     .unwrap_or_default();
-    let manifest = if names_root_doc(agent) {
+    let mut manifest = if names_root_doc(agent) {
         let manifest = resolve_manifest_with(
             reader,
             home,
@@ -343,6 +343,10 @@ fn compose_with_reader(
         )
     };
     let provides = provides::derive(agent.runtime, &manifest);
+    if let Some(listed) = &launch.skills {
+        permissions::turn_off_unlisted_manifest_skills(&mut manifest, listed, &provides.skills);
+    }
+    let provides = provides.allowing(launch.skills.as_deref());
 
     let launch_admission = adapter::launch_admission(
         agent.runtime,
@@ -372,6 +376,9 @@ fn compose_with_reader(
     resolved
         .warnings
         .extend(launch_check::usage_not_recorded_warning(agent));
+    resolved
+        .warnings
+        .extend(launch_check::skills_not_enforced_warning(agent));
     resolved.warnings.extend(silent_empty_mcp_warning(
         agent,
         &resolved.offered_mcp_servers,
@@ -490,6 +497,10 @@ fn launch_profile(agent: &Agent, key: &AgentKey) -> ResolvedLaunchProfile {
     );
     ResolvedLaunchProfile {
         env: agent.env.vars().clone(),
+        skills: desktop
+            .enforces_skill_allowlist
+            .then(|| agent.skills.clone())
+            .flatten(),
         bridge_tools: projects_bridge_tool_allowlist
             .then(|| agent.mcp.bridge_tools.clone())
             .flatten(),

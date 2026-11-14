@@ -671,6 +671,7 @@ fn update_params(key: String, base_revision: u32, draft: AgentDraft) -> AgentUpd
         launch: draft.launch,
         mcp_servers: draft.mcp_servers,
         mcp_bridge_tools: draft.mcp_bridge_tools,
+        skills: draft.skills,
         startup: draft.startup,
         context: draft.context.map(Some),
         repo_overrides: draft.repo_overrides,

@@ -38,6 +38,14 @@ impl AgentProvides {
     pub fn has(&self, name: &str) -> bool {
         self.commands.iter().any(|c| c == name) || self.skills.iter().any(|s| s == name)
     }
+    /// These names with the skills narrowed to `allowlist`, the agent's `skills` list
+    /// where its runtime enforces one; `None` keeps every skill.
+    pub fn allowing(mut self, allowlist: Option<&[String]>) -> Self {
+        if let Some(listed) = allowlist {
+            self.skills.retain(|skill| listed.contains(skill));
+        }
+        self
+    }
 }
 
 /// The names `manifest`'s files provide to `runtime`.

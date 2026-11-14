@@ -148,6 +148,7 @@ pub(crate) fn definition(runtime: AgentCli) -> Agent {
         role: None,
         allow_wake: false,
         resume_after_restart: false,
+        skills: None,
         budget_usd: None,
         revision: revision(),
         archived_at: None,

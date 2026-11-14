@@ -69,6 +69,7 @@ pub(super) fn desktop() -> DesktopCli {
         launch_notes: |_| Vec::new(),
         permission_display: None,
         enforces_bridge_tool_allowlist: true,
+        enforces_skill_allowlist: false,
         // Its launch takes no settings file: a headless launch's approval policy rides its
         // permission keys.
         headless_settings: || serde_json::json!({}),
