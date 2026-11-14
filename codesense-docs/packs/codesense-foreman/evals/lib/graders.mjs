@@ -113,8 +113,9 @@ const ADD = /^worktree add -b (foreman\/\S+) \.\.\/(foreman-\S+) (\S+)$/;
 // The branches this run made (the planted one from a "previous run" is not).
 const newBranches = (s, where) => s.foremanBranches.filter((b) => b.where === where && b.name !== PRIOR_BRANCH);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-// The branch a gh argv's --head names, without an `owner:` prefix.
-const headOf = (argv) => flagValue(argv, "-H", "--head")?.replace(/^[^:/]+:/, "");
+// A PR head without an `owner:` prefix, and the branch a gh argv's --head names.
+const bareHead = (head) => head?.replace(/^[^:/]+:/, "");
+const headOf = (argv) => bareHead(flagValue(argv, "-H", "--head"));
 // A path as the file system sees it (macOS temp dirs sit behind a /private symlink), through its
 // nearest existing parent, since a removed worktree's files are gone by the time it is graded.
 const real = (p) => {
@@ -150,7 +151,9 @@ function newStory(s, e) {
   const out = forbidden(s, e.forbidden_tools);
   const git = gitLines(s);
   const acting = (c) => ["git", "script", "write_file"].includes(c.tool) && !(c.tool === "git" && HOME_ONLY.test(c.args.argv.join(" ")));
-  const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls];
+  // A pull request through the GitHub MCP tool counts like one through gh.
+  const mcpPrs = foremanCalls(s, GITHUB_PR);
+  const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls, ...mcpPrs];
   if (!repliesIn(s, 1).length) out.push("no reply to the request");
   if (s.variant === "docs") {
     if (acts.length || newBranches(s, "origin").length || newBranches(s, "home").length)
@@ -222,7 +225,7 @@ function newStory(s, e) {
     // The recorded method opens each PR: gh's, or the GitHub MCP tool's. None recorded, or a
     // method that can't open a PR: the branch is pushed and handed over, with no gh call.
     const viaGh = s.ghCalls.filter((g) => g.create).map((g) => ({ seq: g.seq, head: headOf(g.argv) }));
-    const viaMcp = calls.filter((c) => c.tool === GITHUB_PR).map((c) => ({ seq: c.seq, head: c.args.head }));
+    const viaMcp = mcpPrs.map((c) => ({ seq: c.seq, head: bareHead(c.args.head) }));
     if (s.gitAccess !== "gh" && s.ghCalls.length) out.push(`${s.ghCalls.length} gh calls with no gh git-access method`);
     const wanted = (method) => (s.gitAccess === method ? creates : 0);
     if (viaGh.length !== wanted("gh")) out.push(`${viaGh.length} pr create calls, expected ${wanted("gh")}`);
@@ -238,7 +241,7 @@ function newStory(s, e) {
           out.push(`opened a pull request before reading the recorded git-access method (${pr.head})`);
       });
   } else {
-    if (s.ghCalls.length) out.push("opened a pull request with no remote");
+    if (s.ghCalls.length || mcpPrs.length) out.push("opened a pull request with no remote");
     if (git.some((g) => /^(?:-C \S+ )?push\b/.test(g.line))) out.push("pushed with no remote");
   }
   if (s.variant === "scripted") {

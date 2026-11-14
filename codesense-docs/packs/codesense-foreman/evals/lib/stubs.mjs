@@ -94,7 +94,7 @@ const good = {
         method
           ? `Opened a pull request for "${title}" from ${branch}.`
           : hasRemote
-            ? `Pushed "${title}" on ${branch}. No git-access method here can open a pull request, so the branch is ready for you.`
+            ? `Pushed "${title}" on ${branch}. I didn't open a pull request: no git-access method here can, so the branch is ready for you.`
             : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
       );
     }

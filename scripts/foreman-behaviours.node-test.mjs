@@ -129,6 +129,9 @@ function makeStory(
     validate = true,
     keep = false,
     readRecord = true,
+    readAfter = false,
+    pr = "gh",
+    push = true,
   } = {},
 ) {
   const wt = WT_OF(branch);
@@ -147,9 +150,20 @@ function makeStory(
   fx.write(path.join(fx.root, `${wt.slice(3)}.msg`), "Add the story\n");
   fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
   if (base === "origin/main") {
-    fx.git(["-C", wt, "push", "-u", "origin", branch]);
-    if (readRecord) fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
-    fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
+    if (push) fx.git(["-C", wt, "push", "-u", "origin", branch]);
+    const read = () => fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    if (readRecord && !readAfter) read();
+    if (pr === "gh") fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
+    if (pr === "mcp")
+      fx.tool(F, GITHUB_PR, {
+        owner: "acme",
+        repo: "demo",
+        head: branch,
+        base: "main",
+        title: "x",
+        body: "y",
+      });
+    if (readRecord && readAfter) read();
   }
   if (!keep) fx.git(["worktree", "remove", wt]);
   fx.say("Done.");
@@ -293,6 +307,13 @@ test("new-story (no remote): red when it pushes or opens a pull request", async 
     ),
     /pushed with no remote/,
   );
+  redFor(
+    await play(
+      goodThen((fx) => fx.tool(F, GITHUB_PR, { head: "foreman/dark-mode-ab12", base: "main" })),
+      "new-story-no-remote",
+    ),
+    /opened a pull request with no remote/,
+  );
 });
 
 test("new-story (docs team): red when it creates a worktree, writes a file or launches setup unasked", async () => {
@@ -308,6 +329,13 @@ test("new-story (docs team): red when it creates a worktree, writes a file or la
   redFor(
     await play(
       goodThen((fx) => fx.write(path.join(fx.root, "x.md"), "x")),
+      "new-story-docs",
+    ),
+    /in the docs team/,
+  );
+  redFor(
+    await play(
+      goodThen((fx) => fx.tool(F, GITHUB_PR, { head: "foreman/x", base: "main" })),
       "new-story-docs",
     ),
     /in the docs team/,
@@ -804,47 +832,16 @@ test("new-story: a pull request head given as owner:branch or -H<branch> is the 
 
 // ---- git access ---------------------------------------------------------------------------
 
-// The story flow of the generic case, ending where a driver chooses: read the record (before the
-// PR, after it, or not at all); open the PR with gh, with the GitHub MCP tool, or not.
+// The generic case's one story, ending where a driver chooses: read the record (before the PR,
+// after it, or not at all); open the PR with gh, with the GitHub MCP tool, or not.
 const gitAccessStory =
-  ({ read = true, readAfter = false, pr = false, push = true } = {}) =>
+  ({ read = true, pr = false, ...rest } = {}) =>
   async ({ caseDef, fx }) => {
     const [request, create] = caseDef.input.turns;
-    const branch = "foreman/dark-mode-ab12";
-    const wt = WT_OF(branch);
-    const dir = path.join(fx.root, wt.slice(3));
     fx.human(request);
     fx.say("Create · Change · Not now?");
     fx.human(create);
-    fx.git(["remote"]);
-    fx.git(["worktree", "list"]);
-    fx.git(["ls-remote", "--heads", "origin"]);
-    fx.git(["worktree", "add", "-b", branch, wt, "origin/main"]);
-    fx.tool(F, "get_story_format");
-    fx.write(
-      path.join(dir, "stories", "dark-mode-ab12.md"),
-      "---\ntype: story\nstatus: planning\nsprint: backlog\n---\n# x\n",
-    );
-    fx.tool(F, "validate_story", { path: `${wt}/stories/dark-mode-ab12.md` });
-    fx.git(["-C", wt, "add", "stories"]);
-    fx.write(path.join(fx.root, `${wt.slice(3)}.msg`), "Add the story\n");
-    fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
-    if (push) fx.git(["-C", wt, "push", "-u", "origin", branch]);
-    const readRecord = () => fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
-    if (read && !readAfter) readRecord();
-    if (pr === "gh") fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
-    if (pr === "mcp")
-      fx.tool(F, GITHUB_PR, {
-        owner: "acme",
-        repo: "demo",
-        head: branch,
-        base: "main",
-        title: "x",
-        body: "y",
-      });
-    if (readAfter) readRecord();
-    fx.git(["worktree", "remove", wt]);
-    fx.say("Done.");
+    makeStory(fx, { readRecord: read, pr, ...rest });
   };
 
 test("git access: a recorded gh method opens the pull request with gh", async () => {
@@ -875,6 +872,12 @@ test("git access: each story's pull request reads the record first, not just the
 test("git access: a recorded GitHub MCP method opens the pull request with its tool, never gh", async () => {
   const id = "new-story-git-access-github-mcp";
   assert.deepEqual((await play(gitAccessStory({ pr: "mcp" }), id)).failures, []);
+  // An `owner:branch` head names the same branch, as with gh.
+  const owned = async (args) => {
+    await gitAccessStory()(args);
+    args.fx.tool(F, GITHUB_PR, { head: "acme:foreman/dark-mode-ab12", base: "main", title: "x" });
+  };
+  assert.deepEqual((await play(owned, id)).failures, []);
   redFor(await play(gitAccessStory({ pr: false }), id), /0 GitHub MCP pull requests, expected 1/);
   redFor(await play(gitAccessStory({ pr: "gh" }), id), /1 gh calls with no gh git-access method/);
   redFor(
@@ -899,7 +902,7 @@ test("git access: with none recorded, or plain git credentials, push and hand ov
   }
 });
 
-test("git access: the fixture serves the record for gh and credentials, and nothing for none", async () => {
+test("git access: the fixture serves the record for each method, and nothing for none", async () => {
   for (const [method, text] of [
     ["gh", /Method: gh/],
     ["github-mcp", /Method: GitHub MCP/],

@@ -413,8 +413,8 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "`validate_story`",
     "`sprint: backlog`",
     "`planning`",
-    "Commit and push what the skill didn't, open the PR, remove the worktree",
-    "With no remote, no push or PR",
+    "Commit and push what the skill didn't, open the PR as above (no remote: neither), remove the worktree",
+    "With no remote, give the one command to merge",
     "one command to merge",
     "never touch the canonical clone",
     "Home gets no commit",
@@ -424,20 +424,20 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
 });
 
 test("every PR, story or not, goes through the recorded git-access method and never needs gh", () => {
-  // The rule sits on the PR form itself, so it covers a PR outside the story flow too (Trevor 42102).
+  // The rule sits on the PR form itself, so it covers a PR outside the story flow too (setup never requires gh).
   const work = spec.split("## Where you work")[1].split("\n## ")[0];
   const form = work.split("\n").find((line) => line.startsWith("- a PR"));
   assert.ok(form, "the allowed forms list a PR form");
   for (const phrase of [
     "after `read_content_file` `tools/git-access.md`",
     '`gh`: `gh pr create --head <branch> --title "<title>" --body "<body>"`',
-    "GitHub MCP: its PR tool",
-    "any other or none: no `gh`; name the pushed branch",
+    "else never `gh`: GitHub MCP: its PR tool",
+    "any other or none: no PR, name the pushed branch",
   ]) {
     assert.ok(form.includes(phrase), `the PR form says: ${phrase}`);
   }
   assert.equal(
-    spec.match(/gh pr create/g).length,
+    (spec.match(/gh pr create/g) ?? []).length,
     1,
     "gh pr create appears only behind the record",
   );

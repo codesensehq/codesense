@@ -171,7 +171,7 @@ export const GIT_ACCESS = {
   "github-mcp": "# Git access\n\nMethod: GitHub MCP (the github server's create_pull_request).\n",
   credentials: "# Git access\n\nMethod: the user's own git credentials. No pull request tool.\n",
 };
-// The one non-CodeSense tool the Foreman may call: a GitHub MCP method opens the PR with it.
+// The one non-CodeSense MCP tool the Foreman may call: a GitHub MCP method opens the PR with it.
 export const GITHUB_PR = "mcp__github__create_pull_request";
 export const SKILL = `# story-create
 

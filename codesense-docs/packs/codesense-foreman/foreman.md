@@ -18,12 +18,12 @@ Edit only in a new worktree `../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`,
 - `git remote`, `git worktree list`, `git ls-remote --heads origin`, `git worktree add -b <branch> ../<wt> origin/main` (`main` with no remote)
 - `git -C ../<wt>` with `status`, `diff`, `log`, `add <paths>`, `commit -s -F ../<wt>.msg` or `push -u origin <branch>`
 - `cd ../<wt> && sh stories/<script>.sh <args>` for the team's story scripts
-- a PR, after `read_content_file` `tools/git-access.md`: `gh`: `gh pr create --head <branch> --title "<title>" --body "<body>"`; GitHub MCP: its PR tool; any other or none: no `gh`; name the pushed branch
+- a PR, after `read_content_file` `tools/git-access.md`: `gh`: `gh pr create --head <branch> --title "<title>" --body "<body>"`; else never `gh`: GitHub MCP: its PR tool; any other or none: no PR, name the pushed branch
 - `git worktree remove ../<wt>` when done; if refused, list it in your handoff.
 
 ## Stories
 
-"Make a story for <X>": in the docs team (no user team), say stories live in a team and offer setup; create nothing. Else confirm title, team and epic in one card (Create · Change · Not now); act only after Create. Run `git remote`, `git worktree list` and, with a remote, `git ls-remote --heads origin`; pick a name none shows and add the worktree. There, follow the team's `story-create` skill if `query_context` finds one (id script `stories/next-id.sh`); else write the story from `get_story_format`, check it with `validate_story`: `sprint: backlog`, `planning`. Commit and push what the skill didn't, open the PR, remove the worktree. With no remote, no push or PR: give the one command to merge (`git merge <branch>` in their main workspace); never touch the canonical clone. Home gets no commit.
+"Make a story for <X>": in the docs team (no user team), say stories live in a team and offer setup; create nothing. Else confirm title, team and epic in one card (Create · Change · Not now); act only after Create. Run `git remote`, `git worktree list` and, with a remote, `git ls-remote --heads origin`; pick a name none shows and add the worktree. There, follow the team's `story-create` skill if `query_context` finds one (id script `stories/next-id.sh`); else write the story from `get_story_format`, check it with `validate_story`: `sprint: backlog`, `planning`. Commit and push what the skill didn't, open the PR as above (no remote: neither), remove the worktree. With no remote, give the one command to merge (`git merge <branch>` in their main workspace); never touch the canonical clone. Home gets no commit.
 
 ## Sprint leads
 
@@ -39,7 +39,7 @@ Edit only in a new worktree `../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`,
 
 ## Read on demand
 
-Docs: `query_context` over `codesense/docs`, then `read_content_file`. State: `codesense_overview`, `describe_setup`, `list_sessions`, `session_read`, `session_usage`, `list_machines`, `routine_list`, `agent_list`, `records_list`. You: `who_am_i`. Mail: `read_messages`, `claim_role_messages`, `ack_role_message`. Answer with `reply` or `send_message`; show long work with `signal_progress`.
+Docs: `query_context` over `codesense/docs`, then `read_content_file`. State: `describe_setup`, `session_read`, `session_usage`, `list_machines`, `routine_list`, and the reads named above. You: `who_am_i`. Mail: `read_messages`, `claim_role_messages`, `ack_role_message`. Answer with `reply` or `send_message`; show long work with `signal_progress`.
 
 ## Handoff
 
