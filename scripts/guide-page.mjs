@@ -51,7 +51,7 @@ export function pageText(template, source) {
 const attrValues = (html, tag, attr) =>
   [
     ...html.matchAll(
-      new RegExp(`<${tag}\\b[^>]*\\s${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "gi"),
+      new RegExp(`<${tag}\\b[^>]*[\\s/]${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "gi"),
     ),
   ].map((match) => match[1] ?? match[2] ?? match[3]);
 
@@ -79,7 +79,7 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
   for (const src of attrValues(html, "script", "src"))
     if (!src.startsWith("/kit/v1/"))
       out.push(`${TEMPLATE}: loads ${src}; a script the page's hash does not cover`);
-  if ((html.match(/<script\b(?![^>]*\ssrc\s*=)/gi) ?? []).length !== 1)
+  if ((html.match(/<script\b(?![^>]*[\s/]src\s*=)/gi) ?? []).length !== 1)
     out.push(`${TEMPLATE}: must hold exactly one inline script`);
   if (attrValues(html, "link", "href").some((href) => !href.startsWith("/kit/v1/")))
     out.push(`${TEMPLATE}: links a style sheet other than the kit's`);
