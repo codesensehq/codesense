@@ -1235,22 +1235,12 @@ fn inbox_reserve_with_chat_at(
 }
 
 /// The notice reserved under `token` for `session` was handed to its agent's hook: what
-/// it told about is marked announced, never moving the mark back. The token names the
-/// reservation whatever handle the session is bound to by now. Idempotent: a token
-/// confirmed already, replaced by a newer offer (whose notice counts its mail too), or of
-/// another session, confirms nothing. Returns whether a reservation was confirmed.
-pub fn inbox_confirm_announcement(
-    store: &WeftStore,
-    session: &str,
-    token: &str,
-) -> WvWriteResult<bool> {
-    Ok(Option::is_some(&inbox_confirm_told(store, session, token)?))
-}
-
-/// Confirms the notice as [`inbox_confirm_announcement`] does and, in the same
-/// transaction, marks each unread message it covered told (`told_at`) the first time only.
-/// `None`: nothing was confirmed; else the ids told now, ascending (empty when every
-/// covered message was told already).
+/// it told about is marked announced, never moving the mark back, and in the same
+/// transaction each unread message it covered is marked told (`told_at`), the first time
+/// only. The token names the reservation whatever handle the session is bound to by now.
+/// Idempotent: a token confirmed already, replaced by a newer offer (whose notice counts its
+/// mail too), or of another session, confirms nothing. `None`: nothing was confirmed; else
+/// the ids told now, ascending (empty when every covered message was told already).
 pub fn inbox_confirm_told(
     store: &WeftStore,
     session: &str,
@@ -1322,7 +1312,7 @@ fn set_reserved_by(store: &WeftStore, token: &str, by: Option<&str>) -> WvWriteR
 }
 
 /// When a recipient's agent was last told about its mail (a confirmed notice, see
-/// [`inbox_confirm_announcement`]): through which message, when (epoch ms), and the
+/// [`inbox_confirm_told`]): through which message, when (epoch ms), and the
 /// session it was told in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Announced {
@@ -1548,7 +1538,7 @@ mod tests {
     fn tell(store: &WeftStore, recipient: &str, session: &str, now: i64) -> Option<u32> {
         match inbox_reserve_announcement_at(store, recipient, session, now, RUN, false).unwrap() {
             Reservation::Offer { token, count } => {
-                assert!(inbox_confirm_announcement(store, session, &token).unwrap());
+                assert_ne!(inbox_confirm_told(store, session, &token).unwrap(), None);
                 Some(count)
             }
             Reservation::Nothing => None,
@@ -1634,7 +1624,7 @@ mod tests {
             );
         }
         // Settled: told.
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", later), None);
         // Newer mail is a new notice, under a new token, covering all of it.
         mail(&store, "H2");
@@ -1698,7 +1688,7 @@ mod tests {
             inbox_unread_for(&store, &wanted).unwrap()["H2"].announced,
             None
         );
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert!(inbox_unread_for(&store, &wanted).unwrap()["H2"]
             .announced
             .is_some());
@@ -1725,7 +1715,7 @@ mod tests {
             inbox_reserve_announcement_at(&store, "H2", "S2", later + 1, RUN, false).unwrap(),
             Reservation::PendingUntil(later + RESERVE_TTL_MS)
         );
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", later + 1), None);
     }
 
@@ -1739,8 +1729,8 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(count, 2);
         // The replaced offer's confirm is stale: it confirms nothing.
-        assert!(!inbox_confirm_announcement(&store, "S2", &first).unwrap());
-        assert!(inbox_confirm_announcement(&store, "S2", &second).unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S2", &first).unwrap(), None);
+        assert_ne!(inbox_confirm_told(&store, "S2", &second).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", T0 + 2), None);
     }
 
@@ -1750,12 +1740,12 @@ mod tests {
         let wanted = ["H2".to_string()];
         let first = mail(&store, "H2");
         let (token, _) = offer(&store, "H2", "S2", T0);
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
-        assert!(!inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
+        assert_eq!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         let second = mail(&store, "H2");
         assert_eq!(tell(&store, "H2", "S2", T0), Some(2));
         // The first token, replayed, leaves the newer mark where it is.
-        assert!(!inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         let told = inbox_unread_for(&store, &wanted).unwrap()["H2"]
             .announced
             .clone()
@@ -1764,8 +1754,8 @@ mod tests {
         // Another session's ack confirms nothing; nor does a token never issued.
         mail(&store, "H2");
         let (third, _) = offer(&store, "H2", "S2", T0);
-        assert!(!inbox_confirm_announcement(&store, "S9", &third).unwrap());
-        assert!(!inbox_confirm_announcement(&store, "S2", "nope").unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S9", &third).unwrap(), None);
+        assert_eq!(inbox_confirm_told(&store, "S2", "nope").unwrap(), None);
     }
 
     #[test]
