@@ -278,6 +278,20 @@ test("reopening an open tab (#resume) after the guide ended launches it with res
   expect((await calls("openWorkspace"))[1].args.initialPrompt).toBe("/codesense-setup resume");
 });
 
+test("a second reopen at the same #resume fragment launches via the host's navigate message", async ({
+  page,
+}) => {
+  const { live, calls, sessions } = await open(page, { hash: "#resume" });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
+  await live([lead(2, "Hi. Earlier conversation.")]);
+  await sessions([GUIDE("exited")]);
+  await page.evaluate(() => {
+    window.postMessage({ type: "codesense:navigate", hash: "#resume", nonce: 1, token: "t" }, "*");
+  });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(2);
+  expect((await calls("openWorkspace"))[1].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
 test("a consent card shows its class and buttons, and a click replies to that card", async ({
   page,
 }) => {

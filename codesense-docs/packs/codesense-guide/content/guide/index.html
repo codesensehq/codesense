@@ -865,12 +865,22 @@ html, body { margin: 0; height: 100%; }
     S.chat = null;
     S.reads = null;
   }
-  // Reopening an open tab only changes its fragment. With no agent live, that launches one that resumes.
-  window.addEventListener('hashchange', () => {
+  // Reopening an open tab with no agent live launches one that resumes. The host reports a reopen two
+  // ways: a fragment change, and a `codesense:navigate` message that also arrives when the fragment is
+  // already `#resume` (no `hashchange` then). A live or starting agent makes both a no-op.
+  function resumeIfIdle() {
     const chat = S.chat;
-    if (window.location.hash !== '#resume' || !chat) return;
+    if (!chat) return;
     const controls = chat.controls();
     if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
+  }
+  window.addEventListener('hashchange', () => {
+    if (window.location.hash === '#resume') resumeIfIdle();
+  });
+  window.addEventListener('message', (event) => {
+    const data = event && event.data;
+    if (event.source !== window.parent || !data || data.type !== 'codesense:navigate' || data.hash !== '#resume') return;
+    resumeIfIdle();
   });
   async function startChat() {
     const chat = mountChat();
