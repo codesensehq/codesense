@@ -2,9 +2,10 @@ step_format: 1
 id: git-access
 title: Let agents reach your git host
 summary: >-
-  Agents need to read your repos. You say how they reach your git host, I check it with one
-  read of a repo your team tracks, and only then I save your answer to tools/git-access.md in
-  your team so every agent knows. Nothing is installed and nothing changes on the host.
+  Agents need to read your repos. You say how they reach your git host, I read one repo your
+  team tracks once, and only if that works I save your answer to tools/git-access.md in your
+  team so every agent knows. The read checks git's own access (what the clone uses), not the
+  MCP server, the token tool or SSH keys. Nothing is installed and nothing changes on the host.
 needs: [source-repos]
 probe:
   - id: repos
@@ -26,10 +27,12 @@ probe:
 ask:
   text: >-
     **How should agents reach your git host?** You pick; I never ask which tool to install.
-    To check, I read one repo your team tracks once, with `git ls-remote`, and only if that
-    works I save your answer to `tools/git-access.md` in your team, so every agent knows how to
-    reach it. If it's something else, tell me and I'll pick the closest. Nothing is committed
-    or pushed: the new file waits in your context repo's folder for you to review and commit.
+    To check, I read {{probe.repos.repo}}, a repo your team tracks: I read {{probe.repos.repo}}
+    once, with `git ls-remote` over https, and only if that works I save your answer to
+    `tools/git-access.md` in your team, so every agent knows how to reach it. That read checks
+    git's own access (what the clone uses), not the MCP server, the token tool or SSH keys. If
+    it's something else, tell me and I'll pick the closest. Nothing is committed or pushed: the
+    new file waits in your context repo's folder for you to review and commit.
   options:
     - { label: The git credentials I already have, act: check-credentials }
     - { label: The gh CLI, act: check-gh-cli }
@@ -74,7 +77,7 @@ act:
       tool: create_content_file
       args:
         path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
-        content: "# Git access\n\nAgents reach the git host with the git credentials already set up on this Mac (a credential helper or SSH keys). It was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        content: "# Git access\n\nAgents reach the git host with the git credentials already set up on this Mac (a credential helper; SSH keys are not checked). Git's own access was checked with one read of a tracked repo (`git ls-remote` over https, what the clone uses). This file holds no secret.\n"
         onCollision: fail
   - id: check-gh-cli
     consent: local-write
@@ -95,7 +98,7 @@ act:
       tool: create_content_file
       args:
         path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
-        content: "# Git access\n\nAgents reach the git host with the GitHub CLI (gh), which git uses for its credentials. It was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        content: "# Git access\n\nAgents reach the git host with the GitHub CLI (gh). Git's own access was checked with one read of a tracked repo (`git ls-remote` over https, what the clone uses), which counts gh only once `gh auth setup-git` has run. gh itself was not checked. This file holds no secret.\n"
         onCollision: fail
   - id: check-mcp-server
     consent: local-write
@@ -116,7 +119,7 @@ act:
       tool: create_content_file
       args:
         path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
-        content: "# Git access\n\nAgents reach the git host through a git or GitHub MCP server. Git itself was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        content: "# Git access\n\nAgents reach the git host through a git or GitHub MCP server. Git's own access was checked with one read of a tracked repo (`git ls-remote` over https, what the clone uses), not the MCP server. This file holds no secret.\n"
         onCollision: fail
   - id: check-token-tool
     consent: local-write
@@ -137,7 +140,7 @@ act:
       tool: create_content_file
       args:
         path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
-        content: "# Git access\n\nAgents reach the git host with a token-based tool that is set up outside CodeSense. Git itself was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret and names no token.\n"
+        content: "# Git access\n\nAgents reach the git host with a token-based tool that is set up outside CodeSense. Git's own access was checked with one read of a tracked repo (`git ls-remote` over https, what the clone uses), not the token tool. This file holds no secret and names no token.\n"
         onCollision: fail
 verify: { probe: note, expect: done }
 record:

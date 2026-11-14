@@ -70,7 +70,7 @@ files:
     sha256: 02d11a3b909b6eec6085124a0a4fdfe867a43a874f106f8d116388144cd16b53
     exec: false
   - path: setup/steps/git-access.yml
-    sha256: 93a7442c58e23a602a933bba9dbfbffd227afbf84ec9af7dd6f491fa098409a9
+    sha256: 3a977ffe75939e9e55343f550eb929e3e5d36ad282b29a4f5723624986db1eff
     exec: false
   - path: setup/steps/index.yml
     sha256: 817ff2768a587a98169758ee90fc3876b2ffbd7442e6bc2f77954ff3b2671ee6
