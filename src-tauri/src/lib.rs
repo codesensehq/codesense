@@ -818,7 +818,7 @@ pub fn run() {
             app.manage(commands::deps::DependencyManager::resolve());
             commands::deps::start_dep_watching(app.handle().clone());
             // SW-OB-12: if the cheap startup fast-path missed the bundled agent,
-            // resolve it via a login-shell PATH probe on a background thread so
+            // resolve it (and gh) via a login-shell PATH probe on a background thread so
             // `.setup()` (and first paint) never blocks. Emits `dep-status-changed`
             // on completion; the frontend gate stays on the splash while resolving.
             commands::deps::spawn_agent_background_resolve(app.handle().clone());

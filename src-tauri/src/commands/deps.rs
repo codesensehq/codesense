@@ -127,9 +127,8 @@ struct AgentEntry {
 struct DependencyManagerInner {
     git_path: Option<PathBuf>,
     git_version: Option<String>,
-    /// The user's `gh`, detected like git. Optional: only the setup guide reads it.
-    gh_path: Option<PathBuf>,
-    gh_version: Option<String>,
+    /// The user's `gh`. Optional: only the setup guide reads it.
+    gh: GhEntry,
     /// SW-AN-44: resolved agent binaries keyed by descriptor basename (was a single
     /// `claude_path` + `claude_resolving`). Startup seeds+probes the bundled
     /// (default) basename exactly as before; additional basenames are filled by
@@ -163,14 +162,26 @@ pub struct GitStatus {
     pub version: Option<String>,
 }
 
+/// The GitHub CLI's detected state. Startup only stats the known locations (no spawn, no
+/// login shell); the startup background thread resolves it against the shared login-shell
+/// `$PATH`, fills the version and clears `resolving`.
+#[derive(Debug, Clone, Default)]
+struct GhEntry {
+    path: Option<PathBuf>,
+    version: Option<String>,
+    resolving: bool,
+}
+
 /// The GitHub CLI, reported like git. Whether it is signed in is not part of the status;
-/// the read-only `probe_environment` tool answers that.
+/// the read-only `probe_environment` tool answers that. `resolving` is true until the
+/// startup background resolution has run.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GhStatus {
     pub available: bool,
     pub path: Option<String>,
     pub version: Option<String>,
+    pub resolving: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,7 +237,13 @@ impl DependencyManager {
         }
 
         let (git_path, git_version) = Self::resolve_git();
-        let (gh_path, gh_version) = Self::resolve_gh();
+        // gh starts resolving: a stat of its known locations only. The login-shell `$PATH`
+        // and `gh --version` run on the background thread with the agents.
+        let gh = GhEntry {
+            path: stat_known_gh(&known_gh_locations()),
+            version: None,
+            resolving: true,
+        };
         // SW-OB-12: the bundled agent is resolved ENTIRELY on a background thread
         // (see `spawn_agent_background_resolve`), so `.setup()` / first paint never
         // blocks on the login-shell `$PATH` probe or a `<agent> --version` spawn.
@@ -256,8 +273,7 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path,
                 git_version,
-                gh_path,
-                gh_version,
+                gh,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -277,7 +293,6 @@ impl DependencyManager {
     /// from the watcher (which would spawn a login shell on every bin write).
     pub fn re_resolve(&self) {
         self.re_resolve_git();
-        self.re_resolve_gh();
 
         // Re-resolve every known agent basename, always including the
         // bundled/default one even if the map was somehow emptied.
@@ -290,6 +305,7 @@ impl DependencyManager {
             basenames.push(default_basename);
         }
         let login_path = probe_login_path();
+        self.resolve_gh_with_login_path(login_path.as_deref());
         for basename in &basenames {
             self.resolve_agent_with_login_path(basename, login_path.as_deref(), || {});
         }
@@ -314,12 +330,39 @@ impl DependencyManager {
         inner.git_version = git_version;
     }
 
-    /// Re-resolve the GitHub CLI only (cheap: a stat and `gh --version`).
+    /// Re-resolve the GitHub CLI only, against the process-wide login-shell `$PATH`
+    /// ([`cached_login_shell_path`]: probed once, then a stat per PATH entry and
+    /// `gh --version`). Blocking: call it off the main thread.
     pub fn re_resolve_gh(&self) {
-        let (gh_path, gh_version) = Self::resolve_gh();
+        let login_path = cached_login_shell_path();
+        self.resolve_gh_with_login_path(login_path.as_deref());
+    }
+
+    /// Resolve `gh` against an already-probed login-shell `$PATH` (`None` = the probe
+    /// failed) and clear its `resolving`. Spawns `gh --version`: off the main thread only.
+    fn resolve_gh_with_login_path(&self, login_path: Option<&str>) {
+        let (path, version) = resolve_gh_with(
+            login_path,
+            known_gh_locations(),
+            user_local_gh_locations(),
+            parse_git_version,
+        );
+        debug!(target: "deps", "gh resolve complete: gh={path:?} (version={version:?})");
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.gh_path = gh_path;
-        inner.gh_version = gh_version;
+        inner.gh = GhEntry {
+            path,
+            version,
+            resolving: false,
+        };
+    }
+
+    /// Whether gh is still waiting for its background resolution.
+    pub fn gh_resolving(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .gh
+            .resolving
     }
 
     /// SW-OB-12 / SW-AN-44: resolve `basename` against an already-probed login-shell
@@ -658,9 +701,10 @@ impl DependencyManager {
                 version: inner.git_version.clone(),
             },
             gh: GhStatus {
-                available: inner.gh_path.is_some(),
-                path: inner.gh_path.as_ref().map(|p| p.display().to_string()),
-                version: inner.gh_version.clone(),
+                available: inner.gh.path.is_some(),
+                path: inner.gh.path.as_ref().map(|p| p.display().to_string()),
+                version: inner.gh.version.clone(),
+                resolving: inner.gh.resolving,
             },
             agents: inner
                 .agents
@@ -720,18 +764,6 @@ impl DependencyManager {
         )
     }
 
-    /// Resolve the user's `gh` the way [`Self::resolve_git`] resolves git. There is no
-    /// version floor: any `gh` that reports a version counts.
-    fn resolve_gh() -> (Option<PathBuf>, Option<String>) {
-        resolve_versioned_binary(
-            "gh",
-            known_gh_locations(),
-            GIT_PROBE_TIMEOUT,
-            parse_git_version,
-            |_| true,
-        )
-    }
-
     /// The version floor for a CLI `basename`: its built-in descriptor's `min_version`.
     /// An unknown basename admits
     /// any parseable version (the `(0, 0)` sentinel — never a bypass; a 2-part
@@ -767,8 +799,7 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents: BTreeMap::new(),
             }),
             stale_resolve: Mutex::new(()),
@@ -804,8 +835,7 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -1084,17 +1114,54 @@ fn known_git_locations() -> Vec<PathBuf> {
     locs
 }
 
-/// Where `gh` is usually installed: Homebrew (both architectures), the official
-/// installer's `/usr/local/bin`, and user-local.
+/// Where `gh` is usually installed: Homebrew (both architectures) and the official
+/// installer's `/usr/local/bin`. User-local `~/.local/bin` is not here, so a stale copy
+/// there never wins over the user's own `$PATH` (see [`user_local_gh_locations`]).
 fn known_gh_locations() -> Vec<PathBuf> {
-    let mut locs = vec![
+    vec![
         PathBuf::from("/opt/homebrew/bin/gh"),
         PathBuf::from("/usr/local/bin/gh"),
-    ];
-    if let Some(home) = dirs::home_dir() {
-        locs.push(home.join(".local/bin/gh"));
+    ]
+}
+
+/// User-local `gh`, tried last: after the login-shell `$PATH` and the known locations.
+fn user_local_gh_locations() -> Vec<PathBuf> {
+    dirs::home_dir()
+        .map(|home| home.join(".local/bin/gh"))
+        .into_iter()
+        .collect()
+}
+
+/// The startup check for `gh`: the first of `known` that is an executable file. A stat
+/// only, with no spawn, so it never delays first paint.
+fn stat_known_gh(known: &[PathBuf]) -> Option<PathBuf> {
+    known
+        .iter()
+        .find_map(|path| is_executable_file(path).then(|| path.clone()))
+}
+
+/// Pick the user's `gh`: the installs on the login-shell `$PATH` (`login_path`) in PATH
+/// order, then `known`, then `user_local`; the first whose version parses wins. There is
+/// no version floor. The version parse is injected so tests never spawn a real `gh`.
+fn resolve_gh_with(
+    login_path: Option<&str>,
+    known: Vec<PathBuf>,
+    user_local: Vec<PathBuf>,
+    parse_version: impl Fn(&Path) -> Option<String>,
+) -> (Option<PathBuf>, Option<String>) {
+    let mut candidates = login_path
+        .map(|path| login_path_candidates(path, "gh"))
+        .unwrap_or_default();
+    let mut seen: HashSet<PathBuf> = candidates.iter().map(|path| canonical_key(path)).collect();
+    for path in known.into_iter().chain(user_local) {
+        if is_executable_file(&path) && seen.insert(canonical_key(&path)) {
+            candidates.push(path);
+        }
     }
-    locs
+    candidates
+        .into_iter()
+        .find_map(|path| parse_version(&path).map(|version| (path, version)))
+        .unzip()
 }
 
 /// Resolve a versioned binary the way the user's environment would: (a) stat a
@@ -1617,15 +1684,24 @@ pub async fn install_command_line_tools() -> Result<CltInstallResult, String> {
 /// version checks), and again once the shadowed installs are known.
 pub fn spawn_agent_background_resolve(app: tauri::AppHandle) {
     let basename = crate::agents::builtin::preferred_binary().to_owned();
-    if !app.state::<DependencyManager>().agent_resolving(&basename) {
+    let agent_resolving = app.state::<DependencyManager>().agent_resolving(&basename);
+    let gh_resolving = app.state::<DependencyManager>().gh_resolving();
+    if !agent_resolving && !gh_resolving {
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // One login-shell `$PATH` probe for the agent and gh; the agent goes first so
+        // the splash clears before gh's version check.
         let login_path = probe_login_path();
-        app.state::<DependencyManager>()
-            .resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
+        let dm = app.state::<DependencyManager>();
+        if agent_resolving {
+            dm.resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
                 let _ = app.emit("dep-status-changed", ());
             });
+        }
+        if gh_resolving {
+            dm.resolve_gh_with_login_path(login_path.as_deref());
+        }
         let _ = app.emit("dep-status-changed", ());
     });
 }
@@ -2374,8 +2450,11 @@ mod tests {
         assert!(!dm.status().gh.available);
         {
             let mut inner = dm.inner.write().unwrap();
-            inner.gh_path = Some(PathBuf::from("/opt/homebrew/bin/gh"));
-            inner.gh_version = Some("2.50.0".to_string());
+            inner.gh = GhEntry {
+                path: Some(PathBuf::from("/opt/homebrew/bin/gh")),
+                version: Some("2.50.0".to_string()),
+                resolving: false,
+            };
         }
         let status = dm.status();
         assert!(status.gh.available);
@@ -2383,7 +2462,99 @@ mod tests {
         assert_eq!(json["gh"]["available"], true);
         assert_eq!(json["gh"]["path"], "/opt/homebrew/bin/gh");
         assert_eq!(json["gh"]["version"], "2.50.0");
+        assert_eq!(json["gh"]["resolving"], false);
         assert_eq!(json["git"]["available"], false);
+    }
+
+    /// Startup never spawns for gh: it stats the known locations and leaves gh resolving
+    /// for the background thread, which has the shared login-shell `$PATH`.
+    #[test]
+    fn startup_leaves_gh_resolving_for_the_background_thread() {
+        let dm = DependencyManager::resolve();
+        let status = dm.status();
+        assert!(status.gh.resolving);
+        assert!(status.gh.version.is_none());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["gh"]["resolving"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_gh_stat_takes_the_first_executable_known_location() {
+        let root = fresh_test_dir("gh_startup_stat");
+        let missing = root.join("brew").join("gh");
+        let plain = root.join("plain").join("gh");
+        std::fs::create_dir_all(plain.parent().unwrap()).unwrap();
+        std::fs::write(&plain, b"not executable").unwrap();
+        let hit = exec_stub(&root.join("local"), "gh");
+        assert_eq!(
+            stat_known_gh(&[missing.clone(), plain, hit.clone()]),
+            Some(hit)
+        );
+        assert_eq!(stat_known_gh(&[missing]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_puts_the_login_path_before_user_local() {
+        let root = fresh_test_dir("gh_login_first");
+        let on_path = exec_stub(&root.join("asdf"), "gh");
+        let user_local = exec_stub(&root.join("dotlocal"), "gh");
+        let parse = versions(&[("asdf", "2.50.0"), ("dotlocal", "2.10.0")]);
+        let login_path = path_of(&[&root.join("asdf")]);
+        assert_eq!(
+            resolve_gh_with(Some(&login_path), vec![], vec![user_local.clone()], &parse),
+            (Some(on_path), Some("2.50.0".to_string()))
+        );
+        // Even when the user's PATH lists ~/.local/bin, it ranks where the user put it.
+        let both = path_of(&[&root.join("dotlocal"), &root.join("asdf")]);
+        assert_eq!(
+            resolve_gh_with(Some(&both), vec![], vec![user_local.clone()], &parse).0,
+            Some(user_local)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_without_a_login_path_takes_known_locations_then_user_local() {
+        let root = fresh_test_dir("gh_fallback");
+        let brew = exec_stub(&root.join("brew"), "gh");
+        let user_local = exec_stub(&root.join("dotlocal"), "gh");
+        let parse = versions(&[("brew", "2.49.0"), ("dotlocal", "2.10.0")]);
+        assert_eq!(
+            resolve_gh_with(None, vec![brew.clone()], vec![user_local.clone()], &parse).0,
+            Some(brew)
+        );
+        let gone = root.join("gone").join("gh");
+        assert_eq!(
+            resolve_gh_with(None, vec![gone], vec![user_local.clone()], &parse),
+            (Some(user_local), Some("2.10.0".to_string()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_skips_an_install_with_no_version_and_reports_a_miss() {
+        let root = fresh_test_dir("gh_no_version");
+        let broken = exec_stub(&root.join("broken"), "gh");
+        let brew = exec_stub(&root.join("brew"), "gh");
+        let parse = versions(&[("brew", "2.49.0")]);
+        assert_eq!(
+            resolve_gh_with(None, vec![broken.clone(), brew.clone()], vec![], &parse).0,
+            Some(brew)
+        );
+        assert_eq!(
+            resolve_gh_with(None, vec![broken], vec![], &parse),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn resolving_gh_against_a_login_path_clears_resolving() {
+        let dm = DependencyManager::resolve();
+        dm.resolve_gh_with_login_path(Some(""));
+        assert!(!dm.status().gh.resolving);
+        assert!(!dm.gh_resolving());
     }
 
     #[test]
@@ -2449,8 +2620,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2489,8 +2659,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2529,8 +2698,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2975,8 +3143,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
-                gh_path: None,
-                gh_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
