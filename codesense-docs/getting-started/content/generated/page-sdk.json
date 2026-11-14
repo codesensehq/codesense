@@ -18077,7 +18077,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "69320e79be94fb34ec1385269f5accf0d10795adbdbd523a38270a41347a9ea8",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "092a42d57eb4178f70e634b6e08edaec66c60cae31ca5304041fb785021e5e9d",
     "src-tauri/src/verbs/registry.generated.json": "4820ab1efc25955f8b103682e343069bdadfbb8f8557fff302159eaee15a40f0",
     "src-tauri/src/verbs/registry.rs": "081ab0a2b8de90045131fd6d567f685b2ccff970d0224302f57a94408919584e",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

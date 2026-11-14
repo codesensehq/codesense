@@ -36,7 +36,8 @@
     unloadKept: "Some messages weren't sent.",
     logLabel: "Story lead chat",
     chips: "Quick replies",
-    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" }
+    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" },
+    pin: { pin: "Pin", unpin: "Unpin", actions: "Message actions", by: (who) => `Pinned by ${who}`, unpinned: "Unpinned.", undo: "Undo", showPins: "Show pins", failed: "Couldn't pin. Try again. If it keeps failing, reload the page.", unpinFailed: "Couldn't unpin. Try again. If it keeps failing, reload the page.", tryAgain: "Try again" }
   };
   var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
   var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
@@ -176,6 +177,32 @@
   function cardAnswer(cardId, thread) {
     const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
     return row ? { text: row.text || "", at: row.createdAtMs || 0 } : null;
+  }
+  var PIN_CAP = 3;
+  var squashSpace = (text) => String(text || "").replace(/\s+/g, " ").trim();
+  function pinFirstSentence(text) {
+    const line = String(text || "").split("\n").find((l) => l.trim()) || "";
+    const end = /^.*?[.!?](?=\s|$)/.exec(line.trim());
+    return squashSpace(end ? end[0] : line);
+  }
+  var pinWho = (pinnedBy, nameOf) => pinnedBy === "human" ? "you" : nameOf(pinnedBy);
+  var pinCapLabel = (count) => `${count} of ${PIN_CAP} pinned`;
+  function pinCapNote(pins, nameOf) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const p of pins) {
+      const who = pinWho(p.pinnedBy, nameOf);
+      counts.set(who, (counts.get(who) || 0) + 1);
+    }
+    const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([who, n]) => `${n} by ${who}`).join(", ");
+    return `${pinCapLabel(pins.length)} (${parts}). Unpin one to pin this.`;
+  }
+  function pinFirstWords(text, words = 4) {
+    const all = squashSpace(text).split(" ");
+    return all.length <= words ? all.join(" ") : `${all.slice(0, words).join(" ")}…`;
+  }
+  function pinLiveText(done, title, count) {
+    const verb = done === "pinned" ? "Pinned" : done === "unpinned" ? "Unpinned" : "Restored";
+    return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
@@ -723,7 +750,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null }) {
     const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
     if (styles) linkChatStyles(win.document);
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
@@ -756,6 +783,68 @@
       if (target2) transport.gotoAgent(target2);
     };
     const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
+    const pinCopy = copy.pin || CHAT_COPY.pin, pinState = { note: null, busy: null, refocus: null };
+    const pinLive = onPin ? h("div", { class: "pin-live", role: "status", "aria-live": "polite" }) : null;
+    const pinList = () => onPin && typeof onPin.pins === "function" && onPin.pins() || [];
+    const pinName = (by) => onPin && typeof onPin.name === "function" ? onPin.name(by) : by;
+    const pinTitle = (item) => pinFirstSentence(item.text) || item.who;
+    async function pinChange(item, action) {
+      if (pinState.busy !== null) return;
+      pinState.busy = item.id;
+      pinState.refocus = item.id;
+      render();
+      try {
+        const list = await onPin.change(action, item.id);
+        const done2 = action === "pin" ? "pinned" : action === "unpin" ? "unpinned" : "restored";
+        pinLive.textContent = pinLiveText(done2, pinTitle(item), (list || pinList()).length);
+        pinState.note = action === "unpin" ? { mid: item.id, kind: "undo", item } : null;
+      } catch {
+        pinState.note = { mid: item.id, kind: action === "unpin" ? "unpin-failed" : "failed", item, action };
+      }
+      pinState.busy = null;
+      pinState.refocus = item.id;
+      render();
+    }
+    function pinToggle(item) {
+      const pins = pinList(), pinned = pins.some((p) => p.messageId === item.id);
+      if (pinned) return pinChange(item, "unpin");
+      if (pins.length >= PIN_CAP) {
+        const text = pinCapNote(pins, pinName);
+        pinState.note = { mid: item.id, kind: "cap", text };
+        pinLive.textContent = text;
+        pinState.refocus = item.id;
+        render();
+        return;
+      }
+      return pinChange(item, "pin");
+    }
+    function pinParts(item) {
+      if (!onPin || item.id === void 0 || item.id === null) return null;
+      const pins = pinList(), pin2 = pins.find((p) => p.messageId === item.id), atCap = !pin2 && pins.length >= PIN_CAP, note = pinState.note && pinState.note.mid === item.id ? pinState.note : null;
+      const label = pin2 ? pinCopy.unpin : atCap ? `${pinCopy.pin} (${pinCapLabel(pins.length)})` : pinCopy.pin, busy = pinState.busy === item.id;
+      const sig = ["p", pin2 ? pin2.pinnedBy : "", atCap, busy, note ? note.kind + (note.text || "") : ""].join(":");
+      const make = () => {
+        const button = h("button", { type: "button", class: "pin-b", "aria-label": label, "aria-pressed": pin2 ? "true" : "false", "aria-disabled": atCap || busy ? "true" : null, title: label, "data-pin": pin2 ? "pinned" : atCap ? "cap" : "pin", "data-pin-mid": String(item.id), onclick: () => pinToggle(item) }, pin2 ? pinCopy.unpin : pinCopy.pin);
+        const acts = h("div", { class: "pin-acts", role: "group", "aria-label": pinCopy.actions }, button);
+        const tag = pin2 ? h("div", { class: "pin-tag" }, pinCopy.by(pinWho(pin2.pinnedBy, pinName))) : null;
+        let foot = null;
+        if (note && note.kind === "cap") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => {
+          pinState.note = null;
+          render();
+          if (typeof onPin.showPins === "function") onPin.showPins();
+        } }, pinCopy.showPins));
+        else if (note && note.kind === "undo") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, pinCopy.unpinned), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, "restore") }, pinCopy.undo));
+        else if (note) foot = h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, note.kind === "unpin-failed" ? pinCopy.unpinFailed : pinCopy.failed), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, note.kind === "unpin-failed" ? "unpin" : note.action || "pin") }, pinCopy.tryAgain));
+        return { acts, tag, foot, pinned: Boolean(pin2) };
+      };
+      return { sig, make };
+    }
+    if (onPin) log.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && pinState.note) {
+        pinState.note = null;
+        render();
+      }
+    });
     const pin = pinToBottom(log, { win });
     const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
     const composer = createComposer({ ids, onSend: (text) => {
@@ -789,7 +878,7 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
-    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
+    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, pinLive, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -802,14 +891,20 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const bubble = (item, side, first = true, info = null) => h(
-      "div",
-      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
-      first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
-      h("div", { class: "body" }, item.text),
-      item.note ? h("div", { class: "note" }, item.note) : null,
-      item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null
-    );
+    const bubble = (item, side, first = true, info = null) => {
+      const pin2 = item.pin ? item.pin.make() : null;
+      return h(
+        "div",
+        { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
+        first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
+        pin2 ? pin2.acts : null,
+        h("div", { class: "body" }, item.text),
+        item.note ? h("div", { class: "note" }, item.note) : null,
+        item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null,
+        pin2 ? pin2.tag : null,
+        pin2 ? pin2.foot : null
+      );
+    };
     const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
       const on = Boolean(terminalTarget());
@@ -953,10 +1048,11 @@
         const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
         if (nextOpt && side === "lead" && row.text && !shown) continue;
         const item = { id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        item.pin = pinParts(item);
         entries.push({
           t: row.createdAtMs || 0,
           id: "m" + row.messageId,
-          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"),
+          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark, item.pin ? item.pin.sig : ""].join("|"),
           make: () => bubble(item, side),
           run: faces ? { key: side === "you" ? "you" : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
         });
@@ -1021,6 +1117,13 @@
       reconcile(log, cache, want);
       paintChips();
       pin.onContentChanged();
+      if (pinState.refocus !== null) {
+        const pinButton = log.querySelector(`.pin-b[data-pin-mid="${pinState.refocus}"]`);
+        if (pinButton) {
+          pinButton.focus();
+          pinState.refocus = null;
+        }
+      }
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
         if (done2) {
@@ -1091,6 +1194,7 @@
     const offs = [reads.on("sessions", () => onRows(reads.latestSessions())), reads.on("inbox", () => {
       readThread();
     }), reads.on("activity", () => render())];
+    if (onPin && typeof onPin.subscribe === "function") offs.push(onPin.subscribe(() => render()));
     if (typeof transport.stream === "function") offs.push(transport.stream((chunk) => {
       streams.set(chunk.messageId, (streams.get(chunk.messageId) || "") + chunk.text);
       render();
@@ -1162,6 +1266,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

@@ -27,7 +27,7 @@ import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinFirstSentence,pinLiveText,pinWho} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
@@ -67,7 +67,7 @@ const storyTarget=(storyId,leadRole)=>({
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true}){
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null}){
  const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
  if(styles)linkChatStyles(win.document);
  const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
@@ -92,6 +92,50 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
  const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
+ // onPin: the person pins a message into its agent thread, through the page: {pins() -> [{messageId, pinnedBy}], change(action 'pin'|'unpin'|'restore', messageId) -> the new list (rejects on failure), subscribe?(fn) -> off, showPins?(), name?(pinnedBy)}.
+ // The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. An unpin offers Undo until the next pin, unpin or Esc. No timers.
+ const pinCopy=copy.pin||CHAT_COPY.pin,pinState={note:null,busy:null,refocus:null};
+ const pinLive=onPin?h('div',{class:'pin-live',role:'status','aria-live':'polite'}):null;
+ const pinList=()=>(onPin&&typeof onPin.pins==='function'&&onPin.pins())||[];
+ const pinName=by=>onPin&&typeof onPin.name==='function'?onPin.name(by):by;
+ const pinTitle=item=>pinFirstSentence(item.text)||item.who;
+ async function pinChange(item,action){
+  if(pinState.busy!==null)return;
+  pinState.busy=item.id;pinState.refocus=item.id;render();
+  try{
+   const list=await onPin.change(action,item.id);
+   const done=action==='pin'?'pinned':action==='unpin'?'unpinned':'restored';
+   pinLive.textContent=pinLiveText(done,pinTitle(item),(list||pinList()).length);
+   pinState.note=action==='unpin'?{mid:item.id,kind:'undo',item}:null;
+  }catch{pinState.note={mid:item.id,kind:action==='unpin'?'unpin-failed':'failed',item,action};}
+  // The button flips where it was clicked and keeps focus, so Unpin is one key away.
+  pinState.busy=null;pinState.refocus=item.id;render();
+ }
+ function pinToggle(item){
+  const pins=pinList(),pinned=pins.some(p=>p.messageId===item.id);
+  if(pinned)return pinChange(item,'unpin');
+  if(pins.length>=PIN_CAP){const text=pinCapNote(pins,pinName);pinState.note={mid:item.id,kind:'cap',text};pinLive.textContent=text;pinState.refocus=item.id;render();return;}
+  return pinChange(item,'pin');
+ }
+ // A message's Pin, its tag and its note; the signature changes when any of them does, so the bubble is rebuilt only then.
+ function pinParts(item){
+  if(!onPin||item.id===undefined||item.id===null)return null;
+  const pins=pinList(),pin=pins.find(p=>p.messageId===item.id),atCap=!pin&&pins.length>=PIN_CAP,note=pinState.note&&pinState.note.mid===item.id?pinState.note:null;
+  const label=pin?pinCopy.unpin:atCap?`${pinCopy.pin} (${pinCapLabel(pins.length)})`:pinCopy.pin,busy=pinState.busy===item.id;
+  const sig=['p',pin?pin.pinnedBy:'',atCap,busy,note?note.kind+(note.text||''):''].join(':');
+  const make=()=>{
+   const button=h('button',{type:'button',class:'pin-b','aria-label':label,'aria-pressed':pin?'true':'false','aria-disabled':atCap||busy?'true':null,title:label,'data-pin':pin?'pinned':atCap?'cap':'pin','data-pin-mid':String(item.id),onclick:()=>pinToggle(item)},pin?pinCopy.unpin:pinCopy.pin);
+   const acts=h('div',{class:'pin-acts',role:'group','aria-label':pinCopy.actions},button);
+   const tag=pin?h('div',{class:'pin-tag'},pinCopy.by(pinWho(pin.pinnedBy,pinName))):null;
+   let foot=null;
+   if(note&&note.kind==='cap')foot=h('div',{class:'pin-note',role:'note'},h('span',{},note.text),h('button',{type:'button',class:'btn sm',onclick:()=>{pinState.note=null;render();if(typeof onPin.showPins==='function')onPin.showPins();}},pinCopy.showPins));
+   else if(note&&note.kind==='undo')foot=h('div',{class:'pin-note',role:'note'},h('span',{},pinCopy.unpinned),h('button',{type:'button',class:'btn sm',onclick:()=>pinChange(note.item,'restore')},pinCopy.undo));
+   else if(note)foot=h('div',{class:'pin-note danger',role:'alert'},h('span',{},note.kind==='unpin-failed'?pinCopy.unpinFailed:pinCopy.failed),h('button',{type:'button',class:'btn sm',onclick:()=>pinChange(note.item,note.kind==='unpin-failed'?'unpin':note.action||'pin')},pinCopy.tryAgain));
+   return {acts,tag,foot,pinned:Boolean(pin)};
+  };
+  return {sig,make};
+ }
+ if(onPin)log.addEventListener('keydown',event=>{if(event.key==='Escape'&&pinState.note){pinState.note=null;render();}});
  const pin=pinToBottom(log,{win});
  const status=h('div',{class:'status-slot',id:ids.status,tabindex:'-1'});
  const composer=createComposer({ids,onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
@@ -106,13 +150,16 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
- el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
+ el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,pinLive,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
  // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar. Unset, first is true and info null, so the node is what it always was.
- const bubble=(item,side,first=true,info=null)=>h('div',{class:`msg ${side}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-  first?h('div',{class:'meta'},...(info?[faceNode(info)]:[]),`${info&&info.label||item.who} · ${timeLabel(item.at)}`):null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null);
+ const bubble=(item,side,first=true,info=null)=>{
+  const pin=item.pin?item.pin.make():null;
+  return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
+   first?h('div',{class:'meta'},...(info?[faceNode(info)]:[]),`${info&&info.label||item.who} · ${timeLabel(item.at)}`):null,pin?pin.acts:null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+ };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
  const alertRow=(kind,why,code,...extra)=>h('div',{class:'sys danger',role:'alert','data-row':kind},alertIcon(),h('span',{class:'why'},why),code?h('code',{class:'code'},code):null,...extra);
@@ -218,7 +265,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    const said=row.text||row.summary||'',shown=nextOpt&&side==='lead'&&row.text?(parseNext(row.text)||{text:said}).text:said;
    if(nextOpt&&side==='lead'&&row.text&&!shown)continue;
    const item={id:row.messageId,text:shown,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},info=faceInfo(row,side,who);
-   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark].join('|'),make:()=>bubble(item,side),
+   item.pin=pinParts(item);
+   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark,item.pin?item.pin.sig:''].join('|'),make:()=>bubble(item,side),
     run:faces?{key:side==='you'?'you':side+'|'+(row.from||''),info,make:(first,info)=>bubble(item,side,first,info)}:null});
   }
   for(const item of launch.messages){
@@ -273,6 +321,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
+  if(pinState.refocus!==null){const pinButton=log.querySelector(`.pin-b[data-pin-mid="${pinState.refocus}"]`);if(pinButton){pinButton.focus();pinState.refocus=null;}}
   if(refocusCard!==null){const done=log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);if(done){done.focus();refocusCard=null;}}
   if(refocus&&launch.state!=='starting'&&launch.state!=='slow'){refocus=false;const retry=status.querySelector('[data-retry]');if(retry&&(!el.ownerDocument.activeElement||el.ownerDocument.activeElement===el.ownerDocument.body||el.ownerDocument.activeElement===status))retry.focus();}
   composer.update({placeholder:p.placeholder,disabled:isDone,...(layout.composer?layout.composer(here):{})});
@@ -316,6 +365,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(!started||moved||again||target.rows(next).some(row=>!watched.has(row.sessionId))){const more=started&&Boolean(sources);const read=readThread(more);if(!started)firstRead=read;started=true;}else render();
  }
  const offs=[reads.on('sessions',()=>onRows(reads.latestSessions())),reads.on('inbox',()=>{readThread();}),reads.on('activity',()=>render())];
+ if(onPin&&typeof onPin.subscribe==='function')offs.push(onPin.subscribe(()=>render()));
  if(typeof transport.stream==='function')offs.push(transport.stream(chunk=>{streams.set(chunk.messageId,(streams.get(chunk.messageId)||'')+chunk.text);render();}));
  const onUnload=event=>{if(launch.hasHeld()){const text=launch.hasKept()?copy.unloadKept:copy.unload;event.preventDefault();event.returnValue=text;return text;}};
  win.addEventListener('beforeunload',onUnload);

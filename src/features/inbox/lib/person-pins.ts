@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: MIT
 // The person's pins of a chat's messages, without the DOM: a message's pin title, the quote
-// its pin previews, the note at the cap and what the live region says. The overlay, the
-// Inbox and the kit's chat say the same words.
+// its pin previews, the note at the cap and what the live region says. The words live in
+// chat-core, so the overlay, the Inbox and the kit's chat say the same thing.
 
-import { HUMAN } from "../model";
+import {
+  PIN_CAP,
+  pinCapLabel,
+  pinCapNote,
+  pinFirstSentence,
+  pinFirstWords,
+  pinLiveText,
+  pinWho,
+} from "./chat-core";
 
-/** A thread shows at most this many pins, the person's and its agent's together. */
-export const PIN_CAP = 3;
+export { PIN_CAP };
 
 type Said = { text: string; contentType?: string | null; summary?: string | null };
 
@@ -28,13 +35,6 @@ function htmlTitle(markup: string): string | null {
   return null;
 }
 
-/** The first sentence of the first non-empty line: up to its first `.`, `!` or `?`. */
-function firstSentence(text: string): string {
-  const line = text.split("\n").find((l) => l.trim()) ?? "";
-  const end = /^.*?[.!?](?=\s|$)/.exec(line.trim());
-  return squash(end ? end[0] : line);
-}
-
 /**
  * What a pin of this message is called. An HTML message: its summary, then its `<title>`,
  * then its first heading, then "Dashboard from <sender>"; never its markup. Any other
@@ -44,7 +44,7 @@ export function pinTitleOf(m: Said, sender: string): string {
   const summary = m.summary?.trim();
   if (summary) return summary;
   if (m.contentType === "html") return htmlTitle(m.text) ?? `Dashboard from ${sender}`;
-  return firstSentence(m.text) || `Message from ${sender}`;
+  return pinFirstSentence(m.text) || `Message from ${sender}`;
 }
 
 /** A plain message's pin preview: its title, then the rest of the message, quoted. */
@@ -56,42 +56,12 @@ export function quoteOf(m: Said, sender: string): { title: string; rest: string 
 }
 
 /** "you" for the person, else the agent's name. */
-export function whoPinned(pinnedBy: string, labelOf: (from: string) => string): string {
-  return pinnedBy === HUMAN ? "you" : labelOf(pinnedBy);
-}
-
+export const whoPinned = pinWho;
 /** The dimmed Pin's accessible name and tooltip at the cap. */
-export const capLabel = (count: number) => `${count} of ${PIN_CAP} pinned`;
-
+export const capLabel = pinCapLabel;
 /** The note at the cap: whose pins fill the list, the most first. Nothing is replaced. */
-export function capNote(
-  pins: ReadonlyArray<{ pinnedBy: string }>,
-  labelOf: (from: string) => string,
-): string {
-  const counts = new Map<string, number>();
-  for (const p of pins) {
-    const who = whoPinned(p.pinnedBy, labelOf);
-    counts.set(who, (counts.get(who) ?? 0) + 1);
-  }
-  const parts = [...counts]
-    .sort((a, b) => b[1] - a[1])
-    .map(([who, n]) => `${n} by ${who}`)
-    .join(", ");
-  return `${capLabel(pins.length)} (${parts}). Unpin one to pin this.`;
-}
-
+export const capNote = pinCapNote;
 /** A message named by its first words, as the line chip and the live region show it. */
-export function firstWords(text: string, words = 4): string {
-  const all = squash(text).split(" ");
-  return all.length <= words ? all.join(" ") : `${all.slice(0, words).join(" ")}…`;
-}
-
+export const firstWords = pinFirstWords;
 /** What the polite live region says after a pin, an unpin or an Undo. */
-export function liveText(
-  done: "pinned" | "unpinned" | "restored",
-  title: string,
-  count: number,
-): string {
-  const verb = done === "pinned" ? "Pinned" : done === "unpinned" ? "Unpinned" : "Restored";
-  return `${verb} "${firstWords(title)}". ${capLabel(count)}.`;
-}
+export const liveText = pinLiveText;

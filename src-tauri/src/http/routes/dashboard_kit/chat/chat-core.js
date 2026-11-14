@@ -95,3 +95,23 @@ export function cardAnswer(cardId,thread){
  const row=(Array.isArray(thread)?thread:[]).find(item=>item&&item.from==='human'&&item.inReplyTo===cardId);
  return row?{text:row.text||'',at:row.createdAtMs||0}:null;
 }
+// The person's pins of a chat's messages: the words the kit's chat and the app's overlay both say. A thread shows at most PIN_CAP pins, the person's and its agent's together.
+export const PIN_CAP=3;
+const squashSpace=text=>String(text||'').replace(/\s+/g,' ').trim();
+// The first sentence of a message's first non-empty line: up to its first . ! or ?.
+export function pinFirstSentence(text){const line=String(text||'').split('\n').find(l=>l.trim())||'';const end=/^.*?[.!?](?=\s|$)/.exec(line.trim());return squashSpace(end?end[0]:line);}
+// "you" for the person, else the agent's name.
+export const pinWho=(pinnedBy,nameOf)=>pinnedBy==='human'?'you':nameOf(pinnedBy);
+// The dimmed Pin's accessible name and tooltip at the cap.
+export const pinCapLabel=count=>`${count} of ${PIN_CAP} pinned`;
+// The note at the cap: whose pins fill the list, the most first. Nothing is replaced.
+export function pinCapNote(pins,nameOf){
+ const counts=new Map();
+ for(const p of pins){const who=pinWho(p.pinnedBy,nameOf);counts.set(who,(counts.get(who)||0)+1);}
+ const parts=[...counts].sort((a,b)=>b[1]-a[1]).map(([who,n])=>`${n} by ${who}`).join(', ');
+ return `${pinCapLabel(pins.length)} (${parts}). Unpin one to pin this.`;
+}
+// A message named by its first words, as the line chip and the live region show it.
+export function pinFirstWords(text,words=4){const all=squashSpace(text).split(' ');return all.length<=words?all.join(' '):`${all.slice(0,words).join(' ')}…`;}
+// What the polite live region says after a pin, an unpin or an Undo.
+export function pinLiveText(done,title,count){const verb=done==='pinned'?'Pinned':done==='unpinned'?'Unpinned':'Restored';return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;}
