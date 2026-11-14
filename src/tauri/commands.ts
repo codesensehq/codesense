@@ -10395,6 +10395,14 @@ export const storyTotals = (params: StoryTotalsParams, frameId?: string, page?: 
     ...(page !== undefined ? { page } : {}),
   });
 
+/** One agent's session record: model, tokens, cost, duration, files and story, from the same reads as session_usage and story_changes. */
+export const sessionRecord = (params: { handle: string }, frameId?: string, page?: string) =>
+  invoke<unknown>("session_record", {
+    params,
+    ...(frameId !== undefined ? { frameId } : {}),
+    ...(page !== undefined ? { page } : {}),
+  });
+
 /** Read-only diff target, resolved afresh from a configured source slug. */
 export const openDiffRead = (
   params: import("@/features/git-sync/lib/open-diff-types").OpenDiffParams,

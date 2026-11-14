@@ -7,6 +7,7 @@ id: new-story-generic
 kind: new-story
 fixture:
   story_team: generic
+  git_access: gh
   planted_prior: true
 input:
   turns:

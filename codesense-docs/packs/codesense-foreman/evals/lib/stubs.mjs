@@ -4,10 +4,17 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ANSWERED_CARD, CARDS, CONFIG, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS, stepDone } from "./fixture.mjs";
+import { ANSWERED_CARD, CARDS, CONFIG, GIT_ACCESS_PATH, GITHUB_PR, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS, stepDone } from "./fixture.mjs";
 
 const F = "foreman";
 const SELF = CONFIG.self;
+
+// Before a pull request: the recorded git-access method, from its Method: line. "gh", "github-mcp",
+// or null when none is recorded or the method can't open a PR.
+const prMethod = (fx) => {
+  const line = /^Method: (.*)$/m.exec(fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH }).text ?? "")?.[1] ?? "";
+  return /^gh\b/.test(line) ? "gh" : /^GitHub MCP\b/.test(line) ? "github-mcp" : null;
+};
 
 const good = {
   "onboard-repo"({ fx, turns }) {
@@ -79,12 +86,16 @@ const good = {
         fx.git(["-C", `../${wt}`, "commit", "-s", "-F", `../${wt}.msg`]);
         if (hasRemote) fx.git(["-C", `../${wt}`, "push", "-u", "origin", branch]);
       }
-      if (hasRemote) fx.gh(["pr", "create", "--head", branch, "--title", title, "--body", "Adds the dark mode story."], dir);
+      const method = hasRemote ? prMethod(fx) : null;
+      if (method === "gh") fx.gh(["pr", "create", "--head", branch, "--title", title, "--body", "Adds the dark mode story."], dir);
+      if (method === "github-mcp") fx.tool(F, GITHUB_PR, { owner: "acme", repo: "demo", head: branch, base: "main", title, body: "Adds the dark mode story." });
       fx.git(["worktree", "remove", `../${wt}`]);
       fx.say(
-        hasRemote
+        method
           ? `Opened a pull request for "${title}" from ${branch}.`
-          : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
+          : hasRemote
+            ? `Pushed "${title}" on ${branch}. I didn't open a pull request: no git-access method here can, so the branch is ready for you.`
+            : `Made the story on branch ${branch}. There's no remote, so no pull request. To merge it, run in your main workspace: git merge ${branch}`,
       );
     }
   },
@@ -169,6 +180,7 @@ const good = {
     const dir = path.join(fx.root, wt);
     fx.human(turns[0]);
     fx.git(["worktree", "add", "-b", branch, `../${wt}`, "origin/main"]);
+    prMethod(fx);
     const result = fx.gh(["pr", "create", "--head", branch, "--title", "Fix the readme", "--body", "Fixes the readme."], dir);
     fx.git(["worktree", "remove", `../${wt}`]);
     fx.say(`The pull request didn't go through (${result.stderr.trim()}). I cleaned up my worktree. Want me to retry?`);

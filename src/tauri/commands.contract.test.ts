@@ -1318,8 +1318,10 @@ describe("Tauri IPC Contract", () => {
     // repos), so 526/545.
     // +2 on both sides for agentPins/agent_pins and agentPinsPrepareView/agent_pins_prepare_view
     // (an agent thread's pin list), so 528/547.
-    const EXPECTED_TS_COMMAND_COUNT = 528;
-    const EXPECTED_RUST_COMMAND_COUNT = 547;
+    // +1 on both sides for sessionRecord/session_record (an agent's session record for a page),
+    // so 529/548.
+    const EXPECTED_TS_COMMAND_COUNT = 529;
+    const EXPECTED_RUST_COMMAND_COUNT = 548;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

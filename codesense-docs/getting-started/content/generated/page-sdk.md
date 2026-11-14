@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 112 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 113 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -445,6 +445,15 @@ onWorktreesChanged(cb: () => void): Unsubscribe;
 ```
 
 
+
+## Surface: onSessionRecordChanged
+
+```ts
+onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
+```
+
+Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
+record's `sessionIds` to hear only about that agent's session.
 
 ## Surface: onPasteTargetChanged
 
@@ -2083,6 +2092,18 @@ sessionRead(args: {
 read · sessions:read · MCP twin session_read
 
 Class: read; default grant: sessions:read; MCP twin: session_read.
+
+## VerbMethods: sessionRecord
+
+```ts
+sessionRecord(args: {
+      handle: string;
+    }): Promise<unknown>;
+```
+
+read · sessions:read
+
+Class: read; default grant: sessions:read; MCP twin: A page's per-agent summary of session_usage and story_changes; agents read those two tools directly..
 
 ## VerbMethods: sessionUsage
 

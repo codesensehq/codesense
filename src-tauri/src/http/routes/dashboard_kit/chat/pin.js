@@ -7,7 +7,8 @@ const PIN_NEAR=80;
 export function pinToBottom(log,{settle=true,win=window}={}){
  let following=true,released=false;
  const near=()=>log.scrollHeight-log.scrollTop-log.clientHeight<PIN_NEAR;
- const follow=()=>{if(following&&!released)log.scrollTop=log.scrollHeight;};
+ // An empty log has nothing to follow, and reading scrollHeight there forces a layout before first paint.
+ const follow=()=>{if(following&&!released&&log.firstChild)log.scrollTop=log.scrollHeight;};
  const onScroll=()=>{following=near();};
  log.addEventListener('scroll',onScroll);
  let observer=null;
