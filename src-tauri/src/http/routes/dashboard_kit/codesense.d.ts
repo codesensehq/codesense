@@ -451,6 +451,21 @@ declare namespace CodesenseSdk {
     pick: string | null;
     reason: string | null;
   }
+  /** A roster row of the chat's peer, as far as the marks rule reads it. */
+  interface ChatLeadRow {
+    state?: string;
+    unread?: number;
+    mailNotice?: string | null;
+    notifiedAt?: string | null;
+    [key: string]: unknown;
+  }
+  /** What the marks rule needs to know about one sent message. */
+  interface ChatMarkInput {
+    sentAt: number;
+    busyAtSend: boolean;
+    lead: ChatLeadRow | null | undefined;
+    newestLeadAt?: number;
+  }
   /** Who the chat talks to: rows of the roster, what its thread reads, and where a message goes while it is away. */
   interface ChatTarget {
     rows(sessions: Array<Record<string, unknown>>): Array<Record<string, unknown>>;
@@ -516,20 +531,25 @@ declare namespace CodesenseSdk {
   /** `/kit/v1/chat.js`'s `kit.chat`. The marks rule and the card parser (`core`) are DOM-free: `/kit/v1/chat-core.js` is the same code as an ES module. */
   interface KitChat {
     mount(element: HTMLElement, options: ChatMountOptions): ChatHandle;
+    /** Keeps a chat log at the newest message while you are at the bottom. `win` is the window whose resize and timers it uses; `reset()` re-pins after the log is rebuilt. */
     pinToBottom(
       log: HTMLElement,
-      options?: { settle?: boolean },
-    ): { onContentChanged(): void; release(): void };
+      options?: { settle?: boolean; win?: Window },
+    ): { onContentChanged(): void; release(): void; reset(): void };
     core: {
-      isBusy(lead: Record<string, unknown> | null): boolean;
-      deliveryMark(input: {
-        sentAt: number;
-        busyAtSend: boolean;
-        lead: Record<string, unknown> | null;
-        newestLeadAt?: number;
-      }): "queued" | "delivered";
-      parseCard(text: string): ChatCard | null;
-      cardAnswer(cardId: string | number, thread: ChatRow[]): { text: string; at: number } | null;
+      /** Only an idle lead takes a message at once; anything else holds it. */
+      isBusy(lead: ChatLeadRow | null | undefined): boolean;
+      /** Queued or Delivered for one sent message. */
+      deliveryMark(input: ChatMarkInput): "queued" | "delivered";
+      /** A mark rule that latches Delivered per message key: a later change in the lead never un-delivers it. */
+      createMarkLatch(): (key: string | number, input: ChatMarkInput) => "queued" | "delivered";
+      /** A needs-you message read as buttons, or null when it is not in the card format. */
+      parseCard(text: unknown): ChatCard | null;
+      /** The person's own row replying to the card, from whichever place sent it. */
+      cardAnswer(
+        cardId: string | number,
+        thread: readonly ChatRow[] | null | undefined,
+      ): { text: string; at: number } | null;
     };
     thread: {
       mergeThread(...lists: unknown[]): ChatRow[];

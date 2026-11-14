@@ -13979,7 +13979,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "412b768d4e310ee5ca8531eb4f225d293d00b9056e2a0567540da57c134aca70",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "7c9424079b41b47348fd939a4b33d20cb97def546d11843095ef2dc1e6ca44ce",
     "src-tauri/src/verbs/registry.generated.json": "9ca0e89edfa86d1ea1acbd68682224a82e2db8291e4097af0e0a1e867b00a035",
     "src-tauri/src/verbs/registry.rs": "cf974e31fcabf851da86c45ba5e8ee828d061fd3806e52bff19b12b8fe4107d6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

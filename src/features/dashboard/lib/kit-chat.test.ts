@@ -4,6 +4,8 @@
  * transport and roster. The marks rule and the card parser have their own cases in
  * src/features/inbox/lib/chat-core.test.ts; the browser-level layout cases run where the pages are built.
  */
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="../../../../src-tauri/src/http/routes/dashboard_kit/codesense.d.ts" />
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,18 +13,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // @ts-expect-error -- a plain Node ESM script without type declarations.
 import { bundleChat } from "../../../../scripts/gen-dashboard-kit-chat.mjs";
+import type * as ChatCore from "../../inbox/lib/chat-core";
 
 const KIT_DIR = join(process.cwd(), "src-tauri/src/http/routes/dashboard_kit");
 const CHAT_JS = readFileSync(join(KIT_DIR, "chat.js"), "utf8");
 
 type Row = Record<string, unknown>;
-interface Kit {
-  chat: {
-    mount(el: HTMLElement, options: Record<string, unknown>): Record<string, any>;
-    core: Record<string, (...args: any[]) => any>;
-    thread: Record<string, (...args: any[]) => any>;
-  };
-}
+// The page-facing types are the contract: a member the served kit gains without a type here fails tsc, and so
+// does a core rule whose signature the types no longer accept.
+type Kit = { chat: CodesenseSdk.KitChat };
+const _coreMatchesTypes: CodesenseSdk.KitChat["core"] = {} as typeof ChatCore;
+void _coreMatchesTypes;
 
 const flush = async () => {
   for (let i = 0; i < 6; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -38,7 +39,7 @@ const lead = (state: string): Row => ({
   notifiedAt: null,
 });
 
-function setup(roster: Row[], thread: Row[] = []) {
+function setup(roster: Row[], thread: CodesenseSdk.ChatRow[] = []) {
   const listeners = new Map<string, Set<() => void>>();
   const emit = (event: string) => listeners.get(event)?.forEach((fn) => fn());
   const send = vi.fn(async () => ({ status: "sent", messageId: 41 }));
@@ -198,12 +199,7 @@ describe("kit.chat", () => {
     const log = document.createElement("div");
     Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
     Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
-    const pin = (kitOf().chat as unknown as { pinToBottom: (...a: any[]) => any }).pinToBottom(
-      log,
-      {
-        settle: false,
-      },
-    );
+    const pin = kitOf().chat.pinToBottom(log, { settle: false });
     expect(log.scrollTop).toBe(1000);
     log.scrollTop = 200;
     log.dispatchEvent(new Event("scroll"));
