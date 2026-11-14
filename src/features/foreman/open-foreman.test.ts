@@ -60,15 +60,20 @@ describe("start-up routing", () => {
   it("one user repo with restored tabs, setting on: the Foreman opens focused, the tabs stay", () => {
     connect([docsOrg, acme], "local/acme", "core");
     const acmeKey = buildTeamKey("local/acme", "core");
+    const acmeTabs = [{ path: "/home/u/acme/core/content/plan.md", name: "plan.md" }];
     useViewerStore.setState({
       openTabs: {
         [DOCS_TEAM_KEY]: [{ path: `${DOCS_ROOT}/restored.md`, name: "restored.md" }],
+        [acmeKey]: acmeTabs,
       },
+      activeTab: { [acmeKey]: acmeTabs[0].path },
     });
     openStartLanding(README);
     expect(paths(DOCS_TEAM_KEY)).toEqual([`${DOCS_ROOT}/restored.md`, FOREMAN]);
     expect(useViewerStore.getState().activeTab[DOCS_TEAM_KEY]).toBe(FOREMAN);
-    expect(paths(acmeKey)).toEqual([]);
+    // The user's own team keeps its tabs and its active tab.
+    expect(paths(acmeKey)).toEqual([acmeTabs[0].path]);
+    expect(useViewerStore.getState().activeTab[acmeKey]).toBe(acmeTabs[0].path);
   });
 
   it("one user repo, setting off: nothing opens", () => {
