@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
-import { TEAM_CONTENT_PATH } from "../fixtures";
+import {
+  MOCK_CODESENSE_ORG_SLUG,
+  MOCK_ORG_SLUG,
+  MOCK_TEAM_NAME,
+  mockCodesenseOrg,
+  TEAM_CONTENT_PATH,
+} from "../fixtures";
 import type { HandlerRegistry } from "../mock-router";
 import type { MockState } from "../mock-state";
 import type { MockEventBus } from "../mock-events";
 import { agentListHub, placeTabs, type AgentListWorld, type Placement } from "./agent-list-hub";
 import { TEAM_KEY } from "./agents-team";
+import { CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
 import type { DerivedPipelineTree, StoryRef } from "@/shared/lib/pipeline-graph/types";
 import type { Workspace } from "@/shared/stores/viewer-store";
 import type { AgentSessionRow } from "@/tauri/commands";
@@ -21,6 +28,8 @@ export function isLeftNavDemo(search: string): boolean {
 }
 
 const ROOT = TEAM_CONTENT_PATH;
+/** The docs team's content, which `?nav=demo` opens on and whose story page it serves. */
+const DOCS_ROOT = `${mockCodesenseOrg.org_root}/${CODESENSE_DOCS_TEAM}/content`;
 
 /** A story, and the stories it depends on (by story id). */
 type Story = [id: string, title: string, status: string, dependsOn?: string[]];
@@ -111,6 +120,15 @@ function demoFileText(path: string): string | null {
   if (rel === DEMO_STORY_PAGE) {
     return '<!doctype html><title>Story page</title><body><h1 id="story-page">Story page</h1></body>';
   }
+  // Story shells, which open as themselves: a pair (the shell and its `.story.md`) and a single
+  // `.html` story.
+  const shell = /^26-agent-inbox\/(AID-6|AID-7)\.html$/.exec(rel);
+  if (shell) {
+    const pair =
+      shell[1] === "AID-6" ? `<meta name="cs:supporting-docs" content="AID-6.story.md">` : "";
+    return `<!doctype html><meta name="cs:type" content="story">${pair}<title>${shell[1]}</title><h1>${shell[1]}</h1>`;
+  }
+  if (rel === "26-agent-inbox/AID-6.story.md") return "# AID-6\n\nThe shell's story text.\n";
   // Each epic's README links its first story, relative to itself.
   const epic = EPICS.find(({ dir }) => rel === `${dir}/README.md`);
   if (epic) return `# ${epic.dir}\n\nStart with [the first story](${epic.stories[0]![0]}.md).\n`;
@@ -324,11 +342,28 @@ export function leftNavDemoHandlers(
   };
   const list = base.dashboard_list_sessions;
   const readBase = base.read_file;
+  const resolveBase = base.bridge_resolve_open_target;
   const hub = agentListHub(events, leftNavDemoListWorld());
   return {
     read_file: (args) => {
       const text = demoFileText(String(args.path ?? ""));
       return text ?? readBase?.(args);
+    },
+    // A page's `openFile` and an inbox chip open the demo's files. A relative path is in the team
+    // the chip names (the user's own, which has no story page), else in the team the demo opens on
+    // (the docs team, whose story page the demo serves); an absolute one is in the team whose
+    // content holds it.
+    bridge_resolve_open_target: (args) => {
+      const asked = String(args.path ?? "");
+      const docs = asked.startsWith("/")
+        ? asked.startsWith(`${DOCS_ROOT}/`)
+        : args.team !== MOCK_TEAM_NAME;
+      const contentRoot = docs ? DOCS_ROOT : ROOT;
+      const path = asked.startsWith("/") ? asked : `${contentRoot}/${asked}`;
+      if (demoFileText(path) === null) return resolveBase?.(args);
+      return docs
+        ? { path, org: MOCK_CODESENSE_ORG_SLUG, team: CODESENSE_DOCS_TEAM, contentRoot }
+        : { path, org: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME, contentRoot };
     },
     live_hub_agent_list_read: (args) => hub.snapshot(String(args.topic), String(args.viewKey)),
     scan_pipeline_tree: (args) => leftNavDemoTree(String(args.teamContentPath).replace(/\/+$/, "")),
