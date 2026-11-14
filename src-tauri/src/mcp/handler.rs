@@ -32,6 +32,7 @@ use super::avatar_tools;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
+use super::probe_environment::ProbeEnvironmentParams;
 use super::routine_tools;
 use super::setup_tools;
 #[cfg(test)]
@@ -2414,6 +2415,12 @@ impl CodesenseHandler {
                         "available": status.git.available,
                         "path": status.git.path,
                         "version": status.git.version,
+                    },
+                    "gh": {
+                        "available": status.gh.available,
+                        "path": status.gh.path,
+                        "version": status.gh.version,
+                        "resolving": status.gh.resolving,
                     },
                     // Per-agent status keyed by agent basename (was a single
                     // `claude` field). Each entry is `{available, path, resolving}`;
@@ -6255,6 +6262,22 @@ impl CodesenseHandler {
         )
         .await?;
         ok_json(serde_json::json!(repos))
+    }
+
+    #[tool(
+        description = "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned."
+    )]
+    async fn probe_environment(
+        &self,
+        Parameters(params): Parameters<ProbeEnvironmentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = crate::mcp::probe_environment::probe_environment_request(
+            self.app_handle.clone(),
+            params,
+        )
+        .await
+        .map_err(|e| ErrorData::invalid_params(format!("probe_environment: {e}"), None))?;
+        ok_json(report)
     }
 
     #[tool(
@@ -17210,6 +17233,8 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only look at this Mac for the setup guide.
+        "probe_environment",
         // Read-only pack folder validator.
         "pack_validate",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
