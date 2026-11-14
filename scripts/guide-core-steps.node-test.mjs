@@ -219,3 +219,95 @@ test("a team row names only shareable inputs, and the paths stay private", () =>
     assert.ok(!/\/(?:Users|home)\//.test(JSON.stringify(s)), id);
   }
 });
+
+// The step table: what each step's verify probes read before its card, after each act its card
+// offers, and in a new session that knows none of the inputs yet. Before, no verify probe says
+// done, so the card is offered; after each act and on a re-run one does, so verify passes and
+// the step is skipped. A probe the row leaves out reads `none`.
+const TABLE = {
+  "context-repo": {
+    before: [{ orgs: "none" }],
+    after: {
+      "create-local-organization": { orgs: "found" },
+      "attach-context-repository": { orgs: "found" },
+    },
+    rerun: { orgs: "found" },
+  },
+  team: {
+    // No team yet, so the ledger probe has no team to read; or a team with no setup log.
+    before: [{}, { ledger: "unreadable" }],
+    after: { "create-team": { ledger: "found" }, "add-ledger-schema": { ledger: "found" } },
+    rerun: { ledger: "found" },
+  },
+  product: {
+    // The ledger row is written after verify, so verify reads the epic; a new session doesn't
+    // know the product's name, so it reads the row.
+    before: [{}, { epic: "unreadable" }],
+    after: { "create-epic": { epic: "found" } },
+    rerun: { product: "found" },
+  },
+  "source-repos": {
+    before: [{}, { repos: "missing" }],
+    after: {
+      "add-source-repo": { repos: "unattached" },
+      "attach-source-repo-path": { repos: "attached" },
+    },
+    rerun: { repos: "unattached" },
+  },
+};
+const RANK = ["unknown", "missing", "partial", "done"];
+
+/** The step's state from what its verify probes read: the most-done of them. */
+function stateOf(s, reads) {
+  return [s.verify.probe]
+    .flat()
+    .map((id) => s.probe.find((p) => p.id === id).map[reads[id] ?? "none"])
+    .reduce((a, b) => (RANK.indexOf(a) >= RANK.indexOf(b) ? a : b));
+}
+
+test("the step table: each card is offered until done, each act ends done, and a re-run skips it", () => {
+  assert.deepEqual(Object.keys(TABLE), IDS);
+  for (const id of IDS) {
+    const s = step(id);
+    const row = TABLE[id];
+    for (const reads of row.before)
+      assert.notEqual(stateOf(s, reads), "done", `${id} before ${JSON.stringify(reads)}`);
+    const acts = s.ask.options.filter((o) => o.act !== "none").map((o) => o.act);
+    assert.deepEqual(Object.keys(row.after).sort(), acts.sort(), `${id}: every card act has a row`);
+    for (const [act, reads] of Object.entries(row.after))
+      assert.equal(stateOf(s, reads), s.verify.expect, `${id}/${act} ends ${s.verify.expect}`);
+    assert.equal(stateOf(s, row.rerun), "done", `${id}: a re-run skips it`);
+  }
+});
+
+test("the team step adds the setup log to a team that has none, and is done only with one", () => {
+  const s = step("team");
+  const ledger = s.probe.find((p) => p.id === "ledger");
+  assert.deepEqual(ledger.check, {
+    tool: "records_list",
+    org: "{{probe.teams.org}}",
+    team: "{{probe.teams.team}}",
+    collection: "setup-ledger",
+  });
+  // records_list fails with "unknown collection" until the schema file exists.
+  assert.equal(ledger.map.unreadable, "partial");
+  assert.equal(s.verify.probe, "ledger");
+  const add = s.act.find((a) => a.id === "add-ledger-schema");
+  const write = s.act.find((a) => a.id === "write-ledger-schema");
+  assert.equal(
+    add.verb.args.path,
+    "{{probe.teams.org_root}}/{{probe.teams.team}}/content/schema/setup-ledger.yaml",
+  );
+  assert.deepEqual({ ...add.verb.args, path: "" }, { ...write.verb.args, path: "" });
+  assert.ok(!add.then, "adding the log creates no team");
+  assert.ok(s.ask.options.some((o) => o.act === "add-ledger-schema"));
+  assert.match(s.ask.text, /no setup log/);
+});
+
+test("the product step verifies its epic, which it can read before the ledger row is written", () => {
+  const s = step("product");
+  const create = s.act.find((a) => a.id === "create-epic");
+  const epic = s.probe.find((p) => p.id === "epic");
+  assert.deepEqual(epic.check, { tool: "read_epic_repos", epicFilePath: create.verb.args.path });
+  assert.deepEqual([s.verify.probe].flat().sort(), ["epic", "product"]);
+});

@@ -49,7 +49,7 @@ files:
     sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
     exec: false
   - path: content/guide/core-steps.md
-    sha256: 906d8903bed5521e844b28249ef50aa681d781be9b92555a727c0c332d634115
+    sha256: 540e2911d027d3e876888da9a11a7166020b780aff5a649d5e16e731fd5ce057
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
@@ -70,11 +70,11 @@ files:
     sha256: f716ba453e5cae1bbe5360676e8baac1c6e357e18340b04cfa8392af0e6fb90a
     exec: false
   - path: setup/steps/product.yml
-    sha256: c12bdc64156912971b9571f1cb1eb0776d05c4a22538972a56d553a0317d7cf8
+    sha256: 6557d08f1398b161847c33f1e95311b95ad3f59cf380ba9de154e4d0d8a06138
     exec: false
   - path: setup/steps/source-repos.yml
     sha256: e2e59362b42384c8798671f10afaea639ebea3f2634fb29b4f7e033c1a463eac
     exec: false
   - path: setup/steps/team.yml
-    sha256: f0dc41eb8d11f4a44fc0a41147eed59dd6039da0bb18dc5d640b7e319139821a
+    sha256: aa246f7cedc9251f2cb132c1025757463a5d5e3793edf9e33083955f2ad37285
     exec: false

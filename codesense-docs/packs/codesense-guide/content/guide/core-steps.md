@@ -5,8 +5,8 @@ The setup guide works from step files. Each one starts with a check, so running 
 | Step | What it checks | What one click changes | How to undo |
 |---|---|---|---|
 | `context-repo` | whether you already have a context repo besides the docs | creates a context repo in a new folder you name, adds your first team and the setup log's schema, or connects a context repo you already have, in place | detach it under Repos; the folder and its history stay |
-| `team` | whether your context repo has a team | creates the team and adds the setup log's schema | archive the team from its settings |
-| `product` | whether the setup log has a product | creates one epic named after the product, lists its repos on it, and records it in the setup log | delete the epic's folder and its row in the log |
+| `team` | whether your context repo has a team, and whether its setup log reads | creates the team and adds the setup log's schema, or adds the log to a team that has none | archive the team from its settings |
+| `product` | whether the setup log has a product, or the epic you just named exists | creates one epic named after the product, lists its repos on it, and records it in the setup log | delete the epic's folder and its row in the log |
 | `source-repos` | which repos your team tracks and which have a clone here | adds each repo you list to the team, or binds a clone you already have | remove the repo under Source repos; nothing on disk changes |
 
 Until CodeSense has products of its own, a product is one epic plus a row in the setup log. The step switches over when the product tool ships.

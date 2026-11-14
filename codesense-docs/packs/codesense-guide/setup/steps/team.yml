@@ -3,7 +3,8 @@ id: team
 title: Name your team
 summary: >-
   A team groups the repos, products and stories you work on. The team step also gives it the
-  setup log, so each finished step is recorded in your team and a new session can resume.
+  setup log, so each finished step is recorded in your team and a new session can resume; a
+  team is done only once its log reads.
 needs: [context-repo]
 probe:
   - id: teams
@@ -11,14 +12,23 @@ probe:
     pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
     yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot", team: "orgs[].teams[].name" }
     map: { found: done, none: missing, unreadable: unknown }
+  - id: ledger
+    check:
+      tool: records_list
+      org: "{{probe.teams.org}}"
+      team: "{{probe.teams.team}}"
+      collection: setup-ledger
+    # The collection is unknown, so the list fails, until the setup log's schema is in the team.
+    map: { found: done, none: missing, unreadable: partial }
 ask:
   text: >-
     **Name your team.** Pick a short lowercase name, like the group you ship with. I'll create
-    it in your context repo, switch CodeSense to it and add the setup log to it. Nothing is
-    committed or pushed: the new files wait in your context repo's folder for you to review
-    and commit.
+    it in your context repo, switch CodeSense to it and add the setup log to it. If your team
+    already exists but has no setup log, I'll only add the log. Nothing is committed or pushed:
+    the new files wait in your context repo's folder for you to review and commit.
   options:
     - { label: Create it, act: create-team }
+    - { label: Add the setup log, act: add-ledger-schema }
     - { label: Not now, act: none }
   free_text: true
 inputs:
@@ -44,7 +54,18 @@ act:
         path: "{{probe.teams.org_root}}/{{team}}/content/schema/setup-ledger.yaml"
         content_from: guide/setup/ledger/setup-ledger.yaml
         onCollision: fail
-verify: { probe: teams, expect: done }
+  - id: add-ledger-schema
+    consent: local-write
+    what: add the setup log's schema to the team you already have
+    where: your team's content folder in the context repo
+    why: so each finished step is recorded, and a new session resumes from facts
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/schema/setup-ledger.yaml"
+        content_from: guide/setup/ledger/setup-ledger.yaml
+        onCollision: fail
+verify: { probe: ledger, expect: done }
 record:
   scope: team
   fields: { created: "team {{team}}" }

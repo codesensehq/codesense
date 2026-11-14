@@ -19,6 +19,13 @@ probe:
       collection: setup-ledger
     pick: { "rows[].fields.step": product, "rows[].fields.state": done }
     map: { found: done, none: missing, unreadable: unknown }
+  # The ledger row is written after verify, so verify also reads the epic itself. A new session
+  # doesn't know the product's name yet; this probe then reads none, and the row above decides.
+  - id: epic
+    check:
+      tool: read_epic_repos
+      epicFilePath: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
+    map: { found: done, none: missing, unreadable: missing }
 ask:
   text: >-
     **What's the product called?** I'll create one epic with that name in your team, list the
@@ -58,7 +65,7 @@ act:
       args:
         epicFilePath: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
         repos: "{{repos}}"
-verify: { probe: product, expect: done }
+verify: { probe: [product, epic], expect: done }
 record:
   scope: team
   fields: { created: "product {{product}}, one epic" }
