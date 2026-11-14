@@ -7,10 +7,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team` and the
-/// Foreman hand-back's `send_role_message`. The same
-/// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 28] = [
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`,
+/// the Foreman hand-back's `send_role_message` and the git-access and clone steps' three (a tab,
+/// its output, the clone verb). The same list as `scripts/guide-pack.node-test.mjs`; a later
+/// phase edits both.
+const PHASE_1: [&str; 31] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -31,6 +32,9 @@ const PHASE_1: [&str; 28] = [
     "add_source_repo",
     "attach_source_repo_path",
     "run_in_terminal_tab",
+    "open_terminal_tab",
+    "read_terminal_tab",
+    "clone_repo",
     "records_create",
     "records_set_fields",
     "create_content_file",

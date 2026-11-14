@@ -37,6 +37,9 @@ mcp:
     - add_source_repo
     - attach_source_repo_path
     - run_in_terminal_tab
+    - open_terminal_tab
+    - read_terminal_tab
+    - clone_repo
     - records_create
     - records_set_fields
     - create_content_file

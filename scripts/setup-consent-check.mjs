@@ -3,7 +3,7 @@
 // The consent check for the setup agent (ONB-6). The engine never runs a setup step, so
 // "act only after the person's click" is the agent's own rule; this reads a recorded
 // session (`session_read` with its conversation turns) and fails if a setup verb ran
-// without one.
+// without one. A `clone_repo` with `stop: true` needs a live click but spends no use.
 //
 //   node scripts/setup-consent-check.mjs <session-export.json>
 //
@@ -23,9 +23,14 @@
 // (`stepActVerbs`), a card that names a step or act they lack, or another consent class than
 // the act's, allows nothing either. A click's verbs run in the order its act lists them (its
 // own, then its `then` acts'), so a write may not come before the switch that comes first. A
-// `set_active_team` must name the team the latest `describe_setup` reading picks (the first
-// non-archived team outside the docs' org, as the steps' probes pick it), and a file written
-// after it must lie in that team's folder. Without them, an act named after a verb (`create-team`)
+// `set_active_team` must name a team the latest `describe_setup` lists (a non-archived one
+// outside the docs' org), and an activating `create_team` an org it lists. The latest switch
+// holds across clicks until another; with none, a file may lie in any listed team. Once a
+// `describe_setup` follows the switch, a team it no longer lists holds nothing. Every file must
+// lie in `<orgRoot>/<team>/content/`, compared by path component, with no `..`. A command's
+// `repo` must be one the team tracks, and a write whose `content` the step file fixes must carry
+// exactly it. A `read_terminal_tab` must name, by `handle`, a tab an `open_terminal_tab` or
+// `clone_repo` result returned. Without step files, an act named after a verb (`create-team`)
 // allows that verb and a `run` act (`run`, `run-…`) allows `run_in_terminal_tab`. No setup
 // call may name the docs' own org, `codesense/docs`, clicked or not. Ledger writes
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
@@ -37,7 +42,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCardLine } from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
-import { SETUP_VERBS, actAllowances } from "./lib/pack-steps.mjs";
+import { SETUP_VERBS, actAllowances, commandInputs } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
 
@@ -55,8 +60,12 @@ function earlierUnspent(allowed, name) {
   return undefined;
 }
 
-/** The org and team the guide's probes pick from a `describe_setup` result, if it has one. */
-function pickedTeam(result) {
+/**
+ * The teams a `describe_setup` result lists that the guide may work in (non-archived, outside
+ * the docs' org, each `{org, orgRoot, team, repos}`) and every such org's folder; `undefined`
+ * when the result lists no org.
+ */
+function listedSetup(result) {
   let orgs;
   const walk = (value) => {
     if (orgs || !value || typeof value !== "object") return;
@@ -64,12 +73,49 @@ function pickedTeam(result) {
     else Object.values(value).forEach(walk);
   };
   walk(json(result));
-  for (const org of orgs ?? []) {
+  // A result with no orgs (an error, a cut-off export, nobody set up) says nothing.
+  if (!orgs?.length) return undefined;
+  const teams = [];
+  const roots = new Map(); // each non-docs org's folder, even when it has no team yet
+  for (const org of orgs) {
     if (org.slug === DOCS_ORG) continue;
-    const team = (org.teams ?? []).find((t) => t.archived === false);
-    if (team) return { org: org.slug, team: team.name };
+    roots.set(org.slug, org.orgRoot);
+    for (const team of org.teams ?? [])
+      if (team.archived === false)
+        teams.push({
+          org: org.slug,
+          orgRoot: org.orgRoot,
+          team: team.name,
+          repos: (team.sourceRepos ?? []).map((r) => r.slug),
+        });
   }
-  return undefined;
+  return { teams, roots };
+}
+
+const nameOf = (t) => `${t.org}/${t.team}`;
+
+/** Whether `file` lies in `<orgRoot>/<team>/content/`, by path component and with no `..`. */
+function inTeamContent(file, { orgRoot, team }) {
+  const parts = file.split("/").filter(Boolean);
+  if (parts.includes("..")) return false;
+  // A team with no known folder holds no file: an empty root would read from the repo's root.
+  if (typeof orgRoot !== "string" || orgRoot === "") return false;
+  const folder = [...orgRoot.split("/").filter(Boolean), team, "content"];
+  return parts.length > folder.length && folder.every((part, i) => parts[i] === part);
+}
+
+/** Every `handle` string a tool result carries. */
+function handlesIn(result) {
+  const found = [];
+  const walk = (value) => {
+    if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object")
+      for (const [key, inner] of Object.entries(value))
+        if (key === "handle" && typeof inner === "string") found.push(inner);
+        else walk(inner);
+  };
+  walk(json(result));
+  return found;
 }
 
 const GUIDE_PACK = join(
@@ -210,8 +256,10 @@ export function checkConsent(
   let card; // the latest card: { id, turn, name, line, answered }
   let allowed = new Map(); // the verbs the latest click allows: name to {uses, used, cmd, click}
   let why = "no card has been sent";
-  let picked; // the team the latest describe_setup picks: { org, team }
-  let switched; // the team a set_active_team in the latest click switched to
+  let listed = []; // the teams the latest good describe_setup lists
+  let roots = new Map(); // the orgs it lists, with their folders
+  let switched; // {org, team, seen}: the latest set_active_team (or activating create_team)
+  const seenHandles = new Set(); // the tabs an open_terminal_tab or clone_repo result returned
   let cards = 0;
   let calls = 0;
   let clicks = 0;
@@ -232,6 +280,8 @@ export function checkConsent(
           errors.push(`turn ${index}: send_message came after the hand-back at turn ${handback}`);
         else if (done) errors.push(`turn ${index}: send_message came after signal_done`);
       }
+      if (name === "open_terminal_tab" || name === "clone_repo")
+        for (const handle of handlesIn(raw.result)) seenHandles.add(handle);
       const line =
         name === "send_message" && input.to === "human" && input.kind === "needs-you"
           ? parseCardLine(input.text ?? input.message)
@@ -271,7 +321,6 @@ export function checkConsent(
             why = `the card ${card.label} sent at turn ${card.turn} is a read card and allows no change`;
           } else {
             allowed = new Map();
-            switched = undefined;
             const verbs = actVerbs(chosen.act, card.line.step, card.line.consent);
             if (typeof verbs === "string") {
               why = `the click on ${card.label} sent at turn ${card.turn} allows nothing: ${verbs}`;
@@ -279,12 +328,20 @@ export function checkConsent(
               continue;
             }
             for (const entry of verbs) {
-              const { verb, uses = 1, cmd } = typeof entry === "string" ? { verb: entry } : entry;
+              const {
+                verb,
+                uses = 1,
+                cmd,
+                inputs,
+                content,
+              } = typeof entry === "string" ? { verb: entry } : entry;
               const had = allowed.get(verb);
               allowed.set(verb, {
                 uses: (had?.uses ?? 0) + uses,
                 used: 0,
                 cmd: had ? undefined : cmd,
+                inputs: had ? undefined : inputs,
+                content: had ? undefined : content,
                 act: chosen.act,
                 step: card.line.step,
                 click: `the click on ${card.label} sent at turn ${card.turn}`,
@@ -296,7 +353,23 @@ export function checkConsent(
           }
         }
       } else if (name === "describe_setup") {
-        picked = pickedTeam(raw.result);
+        const setup = listedSetup(raw.result);
+        if (setup) {
+          ({ teams: listed, roots } = setup);
+          // From here on the switch is read against this listing, with no fallback.
+          if (switched) switched.relisted = true;
+        }
+      } else if (name === "read_terminal_tab") {
+        if (typeof input.handle !== "string" || input.handle === "")
+          errors.push(
+            input.tab !== undefined
+              ? `turn ${index}: read_terminal_tab names the tab ${input.tab}, not a handle, so it could read any tab`
+              : `turn ${index}: read_terminal_tab names no handle`,
+          );
+        else if (!seenHandles.has(input.handle))
+          errors.push(
+            `turn ${index}: read_terminal_tab names handle ${input.handle}, which no open_terminal_tab in this session returned`,
+          );
       } else if (name === "send_role_message") {
         const faults = handbackFaults(input);
         if (handback !== undefined)
@@ -333,6 +406,8 @@ export function checkConsent(
             errors.push(
               `turn ${index}: run_in_terminal_tab sent the key ${input.key}, which no click allows`,
             );
+        } else if (name === "clone_repo" && input.stop === true) {
+          // Stop ends the clone the click started; like Ctrl-C it spends nothing.
         } else if (earlierUnspent(allowed, name)) {
           errors.push(
             `turn ${index}: ${name} was called before ${earlierUnspent(allowed, name)}, which ${entry.click} allows first`,
@@ -348,21 +423,62 @@ export function checkConsent(
           if (name === "set_active_team") {
             const org = String(input.org ?? "").trim();
             const team = String(input.team ?? "").trim();
-            if (org !== picked?.org || team !== picked?.team)
+            const found = listed.find((t) => t.org === org && t.team === team);
+            if (found) switched = { org, team, seen: found };
+            else
               errors.push(
-                `turn ${index}: set_active_team switched to ${org}/${team}, but the team describe_setup picked is ${picked ? `${picked.org}/${picked.team}` : "none"}`,
+                `turn ${index}: set_active_team switched to ${org}/${team}, but describe_setup listed ${listed.length ? `only ${listed.map(nameOf).join(", ")}` : "no team"}`,
               );
-            else switched = picked;
+          } else if (name === "create_team" && input.activate === true) {
+            const org = String(input.org ?? "").trim();
+            const team = String(input.name ?? "").trim();
+            if (!roots.has(org))
+              errors.push(
+                `turn ${index}: create_team activates ${org}/${team}, but describe_setup listed no org ${org}`,
+              );
+            switched = { org, team, seen: { org, team, repos: [] } };
           }
+          // The switch is the team's name; its folder and repos are the latest listing's. Until a
+          // good listing follows the switch, the one it saw stands in; once one has, a team it
+          // leaves out (archived, dropped, its org gone) is no team to work in.
+          const current =
+            switched && listed.find((t) => t.org === switched.org && t.team === switched.team);
+          const gone = switched?.relisted && !current;
+          const inForce = switched && !gone && { ...switched.seen, ...current };
+          if (inForce && inForce.orgRoot === undefined) inForce.orgRoot = roots.get(inForce.org);
+          const teams = gone ? [] : inForce ? [inForce] : listed;
           const file = input[FILE_ARGS[name]];
-          if (switched && typeof file === "string" && !file.includes(`/${switched.team}/content/`))
+          if (typeof file === "string" && gone)
             errors.push(
-              `turn ${index}: ${name} wrote ${file}, outside the team set_active_team switched to (${switched.team})`,
+              `turn ${index}: ${name} wrote ${file}, but the team it switched to, ${nameOf(switched)}, is no longer listed`,
             );
-          if (entry.cmd !== undefined && input.command !== entry.cmd)
+          else if (typeof file === "string" && !teams.length)
             errors.push(
-              `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,
+              `turn ${index}: ${name} wrote ${file}, but no describe_setup listed a team to write in`,
             );
+          else if (typeof file === "string" && !teams.some((t) => inTeamContent(file, t)))
+            errors.push(
+              `turn ${index}: ${name} wrote ${file}, outside the content folder of ${teams.map(nameOf).join(" or ")}`,
+            );
+          if (entry.content !== undefined && input.content !== entry.content)
+            errors.push(
+              `turn ${index}: ${name} wrote content that is not the exact content of act ${entry.act} in step ${entry.step}`,
+            );
+          if (entry.cmd !== undefined) {
+            const typed = commandInputs(entry.cmd, input.command, entry.inputs);
+            if (!typed)
+              errors.push(
+                `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,
+              );
+            else if (typed.repo !== undefined && gone)
+              errors.push(
+                `turn ${index}: run_in_terminal_tab typed the repo ${typed.repo}, but the team it switched to, ${nameOf(switched)}, is no longer listed`,
+              );
+            else if (typed.repo !== undefined && !teams.some((t) => t.repos.includes(typed.repo)))
+              errors.push(
+                `turn ${index}: run_in_terminal_tab typed the repo ${typed.repo}, which describe_setup did not list for the team`,
+              );
+          }
         }
       }
     }
