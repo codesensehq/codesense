@@ -715,16 +715,16 @@ fn read_image_file_gated(
     admit(path)?;
     let real = match path.canonicalize() {
         Ok(real) => real,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("not found: {}", path.display()))
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => {
+            return Err(format!("not found: {}", std::path::Path::display(path)))
         }
-        Err(e) => return Err(format!("resolve {}: {e}", path.display())),
+        Err(e) => return Err(format!("resolve {}: {e}", std::path::Path::display(path))),
     };
     admit(&real)?;
     let root: &Path = real.parent().ok_or("invalid image path")?;
     match crate::commands::raster_bytes::read_file_within(root, path)? {
         Some(side) => Ok(crate::commands::raster_bytes::image_file(side)),
-        None => Err(format!("not found: {}", path.display())),
+        None => Err(format!("not found: {}", std::path::Path::display(path))),
     }
 }
 

@@ -98,26 +98,33 @@ pub(crate) fn image_file(side: Capped) -> ImageFile {
 pub(crate) fn read_file_within(root: &Path, path: &Path) -> Result<Option<Capped>, String> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("read {}: {e}", path.display())),
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read {}: {e}", std::path::Path::display(path))),
     };
     if !meta.is_file() {
-        return Err(format!("not a regular file: {}", path.display()));
+        return Err(format!(
+            "not a regular file: {}",
+            std::path::Path::display(path)
+        ));
     }
     let real_root = root
         .canonicalize()
-        .map_err(|e| format!("resolve {}: {e}", root.display()))?;
+        .map_err(|e| format!("resolve {}: {e}", std::path::Path::display(root)))?;
     let real = path
         .canonicalize()
-        .map_err(|e| format!("resolve {}: {e}", path.display()))?;
+        .map_err(|e| format!("resolve {}: {e}", std::path::Path::display(path)))?;
     if !real.starts_with(&real_root) {
-        return Err(format!("path leaves its root: {}", path.display()));
+        return Err(format!(
+            "path leaves its root: {}",
+            std::path::Path::display(path)
+        ));
     }
-    let file = std::fs::File::open(&real).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let file = std::fs::File::open(&real)
+        .map_err(|e| format!("read {}: {e}", std::path::Path::display(path)))?;
     let mut bytes: Vec<u8> = vec![];
     file.take(MAX_RASTER_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+        .map_err(|e| format!("read {}: {e}", std::path::Path::display(path)))?;
     Ok(Some(capped(bytes)))
 }
 

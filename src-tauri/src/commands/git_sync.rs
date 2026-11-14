@@ -1930,7 +1930,7 @@ pub(crate) fn source_image_sides_impl(
             };
             let object = entry
                 .to_object(&repo)
-                .map_err(|e| format!("tree object {}: {e}", at.display()))?;
+                .map_err(|e| format!("tree object {}: {e}", std::path::Path::display(at)))?;
             let Some(blob) = object.as_blob() else {
                 return Ok(None);
             };
@@ -1978,7 +1978,7 @@ pub async fn source_image_sides<R: tauri::Runtime>(
 ) -> Result<raster_bytes::ImageSides, String> {
     crate::commands::files::validate_repo_read_path(&repo_path, &app)?;
     let path = std::path::PathBuf::from(repo_path);
-    let old_path = old_path.filter(|p| !p.is_empty());
+    let old_path = old_path.filter(|p| !std::string::String::is_empty(p));
     tauri::async_runtime::spawn_blocking(move || {
         source_image_sides_impl(
             &path,
