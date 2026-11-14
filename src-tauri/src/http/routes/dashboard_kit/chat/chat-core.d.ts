@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Types for chat-core.js, the DOM-free chat rules the kit's chat and the app's overlay share.
+// Types for chat-core.js, the DOM-free chat rules the kit's chat and the app's typed module share.
 export interface ChatLeadRow {
   state?: string;
   unread?: number;

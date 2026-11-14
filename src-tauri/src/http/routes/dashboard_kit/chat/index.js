@@ -6,6 +6,6 @@ import {cardAnswer,createMarkLatch,deliveryMark,isBusy,parseCard} from './chat-c
 import {mergeThread,newestFrom,rowsOf,sideOf} from './thread.js';
 const cs=window.codesense;
 if(cs&&cs.kit&&!cs.kit.chat){
- // mount(el, opts) is the only chat DOM; core is the DOM-free marks rule and card parser the React overlay imports from chat-core.js; thread holds the merge rules a transport's reads follow.
+ // mount(el, opts) is the only chat DOM; core is the DOM-free marks rule and card parser, also served to pages as chat-core.js; thread holds the merge rules a transport's reads follow.
  cs.kit.chat={mount,pinToBottom,core:{cardAnswer,createMarkLatch,deliveryMark,isBusy,parseCard},thread:{mergeThread,newestFrom,rowsOf,sideOf}};
 }

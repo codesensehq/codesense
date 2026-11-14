@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// chat-core: the chat rules with no DOM and no bridge, so the page chat and the CLI overlay read them from one place. A second marks rule or card parser anywhere is a review finding.
+// chat-core: the chat rules with no DOM and no bridge, so the page chat and the app's typed module read them from one place. A second marks rule or card parser anywhere is a review finding.
 // The Queued/Delivered rule and the needs-you card parser. Names stay unique across modules: the bundle is one scope.
 // Only an idle lead takes a message at once. Anything else (running, needs you in its terminal, offline, unknown) holds it.
 export const isBusy=lead=>Boolean(lead)&&lead.state!=='idle';
