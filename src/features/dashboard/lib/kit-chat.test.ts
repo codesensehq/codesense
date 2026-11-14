@@ -111,11 +111,14 @@ describe("kit.chat", () => {
     expect(CHAT_JS).not.toMatch(/^\s*(import|export)\b/m);
     expect(Object.keys(kitOf().chat).sort()).toEqual(["core", "mount", "pinToBottom", "thread"]);
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
+      "CONSENT_CLASSES",
       "cardAnswer",
       "createMarkLatch",
       "deliveryMark",
+      "formatCardLine",
       "isBusy",
       "parseCard",
+      "parseCardLine",
       "parseNext",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
@@ -785,5 +788,123 @@ describe("kit.chat suggestion chips from the Next line", () => {
       pencil(s.el, "Bring in my issues")!.click();
       expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");
     });
+  });
+});
+
+describe("kit.chat consent cards (the card line)", () => {
+  const LINE = "card: clone · local-write · clone-repos=Do it | none=Not now";
+  const BODY = "Clone these 2 repos?\n\nWhat: acme/api, acme/worker";
+  const card = (text: string, id = 7): Row => ({
+    messageId: id,
+    from: "lead-1",
+    kind: "needs-you",
+    text,
+    createdAtMs: 1000,
+  });
+  const labels = (el: HTMLElement) =>
+    [...el.querySelectorAll<HTMLButtonElement>("[data-ans]")].map((node) => node.dataset.ans);
+
+  it("is off by default: the line stays in the text, and a card with an Options line is the same as before", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".card .body")!.textContent).toContain(LINE);
+    expect(s.el.querySelector("[data-consent]")).toBeNull();
+    expect(s.el.querySelector("[data-act]")).toBeNull();
+    const plain = setup([lead("idle")], [card("Go?\nOptions: `A`, `B`. My pick: B, because x.")]);
+    mountOn(plain, { cards: { consent: false } });
+    await flush();
+    expect(labels(plain.el)).toEqual(["B", "A"]);
+    expect(plain.el.querySelector("[data-consent]")).toBeNull();
+  });
+
+  it("cards.consent hides the line, shows its labels as buttons and its class in the header", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    const el = s.el.querySelector<HTMLElement>(".card")!;
+    expect(el.querySelector(".body")!.textContent).toBe(BODY);
+    expect(el.textContent).not.toContain("card:");
+    expect(labels(s.el)).toEqual(["Do it", "Not now"]);
+    const cls = el.querySelector<HTMLElement>(".card-h .cls")!;
+    expect(cls.textContent).toBe("local change");
+    expect(cls.dataset.consent).toBe("local-write");
+    expect(el.dataset.step).toBe("clone");
+    expect(el.dataset.consent).toBe("local-write");
+    expect(
+      [...el.querySelectorAll<HTMLElement>("[data-ans]")].map((node) => node.dataset.act),
+    ).toEqual(["clone-repos", "none"]);
+    expect(el.querySelector("[data-ans='Do it']")!.className).toBe("btn primary");
+    expect(el.querySelector("[data-ans='Not now']")!.className).toBe("btn");
+    expect(el.querySelector(".rec")).toBeNull();
+  });
+
+  it("a click sends the label through the transport's reply, to this card", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`, 9)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>("[data-ans='Not now']")!.click();
+    await flush();
+    expect(s.reply).toHaveBeenCalledTimes(1);
+    expect(s.reply).toHaveBeenCalledWith(9, "Not now");
+    expect(s.el.querySelector(".card")!.getAttribute("data-state")).toBe("answered");
+    expect(s.el.querySelector(".card .cls")!.textContent).toBe("local change");
+  });
+
+  it("names each class in words, and a card with no line is as it was", async () => {
+    const lines = [
+      ["read", "read"],
+      ["install-or-sign-in", "install or sign-in"],
+      ["external-write", "external write"],
+    ];
+    for (const [consent, words] of lines) {
+      const s = setup([lead("idle")], [card(`Q?\ncard: s · ${consent} · go=Go | none=No`)]);
+      mountOn(s, { cards: { consent: true } });
+      await flush();
+      expect(s.el.querySelector(".card .cls")!.textContent).toBe(words);
+    }
+    const s = setup([lead("idle")], [card("Go?\nOptions: `A`, `B`.")]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    expect(labels(s.el)).toEqual(["A", "B"]);
+    expect(s.el.querySelector(".card .cls")).toBeNull();
+    expect(s.el.querySelector(".card")!.hasAttribute("data-step")).toBe(false);
+  });
+
+  it("a line that is not well formed stays in the text and the card falls back to the page's parser", async () => {
+    const bad = "Go?\ncard: clone · write · x=Go";
+    const s = setup([lead("idle")], [card(bad)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    expect(s.el.querySelector(".card .body")!.textContent).toBe(bad);
+    expect(s.el.querySelector(".card .cls")).toBeNull();
+  });
+
+  it("the line wins over a custom parse, which still reads a text with no line", async () => {
+    const parse = vi.fn((text: string) => ({
+      question: text,
+      options: ["Yes", "No"],
+      pick: "Yes",
+      reason: null,
+    }));
+    const s = setup([lead("idle")], [card(`Q?\n${LINE}`), card("Other?", 8)]);
+    mountOn(s, { cards: { consent: true, parse } });
+    await flush();
+    const first = s.el.querySelector<HTMLElement>("[data-card='7']")!;
+    expect(
+      [...first.querySelectorAll<HTMLElement>("[data-ans]")].map((n) => n.dataset.ans),
+    ).toEqual(["Do it", "Not now"]);
+    const second = s.el.querySelector<HTMLElement>("[data-card='8']")!;
+    expect(
+      [...second.querySelectorAll<HTMLElement>("[data-ans]")].map((n) => n.dataset.ans),
+    ).toEqual(["Yes", "No"]);
+  });
+
+  it("cards: false still shows the whole text as a message", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s, { cards: false });
+    await flush();
+    expect(s.el.querySelector(".card")).toBeNull();
+    expect(s.el.querySelector(".log .msg .body")!.textContent).toContain(LINE);
   });
 });

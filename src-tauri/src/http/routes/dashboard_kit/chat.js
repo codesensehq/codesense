@@ -27,7 +27,7 @@
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
-    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
+    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
     send: "Send",
     hint: "Enter to send · Shift+Enter for a new line",
     who: { you: "You" },
@@ -145,6 +145,33 @@
     if (!chips.length || chips.length > MAX_NEXT || distinct.size !== chips.length) return null;
     if (chips.some((chip) => chip.length > MAX_CHIP || /[<>]/.test(chip))) return null;
     return { text: lines.slice(0, at).join("\n").trimEnd(), chips };
+  }
+  var CONSENT_CLASSES = Object.freeze(["read", "local-write", "install-or-sign-in", "external-write"]);
+  var CARD_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  var MAX_ID = 64;
+  var SEP = " · ";
+  var idOk = (id) => typeof id === "string" && id.length <= MAX_ID && CARD_ID.test(id);
+  var labelOk = (label) => typeof label === "string" && label.length > 0 && label.length <= MAX_OPTION && label === label.trim() && !/[<>|\r\n]/.test(label);
+  var actsOk = (acts) => Array.isArray(acts) && acts.length >= 1 && acts.length <= MAX_OPTIONS && acts.every((item) => item && idOk(item.act) && labelOk(item.label)) && new Set(acts.map((item) => item.label.toLowerCase())).size === acts.length;
+  function formatCardLine({ step, consent, acts }) {
+    if (!idOk(step) || !CONSENT_CLASSES.includes(consent) || !actsOk(acts)) throw new TypeError("not a card line");
+    return `card: ${step}${SEP}${consent}${SEP}${acts.map((item) => `${item.act}=${item.label}`).join(" | ")}`;
+  }
+  function parseCardLine(text) {
+    if (typeof text !== "string") return null;
+    const lines = text.split(/\r?\n/);
+    let at = lines.length - 1;
+    while (at >= 0 && !lines[at].trim()) at--;
+    if (at < 0 || !lines[at].startsWith("card: ")) return null;
+    const rest = lines[at].slice(6).trimEnd(), first = rest.indexOf(SEP), second = first < 0 ? -1 : rest.indexOf(SEP, first + SEP.length);
+    if (second < 0) return null;
+    const step = rest.slice(0, first), consent = rest.slice(first + SEP.length, second);
+    const acts = rest.slice(second + SEP.length).split(" | ").map((part) => {
+      const eq = part.indexOf("=");
+      return eq < 0 ? null : { act: part.slice(0, eq), label: part.slice(eq + 1) };
+    });
+    if (!idOk(step) || !CONSENT_CLASSES.includes(consent) || acts.includes(null) || !actsOk(acts)) return null;
+    return { text: lines.slice(0, at).join("\n").trimEnd(), step, consent, acts };
   }
   function cardAnswer(cardId, thread) {
     const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
@@ -579,13 +606,13 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/card.js
   var CARD_COPY = CHAT_COPY.card;
-  function cardNode({ id, text, parsed, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
+  function cardNode({ id, text, parsed, meta = null, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
     const answered = state === "answered", busy = state === "pending", inInbox = answered && answer.where === "inbox";
-    const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
+    const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), meta ? h("span", { class: "cls", "data-consent": meta.consent }, CARD_COPY.consent[meta.consent]) : null, h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
     const body = h("div", { class: "body" }, parsed ? parsed.question : text);
     const parts = [head, body];
     if (parsed && !(answered && !inInbox)) {
-      parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: option === parsed.pick && !answered ? "btn primary" : "btn", "data-ans": option, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
+      parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: (option === parsed.pick || option === parsed.primary) && !answered ? "btn primary" : "btn", "data-ans": option, "data-act": meta ? (meta.acts.find((item) => item.label === option) || {}).act : null, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
     } else if (!parsed && !answered) {
       const input = h("textarea", { rows: "2", "aria-label": CARD_COPY.replyLabel, spellcheck: "true", disabled: busy ? "" : null });
       input.value = draft || "";
@@ -604,7 +631,7 @@
     }
     if (answered) parts.push(h("div", { class: "chosen", tabindex: "-1", role: "status" }, CARD_COPY.chose, " ", h("b", {}, answer.text), ` · ${inInbox ? CARD_COPY.inbox : CARD_COPY.here} · ${timeLabel(answer.at)}`));
     if (state === "error" && failure) parts.push(h("div", { class: "sys danger", role: "alert" }, h("span", { class: "why" }, CARD_COPY.failed(failure))));
-    return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state }, ...parts));
+    return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state, "data-step": meta ? meta.step : null, "data-consent": meta ? meta.consent : null }, ...parts));
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
@@ -651,7 +678,7 @@
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
   function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], next = false, activity = false, copy: words = null }) {
-    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, copy = words ? mergeCopy(words) : CHAT_COPY;
+    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
     let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
@@ -810,15 +837,16 @@
       });
     }
     function cardEntry(row) {
-      const id = row.messageId, local = cardState.get(id), remote = cardAnswer(id, thread), text = row.text || row.summary || "", parsed = parseOf(text);
+      const id = row.messageId, local = cardState.get(id), remote = cardAnswer(id, thread), said = row.text || row.summary || "", line = consentOn ? parseCardLine(said) : null, text = line ? line.text : said;
+      const parsed = line ? { question: line.text, options: line.acts.map((item) => item.label), pick: null, reason: null, primary: (line.acts.find((item) => item.act !== "none") || {}).label || null } : parseOf(text);
       const state2 = local && local.phase === "answered" ? "answered" : remote ? "answered" : local ? local.phase : "open";
       const answer = state2 !== "answered" ? null : local && local.phase === "answered" ? { text: local.text, at: local.at, where: "here" } : { text: remote.text, at: remote.at, where: "inbox" };
       const failure = state2 === "error" ? local.failure : null;
       return {
         t: row.createdAtMs || 0,
         id: "m" + id,
-        sig: ["c", id, text, state2, answer && answer.text, answer && answer.where, failure, row.createdAtMs].join("|"),
-        make: () => cardNode({ lead: target.leadName(row), id, text, parsed, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
+        sig: ["c", id, said, state2, answer && answer.text, answer && answer.where, failure, row.createdAtMs].join("|"),
+        make: () => cardNode({ lead: target.leadName(row), id, text, parsed, meta: line, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
       };
     }
     const deliveryOf = createMarkLatch();
@@ -1049,6 +1077,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

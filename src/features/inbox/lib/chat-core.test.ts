@@ -4,11 +4,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CONSENT_CLASSES,
   cardAnswer,
   createMarkLatch,
   deliveryMark,
+  formatCardLine,
   isBusy,
   parseCard,
+  parseCardLine,
   parseNext,
   type ChatLeadRow,
 } from "./chat-core";
@@ -253,5 +256,161 @@ describe("parseNext", () => {
       text: "Earlier: Next: `x`",
       chips: ["y", "z"],
     });
+  });
+});
+
+describe("the consent card line", () => {
+  const BODY = "Clone these 2 repos?\n\nWhat: acme/api, acme/worker";
+  const LINE = "card: clone · local-write · clone-repos=Do it | none=Not now";
+  const ACTS = [
+    { act: "clone-repos", label: "Do it" },
+    { act: "none", label: "Not now" },
+  ];
+
+  it("lists the four consent classes, the contract's order", () => {
+    expect([...CONSENT_CLASSES]).toEqual([
+      "read",
+      "local-write",
+      "install-or-sign-in",
+      "external-write",
+    ]);
+  });
+
+  it("formats one fixed line: card: step · class · act=label | act=label", () => {
+    expect(formatCardLine({ step: "clone", consent: "local-write", acts: ACTS })).toBe(LINE);
+  });
+
+  it("refuses to format a line the parser would not read", () => {
+    const ok = { step: "clone", consent: "local-write", acts: ACTS };
+    for (const bad of [
+      { ...ok, step: "" },
+      { ...ok, step: "Clone" },
+      { ...ok, step: "a b" },
+      { ...ok, step: "x".repeat(65) },
+      { ...ok, consent: "write" },
+      { ...ok, acts: [] },
+      { ...ok, acts: [{ act: "Do It", label: "x" }] },
+      { ...ok, acts: [{ act: "a", label: "" }] },
+      { ...ok, acts: [{ act: "a", label: "x | y" }] },
+      { ...ok, acts: [{ act: "a", label: "<x>" }] },
+      { ...ok, acts: [{ act: "a", label: "x".repeat(81) }] },
+      {
+        ...ok,
+        acts: [
+          { act: "a", label: "Go" },
+          { act: "b", label: "go" },
+        ],
+      },
+      { ...ok, acts: [1, 2, 3, 4, 5, 6, 7].map((n) => ({ act: `a${n}`, label: `L${n}` })) },
+    ])
+      expect(() => formatCardLine(bad as never), JSON.stringify(bad)).toThrow();
+  });
+
+  it("reads the trailing line and returns the text above it", () => {
+    expect(parseCardLine(`${BODY}\n${LINE}`)).toEqual({
+      text: BODY,
+      step: "clone",
+      consent: "local-write",
+      acts: ACTS,
+    });
+  });
+
+  it("round-trips what formatCardLine writes, with trailing blank lines and CRLF", () => {
+    for (const consent of CONSENT_CLASSES) {
+      const line = formatCardLine({ step: "gh-sign-in", consent, acts: ACTS });
+      expect(parseCardLine(`${BODY}\r\n${line}\r\n\r\n`)).toEqual({
+        text: BODY,
+        step: "gh-sign-in",
+        consent,
+        acts: ACTS,
+      });
+    }
+  });
+
+  it("keeps commas, dots and the middle dot inside a label", () => {
+    const labels = [
+      { act: "a", label: "Yes, clone both." },
+      { act: "none", label: "Not now · later" },
+    ];
+    const parsed = parseCardLine(
+      `Q?\n${formatCardLine({ step: "s", consent: "read", acts: labels })}`,
+    );
+    expect(parsed?.acts).toEqual(labels);
+  });
+
+  it("reads a single act, and trailing spaces after the line", () => {
+    expect(parseCardLine("Q?\ncard: a · read · open=Open it ")).toEqual({
+      text: "Q?",
+      step: "a",
+      consent: "read",
+      acts: [{ act: "open", label: "Open it" }],
+    });
+  });
+
+  it("reads exactly `card: ` at column 0: other cases and leading whitespace are not a card", () => {
+    for (const lead of ["Card: ", "CARD: ", " card: ", "  card: ", "\tcard: ", "\u00a0card: "])
+      expect(parseCardLine(`Q?\n${lead}a · read · x=Go`), JSON.stringify(lead)).toBeNull();
+    expect(parseCardLine("Q?\ncard:a · read · x=Go")).toBeNull();
+    expect(parseCardLine("Q?\ncard:  a · read · x=Go")).toBeNull();
+  });
+
+  it("a card line inside a quoted or indented block is not a card", () => {
+    for (const text of [
+      "Q?\n> card: a · read · x=Go",
+      "Q?\n    card: a · read · x=Go",
+      "Q?\n```\n  card: a · read · x=Go",
+      "Q?\n- card: a · read · x=Go",
+    ])
+      expect(parseCardLine(text), text).toBeNull();
+  });
+
+  it("a lookalike for the middle dot separator is not a card", () => {
+    for (const dot of ["\u2022", "\u22c5", "\u2027", "\u2219", "\u0387", "\u00b7\u00b7", "."]) {
+      expect(parseCardLine(`Q?\ncard: a ${dot} read ${dot} x=Go`), dot).toBeNull();
+      expect(parseCardLine(`Q?\ncard: a ${dot} read · x=Go`), dot).toBeNull();
+      expect(parseCardLine(`Q?\ncard: a · read ${dot} x=Go`), dot).toBeNull();
+    }
+    // The separator is the dot with one space either side, and no other spacing.
+    expect(parseCardLine("Q?\ncard: a·read·x=Go")).toBeNull();
+    expect(parseCardLine("Q?\ncard: a  ·  read  ·  x=Go")).toBeNull();
+  });
+
+  it("an over-long line is not a card: too many acts, a long label, a long step", () => {
+    const acts = (n: number) => Array.from({ length: n }, (_, i) => `a${i}=L${i}`).join(" | ");
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(6)}`)).not.toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(7)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · ${acts(500)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(80)}`)).not.toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(81)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: a · read · x=${"L".repeat(100_000)}`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: ${"a".repeat(65)} · read · x=Go`)).toBeNull();
+    expect(parseCardLine(`Q?\ncard: ${"a".repeat(100_000)}`)).toBeNull();
+  });
+
+  it("is not a card line when it is not the last line, or is not well formed", () => {
+    for (const text of [
+      `${LINE}\nmore text`,
+      "Q?\ncard: a · local-write",
+      "Q?\ncard: a · write · x=Go",
+      "Q?\ncard: a · Local-write · x=Go",
+      "Q?\ncard: a - local-write - x=Go",
+      "Q?\ncard: A · read · x=Go",
+      "Q?\ncard: a · read · x",
+      "Q?\ncard: a · read · X=Go",
+      "Q?\ncard: a · read · x=",
+      "Q?\ncard: a · read · x=Go | y=go",
+      "Q?\ncard: a · read · x=Go ||y=No",
+      "Q?\ncards: a · read · x=Go",
+      "Q?",
+      "",
+      null,
+      undefined,
+      7,
+    ])
+      expect(parseCardLine(text), String(text)).toBeNull();
+  });
+
+  it("a card that is only the line has no body text", () => {
+    expect(parseCardLine("card: a · read · x=Go")?.text).toBe("");
   });
 });

@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
 // One needs-you card in the thread (the question, its options, and the answered state). The node is built from plain values by chat.js, which owns the state; a card changes only when its signature does.
+// meta (a card line, chat-core parseCardLine): the step, the consent class shown in the header and each button's act. A parsed card's primary option gets the primary look without the recommended mark.
 // state: open | pending (a reply waits on the host confirm) | error | answered. A parsed card shows the lead's pick first; one chat-core cannot parse shows its text and a reply box.
 import {h} from './dom.js';
 import {CHAT_COPY,timeLabel} from './copy.js';
 const CARD_COPY=CHAT_COPY.card;
-export function cardNode({id,text,parsed,at,state,answer,failure,draft,onAnswer,onDraft,lead=CHAT_COPY.lead}){
+export function cardNode({id,text,parsed,meta=null,at,state,answer,failure,draft,onAnswer,onDraft,lead=CHAT_COPY.lead}){
  const answered=state==='answered',busy=state==='pending',inInbox=answered&&answer.where==='inbox';
- const head=h('div',{class:'card-h'},h('b',{},answered?(inInbox?CARD_COPY.answeredInbox:CARD_COPY.answered):CARD_COPY.needs),h('span',{},CARD_COPY.from(lead,timeLabel(at))),h('span',{class:'sp'}),answered?null:h('span',{},CARD_COPY.alsoInbox));
+ const head=h('div',{class:'card-h'},h('b',{},answered?(inInbox?CARD_COPY.answeredInbox:CARD_COPY.answered):CARD_COPY.needs),meta?h('span',{class:'cls','data-consent':meta.consent},CARD_COPY.consent[meta.consent]):null,h('span',{},CARD_COPY.from(lead,timeLabel(at))),h('span',{class:'sp'}),answered?null:h('span',{},CARD_COPY.alsoInbox));
  const body=h('div',{class:'body'},parsed?parsed.question:text);
  const parts=[head,body];
  if(parsed&&!(answered&&!inInbox)){
   parts.push(h('div',{class:'opts',role:'group','aria-label':CARD_COPY.options},...parsed.options.map(option=>
-   h('button',{type:'button',class:option===parsed.pick&&!answered?'btn primary':'btn','data-ans':option,disabled:answered||busy?'':null,onclick:()=>onAnswer(option)},option,option===parsed.pick&&!answered?h('span',{class:'rec'},` · ${CARD_COPY.recommended}`):null))));
+   h('button',{type:'button',class:(option===parsed.pick||option===parsed.primary)&&!answered?'btn primary':'btn','data-ans':option,'data-act':meta?(meta.acts.find(item=>item.label===option)||{}).act:null,disabled:answered||busy?'':null,onclick:()=>onAnswer(option)},option,option===parsed.pick&&!answered?h('span',{class:'rec'},` · ${CARD_COPY.recommended}`):null))));
  }else if(!parsed&&!answered){
   const input=h('textarea',{rows:'2','aria-label':CARD_COPY.replyLabel,spellcheck:'true',disabled:busy?'':null});
   input.value=draft||'';
@@ -22,5 +23,5 @@ export function cardNode({id,text,parsed,at,state,answer,failure,draft,onAnswer,
  }
  if(answered)parts.push(h('div',{class:'chosen',tabindex:'-1',role:'status'},CARD_COPY.chose,' ',h('b',{},answer.text),` · ${inInbox?CARD_COPY.inbox:CARD_COPY.here} · ${timeLabel(answer.at)}`));
  if(state==='error'&&failure)parts.push(h('div',{class:'sys danger',role:'alert'},h('span',{class:'why'},CARD_COPY.failed(failure))));
- return h('div',{class:'msg lead','data-mid':String(id)},h('div',{class:'card','data-card':String(id),'data-state':state},...parts));
+ return h('div',{class:'msg lead','data-mid':String(id)},h('div',{class:'card','data-card':String(id),'data-state':state,'data-step':meta?meta.step:null,'data-consent':meta?meta.consent:null},...parts));
 }
