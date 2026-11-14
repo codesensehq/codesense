@@ -27,14 +27,12 @@ import {
 } from "../model";
 import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
-import { cardAnswer, parseCard, type ChatCard } from "../lib/chat-core";
 import type { DeliveryMark } from "../lib/delivery-marks";
 
 import { GroupRow, GroupChatPane, groupKey, type GroupRoom } from "./group-chat";
 /** The latest message `key` sent, which a Reply to them answers. */
 export const lastFrom = (messages: readonly ConversationMessage[], key: string) =>
   [...messages].reverse().find((m) => m.from === key) ?? null;
-import { CardOptions } from "./card-options";
 import { Composer } from "./composer";
 import { ArrivalsNote, JumpToLatest } from "./jump-to-latest";
 import { selfOf, useInboxView, type ReplyRequest } from "./inbox-view-context";
@@ -528,7 +526,6 @@ export function Conversation({
   newFrom = null,
   empty = null,
   marks,
-  cards = false,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -540,8 +537,6 @@ export function Conversation({
   empty?: React.ReactNode;
   /** Queued or Delivered for a message the person sent (null: no mark). */
   marks?: (m: ConversationMessage) => DeliveryMark | null;
-  /** A needs-you message in the card format shows its options as buttons (chat-core's parser). */
-  cards?: boolean;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -594,7 +589,6 @@ export function Conversation({
                   plain={quick}
                   grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
                   mark={marks?.(m) ?? null}
-                  card={cards && m.from !== HUMAN ? cardOf(m, thread.messages) : null}
                 />
               </Fragment>
             );
@@ -624,29 +618,16 @@ const follows = (prev: ConversationMessage | undefined, m: ConversationMessage) 
   return gap >= 0 && gap < GROUP_MS;
 };
 
-/** A message read as a card of options, and what the person answered it, when they did. */
-export type BubbleCard = { parsed: ChatCard; answer: string | null };
-const cardOf = (
-  m: ConversationMessage,
-  thread: readonly ConversationMessage[],
-): BubbleCard | null => {
-  const parsed = parseCard(m.text);
-  return parsed ? { parsed, answer: cardAnswer(m.id, thread)?.text ?? null } : null;
-};
-
 /** One message: in (left) or out (right), terminal-typed in a dashed mono box, with its claim state. */
 export function Bubble({
   m,
   plain = false,
   grouped = false,
   mark = null,
-  card = null,
 }: {
   m: ConversationMessage;
   /** Queued or Delivered, for a message the person sent. */
   mark?: DeliveryMark | null;
-  /** The message as a card: its question, then its options as buttons. */
-  card?: BubbleCard | null;
   /** Follows the sender's previous message closely: no sender and time of its own (how it came
    *  and where replies go are still said). */
   grouped?: boolean;
@@ -707,11 +688,7 @@ export function Bubble({
         </div>
       )}
       <div className="bub">
-        <MessageBody
-          m={card ? { ...m, text: card.parsed.question } : m}
-          liveDashboards={me === HUMAN && !view.self}
-        />
-        {card && <CardOptions m={m} card={card.parsed} answer={card.answer} />}
+        <MessageBody m={m} liveDashboards={me === HUMAN && !view.self} />
       </div>
       {plain ? null : queuedHere ? (
         <div className="ibx-rto">

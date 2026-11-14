@@ -395,7 +395,6 @@ export function ChatOverlay({
                 defaultTo={handle}
                 quick
                 marks={marks}
-                cards
                 empty={
                   <div className="ibx-empty" data-testid="chat-overlay-empty">
                     <strong>No messages yet</strong>

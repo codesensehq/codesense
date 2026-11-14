@@ -213,7 +213,7 @@ const lead = (extra = {}) => [
   { handle: LEAD, displayName: "Login timeout lead", state: "running", unread: 1, ...extra },
 ];
 
-describe("ChatOverlay marks and cards (chat-core)", () => {
+describe("ChatOverlay marks (chat-core)", () => {
   it("marks what you send Queued while a busy lead is not told, Delivered once it is, none on history", async () => {
     api.loadInboxSessions.mockResolvedValue(lead({ mailNotice: "pending" }));
     await renderOverlay(420, 700, "dock");
@@ -241,36 +241,6 @@ describe("ChatOverlay marks and cards (chat-core)", () => {
     await waitFor(() => expect(useInboxSessionsStore.getState().sessions).toHaveLength(1));
     arrive(msg(7, "human", LEAD, "Ship it", { createdAtMs: Date.now() }));
     expect(await screen.findByText("Delivered")).toBeInTheDocument();
-  });
-
-  it("reads a needs-you card as buttons and answers it with the option, replying to it", async () => {
-    await renderOverlay(420, 700, "dock");
-    arrive(
-      msg(
-        8,
-        LEAD,
-        "human",
-        "Merge now?\nOptions: `Merge`, `Wait`. My pick: Merge, because CI is green.",
-        { kind: "needs-you" },
-      ),
-    );
-    const merge = await screen.findByRole("button", { name: "Merge" });
-    expect(screen.getByRole("button", { name: "Wait" })).toBeInTheDocument();
-    expect(screen.getByText("CI is green")).toBeInTheDocument();
-    expect(screen.queryByText(/Options:/)).toBeNull();
-    fireEvent.click(merge);
-    await waitFor(() => expect(api.sendAsHuman).toHaveBeenCalled());
-    expect(api.sendAsHuman.mock.calls[0]).toEqual(expect.arrayContaining([LEAD, "Merge", 8]));
-  });
-
-  it("shows the answer, not the buttons, once the thread holds it", async () => {
-    await renderOverlay(420, 700, "dock");
-    arrive(
-      msg(8, LEAD, "human", "Merge now?\nOptions: `Merge`, `Wait`."),
-      msg(9, "human", LEAD, "Wait", { inReplyTo: 8 }),
-    );
-    expect(await screen.findByText("Answered: Wait")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
   });
 });
 

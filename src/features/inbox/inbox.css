@@ -880,18 +880,6 @@
 .ibx-mark[data-mark="queued"] {
   font-style: italic;
 }
-.ibx-card-opts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--ibx-mfg);
-}
-.ibx-card-why {
-  flex-basis: 100%;
-}
 .ibx-m .bub {
   padding: 8px 11px;
   border-radius: 12px;
