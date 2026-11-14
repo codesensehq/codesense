@@ -636,6 +636,25 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
   var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
+  var initialsOf = (name) => {
+    const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
+    return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
+  };
+  function avatarOf(info) {
+    const kit = window.codesense && window.codesense.kit;
+    if (kit && typeof kit.avatar === "function") return kit.avatar({ face: info.face, name: info.name, size: 24 });
+    return h("span", { class: "cs-avatar", title: info.name }, initialsOf(info.name));
+  }
+  function faceNode(info) {
+    if (!info.src) return avatarOf(info);
+    const img = h("img", { src: info.src, alt: info.name }), wrap = h("span", { class: "cs-avatar", title: info.name }, img);
+    img.addEventListener("error", () => {
+      const next = avatarOf(info);
+      if (wrap.parentNode) wrap.replaceWith(next);
+      else wrap.replaceChildren(next);
+    }, { once: true });
+    return wrap;
+  }
   var face = (state, label) => h("span", { class: "av", "aria-hidden": "true", "data-face": state, "data-label": label });
   var ALERT_NS = "http://www.w3.org/2000/svg";
   var alertIcon = () => {
@@ -677,7 +696,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], next = false, activity = false, copy: words = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null }) {
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
@@ -754,10 +773,10 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const bubble = (item, side) => h(
+    const bubble = (item, side, first = true, info = null) => h(
       "div",
-      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id) },
-      h("div", { class: "meta" }, `${item.who} · ${timeLabel(item.at)}`),
+      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
+      first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
       h("div", { class: "body" }, item.text),
       item.note ? h("div", { class: "note" }, item.note) : null,
       item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null
@@ -886,10 +905,17 @@
       }
       chipsBox.hidden = !shown.length;
     }
+    function faceInfo(row, side, who) {
+      if (!faces || side === "you") return null;
+      const given = typeof faces === "function" ? faces(row) : null;
+      return { name: given && given.name || who, label: given && given.label || null, src: given && given.src || null, face: given && given.face || null };
+    }
     function threadItems() {
+      let lastLead = null;
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
       for (const row of thread) {
         const side = sideOf(row, handles), needs = cards !== false && row.kind === "needs-you" && side === "lead";
+        if (side === "lead") lastLead = row;
         if (needs) {
           entries.push(cardEntry(row));
           continue;
@@ -897,15 +923,44 @@
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
         const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
         if (nextOpt && side === "lead" && row.text && !shown) continue;
-        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
+        const item = { id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        entries.push({
+          t: row.createdAtMs || 0,
+          id: "m" + row.messageId,
+          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"),
+          make: () => bubble(item, side),
+          run: faces ? { key: side === "you" ? "you" : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
+        });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt }, "you") });
+        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt };
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: "you", info: null, make: (first) => bubble(sent, "you", first) } : null });
       }
       entries.sort((a, b) => a.t - b.t);
-      for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: copy.lead, at: clock.now() }, "lead") });
+      for (const [id, text] of streams) {
+        if (rowIds.has(id)) continue;
+        const item = { id, text, who: copy.lead, at: clock.now() };
+        let run = null;
+        if (faces) {
+          const ref = lastLead || { from: (live() || {}).handle };
+          item.who = target.leadName(ref);
+          run = { key: "lead|" + (ref.from || ""), info: faceInfo(ref, "lead", item.who), make: (first, info) => bubble(item, "lead", first, info) };
+        }
+        entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble(item, "lead"), run });
+      }
+      if (faces) {
+        let before = null;
+        for (const entry of entries) {
+          const run = entry.run, key = run ? run.key : null, first = !key || key !== before;
+          before = key;
+          if (run) {
+            entry.sig += "|" + (first ? "rs" : "rc") + "|" + JSON.stringify(run.info);
+            entry.make = () => run.make(first, run.info);
+          }
+        }
+      }
       return entries;
     }
     const awaiting = () => awaitBase !== null && leadCount() <= awaitBase && (launch.state === "joined" || Boolean(live() && live().state === "running"));
