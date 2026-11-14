@@ -407,8 +407,8 @@
     {
       "name": "onSessionRecordChanged",
       "owner": "Surface",
-      "signature": "onSessionRecordChanged(cb: () => void): Unsubscribe;",
-      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`.",
+      "signature": "onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;",
+      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the\nrecord's `sessionIds` to hear only about that agent's session.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -1001,8 +1001,8 @@
     {
       "name": "onSessionRecordChanged",
       "owner": "Surface",
-      "signature": "onSessionRecordChanged(cb: () => void): Unsubscribe;",
-      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`.",
+      "signature": "onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;",
+      "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the\nrecord's `sessionIds` to hear only about that agent's session.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -17331,12 +17331,12 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "e77d1543d29fc3655ad58b4a3dcaf61ec2cd0dd7884ca4a28965d8d997e3d472",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "86d64b7040b63b60c3e659998ea8d4507b4311b14fafd4ac376349cd9ca7557e",
     "src-tauri/src/verbs/registry.generated.json": "87e59ca692396b4329d6ee80d3f07fe1becec38f112f09b66aae4a2d738225b7",
     "src-tauri/src/verbs/registry.rs": "b0327c45bae68ad3e361621cb1d67b17ef2f5c586bdab2c1f32a43f68b192673",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "4ec19bf5799849aa2535f8e922eba8b235d17ca17060748ea529618527f15cea",
+    "src-tauri/src/http/routes/viewer.rs": "a9f4d618d7caa94935652c856182802ab20327fb2ef4fd969ed65c62e65f270a",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

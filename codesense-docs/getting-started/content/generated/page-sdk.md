@@ -449,10 +449,11 @@ onWorktreesChanged(cb: () => void): Unsubscribe;
 ## Surface: onSessionRecordChanged
 
 ```ts
-onSessionRecordChanged(cb: () => void): Unsubscribe;
+onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
 ```
 
-Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`.
+Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
+record's `sessionIds` to hear only about that agent's session.
 
 ## Surface: onPasteTargetChanged
 

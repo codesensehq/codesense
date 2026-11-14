@@ -20,6 +20,13 @@ struct Pending {
     armed: bool,
 }
 
+fn lock(pending: &Mutex<Pending>) -> std::sync::MutexGuard<'_, Pending> {
+    match Mutex::lock(pending) {
+        Ok(guard) => guard,
+        Err(poisoned) => std::sync::PoisonError::into_inner(poisoned),
+    }
+}
+
 /// Collects session ids and hands them to `sink` once, `delay` after the first of a burst.
 pub(crate) struct Debouncer {
     delay: Duration,
@@ -37,10 +44,7 @@ impl Debouncer {
     }
 
     pub(crate) fn note(&self, ids: impl IntoIterator<Item = String>) {
-        let mut pending = match self.pending.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut pending = lock(&self.pending);
         pending.ids.extend(ids);
         if pending.armed || pending.ids.is_empty() {
             return;
@@ -50,10 +54,7 @@ impl Debouncer {
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             let ids = {
-                let mut pending = match shared.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut pending = lock(&shared);
                 pending.armed = false;
                 std::mem::take(&mut pending.ids)
             };
@@ -68,17 +69,17 @@ static GLOBAL: OnceLock<Debouncer> = OnceLock::new();
 pub fn install_app_emitter(app: tauri::AppHandle) {
     use tauri::Emitter;
     let sink: Sink = Arc::new(move |ids| {
-        if let Err(e) = app.emit(EVENT, serde_json::json!({ "sessionIds": ids })) {
+        if let Err(e) = Emitter::emit(&app, EVENT, serde_json::json!({ "sessionIds": ids })) {
             log::debug!(target: "session_usage", "{EVENT} emit failed: {e}");
         }
     });
-    let _ = GLOBAL.set(Debouncer::new(DEBOUNCE, sink));
+    let _ = OnceLock::set(&GLOBAL, Debouncer::new(DEBOUNCE, sink));
 }
 
 /// Usage was stored for these sessions. Does nothing before the app installs its emitter.
 pub(crate) fn ingested<'a>(ids: impl IntoIterator<Item = &'a str>) {
-    if let Some(debouncer) = GLOBAL.get() {
-        debouncer.note(ids.into_iter().map(str::to_owned));
+    if let Some(debouncer) = OnceLock::get(&GLOBAL) {
+        Debouncer::note(debouncer, ids.into_iter().map(str::to_owned));
     }
 }
 

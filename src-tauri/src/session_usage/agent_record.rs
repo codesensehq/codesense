@@ -74,7 +74,7 @@ pub(crate) fn usage_half(
     let session_id = session_read::resolve_session(&store, None, &input)?.session_id;
     let ids = UsageStore::event_session_ids(&store, &session_id)?;
     let record = UsageStore::read_session_record(&store, &session_id)?;
-    let priced_usd = UsageStore::session_cost(&store, &session_id)?.priced();
+    let priced_usd = super::cost_rollup::CostRollup::priced(&UsageStore::session_cost(&store, &session_id)?);
     let mut stories = StoryResolver::for_home(home, launch_stories).with_scope(scope.clone());
     let filter = Filter {
         session_id: Some(session_id.clone()),
