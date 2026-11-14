@@ -333,6 +333,11 @@ const SITES: Record<string, { count: number; reason: string }> = {
     count: 4,
     reason: "records window and page focus state; no action, no id lookup.",
   },
+  "src/shared/lib/side-frame.tsx": {
+    count: 1,
+    reason:
+      "window message listener for a rendered diff side's unload report; it acts only on its own drawing's nonce and only closes that side (no input, no id lookup), whichever team is shown.",
+  },
   "src/shared/lib/popover-bounds.ts": {
     count: 2,
     reason: "measures the singleton workbench and workspace bar; no input.",

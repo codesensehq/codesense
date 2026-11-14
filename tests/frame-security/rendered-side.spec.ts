@@ -9,6 +9,8 @@ let probePort: number;
 let probeHits: string[];
 let vite: ViteDevServer;
 let url: string;
+const frameOf = (page: import("@playwright/test").Page) =>
+  page.frames().find((f) => f.url() === "about:srcdoc")!;
 test.beforeAll(async () => {
   test.setTimeout(60_000);
   probe = createServer((req, res) => {
@@ -56,8 +58,10 @@ test("a remote diff side renders and runs inline, but makes no request of its ow
   await expect(side.locator("#marker")).toHaveText("remote side", { timeout: 30_000 });
   // Its own script ran: the sandbox allows scripts, only the network is closed.
   await expect(side.locator("#marker")).toHaveAttribute("data-ran", "yes");
-  await expect(side.locator("#written")).toHaveText("written");
-  // Once parsed, the document can't be reopened: that would erase the side's unload report.
+  expect(await frameOf(page).evaluate(() => (window as any).parseWrite)).toBe("SecurityError");
+  expect(await side.locator("#written").count()).toBe(0);
+  // Once parsed, the document can't be reopened or written either: that would erase the
+  // side's unload report.
   const reopened = await page
     .frames()
     .find((f) => f.url() === "about:srcdoc")!
@@ -118,6 +122,7 @@ for (const [name, path] of [
   ["a link click", "/nav-click"],
   ["document.open() and then location.href", "/nav-reopen"],
   ["another realm's document.open() and then location.href", "/nav-realm"],
+  ["a timer's document.write() while parsing and then location.href", "/nav-timerwrite"],
 ] as const) {
   test(`a side that navigates itself by ${name} sends at most one request and is closed`, async ({
     page,

@@ -34,24 +34,23 @@ export const SIDE_LEFT_MESSAGE = "codesense:side-left:";
  * navigated, even before its own load finished), it tells the host, naming its
  * drawing by `nonce`. The poster is bound here, and the listener is the first
  * capture listener on the window, so the side's own scripts can neither replace
- * it nor stop it. `document.open()` would erase it, so `open` is locked on
- * `Document.prototype` and on the document, and `write`/`writeln` (which open
- * the document once parsing is done) throw after parsing. It then removes
- * itself, so the side's DOM is as it was authored. The nonce is not a secret: a
- * forged message can only close a side.
+ * it nor stop it. `document.open()` would erase it, so `open`, `write` and
+ * `writeln` are locked on `Document.prototype` and on the document and always
+ * throw: a write with no insertion point (from a timer, say, even while the page
+ * still parses) runs the document open steps natively, past any lock on `open`.
+ * A side that writes while it parses gets a script error inside its own frame.
+ * The prelude then removes itself, so the side's DOM is as it was authored. The
+ * nonce is not a secret: a forged message can only close a side.
  */
 export function sidePrelude(nonce: string): string {
   const message = JSON.stringify(SIDE_LEFT_MESSAGE + nonce);
   return (
     `<script>(()=>{const post=parent.postMessage.bind(parent),doc=document,` +
-    `proto=Document.prototype,write=proto.write,writeln=proto.writeln,` +
-    `refuse=()=>{throw new DOMException("A rendered diff side can't reopen its document","SecurityError")},` +
-    `lock=(name,value)=>{for(const at of [proto,doc])` +
-    `Object.defineProperty(at,name,{value,writable:false,configurable:false})};` +
+    `proto=Document.prototype,` +
+    `refuse=()=>{throw new DOMException("A rendered diff side can't reopen or write its document","SecurityError")};` +
     `addEventListener("pagehide",()=>post(${message},"*"),true);` +
-    `lock("open",refuse);` +
-    `lock("write",function(...a){if(doc.readyState!=="loading")refuse();return write.apply(this,a)});` +
-    `lock("writeln",function(...a){if(doc.readyState!=="loading")refuse();return writeln.apply(this,a)});` +
+    `for(const name of ["open","write","writeln"])for(const at of [proto,doc])` +
+    `Object.defineProperty(at,name,{value:refuse,writable:false,configurable:false});` +
     `doc.currentScript.remove()})()</script>`
   );
 }

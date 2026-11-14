@@ -44,8 +44,13 @@ ${watch}
     window.worker = "refused";
   }
   document.getElementById("marker").dataset.ran = "yes";
-  // Writing while the page parses is ordinary page code and still works.
-  document.write('<p id="written">written</p>');
+  // Even a write while the page parses is refused: no write can reopen the document.
+  try {
+    document.write('<p id="written">written</p>');
+    window.parseWrite = "allowed";
+  } catch (e) {
+    window.parseWrite = e.name;
+  }
 </script>
 <img src="file:///etc/hosts">
 <img src="${probe}/img">
@@ -63,6 +68,14 @@ ${watch}
     location.href = "${probe}/nav-reopen";
   });
 </script>`,
+  // A write from a timer while the parser has yielded has no insertion point, so it
+  // runs the document open steps natively (no call to open), then navigates.
+  timerwrite: `<h1 id="marker">navigates</h1><script>
+  setTimeout(() => {
+    try { document.write("<p>rewritten</p>"); } catch {}
+    location.href = "${probe}/nav-timerwrite";
+  }, 0);
+</script>${"<p>still parsing</p>".repeat(200000)}`,
   // The same through another realm's Document.prototype.open (an about:blank frame).
   realm: `<h1 id="marker">navigates</h1><script>
   document.addEventListener("DOMContentLoaded", () => {
