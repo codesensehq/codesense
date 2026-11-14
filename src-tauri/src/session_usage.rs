@@ -1685,7 +1685,10 @@ pub fn pull_machine(
 /// earlier one, and a rate-table cost is repriced by a later rate, as the store's upsert rules say.
 fn ingest_rows(tx: &rusqlite::Transaction<'_>, machine: &str, events: &[UsageEvent]) -> Result<(), String> {
     // The notice is debounced, so it goes out after this transaction commits.
-    ingest_notice::ingested(events.iter().map(|e| String::as_str(&e.session_id)));
+    ingest_notice::ingested(events.iter().map(|e| {
+        let id: &str = &e.session_id;
+        id
+    }));
     for e in events {
         let day = match checked_day(e.at_ms) {
             Ok(day) => day,

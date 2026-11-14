@@ -116,7 +116,7 @@ async fn read_page(
     let unavailable = BTreeMap::get(&page.unavailable, "commits").map(Clone::clone);
     let mut commits = Vec::new();
     for commit in page.commits {
-        Vec::push(&mut commits, (commit.sha, commit.files, commit.session_ids));
+        commits.push((commit.sha, commit.files, commit.session_ids));
     }
     Ok(CommitPage {
         unavailable,

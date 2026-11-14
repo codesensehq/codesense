@@ -81,7 +81,7 @@ pub(crate) fn ingested<'a>(ids: impl IntoIterator<Item = &'a str>) {
     if let Some(debouncer) = OnceLock::get(&GLOBAL) {
         let mut owned = Vec::new();
         for id in ids {
-            Vec::push(&mut owned, str::to_owned(id));
+            owned.push(str::to_owned(id));
         }
         Debouncer::note(debouncer, owned);
     }
