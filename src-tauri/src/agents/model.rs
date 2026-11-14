@@ -189,6 +189,11 @@ pub struct Agent {
     /// an unreadable definition.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub startup: Vec<String>,
+    /// The skills a launch offers, by name. Omitted means every skill the
+    /// workspace has; a list turns every other skill off for the launch, where
+    /// its runtime enforces that (`enforces_skill_allowlist`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
     /// The bulk content sets a workspace gets for this agent.
     /// Absent means the runtime's default, resolved at launch and never
     /// written back ([`super::context::default_context`]); `[]` means none.
@@ -259,6 +264,8 @@ pub enum ValidationError {
     InvalidBridgeTool(String),
     DuplicateBridgeTool(String),
     BridgeToolsUnsupported,
+    InvalidSkill(String),
+    DuplicateSkill(String),
     InvalidStartupPath(StartupPathError),
     DuplicateStartupPath(String),
     /// `path` lies inside (or contains) the earlier entry `covered_by`, so its
@@ -326,6 +333,8 @@ impl fmt::Display for ValidationError {
                 "mcp.bridge_tools is supported only for {} agents",
                 bridge_tool_runtimes()
             ),
+            Self::InvalidSkill(name) => write!(f, "skill {name:?} must be a skill name of 1-128 ASCII letters, digits, '_', '-' or ':'"),
+            Self::DuplicateSkill(name) => write!(f, "skill {name:?} is listed twice"),
             Self::InvalidStartupPath(e) => write!(f, "{e}"),
             Self::DuplicateStartupPath(p) => write!(f, "startup path {p:?} is listed twice"),
             Self::OverlappingStartupPath { path, covered_by } => write!(
@@ -356,6 +365,14 @@ pub fn is_valid_id(id: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+}
+
+/// 1-128 ASCII letters, digits or bytes of `punctuation`: a bridge tool or skill name.
+fn is_plain_name(name: &str, punctuation: &[u8]) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || punctuation.contains(&b))
 }
 
 /// The runtimes whose adapters enforce `mcp.bridge_tools`, by display label.
@@ -676,17 +693,22 @@ impl Agent {
             }
             let mut seen = BTreeSet::new();
             for name in tools {
-                if name.is_empty()
-                    || name.len() > 128
-                    || name.starts_with("mcp__")
-                    || !name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-                {
+                if !is_plain_name(name, b"_-") || name.starts_with("mcp__") {
                     return Err(ValidationError::InvalidBridgeTool(name.clone()));
                 }
                 if !seen.insert(name) {
                     return Err(ValidationError::DuplicateBridgeTool(name.clone()));
+                }
+            }
+        }
+        if let Some(skills) = &self.skills {
+            let mut seen = BTreeSet::new();
+            for name in skills {
+                if !is_plain_name(name, b"_-:") {
+                    return Err(ValidationError::InvalidSkill(name.clone()));
+                }
+                if !seen.insert(name) {
+                    return Err(ValidationError::DuplicateSkill(name.clone()));
                 }
             }
         }

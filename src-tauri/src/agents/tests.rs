@@ -114,6 +114,7 @@ fn agent(id: &str) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skills: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,
@@ -330,12 +331,60 @@ fn bridge_tool_allowlist_validation_follows_the_runtime_capability() {
 }
 
 #[test]
+fn a_skills_list_is_optional_and_may_be_empty() {
+    for skills in [
+        None,
+        Some(vec![]),
+        Some(vec!["bmad-build".to_string(), "pack:review".to_string()]),
+    ] {
+        let mut definition = agent("lean");
+        definition.revision = 1;
+        definition.skills = skills;
+        assert_eq!(definition.validate(), Ok(()));
+    }
+    let stored: Agent =
+        serde_yaml::from_str(&serde_yaml::to_string(&agent("lean")).unwrap()).unwrap();
+    assert_eq!(stored.skills, None);
+    assert!(!serde_yaml::to_string(&agent("lean"))
+        .unwrap()
+        .contains("skills"));
+}
+
+#[test]
 fn every_validation_error_is_typed() {
     let saved = |mut a: Agent| {
         a.revision = 1;
         a.validate()
     };
     let cases: Vec<(Agent, ValidationError)> = vec![
+        (
+            Agent {
+                skills: Some(vec!["bmad build".into()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill("bmad build".into()),
+        ),
+        (
+            Agent {
+                skills: Some(vec![String::new()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill(String::new()),
+        ),
+        (
+            Agent {
+                skills: Some(vec!["../x".into()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill("../x".into()),
+        ),
+        (
+            Agent {
+                skills: Some(vec!["bmad-build".into(), "bmad-build".into()]),
+                ..agent("x")
+            },
+            ValidationError::DuplicateSkill("bmad-build".into()),
+        ),
         (
             Agent {
                 id: "Bad_Id".into(),

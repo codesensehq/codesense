@@ -172,6 +172,69 @@ fn codex_bridge_tools_round_trip_and_preview_the_effective_set() {
 }
 
 #[test]
+fn a_skills_list_round_trips_and_previews_the_effective_skills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write_org(home, &alice());
+    let saved = ok(create_as(
+        home,
+        &alice(),
+        team(),
+        json!({"name": "Lean lead", "runtime": "claude", "skills": ["bmad-build"]}),
+    ));
+    let id = saved["id"].as_str().unwrap();
+    let got = ok(get(home, &alice(), params(json!({"id": id}))));
+    assert_eq!(got["definition"]["skills"], json!(["bmad-build"]));
+    let previewed = ok(preview(
+        home,
+        &alice(),
+        team(),
+        &local(&alice()),
+        params(json!({"agent": id})),
+    ));
+    assert_eq!(previewed["launch"]["skills"], json!(["bmad-build"]));
+
+    // Omitted keeps the list; null removes it, and the launch offers every skill.
+    ok(update(
+        home,
+        &alice(),
+        &local(&alice()),
+        params(json!({"id": id, "baseRevision": 1, "description": "kept"})),
+    ));
+    let kept = ok(get(home, &alice(), params(json!({"id": id}))));
+    assert_eq!(kept["definition"]["skills"], json!(["bmad-build"]));
+    ok(update(
+        home,
+        &alice(),
+        &local(&alice()),
+        params(json!({"id": id, "baseRevision": 2, "skills": null})),
+    ));
+    let cleared = ok(get(home, &alice(), params(json!({"id": id}))));
+    assert!(cleared["definition"].get("skills").is_none());
+    let p = ok(preview(
+        home,
+        &alice(),
+        team(),
+        &local(&alice()),
+        params(json!({"agent": id})),
+    ));
+    assert!(p["launch"].get("skills").is_none());
+
+    for skills in [json!(["bmad build"]), json!(["a", "a"])] {
+        let error = refused_with(
+            create_as(
+                home,
+                &alice(),
+                team(),
+                json!({"name": "Bad skills", "runtime": "claude", "skills": skills}),
+            ),
+            "invalid",
+        );
+        assert_eq!(error["field"], "skills");
+    }
+}
+
+#[test]
 fn bridge_tool_validation_and_unknown_names_never_expand_the_grant() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();

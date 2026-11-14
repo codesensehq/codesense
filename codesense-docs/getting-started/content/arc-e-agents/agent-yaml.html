@@ -221,7 +221,7 @@ revision: 7</code></pre>
         </table>
       </section>
 
-      <section data-search="Optional fields — description, created_by, args, launch, mcp, startup, permissions, default_prompt, avatar, archived_at" id="optional">
+      <section data-search="Optional fields — description, created_by, args, launch, mcp, startup, skills, permissions, default_prompt, avatar, archived_at" id="optional">
         <h2>Optional</h2>
         <table class="arce-fields">
           <thead>
@@ -310,6 +310,26 @@ revision: 7</code></pre>
                 preserved. See
                 <a href="./context-field.html">context resolver</a> for how it
                 resolves.
+              </td>
+            </tr>
+            <tr>
+              <td><code>skills</code> <span class="arce-opt">opt</span></td>
+              <td>string array · <code>null</code></td>
+              <td>
+                The skills a launch offers, by name. Omitted or <code>null</code>
+                offers every skill the workspace has. With a list, a Claude launch
+                turns off every other skill it finds, both the ones its
+                <code>startup</code> places and the ones already under
+                <code>.claude/skills/</code> in its workspace, so a launch into a
+                context worktree lists only these. <code>[]</code> turns every
+                found skill off. Names are 1–128 ASCII letters, digits,
+                <code>_</code>, <code>-</code> or <code>:</code>, without
+                duplicates. Other runtimes don't enforce it yet and warn
+                <code>skills_not_enforced</code>; a listed skill the startup
+                doesn't place warns <code>skills_not_in_manifest</code>. Preview
+                reports <code>launch.skills</code> and narrows
+                <code>provides.skills</code> to the list. An update keeps an
+                omitted list; <code>null</code> clears it.
               </td>
             </tr>
             <tr>
@@ -723,6 +743,7 @@ permissions:
           <li><code>runtime</code> — not <code>claude</code>, <code>codex</code> or <code>opencode</code> (and no <code>sessionId</code> to infer from).</li>
           <li><code>args[n]</code> — contains shell syntax (pipe, redirect, quote), NUL, or an empty string.</li>
           <li><code>mcp.servers[n]</code> — <code>codesense</code> (the bridge), a duplicate, empty, or NUL.</li>
+          <li><code>skills</code> — a name with other characters, empty, over 128 bytes, or listed twice.</li>
           <li><code>startup[n]</code> — absolute path, <code>..</code>, a glob, inside a reserved top-level dir, or overlaps an earlier entry.</li>
           <li><code>permissions.&lt;runtime&gt;.&lt;key&gt;</code> — a key the runtime doesn't have.</li>
           <li><code>revision</code> — &lt; 1, or (on update) doesn't match <code>baseRevision</code> → <code>conflict</code>.</li>
