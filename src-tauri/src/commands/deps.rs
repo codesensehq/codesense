@@ -1415,9 +1415,8 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    // Its own process group, so a timeout stops what the rc started too.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    // A new session, so a timeout stops what the rc started too.
+    in_new_session(&mut command);
     let mut child = command
         .spawn()
         .map_err(|e| warn!(target: "deps", "login-shell probe spawn failed: {}", e))
@@ -1471,7 +1470,28 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Kill `child`'s process group (it leads one, see [`capture_stdout_within`]), then the
+/// Start `command` as the leader of a new session, so its pid is also its group's id
+/// and a timeout can kill the group. Not just a new process group: under a terminal, an
+/// interactive shell in a background group stops on its first terminal access until the
+/// timeout; a new session has no terminal.
+#[cfg(unix)]
+fn in_new_session(command: &mut Command) {
+    // SAFETY: the hook runs in the child between fork and exec, and `setsid` is
+    // async-signal-safe and touches no memory of the parent.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(command, || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn in_new_session(_command: &mut Command) {}
+
+/// Kill `child`'s process group (it leads a session, see [`capture_stdout_within`]), then the
 /// child itself, and reap it.
 fn kill_group_and_reap(child: &mut std::process::Child) {
     // Not reaped yet, so its pid is still its group's id.
@@ -2581,6 +2601,46 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// The probe's shell leads a new session, not just a process group: an interactive
+    /// shell started in a background group of a terminal's session stops on its first
+    /// terminal access until the timeout, and a new session has no terminal at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_shell_probe_runs_in_its_own_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("probe_session");
+        let pid_file = dir.join("shell.pid");
+        let shell = dir.join("session-zsh");
+        std::fs::write(
+            &shell,
+            format!("#!/bin/sh\necho $$ > '{}'\nsleep 2\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = std::thread::spawn({
+            let shell = shell.clone();
+            move || run_shell_capture(shell.to_str().unwrap(), "true", Duration::from_secs(10))
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the shell never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: getsid only reads the session id of a live process.
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the shell leads its own session"
+        );
+        assert!(probe.join().unwrap().is_some());
     }
 
     /// The env-set probe answers only for zsh and bash: another `$SHELL` reads as unknown,
