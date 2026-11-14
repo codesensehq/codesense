@@ -256,3 +256,41 @@ export function stepErrors(dir) {
   }
   return errors;
 }
+
+/**
+ * What each act of a pack's steps allows after its click, from the step files alone:
+ * `"<step>/<act>"` to the verbs it may call, each with how many times, and for a `run` act
+ * the one command it may type. An act allows its own verb (`repeat` times, default once)
+ * and the verbs of the acts it `then`-runs. A step file that doesn't read is left out; the
+ * pack build reports it.
+ */
+export function actAllowances(dir) {
+  const allowances = new Map();
+  const stepsDir = join(dir, "setup/steps");
+  let entries;
+  try {
+    entries = parse(readFileSync(join(stepsDir, "index.yml"), "utf8")).steps ?? [];
+  } catch {
+    return allowances;
+  }
+  for (const { id } of entries) {
+    let step;
+    try {
+      step = parse(readFileSync(join(stepsDir, `${id}.yml`), "utf8"));
+    } catch {
+      continue;
+    }
+    const acts = step?.act ?? [];
+    const own = (act) => {
+      if (act.verb) return [{ verb: act.verb.tool, uses: act.repeat ?? 1 }];
+      if (act.run) return [{ verb: "run_in_terminal_tab", uses: 1, cmd: act.run.cmd }];
+      return [];
+    };
+    for (const act of acts) {
+      const verbs = [...own(act)];
+      for (const next of act.then ?? []) verbs.push(...own(acts.find((a) => a.id === next) ?? {}));
+      allowances.set(`${id}/${act.id}`, verbs);
+    }
+  }
+  return allowances;
+}

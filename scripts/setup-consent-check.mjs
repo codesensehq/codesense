@@ -25,12 +25,17 @@
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
 // already allowed.
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCardLine } from "./lib/card-line.mjs";
-import { SETUP_VERBS } from "./lib/pack-steps.mjs";
+import { SETUP_VERBS, actAllowances } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
+
+const GUIDE_PACK = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../codesense-docs/packs/codesense-guide",
+);
 
 // Claude names a tool `mcp__codesense__<tool>`, OpenCode `codesense_<tool>`, and the by-name
 // wrapper is `codesense_call_tool` under either.
@@ -42,6 +47,16 @@ export function defaultActVerbs(act) {
   if (SETUP_VERBS.includes(verb)) return [verb];
   if (act === "run" || act.startsWith("run-")) return ["run_in_terminal_tab"];
   return [];
+}
+
+/**
+ * `actVerbs` from a pack's step files: `(act, step)` gives the verbs the click allows, each
+ * `{verb, uses, cmd?}`, where `cmd` is the one command a `run` act may type. An act or step
+ * the files don't hold falls back to `defaultActVerbs`, whose commands go unchecked.
+ */
+export function stepActVerbs(packDir) {
+  const allowances = actAllowances(packDir);
+  return (act, step) => allowances.get(`${step}/${act}`) ?? defaultActVerbs(act);
 }
 
 function json(text) {
@@ -103,7 +118,7 @@ export function checkConsent(
   );
   const seen = new Set();
   let card; // the latest card: { id, turn, name, line, answered }
-  let allowed = []; // the verbs the latest click allows
+  let allowed = new Map(); // the verbs the latest click allows: name to {uses, used, cmd, click}
   let why = "no card has been sent";
   let cards = 0;
   let calls = 0;
@@ -123,7 +138,7 @@ export function checkConsent(
         const label = `"${line.step} · ${line.consent}"`;
         card = { id, turn: index, label, line, answered: false };
         cards += 1;
-        allowed = [];
+        allowed = new Map();
         why =
           id === undefined
             ? `the card ${label} sent at turn ${index} has no messageId, so no click can answer it`
@@ -151,14 +166,48 @@ export function checkConsent(
           } else if (card.line.consent === "read") {
             why = `the card ${card.label} sent at turn ${card.turn} is a read card and allows no change`;
           } else {
-            allowed = actVerbs(chosen.act);
-            why = `the click on ${card.label} sent at turn ${card.turn} allows act ${chosen.act} (${allowed.join(", ") || "no setup verb"}) only`;
+            allowed = new Map();
+            for (const entry of actVerbs(chosen.act, card.line.step)) {
+              const { verb, uses = 1, cmd } = typeof entry === "string" ? { verb: entry } : entry;
+              const had = allowed.get(verb);
+              allowed.set(verb, {
+                uses: (had?.uses ?? 0) + uses,
+                used: 0,
+                cmd: had ? undefined : cmd,
+                act: chosen.act,
+                step: card.line.step,
+                click: `the click on ${card.label} sent at turn ${card.turn}`,
+              });
+            }
+            const names = [...allowed.keys()].join(", ") || "no setup verb";
+            for (const entry of allowed.values()) entry.names = names;
+            why = `the click on ${card.label} sent at turn ${card.turn} allows act ${chosen.act} (${names}) only`;
           }
         }
       } else if (setupVerbs.includes(name)) {
         calls += 1;
-        if (!allowed.includes(name))
+        const entry = allowed.get(name);
+        if (!entry) {
           errors.push(`turn ${index}: ${name} was called with no consent click for it: ${why}`);
+        } else if (name === "run_in_terminal_tab" && input.key && !input.command) {
+          // A bare key is no command. Ctrl-C stops the run the click started; it spends nothing.
+          if (input.key !== "ctrl-c")
+            errors.push(
+              `turn ${index}: run_in_terminal_tab sent the key ${input.key}, which no click allows`,
+            );
+        } else if (entry.used >= entry.uses) {
+          const nth = entry.used + 1 === 2 ? "second" : `${entry.used + 1}th`;
+          const times = entry.uses === 1 ? "once" : `${entry.uses} times`;
+          errors.push(
+            `turn ${index}: ${name} was called a ${nth} time, but ${entry.click} allows act ${entry.act} (${entry.names}) ${times}`,
+          );
+        } else {
+          entry.used += 1;
+          if (entry.cmd !== undefined && input.command !== entry.cmd)
+            errors.push(
+              `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,
+            );
+        }
       }
     }
   }
@@ -166,9 +215,15 @@ export function checkConsent(
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [path, ...rest] = process.argv.slice(2);
-  if (!path || rest.length) {
-    console.error("usage: node scripts/setup-consent-check.mjs <session-export.json>");
+  const args = process.argv.slice(2);
+  const flag = args.indexOf("--pack");
+  const packDir = flag < 0 ? GUIDE_PACK : args[flag + 1];
+  if (flag >= 0) args.splice(flag, 2);
+  const [path, ...rest] = args;
+  if (!path || rest.length || !packDir) {
+    console.error(
+      "usage: node scripts/setup-consent-check.mjs <session-export.json> [--pack <pack folder>]",
+    );
     process.exit(2);
   }
   let exported;
@@ -178,7 +233,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(`setup-consent-check: cannot read ${path}: ${String(e.message).split("\n")[0]}`);
     process.exit(2);
   }
-  const { errors, cards, calls, clicks } = checkConsent(exported);
+  const { errors, cards, calls, clicks } = checkConsent(exported, {
+    actVerbs: stepActVerbs(resolve(packDir)),
+  });
   for (const e of errors) console.error(`setup-consent-check: ${e}`);
   if (errors.length) process.exit(1);
   console.log(`setup-consent-check: ok (${calls} setup calls, ${cards} cards, ${clicks} clicks)`);
