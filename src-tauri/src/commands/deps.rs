@@ -650,19 +650,50 @@ impl DependencyManager {
         self.fill_shadowed(basename, pending, parse_agent_version);
     }
 
-    /// Claim the first probe of `basename`: `true` when nothing has probed it yet, and the
-    /// claim is recorded (as not found) so a later or concurrent warm skips it. A warm
-    /// never probes a claimed basename again; a launch retries a miss once its cooldown
-    /// passes, and the explicit re-check ([`Self::re_resolve`]) probes it at once.
-    fn claim_first_probe(&self, basename: &str) -> bool {
+    /// Claim the first probe of each of `basenames` that nothing has probed yet, under one
+    /// lock, and return the claimed ones. A claim is recorded as not found and resolving, so
+    /// a CLI waiting for its probe never reads as not installed, and a later or concurrent
+    /// warm skips it. A warm never probes a claimed basename again; a launch retries a miss
+    /// once its cooldown passes, and the explicit re-check ([`Self::re_resolve`]) probes it
+    /// at once.
+    fn claim_first_probes<'a>(&self, basenames: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.agents.contains_key(basename) {
-            return false;
+        basenames
+            .into_iter()
+            .filter(|basename| {
+                if inner.agents.contains_key(*basename) {
+                    return false;
+                }
+                inner.agents.insert(
+                    basename.to_string(),
+                    AgentEntry {
+                        resolving: true,
+                        ..Default::default()
+                    },
+                );
+                true
+            })
+            .collect()
+    }
+
+    /// Warm `basenames`: claim every one not probed yet before probing the first, then
+    /// `resolve` each claimed basename in order against one login-shell `$PATH`
+    /// (`login_path`, probed only when something was claimed). Returns how many it probed.
+    fn warm_builtins_with(
+        &self,
+        basenames: &[&str],
+        login_path: impl FnOnce() -> Option<String>,
+        mut resolve: impl FnMut(&str, Option<&str>),
+    ) -> usize {
+        let claimed = self.claim_first_probes(basenames.iter().copied());
+        if claimed.is_empty() {
+            return 0;
         }
-        inner
-            .agents
-            .insert(basename.to_string(), AgentEntry::default());
-        true
+        let login_path = login_path();
+        for basename in &claimed {
+            resolve(basename, login_path.as_deref());
+        }
+        claimed.len()
     }
 
     /// Whether the background resolution for `basename` is still in flight (the
@@ -1152,26 +1183,18 @@ fn stat_known_gh(known: &[PathBuf]) -> Option<PathBuf> {
 
 /// Pick the user's `gh`: the installs on the login-shell `$PATH` (`login_path`) in PATH
 /// order, then `known`, then `user_local`; the first whose version parses wins. There is
-/// no version floor. The version parse is injected so tests never spawn a real `gh`.
+/// no version floor: this is the agent CLIs' candidate walk ([`resolve_agent_binary`])
+/// with a floor every version meets. The version parse is injected so tests never spawn
+/// a real `gh`.
 fn resolve_gh_with(
     login_path: Option<&str>,
     known: Vec<PathBuf>,
     user_local: Vec<PathBuf>,
     parse_version: impl Fn(&Path) -> Option<String>,
 ) -> (Option<PathBuf>, Option<String>) {
-    let mut candidates = login_path
-        .map(|path| login_path_candidates(path, "gh"))
-        .unwrap_or_default();
-    let mut seen: HashSet<PathBuf> = candidates.iter().map(|path| canonical_key(path)).collect();
-    for path in known.into_iter().chain(user_local) {
-        if is_executable_file(&path) && seen.insert(canonical_key(&path)) {
-            candidates.push(path);
-        }
-    }
-    candidates
-        .into_iter()
-        .find_map(|path| parse_version(&path).map(|version| (path, version)))
-        .unzip()
+    let fallback = known.into_iter().chain(user_local).collect();
+    let resolution = resolve_agent_binary("gh", login_path, fallback, parse_version, |_| true);
+    (resolution.path, resolution.version)
 }
 
 /// Resolve a versioned binary the way the user's environment would: (a) stat a
@@ -1770,7 +1793,9 @@ pub fn spawn_agent_background_resolve(app: tauri::AppHandle) {
 
 /// Warm the deps cache for every built-in CLI's basename beyond the default one probed at
 /// startup, probing each once: a CLI found or not found is not probed again on the next team
-/// switch (a launch retries a miss after its cooldown; the explicit re-check re-probes it). A
+/// switch (a launch retries a miss after its cooldown; the explicit re-check re-probes it). Every
+/// one is claimed as resolving before the first is probed, so none reads as not installed while
+/// it waits. A
 /// launch reads the warmed cache via
 /// [`DependencyManager::launch_binary`] and REFUSES a cold basename, so without this Codex could
 /// never launch. Rides the idempotent team-activation seam (fires on first mount + every switch);
@@ -1783,21 +1808,17 @@ pub fn spawn_builtin_agents_warm<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let Some(dm) = app.try_state::<DependencyManager>() else {
             return;
         };
-        let mut warmed = 0u32;
-        // One `$PATH` probe shared by every basename this warm resolves.
-        let mut login_path: Option<Option<String>> = None;
-        for descriptor in AgentCli::ALL.map(descriptor) {
-            let basename = descriptor.binary.as_str();
-            if basename == default_basename || !dm.claim_first_probe(basename) {
-                continue;
-            }
-            let login_path = login_path.get_or_insert_with(probe_login_path);
+        let basenames: Vec<&str> = AgentCli::ALL
+            .into_iter()
+            .map(|cli| descriptor(cli).binary.as_str())
+            .filter(|basename| *basename != default_basename)
+            .collect();
+        let warmed = dm.warm_builtins_with(&basenames, probe_login_path, |basename, login_path| {
             // Each winner reaches the frontend before its shadowed installs are checked.
-            dm.resolve_agent_with_login_path(basename, login_path.as_deref(), || {
+            dm.resolve_agent_with_login_path(basename, login_path, || {
                 let _ = app.emit("dep-status-changed", ());
             });
-            warmed += 1;
-        }
+        });
         if warmed > 0 {
             let _ = app.emit("dep-status-changed", ());
         }
@@ -2787,7 +2808,7 @@ mod tests {
     /// over a synthetic second basename (no second descriptor shipped — that is SW-AN-45).
     /// A built-in CLI is probed once across team switches, whether or not it was found; a
     /// basename already in the map (the default, or one the startup probe seeded) is never
-    /// claimed.
+    /// claimed. A claimed CLI reads as resolving, not as missing, until its probe stores it.
     #[test]
     fn a_cli_is_claimed_for_its_first_probe_only() {
         let mut agents = BTreeMap::new();
@@ -2802,14 +2823,53 @@ mod tests {
             stale_resolve: Mutex::new(()),
             known_locations: Box::new(no_known_locations),
         };
-        assert!(!dm.claim_first_probe("claude"));
-        assert!(dm.claim_first_probe("codex"));
-        assert!(!dm.claim_first_probe("codex"), "a second switch skips it");
-        assert_eq!(dm.agent("codex"), None);
+        assert_eq!(dm.claim_first_probes(["claude", "codex"]), ["codex"]);
         assert!(
-            !dm.agent_resolving("codex"),
-            "a claim never gates the splash"
+            dm.claim_first_probes(["codex"]).is_empty(),
+            "a second switch skips it"
         );
+        assert_eq!(dm.agent("codex"), None);
+        let status = dm.status();
+        let codex = &status.agents["codex"];
+        assert!(codex.resolving && !codex.available);
+    }
+
+    /// A warm claims every built-in before it probes the first, so a CLI waiting its turn
+    /// reads as resolving rather than not installed, and a later warm probes nothing.
+    #[test]
+    fn a_warm_claims_every_builtin_before_probing_the_first() {
+        let mut agents: BTreeMap<String, AgentEntry> = Default::default();
+        agents.insert("claude".to_string(), Default::default());
+        let dm = manager_with(agents);
+        let mut probed: Vec<String> = Default::default();
+        let warmed = dm.warm_builtins_with(
+            &["claude", "codex", "opencode"],
+            || None,
+            |basename, _| {
+                let status = dm.status();
+                for waiting in ["codex", "opencode"] {
+                    if probed.iter().any(|done| done == waiting) {
+                        continue;
+                    }
+                    let entry = &status.agents[waiting];
+                    assert!(
+                        entry.resolving && !entry.available,
+                        "{waiting} reads as resolving until its probe"
+                    );
+                }
+                dm.store_winner(basename, Default::default());
+                probed.push(basename.to_string());
+            },
+        );
+        assert_eq!(warmed, 2);
+        assert_eq!(probed, ["codex", "opencode"]);
+        assert!(!dm.agent_resolving("codex") && !dm.agent_resolving("opencode"));
+        let again = dm.warm_builtins_with(
+            &["codex", "opencode"],
+            || panic!("no PATH probe when nothing is claimed"),
+            |basename, _| panic!("{basename} probed twice"),
+        );
+        assert_eq!(again, 0);
     }
 
     #[test]
