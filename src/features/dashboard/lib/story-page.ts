@@ -31,6 +31,16 @@ function typeBefore(lines: string[], end: number): StoryType | null {
   return null;
 }
 
+/** The story type a shell's `<meta name="cs:type">` declares, or `null` for any other page. */
+export function storyTypeOfHtml(text: string): StoryType | null {
+  for (const tag of text.match(/<meta\b[^>]*>/gi) ?? []) {
+    if (!/\bname\s*=\s*["']cs:type["']/i.test(tag)) continue;
+    const value = /\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? "";
+    return (STORY_TYPES as readonly string[]).includes(value) ? (value as StoryType) : null;
+  }
+  return null;
+}
+
 /**
  * The story page a team declares in `teams.yml` (`story_page:`, relative to the team's content),
  * or `null` when it declares none. The app names no page of its own: without the setting a story

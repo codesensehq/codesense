@@ -17,6 +17,10 @@ import {
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { toast } from "sonner";
+import {
+  liveStoryDashboardDeps,
+  openStoryDashboard,
+} from "@/features/dashboard/lib/open-story-dashboard";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { canExportToPdf, exportViewerToPdf } from "@/features/viewer/lib/export-pdf";
 import {
@@ -528,6 +532,20 @@ const shortcutActions: readonly ShortcutAction[] = [
       const { teamKey } = getActiveWorkspaceContext();
       if (teamKey === NO_TEAM_SENTINEL) return;
       useViewerStore.getState().toggleConsoleShared();
+    },
+  },
+  {
+    // View → Dashboard: the focused story's dashboard (its workspace's story, else the active tab when
+    // it is a story file). With no story in focus it says why in a toast, so the item is never silent.
+    id: "viewer.open-story-dashboard",
+    label: "Dashboard",
+    menuPath: ["View", "Dashboard"],
+    defaultKeystroke: "",
+    scope: "team",
+    run: () => {
+      const { teamKey } = getActiveWorkspaceContext();
+      if (teamKey === NO_TEAM_SENTINEL) return;
+      void openStoryDashboard(liveStoryDashboardDeps());
     },
   },
   {

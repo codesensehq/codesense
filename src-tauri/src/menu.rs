@@ -83,6 +83,8 @@ pub const MENU_ITEMS: &[(&str, &str, &str)] = &[
         "Toggle Console",
         "CmdOrCtrl+Shift+\\",
     ),
+    // View → Dashboard: the focused story's dashboard (a toast says why when none is in focus).
+    ("viewer.open-story-dashboard", "Dashboard", ""),
     ("nav.switch-org", "Switch Context Repo", "CmdOrCtrl+Shift+O"),
     ("nav.switch-team", "Switch Team", "CmdOrCtrl+Alt+Shift+T"),
 ];
@@ -249,7 +251,8 @@ fn build_menu_internal<R: Runtime>(
         .item(&build_item(app, "viewer.toggle-terminal", overrides)?)
         .item(&build_item(app, "viewer.toggle-right-pane", overrides)?)
         .item(&build_item(app, "viewer.toggle-pane-full-screen", overrides)?)
-        .item(&build_item(app, "viewer.toggle-console", overrides)?);
+        .item(&build_item(app, "viewer.toggle-console", overrides)?)
+        .item(&build_item(app, "viewer.open-story-dashboard", overrides)?);
     // SW-RP-1: append the registry-driven Panels submenu (close/re-open panels)
     // when the frontend has supplied panels. Built wholesale on each rebuild.
     let panels_sub = if panels.is_empty() {
@@ -361,6 +364,7 @@ mod tests {
                 "viewer.toggle-right-pane",
                 "viewer.toggle-pane-full-screen",
                 "viewer.toggle-console",
+                "viewer.open-story-dashboard",
                 "nav.switch-org",
                 "nav.switch-team",
             ],
