@@ -85,6 +85,8 @@ mod memory_metrics;
 mod menu;
 mod models;
 mod operations;
+/// The pack format: `pack.yml` and `packs.lock.yml` models.
+pub mod packs;
 mod panes;
 #[cfg(feature = "bench-support")]
 pub mod perf_support;

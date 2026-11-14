@@ -403,6 +403,1109 @@
       "title": "Agent",
       "type": "object"
     },
+    "pack-yml": {
+      "$defs": {
+        "CliRequirement": {
+          "properties": {
+            "for": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "type": "string"
+            },
+            "optional": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "ExternalMethod": {
+          "enum": [
+            "files",
+            "setup"
+          ],
+          "type": "string"
+        },
+        "ExternalSetup": {
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "run": {
+              "type": "string"
+            },
+            "verify": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SetupVerify"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "type": "object"
+        },
+        "ExternalSource": {
+          "properties": {
+            "git": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "npm": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "FileEntry": {
+          "properties": {
+            "exec": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "Follow": {
+          "enum": [
+            "pinned",
+            "latest-compatible"
+          ],
+          "type": "string"
+        },
+        "KitRequirement": {
+          "additionalProperties": false,
+          "properties": {
+            "chat": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "McpRequirement": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "why": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "Part": {
+          "oneOf": [
+            {
+              "properties": {
+                "default": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "includes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "preset",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "includes"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "agent",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "file"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "content",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "paths"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "skill",
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "targets": {
+                  "items": {
+                    "$ref": "#/$defs/SkillTarget"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "source",
+                "targets"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "routine",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "file"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "dashboards",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "paths"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "seed",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "starter_page": {
+                  "type": "boolean"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "from",
+                "to"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "commit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "compatible": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "expect_license": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "follow": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Follow"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "integrity": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "const": "external",
+                  "type": "string"
+                },
+                "method": {
+                  "$ref": "#/$defs/ExternalMethod"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "paths": {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                "setup": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ExternalSetup"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source": {
+                  "$ref": "#/$defs/ExternalSource"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "trademark": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tree_sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "method",
+                "source",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "setup",
+                  "type": "string"
+                },
+                "needs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "command"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Requires": {
+          "properties": {
+            "agents": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "clis": {
+              "items": {
+                "$ref": "#/$defs/CliRequirement"
+              },
+              "type": "array"
+            },
+            "codesense": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "integrations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KitRequirement"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mcp_servers": {
+              "items": {
+                "$ref": "#/$defs/McpRequirement"
+              },
+              "type": "array"
+            },
+            "packs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "routines": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "Setting": {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "value"
+          ],
+          "type": "object"
+        },
+        "SetupVerify": {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "read": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "read",
+            "field"
+          ],
+          "type": "object"
+        },
+        "SkillTarget": {
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "hermes"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileEntry"
+          },
+          "type": "array"
+        },
+        "for": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "homepage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pack_format": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/Part"
+          },
+          "type": "array"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "requires": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Requires"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings": {
+          "items": {
+            "$ref": "#/$defs/Setting"
+          },
+          "type": "array"
+        },
+        "setup_steps": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec_hash": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": "object"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_format",
+        "id",
+        "name",
+        "version",
+        "publisher",
+        "summary",
+        "license",
+        "parts"
+      ],
+      "title": "PackManifest",
+      "type": "object"
+    },
+    "packs-lock-yml": {
+      "$defs": {
+        "ExternalMethod": {
+          "enum": [
+            "files",
+            "setup"
+          ],
+          "type": "string"
+        },
+        "Follow": {
+          "enum": [
+            "pinned",
+            "latest-compatible"
+          ],
+          "type": "string"
+        },
+        "LicenseClass": {
+          "enum": [
+            "open-source",
+            "copyleft",
+            "no-license",
+            "unrecognized",
+            "blocked"
+          ],
+          "type": "string"
+        },
+        "LockAgent": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "revision",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "LockExternal": {
+          "properties": {
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fetched_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "follow": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Follow"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "integrity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "license": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LockLicense"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "method": {
+              "$ref": "#/$defs/ExternalMethod"
+            },
+            "setup": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LockSetupState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tree_sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "source",
+            "version"
+          ],
+          "type": "object"
+        },
+        "LockLicense": {
+          "properties": {
+            "class": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LicenseClass"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "confidence": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "spdx": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "spdx"
+          ],
+          "type": "object"
+        },
+        "LockParts": {
+          "properties": {
+            "excluded": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "installed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "LockRoutine": {
+          "properties": {
+            "enabled_at_install": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "LockSeed": {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "LockSetupState": {
+          "properties": {
+            "at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "verified_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        "LockSource": {
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/LockSourceKind"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        "LockSourceKind": {
+          "enum": [
+            "catalog",
+            "url",
+            "folder"
+          ],
+          "type": "string"
+        },
+        "LockTrust": {
+          "enum": [
+            "verified",
+            "bundled",
+            "unverified"
+          ],
+          "type": "string"
+        },
+        "LockedPack": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/$defs/LockAgent"
+              },
+              "type": "array"
+            },
+            "archive_sha256": {
+              "type": "string"
+            },
+            "catalog_sequence": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "external": {
+              "items": {
+                "$ref": "#/$defs/LockExternal"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "installed_at": {
+              "type": "string"
+            },
+            "pack_team": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parts": {
+              "$ref": "#/$defs/LockParts"
+            },
+            "previous_parent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "routines": {
+              "items": {
+                "$ref": "#/$defs/LockRoutine"
+              },
+              "type": "array"
+            },
+            "seeds": {
+              "items": {
+                "$ref": "#/$defs/LockSeed"
+              },
+              "type": "array"
+            },
+            "source": {
+              "$ref": "#/$defs/LockSource"
+            },
+            "trust": {
+              "$ref": "#/$defs/LockTrust"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "source",
+            "archive_sha256",
+            "trust",
+            "installed_at",
+            "parts"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "lock_format": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "packs": {
+          "items": {
+            "$ref": "#/$defs/LockedPack"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "lock_format"
+      ],
+      "title": "PacksLock",
+      "type": "object"
+    },
     "role-yaml": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -1295,7 +2398,9 @@
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
     "src-tauri/src/agents/model.rs": "e6bda3a39850fa241c4345dafffecbc8db2667ff8e3346dc91eead6d52887721",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
-    "src-tauri/src/docs_schemas.rs": "d67976d753078dbeee4fe173776a3fd8caaa87c89b25232b71e2128d7d3e99b3",
+    "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
+    "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",
+    "src-tauri/src/packs/manifest.rs": "cbefe924e32f030e301da71b9162d7d5bff7e98894d1782f7a43bd7a45b35a62",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
     "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
     "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"

@@ -1,0 +1,81 @@
+# A full example pack.yml (a recipe with agents, content, external parts and a seed). Comma-bearing
+# titles are quoted, since a bare comma splits a flow mapping. Schema-only: the preset names parts
+# this file doesn't declare and the pack ships no files, so the validator refuses it as a pack.
+pack_format: 1
+id: codesense-team # [a-z0-9-], unique in the catalog
+name: CodeSense team pack
+version: 1.0.0 # semver; the release tag is <id>-v<version>
+publisher: codesense # only catalog packs signed by the CodeSense key may say codesense
+summary: The agent team we build CodeSense with. Compatible with BMad Method 6 and Impeccable.
+for: Solo developers and small teams shipping software with Claude Code or Codex.
+homepage: https://codesense.ai/packs/codesense-team
+source: https://github.com/<org>/codesense-pack-team
+source_commit: <40-hex> # written by the pack build; never a short SHA
+license: MIT # covers every bundled file; the bundle rule refuses anything else
+requires:
+  codesense: ">=0.2.0"
+  clis:
+    - { name: claude, version: ">=2.0", optional: false }
+    - { name: codex, optional: true }
+    - { name: node, version: ">=20", optional: true, for: [bmad] } # only the BMAD setup step needs it
+  mcp_servers: []
+  packs: [codesense-starter] # extends the starter pack
+parts: # what the store lists and lets you tick
+  - id: full
+    kind: preset
+    includes:
+      [
+        claude-bmad-impeccable,
+        codex-bmad-impeccable,
+        dev-worker,
+        reviewer,
+        process,
+        dashboards,
+        bmad,
+        impeccable,
+      ]
+    default: true
+  - {
+      id: claude-bmad-impeccable,
+      kind: agent,
+      file: agents/claude-bmad-impeccable/agent.yaml,
+      needs: [bmad, impeccable],
+    }
+  - {
+      id: process,
+      kind: content,
+      title: "Handbook, story format and review records",
+      paths: [content/handbook/**, content/_bmad/custom/**],
+    } # our BMAD overlays are our own files
+  - id: bmad
+    kind: external
+    title: BMad Method
+    method: setup # upstream's own installer; run by your agent after install
+    source: { npm: bmad-method }
+    version: 6.11.0 # the version we tested
+    integrity: sha512-… # npm registry integrity of the tested tarball
+    compatible: ">=6.11.0 <7" # range for the opt-in follow-latest mode
+    follow: pinned # pinned | latest-compatible (user's choice, recorded in the lock)
+    setup:
+      run: npx bmad-method@6.11.0 install --directory . --modules bmm,bmb,cis,tea --tools claude-code,codex --yes # exact tested flags verified before release
+      cwd: pack-team-content
+      verify: { read: _bmad/_config/manifest.yaml, field: installation.version }
+    expect_license: MIT # a mismatch with the detected license is shown in the preview
+    trademark: "BMad™ and BMad Method™ are trademarks of BMad Code, LLC. Not affiliated with or endorsed by BMad Code, LLC."
+  - id: impeccable
+    kind: external
+    method: files # fetched archive, mapped paths, nothing runs
+    source: { git: https://github.com/pbakaus/impeccable }
+    version: 4.6.0
+    commit: <40-hex> # the commit we tested
+    tree_sha256: … # hash of the mapped files; a mismatch is refused
+    paths: { "skill/**": [".agents/skills/impeccable/", ".claude/skills/impeccable/"] } # verified against the upstream layout at the pinned commit
+    compatible: ">=4.6.0 <5"
+    expect_license: Apache-2.0
+  - { id: manager-wake, kind: routine, file: routines/manager-wake/routine.yml } # always installed off
+  - { id: dashboards, kind: dashboards, paths: [content/dashboards/**] }
+  - { id: readme, kind: seed, from: seed/README.html, to: README.html, starter_page: true }
+settings: # applied only if ticked in the install sheet
+  - { key: starter_page, value: README.html }
+files: # written by the pack build: every BUNDLED file, its sha256 and whether it is executable
+  - { path: content/dashboards/story-board.html, sha256: "…", exec: false }
