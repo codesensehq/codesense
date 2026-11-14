@@ -222,6 +222,16 @@ export function checkConsent(
     const index = turn.index ?? at;
     for (const raw of turn.tool_calls ?? turn.toolCalls ?? []) {
       const { name, input } = callOf(raw);
+      if (name === "send_message") {
+        // Setup talks to the person only, and says nothing once it has handed back.
+        if (input.to !== "human")
+          errors.push(
+            `turn ${index}: send_message to ${JSON.stringify(input.to)}, not "human", which is the only one setup writes to`,
+          );
+        if (handback !== undefined)
+          errors.push(`turn ${index}: send_message came after the hand-back at turn ${handback}`);
+        else if (done) errors.push(`turn ${index}: send_message came after signal_done`);
+      }
       const line =
         name === "send_message" && input.to === "human" && input.kind === "needs-you"
           ? parseCardLine(input.text ?? input.message)
@@ -306,15 +316,15 @@ export function checkConsent(
         if (handback !== undefined)
           errors.push(`turn ${index}: ${name} came after the hand-back at turn ${handback}`);
         else if (done) errors.push(`turn ${index}: ${name} came after signal_done`);
-        if (!setup) {
-          // A ledger write records what a click already allowed; it needs no click of its own.
-        } else if (
+        if (
           String(input.org ?? "")
             .trim()
             .toLowerCase() === DOCS_ORG
         ) {
           // The docs are the guide's own context; no click makes them the place a setup writes.
           errors.push(`turn ${index}: ${name} names org ${DOCS_ORG}, which setup never writes to`);
+        } else if (!setup) {
+          // A ledger write records what a click already allowed; it needs no click of its own.
         } else if (!entry) {
           errors.push(`turn ${index}: ${name} was called with no consent click for it: ${why}`);
         } else if (name === "run_in_terminal_tab" && input.key && !input.command) {

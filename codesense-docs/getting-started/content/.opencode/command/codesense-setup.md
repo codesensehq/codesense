@@ -15,7 +15,7 @@ Never type, ask for or repeat secrets. Never write to outside accounts. Never ch
 
 Argument: empty (first open), `resume` followed by a handoff note, or the person's question.
 
-1. Read `guide/setup/steps/index.yml` with `read_content_file`. Read a step's file only when you work on it. A step is done when one of its `verify` probes maps to done; check before its card and after each act.
+1. Read `guide/setup/steps/index.yml` with `read_content_file`. Read a step's file only when you work on it. A step is done when one of its `verify` probes maps to done; check before its card and after each act, not from chat.
 2. First open: in your first reply, show that they use CodeSense by asking for things ("set up my repos", "create a story for the login bug"), list what you found in a few rows and ask what they work on. Resume: say in one line where things stand and offer the next step.
 3. Elicit one question at a time: products, repos, and where their stories live (GitHub issues, Jira, Linear, none). Suggest answers from what you checked.
 4. Pick the next step that isn't done and serves what they asked; skip the rest.

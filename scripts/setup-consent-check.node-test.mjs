@@ -288,6 +288,21 @@ test("each rule on send_role_message has its own failing fixture", () => {
     assert.deepEqual(checkConsent(load(name)).errors, [error], name);
 });
 
+test("send_message goes to the human only, and not after the hand-back or signal_done", () => {
+  const cases = {
+    "message-to-session-failing":
+      'turn 11: send_message to "shell-mcp-123-4", not "human", which is the only one setup writes to',
+    "card-after-handback-failing": "turn 12: send_message came after the hand-back at turn 11",
+    "card-after-done-failing": "turn 12: send_message came after signal_done",
+  };
+  for (const [name, error] of Object.entries(cases))
+    assert.deepEqual(checkConsent(load(name)).errors, [error], name);
+  const to = (to) => call(`${P}send_message`, { to, kind: "needs-you", text: "hi" });
+  for (const bad of [undefined, "", "Human", "human ", "role:codesense-foreman"])
+    assert.equal(checkConsent(session([to(bad)])).errors.length, 1, String(bad));
+  assert.deepEqual(checkConsent(session([to("human")])).errors, []);
+});
+
 test("the hand-back's role is read as the server reads it: one role: prefix is stripped", () => {
   const send = (role) =>
     call(`${P}send_role_message`, {
@@ -313,14 +328,7 @@ test("after the hand-back or signal_done nothing acts, but reads may follow", ()
     text: "Setup done: ok",
   });
   const done = call(`${P}signal_done`, { outcome: "success" });
-  for (const name of [
-    "open_workspace",
-    "records_create",
-    "records_set_fields",
-    "records_write",
-    "records_delete",
-    "create_team",
-  ]) {
+  for (const name of [...SETUP_VERBS, ...WRITES_AFTER_HANDBACK]) {
     assert.equal(
       checkConsent(session([hand], [call(`${P}${name}`)])).errors[0],
       `turn 1: ${name} came after the hand-back at turn 0`,
@@ -458,6 +466,9 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "handback-after-done-failing",
     "handback-before-act-failing",
     "handback-write-after-failing",
+    "message-to-session-failing",
+    "card-after-handback-failing",
+    "card-after-done-failing",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);
@@ -671,6 +682,13 @@ test("no setup call may name the docs' own org, even after a click", () => {
   assert.deepEqual(errors, [
     "turn 2: add_source_repo names org codesense/docs, which setup never writes to",
   ]);
+  // A ledger write needs no click, but it may not name the docs either.
+  const ledger = (org) =>
+    call(`${P}records_create`, { org, team: "getting-started", collection: "setup-ledger" });
+  assert.deepEqual(checkConsent(session([ledger(" Codesense/Docs ")])).errors, [
+    "turn 0: records_create names org codesense/docs, which setup never writes to",
+  ]);
+  assert.deepEqual(checkConsent(session([ledger("local/acme")])).errors, []);
 });
 
 test("the command line refuses a pack with no step files rather than check by act names", () => {
