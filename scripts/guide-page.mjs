@@ -32,9 +32,8 @@ export const FILES = [SOURCE, TEMPLATE, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS];
 
 const BEGIN = "/* guide.js:begin */\n";
 const END = "\n/* guide.js:end */";
-const INLINE = new RegExp(
-  `${BEGIN.replace(/[*/]/g, "\\$&")}([\\s\\S]*?)${END.replace(/[*/]/g, "\\$&")}`,
-);
+const literal = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+const INLINE = new RegExp(`${literal(BEGIN)}([\\s\\S]*?)${literal(END)}`);
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const read = (rel, root = ROOT) => readFileSync(join(root, rel), "utf8");
