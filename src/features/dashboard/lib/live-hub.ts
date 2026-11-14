@@ -188,6 +188,13 @@ function canDeliver(frame: Frame, message: Record<string, unknown>) {
     (sub) => sub.topic === message.topic && !sub.order && sub.viewKey === message.viewKey,
   );
 }
+/** The session ids an event names: a progress or done event's `sessionId`, a pty-exit's
+ *  `session_id`, or a usage notice's `sessionIds`. */
+const sessionIdsOf = (payload: unknown): string[] => {
+  const p = (payload ?? {}) as { sessionId?: unknown; session_id?: unknown; sessionIds?: unknown };
+  const ids = Array.isArray(p.sessionIds) ? p.sessionIds : [p.sessionId ?? p.session_id];
+  return ids.filter((id): id is string => typeof id === "string" && id !== "");
+};
 const rowId = (row: HubRow) => row.id ?? String(row.handle);
 
 export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
@@ -336,22 +343,29 @@ export class LiveHub {
       this.queueDelta(subscription.frame, delta);
       this.schedule();
     });
-    const nudges: [event: string, type: string | string[]][] = [
+    const nudges: [event: string, type: string][] = [
       ["agent-inbox-changed", "inbox-changed"],
       ["routines:changed", "routines-changed"],
       ["machines-changed", "machines-changed"],
       ["worktree-changed", "worktrees-changed"],
       ["context-index-changed", "context-changed"],
       ["mcp:agent-message", "agent-activity-changed"],
-      // An agent's session record (tokens, cost, files) moves with its progress and its end.
-      ["mcp:agent-progress", ["agent-activity-changed", "session-record-changed"]],
-      ["mcp:agent-done", "session-record-changed"],
-      ["pty-exit", "session-record-changed"],
     ];
     for (const [event, type] of nudges)
-      this.listen(event, ({ payload }) => {
-        for (const each of Array.isArray(type) ? type : [type]) this.invalidate(each, payload);
-      });
+      this.listen(event, ({ payload }) => this.invalidate(type, payload));
+    // An agent's session record (tokens, cost, files) moves with its progress and its end, and
+    // with usage stored for its session (the host debounces that to about 2 s). Each nudge names
+    // its session, so a page reads again only its own agent's record. Commits have no event of
+    // their own: a record's files refresh on progress, done and exit.
+    this.listen("mcp:agent-progress", ({ payload }) => {
+      this.invalidate("agent-activity-changed", payload);
+      this.sessionRecordChanged(sessionIdsOf(payload));
+    });
+    for (const event of ["mcp:agent-done", "pty-exit"])
+      this.listen(event, ({ payload }) => this.sessionRecordChanged(sessionIdsOf(payload)));
+    this.listen("session-usage-changed", ({ payload }) =>
+      this.sessionRecordChanged(sessionIdsOf(payload)),
+    );
     // Any change to orgs, teams or source repos (creating or deleting a team, attaching a
     // context repo, adding a source repo) raises one or more of these; a burst folds into one
     // page event.
@@ -384,6 +398,11 @@ export class LiveHub {
       this.invalidate("setup-changed");
     }, wait);
   }
+  private sessionRecordChanged(sessionIds: string[]) {
+    // An event that names no session is one every record may have to reread.
+    for (const sessionId of sessionIds.length ? sessionIds : [undefined])
+      this.invalidate("session-record-changed", { sessionId });
+  }
   /** Posts a payloadless (or context/inbox) change nudge to every frame; a hidden frame
    *  holds it until shown, since consumers must reread. */
   private invalidate(type: string, payload?: unknown) {
@@ -392,6 +411,9 @@ export class LiveHub {
       type: `codesense:${type}`,
       ...(type === "context-changed"
         ? { orgs: [], allOrgs: true, truncated: true, ...(payload as object) }
+        : {}),
+      ...(type === "session-record-changed" && sessionIdsOf(payload).length
+        ? { sessionId: sessionIdsOf(payload)[0] }
         : {}),
     };
     const changes = type === "inbox-changed" ? inboxChangesOf(payload) : [];
@@ -409,15 +431,17 @@ export class LiveHub {
           key,
           type === "context-changed" && held
             ? { ...message, allOrgs: true }
-            : type === "inbox-changed" && changes.length
-              ? {
-                  ...message,
-                  changes: unionChanges(
-                    (held?.changes as InboxChange[] | undefined) ?? [],
-                    changes,
-                  ),
-                }
-              : message,
+            : type === "session-record-changed" && held && held.sessionId !== message.sessionId
+              ? { type: message.type }
+              : type === "inbox-changed" && changes.length
+                ? {
+                    ...message,
+                    changes: unionChanges(
+                      (held?.changes as InboxChange[] | undefined) ?? [],
+                      changes,
+                    ),
+                  }
+                : message,
         );
         // A paste-target flip changes no hub data, so it never makes a hidden page resync.
         if (type === "paste-target-changed") continue;

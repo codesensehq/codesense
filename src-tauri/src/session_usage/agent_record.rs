@@ -34,6 +34,8 @@ pub(crate) struct UsageHalf {
     pub ids: Vec<String>,
     pub record: Option<SessionRecord>,
     pub report: UsageReport,
+    /// What the session's rows that have a price add up to.
+    pub priced_usd: f64,
 }
 
 /// The session a launch handle names: the latest durable record, else the latest attribution.
@@ -72,6 +74,7 @@ pub(crate) fn usage_half(
     let session_id = session_read::resolve_session(&store, None, &input)?.session_id;
     let ids = UsageStore::event_session_ids(&store, &session_id)?;
     let record = UsageStore::read_session_record(&store, &session_id)?;
+    let priced_usd = UsageStore::session_cost(&store, &session_id)?.priced();
     let mut stories = StoryResolver::for_home(home, launch_stories).with_scope(scope.clone());
     let filter = Filter {
         session_id: Some(session_id.clone()),
@@ -83,38 +86,76 @@ pub(crate) fn usage_half(
         ids,
         record,
         report,
+        priced_usd,
     })
 }
 
-/// The commits of a story, as many pages as it takes, with why they could not be read.
-async fn story_commits(
+/// One page of a story's commits, as the record reads it.
+struct CommitPage {
+    commits: Vec<CommitFacts>,
+    /// Why the story's commits could not be read, when they could not.
+    unavailable: Option<String>,
+    next: Option<String>,
+}
+
+/// One page of the story's commits from `story_changes`, from `cursor`.
+async fn read_page(
     home: &Path,
     story: &str,
+    cursor: Option<String>,
     scope: &CallerScope,
-) -> Result<(Vec<CommitFacts>, Option<String>), String> {
+) -> Result<CommitPage, String> {
+    let params = story_changes::Params {
+        include: Vec::new(),
+        story_id: story.to_owned(),
+        limit: Some(500),
+        cursor,
+        only: Some(vec![story_changes::Only::Commits]),
+    };
+    let page = story_changes::read(home, &params, scope).await?;
+    Ok(CommitPage {
+        unavailable: BTreeMap::get(&page.unavailable, "commits").cloned(),
+        commits: page
+            .commits
+            .into_iter()
+            .map(|commit| (commit.sha, commit.files, commit.session_ids))
+            .collect(),
+        next: page.next_cursor,
+    })
+}
+
+/// The commits of a story, as many pages as `read_page` gives (up to [`COMMIT_PAGES`]), with why
+/// they could not all be read.
+async fn collect_commits<F, Fut>(
+    mut read_page: F,
+) -> Result<(Vec<CommitFacts>, Option<String>), String>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<CommitPage, String>>,
+{
     let mut commits = Vec::new();
     let mut cursor = None;
     for _ in 0..COMMIT_PAGES {
-        let params = story_changes::Params {
-            include: Vec::new(),
-            story_id: story.to_owned(),
-            limit: Some(500),
-            cursor: Option::take(&mut cursor),
-            only: Some(vec![story_changes::Only::Commits]),
-        };
-        let page = story_changes::read(home, &params, scope).await?;
-        if let Some(reason) = BTreeMap::get(&page.unavailable, "commits") {
-            return Ok((commits, Some(reason.clone())));
+        let page = read_page(Option::take(&mut cursor)).await?;
+        if let Some(reason) = page.unavailable {
+            return Ok((commits, Some(reason)));
         }
-        for commit in page.commits {
-            commits.push((commit.sha, commit.files, commit.session_ids));
-        }
-        match page.next_cursor {
+        commits.extend(page.commits);
+        match page.next {
             Some(next) => cursor = Some(next),
             None => return Ok((commits, None)),
         }
     }
     Ok((commits, Some("more commits than one record reads".into())))
+}
+
+/// The commits of a story, with why they could not all be read.
+async fn story_commits(
+    home: &Path,
+    story: &str,
+    scope: &CallerScope,
+) -> Result<(Vec<CommitFacts>, Option<String>), String> {
+    collect_commits(|cursor| read_page(home, story, cursor, scope)).await
 }
 
 /// The record: usage figures from `half`, files from the story's `commits` made by the session.
@@ -139,16 +180,27 @@ pub(crate) fn assemble(
         Some(timing) => Some(timing.wall_ms),
         None => first.zip(last).map(|(first, last)| last - first),
     };
-    let cost = if report.totals.unpriced_sessions > 0 || report.sessions.first().is_none() {
+    let mut unpriced_models = BTreeSet::new();
+    for session in &report.sessions {
+        unpriced_models.extend(session.unpriced_models.iter().cloned());
+    }
+    // The priced sum, with `unpricedModels` naming what it leaves out (as `session_usage` does);
+    // null only when nothing has a price.
+    let cost = if report.sessions.first().is_none() || (!unpriced_models.is_empty() && unpriced_models.len() >= models.len()) {
         None
     } else {
-        Some(report.totals.cost_usd)
+        Some(half.priced_usd)
     };
     let mut unavailable = BTreeMap::new();
     if report.sessions.first().is_none() {
         unavailable.insert("usage", "no usage has been reported for this session yet".to_owned());
-    } else if cost.is_none() {
-        unavailable.insert("cost", "a model of this session has no rate".to_owned());
+    } else if !unpriced_models.is_empty() {
+        let why = if cost.is_some() {
+            "costUsd is the priced part only: a model of this session has no rate"
+        } else {
+            "a model of this session has no rate"
+        };
+        unavailable.insert("cost", why.to_owned());
     }
     if story.is_none() {
         unavailable.insert("story", "no story is linked to this session".to_owned());
@@ -184,11 +236,13 @@ pub(crate) fn assemble(
     json!({
         "handle": handle,
         "sessionId": half.session_id,
+        "sessionIds": half.ids,
         "cli": record.and_then(|r| r.cli.clone()).map(Value::from).or_else(|| report.sessions.first().map(|s| json!(s.cli))),
         "model": record.and_then(|r| r.model.clone()).or_else(|| models.iter().next().cloned()),
         "models": models,
         "tokens": report.totals.tokens,
         "costUsd": cost,
+        "unpricedModels": unpriced_models,
         "durationMs": duration,
         "firstAtMs": first,
         "lastAtMs": last,

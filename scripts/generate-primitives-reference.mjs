@@ -385,7 +385,7 @@ const INVOKE_META = {
   },
   sessionRecord: {
     description:
-      "One agent's session record by launch `handle`: `{handle, sessionId, cli, model, models, tokens, costUsd, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is `null` when a model has no rate, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb)`.",
+      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb)`.",
     examples: [
       {
         args: { handle: "agent-1" },
@@ -1220,9 +1220,10 @@ const KIT = [
     name: "codesense.onSessionRecordChanged",
     category: "data-read",
     wraps: "codesense:session-record-changed listener",
-    description: "Nudge callback for when an agent's session record may have changed.",
+    description:
+      "Nudge callback for when an agent's session record may have changed. Pass the record's `sessionIds` as the second argument to hear only about that agent's session.",
     example:
-      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render));",
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   {
     name: "codesense.onPasteTargetChanged",
@@ -1931,11 +1932,13 @@ const EVENT_META = {
   },
   "codesense:session-record-changed": {
     direction: "parent-to-doc",
-    payload: "N/A",
-    timing: "On an agent's progress, completion or exit",
-    description: "Nudge for `sessionRecord()` listeners.",
+    payload: "`{sessionId?}`: the session that changed; absent when the host cannot tell which",
+    timing:
+      "On the agent's progress, completion or exit, and about 2 s after usage is stored for its session. Files from commits have no event of their own; they refresh on progress, completion and exit",
+    description:
+      "Nudge for `sessionRecord()` listeners. `onSessionRecordChanged(cb, sessionIds)` runs `cb` only for those sessions (and for a nudge that names none).",
     example:
-      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render));",
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   "codesense:setup-changed": {
     direction: "parent-to-doc",
