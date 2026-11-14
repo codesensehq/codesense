@@ -14,6 +14,7 @@ import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
+import { runBridgeCommand } from "@/features/dashboard/components/html-bridge";
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
 
 vi.mock("@tauri-apps/api/core", async (original) => ({
@@ -303,18 +304,47 @@ describe("ChatOverlay", () => {
     expect(screen.getByRole("textbox")).toBeEnabled();
   });
 
-  it("a message sent from the page's transport appears in the thread for the same session", async () => {
-    await renderOverlay(420, 700);
-    // The page sends `sendAsHuman({to: handle, text})`; the engine stores it under that handle, the key the overlay reads its thread by.
-    const sent = msg(5, "human", LEAD, "sent from the agent page");
-    api.loadSessionInbox.mockResolvedValue({
-      dto: { handle: LEAD, roles: [], messages: [...MESSAGES, sent] },
+  it("a message the page sends to the agent's handle appears in the overlay's thread for the same session", async () => {
+    // A keyed store like the engine's: the page's `sendAsHuman({to: handle})` lands under the session that handle names,
+    // and the overlay reads its thread by that session id, so the two meet only if the handle resolves to the overlay's session.
+    const store = new Map<string, ConversationMessage[]>([[SESSION, [...MESSAGES]]]);
+    const handleToSession = new Map([[LEAD, SESSION]]);
+    api.loadSessionInbox.mockImplementation(async (key: string) => ({
+      dto: { handle: LEAD, roles: [], messages: store.get(key) ?? [] },
       source: "live",
+    }));
+    const sends: { to: string; text: string }[] = [];
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "send_inbox_as_human") {
+        const { to, text } = args as { to: string; text: string };
+        sends.push({ to, text });
+        const session = handleToSession.get(to);
+        if (session) store.get(session)?.push(msg(5, "human", to, text));
+        return { status: "sent", messageId: 5 };
+      }
+      return cmd === "agent_pins"
+        ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
+        : undefined;
     });
+    await renderOverlay(420, 700);
+    expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION);
+
+    // The page's own transport: the bridge verb, with the handle the overlay's agent is known by.
+    await runBridgeCommand("sendAsHuman", { to: LEAD, text: "sent from the agent page", ...TEAM });
+    expect(sends).toEqual([{ to: LEAD, text: "sent from the agent page" }]);
+
+    api.loadSessionInbox.mockClear();
     await act(async () => {
       events.get(AGENT_INBOX_CHANGED_EVENT)?.({ payload: null });
     });
     expect(await screen.findByText("sent from the agent page")).toBeInTheDocument();
+    // The reload is keyed by the overlay's session id, and the thread it read is the one whose handle is what the page sent to.
+    const keys = api.loadSessionInbox.mock.calls.map((call) => call[0]);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(new Set(keys)).toEqual(new Set([SESSION]));
+    const read = await api.loadSessionInbox.mock.results.at(-1)!.value;
+    expect(read.dto.handle).toBe(LEAD);
+    expect(sends[0]!.to).toBe(read.dto.handle);
   });
 
   it("Terminal hands the tab back to the terminal, and names the key that brings the chat back", async () => {
