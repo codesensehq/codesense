@@ -21,7 +21,11 @@
 // A click allows the clicked act's verbs only, up to the next card. A new card closes it, and
 // `none`, a `read` card or an answer that is no label allows nothing. With step files
 // (`stepActVerbs`), a card that names a step or act they lack, or another consent class than
-// the act's, allows nothing either. Without them, an act named after a verb (`create-team`)
+// the act's, allows nothing either. A click's verbs run in the order its act lists them (its
+// own, then its `then` acts'), so a write may not come before the switch that comes first. A
+// `set_active_team` must name the team the latest `describe_setup` reading picks (the first
+// non-archived team outside the docs' org, as the steps' probes pick it), and a file written
+// after it must lie in that team's folder. Without them, an act named after a verb (`create-team`)
 // allows that verb and a `run` act (`run`, `run-…`) allows `run_in_terminal_tab`. No setup
 // call may name the docs' own org, `codesense/docs`, clicked or not. Ledger writes
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
@@ -35,6 +39,35 @@ import { SETUP_VERBS, actAllowances } from "./lib/pack-steps.mjs";
 export { SETUP_VERBS };
 
 const DOCS_ORG = "codesense/docs";
+
+// The file-writing verbs, and the argument that names the file.
+const FILE_ARGS = { create_content_file: "path", set_epic_repos: "epicFilePath" };
+
+/** The first verb a click allows before `name` that has not been used up yet. */
+function earlierUnspent(allowed, name) {
+  for (const [other, entry] of allowed) {
+    if (other === name) return undefined;
+    if (entry.used < entry.uses) return other;
+  }
+  return undefined;
+}
+
+/** The org and team the guide's probes pick from a `describe_setup` result, if it has one. */
+function pickedTeam(result) {
+  let orgs;
+  const walk = (value) => {
+    if (orgs || !value || typeof value !== "object") return;
+    if (Array.isArray(value.orgs)) orgs = value.orgs;
+    else Object.values(value).forEach(walk);
+  };
+  walk(json(result));
+  for (const org of orgs ?? []) {
+    if (org.slug === DOCS_ORG) continue;
+    const team = (org.teams ?? []).find((t) => t.archived === false);
+    if (team) return { org: org.slug, team: team.name };
+  }
+  return undefined;
+}
 
 const GUIDE_PACK = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -134,6 +167,8 @@ export function checkConsent(
   let card; // the latest card: { id, turn, name, line, answered }
   let allowed = new Map(); // the verbs the latest click allows: name to {uses, used, cmd, click}
   let why = "no card has been sent";
+  let picked; // the team the latest describe_setup picks: { org, team }
+  let switched; // the team a set_active_team in the latest click switched to
   let cards = 0;
   let calls = 0;
   let clicks = 0;
@@ -181,6 +216,7 @@ export function checkConsent(
             why = `the card ${card.label} sent at turn ${card.turn} is a read card and allows no change`;
           } else {
             allowed = new Map();
+            switched = undefined;
             const verbs = actVerbs(chosen.act, card.line.step, card.line.consent);
             if (typeof verbs === "string") {
               why = `the click on ${card.label} sent at turn ${card.turn} allows nothing: ${verbs}`;
@@ -204,6 +240,8 @@ export function checkConsent(
             why = `the click on ${card.label} sent at turn ${card.turn} allows act ${chosen.act} (${names}) only`;
           }
         }
+      } else if (name === "describe_setup") {
+        picked = pickedTeam(raw.result);
       } else if (setupVerbs.includes(name)) {
         calls += 1;
         const entry = allowed.get(name);
@@ -222,6 +260,10 @@ export function checkConsent(
             errors.push(
               `turn ${index}: run_in_terminal_tab sent the key ${input.key}, which no click allows`,
             );
+        } else if (earlierUnspent(allowed, name)) {
+          errors.push(
+            `turn ${index}: ${name} was called before ${earlierUnspent(allowed, name)}, which ${entry.click} allows first`,
+          );
         } else if (entry.used >= entry.uses) {
           const nth = entry.used + 1 === 2 ? "second" : `${entry.used + 1}th`;
           const times = entry.uses === 1 ? "once" : `${entry.uses} times`;
@@ -230,6 +272,20 @@ export function checkConsent(
           );
         } else {
           entry.used += 1;
+          if (name === "set_active_team") {
+            const org = String(input.org ?? "").trim();
+            const team = String(input.team ?? "").trim();
+            if (org !== picked?.org || team !== picked?.team)
+              errors.push(
+                `turn ${index}: set_active_team switched to ${org}/${team}, but the team describe_setup picked is ${picked ? `${picked.org}/${picked.team}` : "none"}`,
+              );
+            else switched = picked;
+          }
+          const file = input[FILE_ARGS[name]];
+          if (switched && typeof file === "string" && !file.includes(`/${switched.team}/content/`))
+            errors.push(
+              `turn ${index}: ${name} wrote ${file}, outside the team set_active_team switched to (${switched.team})`,
+            );
           if (entry.cmd !== undefined && input.command !== entry.cmd)
             errors.push(
               `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,

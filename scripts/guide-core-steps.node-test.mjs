@@ -22,6 +22,7 @@ const WRITES = {
   create_local_organization: {},
   attach_context_repository: {},
   create_team: { org: "org" },
+  set_active_team: { org: "org", team: "team" },
   add_source_repo: { org: "org", team: "team" },
   attach_source_repo_path: { org: "org", team: "team" },
   create_content_file: { path: "path" },
@@ -181,8 +182,11 @@ test("the setup log's schema is written to the user's team from the pack's own f
 
 test("the product step writes a ledger row and one epic with its repos, as the interim", () => {
   const s = step("product");
-  const create = s.act.find((a) => a.id === "create-epic");
-  assert.deepEqual(create.then, ["set-epic-repos"]);
+  const switchTeam = s.act.find((a) => a.id === "create-epic");
+  assert.equal(switchTeam.verb.tool, "set_active_team");
+  assert.deepEqual(switchTeam.then, ["write-epic", "set-epic-repos"]);
+  assert.match(s.ask.text, /switch CodeSense to your team/);
+  const create = s.act.find((a) => a.id === "write-epic");
   assert.equal(create.verb.tool, "create_content_file");
   assert.match(create.verb.args.content, /^---\ntype: epic\n/);
   const set = s.act.find((a) => a.id === "set-epic-repos");
@@ -231,12 +235,24 @@ const TABLE = {
       "create-local-organization": { orgs: "found" },
       "attach-context-repository": { orgs: "found" },
     },
+    calls: {
+      "create-local-organization": [
+        "create_local_organization",
+        "create_team",
+        "create_content_file",
+      ],
+      "attach-context-repository": ["attach_context_repository"],
+    },
     rerun: { orgs: "found" },
   },
   team: {
     // No team yet, so the ledger probe has no team to read; or a team with no setup log.
     before: [{}, { ledger: "unreadable" }],
     after: { "create-team": { ledger: "found" }, "add-ledger-schema": { ledger: "found" } },
+    calls: {
+      "create-team": ["create_team", "create_content_file"],
+      "add-ledger-schema": ["set_active_team", "create_content_file"],
+    },
     rerun: { ledger: "found" },
   },
   product: {
@@ -244,6 +260,7 @@ const TABLE = {
     // know the product's name, so it reads the row.
     before: [{}, { epic: "unreadable" }],
     after: { "create-epic": { epic: "found" } },
+    calls: { "create-epic": ["set_active_team", "create_content_file", "set_epic_repos"] },
     rerun: { product: "found" },
   },
   "source-repos": {
@@ -251,6 +268,10 @@ const TABLE = {
     after: {
       "add-source-repo": { repos: "unattached" },
       "attach-source-repo-path": { repos: "attached" },
+    },
+    calls: {
+      "add-source-repo": ["add_source_repo"],
+      "attach-source-repo-path": ["attach_source_repo_path"],
     },
     rerun: { repos: "unattached" },
   },
@@ -277,6 +298,24 @@ test("the step table: each card is offered until done, each act ends done, and a
     for (const [act, reads] of Object.entries(row.after))
       assert.equal(stateOf(s, reads), s.verify.expect, `${id}/${act} ends ${s.verify.expect}`);
     assert.equal(stateOf(s, row.rerun), "done", `${id}: a re-run skips it`);
+    // The verbs one click runs, in order: a write into the team comes after the switch to it.
+    for (const act of acts) {
+      const own = s.act.find((a) => a.id === act);
+      const chain = [own, ...(own.then ?? []).map((n) => s.act.find((a) => a.id === n))];
+      assert.deepEqual(
+        chain.map((a) => a.verb.tool),
+        row.calls[act],
+        `${id}/${act}`,
+      );
+      const write = chain.findIndex((a) =>
+        ["create_content_file", "set_epic_repos"].includes(a.verb.tool),
+      );
+      const switched = chain.findIndex(
+        (a) => a.verb.tool === "set_active_team" || a.verb.args?.activate === true,
+      );
+      if (write >= 0)
+        assert.ok(switched >= 0 && switched < write, `${id}/${act} switches team before it writes`);
+    }
   }
 });
 
@@ -292,7 +331,7 @@ test("the team step adds the setup log to a team that has none, and is done only
   // records_list fails with "unknown collection" until the schema file exists.
   assert.equal(ledger.map.unreadable, "partial");
   assert.equal(s.verify.probe, "ledger");
-  const add = s.act.find((a) => a.id === "add-ledger-schema");
+  const add = s.act.find((a) => a.id === "write-existing-ledger-schema");
   const write = s.act.find((a) => a.id === "write-ledger-schema");
   assert.equal(
     add.verb.args.path,
@@ -300,13 +339,22 @@ test("the team step adds the setup log to a team that has none, and is done only
   );
   assert.deepEqual({ ...add.verb.args, path: "" }, { ...write.verb.args, path: "" });
   assert.ok(!add.then, "adding the log creates no team");
+  // The click switches CodeSense to the person's team first (create_content_file writes into
+  // the active team), and the card and the act both say so.
+  const first = s.act.find((a) => a.id === "add-ledger-schema");
+  assert.deepEqual(first.verb, {
+    tool: "set_active_team",
+    args: { org: "{{probe.teams.org}}", team: "{{probe.teams.team}}" },
+  });
+  assert.deepEqual(first.then, ["write-existing-ledger-schema"]);
+  assert.match(first.what, /switch CodeSense to the team you already have/);
   assert.ok(s.ask.options.some((o) => o.act === "add-ledger-schema"));
-  assert.match(s.ask.text, /no setup log/);
+  assert.match(s.ask.text, /no setup log, I'll switch CodeSense to it and add only the log/);
 });
 
 test("the product step verifies its epic, which it can read before the ledger row is written", () => {
   const s = step("product");
-  const create = s.act.find((a) => a.id === "create-epic");
+  const create = s.act.find((a) => a.id === "write-epic");
   const epic = s.probe.find((p) => p.id === "epic");
   assert.deepEqual(epic.check, { tool: "read_epic_repos", epicFilePath: create.verb.args.path });
   assert.deepEqual([s.verify.probe].flat().sort(), ["epic", "product"]);

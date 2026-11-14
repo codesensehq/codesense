@@ -37,13 +37,13 @@ files:
     sha256: d0d1bba570c135a2a51273d7261df49c4ce5d63332a304d03626c5836cbbec4f
     exec: false
   - path: agents/guide-claude/agent.yaml
-    sha256: a2e5d05871c120c7b6510cd0016bc5f76d1a1bef1b80318bb76ce9d03ebc5886
+    sha256: d04251560f40177bfccf120c8964688671ed63b7dfef3355963a3e5b5357b9d6
     exec: false
   - path: agents/guide-codex/agent.yaml
-    sha256: 1d700f905584322fc352cfaf8a9f600d8511822fec03228d3da47efd8984e181
+    sha256: a543303b04d2944f4bcc6a50c76d68ff55e4f567ad014bada7cd1ffbe7aa15ad
     exec: false
   - path: agents/guide-opencode/agent.yaml
-    sha256: 0d94957543a4d3373e506d955bd3e73b96d287454d105d28c17785b23f7737d4
+    sha256: e65ae76973f91bda55fae99089e8cab37bc08a91ae19f444a3c5303829f68b95
     exec: false
   - path: commands/codesense-setup.md
     sha256: 85db5fa5f3fb7c03546c0e9fb86f5f2aadd6331ee7f3952bfff28997dc589c42
@@ -70,11 +70,11 @@ files:
     sha256: f716ba453e5cae1bbe5360676e8baac1c6e357e18340b04cfa8392af0e6fb90a
     exec: false
   - path: setup/steps/product.yml
-    sha256: 6557d08f1398b161847c33f1e95311b95ad3f59cf380ba9de154e4d0d8a06138
+    sha256: c8b5a916a7bf37e99a5cc438ef4046f4e296d37783ea12cb070e1207d3f874fb
     exec: false
   - path: setup/steps/source-repos.yml
     sha256: e2e59362b42384c8798671f10afaea639ebea3f2634fb29b4f7e033c1a463eac
     exec: false
   - path: setup/steps/team.yml
-    sha256: aa246f7cedc9251f2cb132c1025757463a5d5e3793edf9e33083955f2ad37285
+    sha256: 1998dbcee849e73687bfba152ecad672097609429db34a37f99d43f29a99d7d4
     exec: false

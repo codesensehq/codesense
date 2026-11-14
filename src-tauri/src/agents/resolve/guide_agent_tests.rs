@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs. The same
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs and `set_active_team`. The same
 /// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 26] = [
+const PHASE_1: [&str; 27] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -36,6 +36,7 @@ const PHASE_1: [&str; 26] = [
     "open_workspace",
     "set_epic_repos",
     "read_epic_repos",
+    "set_active_team",
 ];
 
 /// Phase 1 tools a build may not register yet: the environment probe lands in its own PR.

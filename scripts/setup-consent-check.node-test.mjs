@@ -320,6 +320,9 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "spent-verb-failing",
     "foreign-command-failing",
     "docs-org-failing",
+    "connect-mine",
+    "write-before-switch-failing",
+    "switch-other-team-failing",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);
@@ -427,6 +430,33 @@ test("the spent-click and foreign-command fixtures fail, naming the turn and the
   ]);
   assert.deepEqual(checkConsent(load("foreign-command-failing"), steps).errors, [
     "turn 4: run_in_terminal_tab ran a command that is not the exact run.cmd of act sign-in in step gh-auth",
+  ]);
+});
+
+test("the team step's Connect mine click allows a switch to the picked team, then one write", () => {
+  const guide = { actVerbs: stepActVerbs(PACK) };
+  assert.deepEqual(
+    stepActVerbs(PACK)("add-ledger-schema", "team").map((v) => `${v.verb}:${v.uses}`),
+    ["set_active_team:1", "create_content_file:1"],
+  );
+  assert.deepEqual(checkConsent(load("connect-mine"), guide).errors, []);
+  assert.deepEqual(checkConsent(load("write-before-switch-failing"), guide).errors, [
+    'turn 4: create_content_file was called before set_active_team, which the click on "team · local-write" sent at turn 2 allows first',
+  ]);
+  assert.deepEqual(checkConsent(load("switch-other-team-failing"), guide).errors, [
+    "turn 4: set_active_team switched to acme/context/sales, but the team describe_setup picked is acme/context/web",
+  ]);
+});
+
+test("a write after a switch lands only in the team it switched to", () => {
+  const guide = { actVerbs: stepActVerbs(PACK) };
+  const exported = load("connect-mine");
+  const calls = exported.conversation.turns.at(-1).tool_calls;
+  const input = JSON.parse(calls[0].input);
+  input.path = input.path.replace("/web/", "/sales/");
+  calls[0].input = JSON.stringify(input);
+  assert.deepEqual(checkConsent(exported, guide).errors, [
+    "turn 5: create_content_file wrote orgs/acme-context/sales/content/schema/setup-ledger.yaml, outside the team set_active_team switched to (web)",
   ]);
 });
 

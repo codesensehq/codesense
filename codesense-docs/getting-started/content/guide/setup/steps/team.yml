@@ -24,7 +24,7 @@ ask:
   text: >-
     **Name your team.** Pick a short lowercase name, like the group you ship with. I'll create
     it in your context repo, switch CodeSense to it and add the setup log to it. If your team
-    already exists but has no setup log, I'll only add the log. Nothing is committed or pushed:
+    already exists but has no setup log, I'll switch CodeSense to it and add only the log. Nothing is committed or pushed:
     the new files wait in your context repo's folder for you to review and commit.
   options:
     - { label: Create it, act: create-team }
@@ -55,6 +55,15 @@ act:
         content_from: guide/setup/ledger/setup-ledger.yaml
         onCollision: fail
   - id: add-ledger-schema
+    consent: local-write
+    what: switch CodeSense to the team you already have and add the setup log's schema to it
+    where: your team's content folder in the context repo
+    why: so each finished step is recorded, and a new session resumes from facts
+    verb:
+      tool: set_active_team
+      args: { org: "{{probe.teams.org}}", team: "{{probe.teams.team}}" }
+    then: [write-existing-ledger-schema]
+  - id: write-existing-ledger-schema
     consent: local-write
     what: add the setup log's schema to the team you already have
     where: your team's content folder in the context repo

@@ -28,7 +28,7 @@ probe:
     map: { found: done, none: missing, unreadable: missing }
 ask:
   text: >-
-    **What's the product called?** I'll create one epic with that name in your team, list the
+    **What's the product called?** I'll switch CodeSense to your team, create one epic with that name in it, list the
     repos you told me about on it, and note it in the setup log. Nothing is committed or
     pushed: the new files wait in your context repo's folder for you to review and commit.
   options:
@@ -45,16 +45,24 @@ inputs:
 act:
   - id: create-epic
     consent: local-write
-    what: create the product's epic and list its repos on it
+    what: switch CodeSense to your team, create the product's epic and list its repos on it
     where: your team's content folder in the context repo
     why: so stories can be planned under the product and name the repos they touch
+    verb:
+      tool: set_active_team
+      args: { org: "{{probe.teams.org}}", team: "{{probe.teams.team}}" }
+    then: [write-epic, set-epic-repos]
+  - id: write-epic
+    consent: local-write
+    what: create the product's epic
+    where: your team's content folder in the context repo
+    why: so stories can be planned under the product
     verb:
       tool: create_content_file
       args:
         path: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
         content: "---\ntype: epic\ntitle: {{product}}\nstatus: in-progress\n---\n# {{product}}\n"
         onCollision: fail
-    then: [set-epic-repos]
   - id: set-epic-repos
     consent: local-write
     what: list the product's repos on its epic

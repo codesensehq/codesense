@@ -43,7 +43,7 @@ function structs(source) {
   for (const m of source.matchAll(/pub struct (\w+)\s*\{/g)) {
     const body = block(source, m.index);
     assert.ok(
-      !/serde\(\s*(?:rename\s*=|skip\b|flatten\b)/.test(body),
+      !/serde\([^)]*\b(?:rename\s*=|skip(?:_serializing)?\b|flatten\b)/.test(body),
       `${m[1]} renames, skips or flattens a field; read it here`,
     );
     const attrs = attributesBefore(source, m.index);
@@ -117,7 +117,17 @@ test("the drift check refuses a struct it would misread", () => {
   );
   assert.throws(() => paths(structs(plant("#[derive(Serialize)]")), "Planted"), /camelCase/);
   assert.throws(() => paths(structs(plant('#[serde(rename_all = "snake_case")]')), "Planted"));
-  for (const attr of ["#[serde(skip)]", "#[serde(flatten)]", "#[serde(skip, default)]"])
+  for (const attr of [
+    "#[serde(skip)]",
+    "#[serde(flatten)]",
+    "#[serde(skip, default)]",
+    // Not the first item in the attribute, and the serialize-only forms of skip.
+    "#[serde(default, skip)]",
+    '#[serde(default, rename = "x")]',
+    "#[serde(default, flatten)]",
+    "#[serde(skip_serializing)]",
+    "#[serde(default, skip_serializing)]",
+  ])
     assert.throws(
       () => structs(plant(camelAttr, `${attr}\n    pub a_b: String,`)),
       /renames, skips or flattens/,

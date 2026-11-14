@@ -56,6 +56,7 @@ export const SETUP_VERBS = [
   "create_local_organization",
   "attach_context_repository",
   "create_team",
+  "set_active_team",
   "add_source_repo",
   "attach_source_repo_path",
   "run_in_terminal_tab",

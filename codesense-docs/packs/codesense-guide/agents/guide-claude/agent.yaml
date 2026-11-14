@@ -44,4 +44,5 @@ permissions:
       - mcp__codesense__open_workspace
       - mcp__codesense__set_epic_repos
       - mcp__codesense__read_epic_repos
+      - mcp__codesense__set_active_team
 revision: 1
