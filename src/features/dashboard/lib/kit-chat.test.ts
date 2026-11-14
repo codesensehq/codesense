@@ -526,3 +526,96 @@ describe("kit.chat", () => {
     expect(log.scrollTop).toBe(1000);
   });
 });
+
+describe("kit.chat page layout and activity", () => {
+  const running = (note?: string): Row => ({
+    ...lead("running"),
+    progress: note === undefined ? null : { note, atMs: Date.now() },
+  });
+  const activityRow = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-row="activity"]');
+
+  it("is the story chat's layout and shows no activity row until asked", async () => {
+    const s = setup([running("Cloning acme/api · 62%")]);
+    mountOn(s);
+    await flush();
+    const col = s.el.querySelector(".chatcol")!;
+    expect(col.className).toBe("chatcol");
+    expect(col.hasAttribute("data-variant")).toBe(false);
+    expect(activityRow(s.el)).toBeNull();
+  });
+
+  it("layout.variant 'page' marks the column for the page's own styling; another value changes nothing", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s, { layout: { variant: "page" } });
+    await flush();
+    const col = s.el.querySelector(".chatcol")!;
+    expect(col.getAttribute("data-variant")).toBe("page");
+    expect(col.classList.contains("page")).toBe(true);
+    const other = setup([lead("idle")]);
+    mountOn(other, { layout: { variant: "wide" } });
+    await flush();
+    expect(other.el.querySelector(".chatcol")!.className).toBe("chatcol");
+    expect(other.el.querySelector(".chatcol")!.hasAttribute("data-variant")).toBe(false);
+  });
+
+  it("activity shows the working row with the peer's current step, and drops it when the peer is idle", async () => {
+    const roster = [running("Cloning acme/api · 62%")];
+    const s = setup(roster);
+    mountOn(s, { activity: true });
+    await flush();
+    const row = activityRow(s.el)!;
+    expect(row.getAttribute("role")).toBe("status");
+    expect(row.textContent).toContain("Cloning acme/api · 62%");
+    roster[0] = lead("idle");
+    await s.reads.sessions();
+    await flush();
+    expect(activityRow(s.el)).toBeNull();
+  });
+
+  it("activity reads Working… when the peer reports no step", async () => {
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    expect(activityRow(s.el)!.textContent).toContain("Working…");
+  });
+
+  it("activity.text puts the page's own line in the row; an empty line falls back to the peer's step", async () => {
+    const s = setup([running("Checking this Mac")]);
+    let line: string | null = "Cloning acme/api · 62%";
+    mountOn(s, { activity: { text: () => line } });
+    await flush();
+    expect(activityRow(s.el)!.textContent).toContain("Cloning acme/api · 62%");
+    line = null;
+    await s.reads.sessions();
+    await flush();
+    expect(activityRow(s.el)!.textContent).toContain("Checking this Mac");
+  });
+
+  it("activity.text shows the page's own line while the peer is idle, and drops it with the line", async () => {
+    const s = setup([lead("idle")]);
+    let line: string | null = "Installing the CLI";
+    mountOn(s, { activity: { text: () => line } });
+    await flush();
+    expect(activityRow(s.el)!.textContent).toContain("Installing the CLI");
+    line = null;
+    await s.reads.sessions();
+    await flush();
+    expect(activityRow(s.el)).toBeNull();
+  });
+
+  it("the activity row sits after the thread and keeps its node while nothing about it changes", async () => {
+    const s = setup(
+      [running("Checking this Mac")],
+      [{ messageId: 1, from: "lead-1", text: "hi", createdAtMs: 1 }],
+    );
+    mountOn(s, { activity: true });
+    await flush();
+    const row = activityRow(s.el)!;
+    await s.reads.sessions();
+    await flush();
+    expect(activityRow(s.el)).toBe(row);
+    expect(row.compareDocumentPosition(s.el.querySelector(".log .msg")!)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+});

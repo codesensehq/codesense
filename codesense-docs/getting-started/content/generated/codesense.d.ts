@@ -515,6 +515,8 @@ declare namespace CodesenseSdk {
       logLabel?: string;
       empty?: string;
       autofocus?: boolean;
+      /** `'page'` marks the column (`data-variant="page"`, class `page`) for a full-page layout. Anything else is the story chat's layout. */
+      variant?: "page";
     };
     /** Inline needs-you cards: `parse` replaces the built-in parser; `false` shows those rows as messages. */
     cards?: { parse?(text: string): ChatCard | null } | false;
@@ -524,6 +526,8 @@ declare namespace CodesenseSdk {
     copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
     chips?: Array<{ label: string; text: string }>;
+    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
+    activity?: boolean | { text?(state: ChatState): string | null | undefined };
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
     timers?: { slowMs: number; failMs: number };
     /** Builds the launch prompt from the first message. Default: the text itself. */

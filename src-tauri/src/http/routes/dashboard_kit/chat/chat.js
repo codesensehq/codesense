@@ -4,7 +4,8 @@
 // A page with another peer or another frame passes options, never a second chat:
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
-//  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head.
+//  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
+//  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the peer's current step while it runs, else Working…).
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message).
 //  chips: [{label, text}]: one-tap messages above the composer, sent like typed text.
 //  copy: the page's own words over CHAT_COPY, one level deep (a section it names keeps the keys it leaves out).
@@ -49,7 +50,7 @@ const storyTarget=(storyId,leadRole)=>({
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],copy:words=null}){
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],activity=false,copy:words=null}){
  const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
  const cardState=new Map(),drafts=new Map();
@@ -78,7 +79,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
  const sendChip=text=>{awaitBase=leadCount();fails.clear();launch.send(text);};
  const chipsBox=chips.length?h('div',{class:'chips',role:'group','aria-label':copy.chips},...chips.map(chip=>h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label))):null;
- el.replaceChildren(h('div',{class:'chatcol'},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
+ const variant=layout.variant==='page'?'page':null;
+ el.replaceChildren(h('div',{class:variant?`chatcol ${variant}`:'chatcol','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
@@ -145,6 +147,13 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(item.mark!=='sent')return item.mark;
   return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles())});
  }
+ // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the peer's current step while it runs.
+ function activityItem(){
+  if(!activity)return null;
+  const here=state(),own=activity.text?activity.text(here):null,p=presence();
+  const line=own||(p.key==='running'?(p.activity===copy.header.activityNone?copy.row.working:p.activity):null);
+  return line?{id:'activity',sig:'a|'+line,make:()=>h('div',{class:'act',role:'status','aria-live':'polite','data-row':'activity'},face('working',copy.row.working),h('span',{},line))}:null;
+ }
  function threadItems(){
   const handles=leadHandles(),entries=[],rowIds=new Set(thread.map(row=>row.messageId)),sentHere=new Map(launch.messages.filter(item=>item.messageId!==undefined).map(item=>[item.messageId,item]));
   for(const row of thread){
@@ -179,7 +188,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const here=state();
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
-  const want=[...(layout.empty&&!thread.length&&!launch.messages.length?[{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}]:[]),...threadItems(),{id:'status',node:status},...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const act=activityItem(),want=[...(layout.empty&&!thread.length&&!launch.messages.length?[{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}]:[]),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
