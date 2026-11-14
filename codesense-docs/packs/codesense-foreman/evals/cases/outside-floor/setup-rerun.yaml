@@ -7,7 +7,7 @@ fixture:
   ledger:
     - { step: team, state: done }
     - { step: source-repos, state: done }
-    - { step: gh, state: done }
+    - { step: git-access, state: done }
   guide: complete
 input:
   turns:
