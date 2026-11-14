@@ -204,6 +204,43 @@ async fn every_session_of_the_same_agent_and_story_shares_one_thread() {
 }
 
 #[tokio::test]
+async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do_not() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", "acme/default/claude-dev@3", Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    fake.launched_from("H3", "acme/default/claude-dev@4", Some("DEMO-2"));
+    fake.launched_from("H4", "acme/default/claude-dev@4", None);
+    let first = mail(&fake, "S1", "human", "first").await;
+    let second = mail(&fake, "S2", "human", "second").await;
+    let other_story = mail(&fake, "S3", "human", "other story").await;
+    let ad_hoc = mail(&fake, "S4", "human", "ad hoc").await;
+    for (session, id) in [
+        ("S1", first),
+        ("S2", second),
+        ("S3", other_story),
+        ("S4", ad_hoc),
+    ] {
+        pin_request(&*fake, Some(session), id, None, None, false)
+            .await
+            .unwrap();
+    }
+    // The page opens the thread by the agent as saved, with or without a revision.
+    let team = launch_team("default");
+    for agent in [AGENT, "acme/default/claude-dev@4"] {
+        let read = |story| pins_from_human(&*fake, &team, agent, story, PinOp::Read);
+        assert_eq!(
+            listed(&read(Some("DEMO-1")).await.unwrap()),
+            vec![first, second]
+        );
+        assert_eq!(
+            listed(&read(Some("DEMO-2")).await.unwrap()),
+            vec![other_story]
+        );
+        assert_eq!(listed(&read(None).await.unwrap()), vec![ad_hoc]);
+    }
+}
+
+#[tokio::test]
 async fn an_unbound_caller_one_with_no_saved_agent_or_mail_it_is_not_party_to_is_refused() {
     let fake = FakeHost::new();
     fake.tab("H3", "S3", "Third", true);

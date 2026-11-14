@@ -357,7 +357,7 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
   }
 });
 
-test("pack.yml lists the agent and leaves the spec hash to the pack build", () => {
+test("pack.yml lists the agent and leaves the spec hash null", () => {
   const manifest = parse(text("pack.yml"));
   assert.equal(manifest.id, "codesense-foreman");
   assert.deepEqual(

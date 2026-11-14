@@ -525,6 +525,14 @@
       "feature": null
     },
     {
+      "name": "kit.runtimes",
+      "owner": "Kit",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not \"no CLI\", and call again.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
       "name": "kit.createEditor",
       "owner": "Kit",
       "signature": "createEditor?: (element: HTMLElement, options?: KitEditorOptions) => KitEditor;",
@@ -7196,6 +7204,14 @@
       "owner": "Kit",
       "signature": "compareNavNames(a: string, b: string): number;",
       "description": "The nav's name order (numeric, case-insensitive); a sort comparator.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "kit.runtimes",
+      "owner": "Kit",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not \"no CLI\", and call again.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -17218,7 +17234,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "627f04aee2a11b77effc7f3f9d333eb3a256ada5d562293d74b6655ea7214019",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "63e61fddefd9af18be7eaaf36752a022181e0749130f7fa86e1f7c8dd4ddaf87",
     "src-tauri/src/verbs/registry.generated.json": "680c1116a4fa31b471d13d7e1639788dbc045e1da71621262452d0d925c5eb8c",
     "src-tauri/src/verbs/registry.rs": "91d765c65ee483cd72f3b481ab6ae918c5b0ce1edfe211ca05b9152bdbd39562",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

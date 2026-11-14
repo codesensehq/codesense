@@ -1,0 +1,8 @@
+pack_format: 1
+id: bad-schema
+name: bad-schema
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+parts:
+  - { id: a, kind: agent, file: a.yaml }
