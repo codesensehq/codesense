@@ -225,9 +225,9 @@ async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do
             .unwrap();
     }
     // The page opens the thread by the agent as saved, with or without a revision.
+    let team = launch_team("default");
     for agent in [AGENT, "acme/default/claude-dev@4"] {
-        let read =
-            |story| pins_from_human(&*fake, &launch_team("default"), agent, story, PinOp::Read);
+        let read = |story| pins_from_human(&*fake, &team, agent, story, PinOp::Read);
         assert_eq!(
             listed(&read(Some("DEMO-1")).await.unwrap()),
             vec![first, second]
