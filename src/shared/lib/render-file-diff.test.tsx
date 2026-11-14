@@ -252,13 +252,27 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.getByTestId("file-diff-rendered-alone")).toBeInTheDocument();
   });
 
+  const scene = (n: number) => JSON.stringify({ type: "excalidraw", elements: [], n });
   it("off Files: Excalidraw's sides are read-only scenes from their text", () => {
     atWidth(1200);
-    render(renderFileDiff(args("/repo/d.excalidraw")));
+    render(
+      renderFileDiff(args("/repo/d.excalidraw", { sides: { before: scene(1), after: scene(2) } })),
+    );
     const canvases = screen.getAllByTestId("excalidraw");
-    expect(canvases.map((c) => c.dataset.scene)).toEqual(["old", "new"]);
+    expect(canvases.map((c) => c.dataset.scene)).toEqual([scene(1), scene(2)]);
     expect(canvases.every((c) => c.dataset.readonly === "true")).toBe(true);
     expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: an Excalidraw side that won't parse says so instead of drawing a blank scene", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args("/repo/d.excalidraw", { sides: { before: scene(1), after: '{"type":"excal' } }),
+      ),
+    );
+    expect(screen.getAllByTestId("excalidraw")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't read this side's drawing");
   });
 
   it("off Files: a raster image renders from the bytes the surface holds", () => {

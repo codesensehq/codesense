@@ -784,6 +784,16 @@ function RenderedFileDiff({
   );
 }
 
+/** Whether `text` is an Excalidraw scene's JSON: an object, not just any text. */
+function isScene(text: string): boolean {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 /** A side off Files, from the surface's own text or bytes: nothing it can load
  *  reaches past that side's content. */
 function InlineRenderedSide({
@@ -797,7 +807,16 @@ function InlineRenderedSide({
 }) {
   const text = (side === "before" ? sides.before : sides.after) ?? "";
   const label = sideLabel(sides, side);
-  if (getViewerFileType(filePath) === "excalidraw")
+  if (getViewerFileType(filePath) === "excalidraw") {
+    // A scene that won't parse would draw as a blank canvas next to a good side: say so.
+    if (!isScene(text))
+      return (
+        <OverlayCenteredState testId="excalidraw-unreadable">
+          <span role="alert">
+            Couldn&apos;t read this side&apos;s drawing: it isn&apos;t valid JSON.
+          </span>
+        </OverlayCenteredState>
+      );
     return (
       <ExcalidrawViewer
         key={side}
@@ -807,6 +826,7 @@ function InlineRenderedSide({
         readOnly
       />
     );
+  }
   if (rendersFromText(filePath)) return <SideFrame key={side} html={text} title={label} />;
   return (
     <SideImage key={side} base64={sides.imageBytes?.[side] ?? ""} filePath={filePath} alt={label} />
