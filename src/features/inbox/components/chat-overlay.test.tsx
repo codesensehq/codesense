@@ -22,9 +22,12 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   invoke: vi.fn(async () => undefined),
 }));
 const events = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
+// Every handler per event: a later listener replaces the one `events` keeps.
+const listeners = vi.hoisted(() => new Map<string, ((event: { payload: unknown }) => void)[]>());
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
     events.set(name, handler);
+    listeners.set(name, [...(listeners.get(name) ?? []), handler]);
     return Promise.resolve(() => {});
   }),
 }));
@@ -175,6 +178,7 @@ beforeEach(() => {
   clearInboxDrafts();
   vi.clearAllMocks();
   events.clear();
+  listeners.clear();
   useInboxSessionsStore.setState({ sessions: null });
   useAgentInboxRailStore.setState({ bySession: {} });
   // The chat opens only on a running agent.
@@ -196,6 +200,78 @@ beforeEach(() => {
       ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
       : undefined,
   );
+});
+
+const arrive = (...extra: ConversationMessage[]) => {
+  api.loadSessionInbox.mockResolvedValue({
+    dto: { handle: LEAD, roles: [], messages: [...MESSAGES, ...extra] },
+    source: "live",
+  });
+  act(() => listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null })));
+};
+const lead = (extra = {}) => [
+  { handle: LEAD, displayName: "Login timeout lead", state: "running", unread: 1, ...extra },
+];
+
+describe("ChatOverlay marks and cards (chat-core)", () => {
+  it("marks what you send Queued while a busy lead is not told, Delivered once it is, none on history", async () => {
+    api.loadInboxSessions.mockResolvedValue(lead({ mailNotice: "pending" }));
+    await renderOverlay(420, 700, "dock");
+    expect(screen.queryByText("Queued")).toBeNull();
+    expect(screen.queryByText("Delivered")).toBeNull();
+    await waitFor(() => expect(useInboxSessionsStore.getState().sessions).toHaveLength(1));
+    const sentAt = Date.now();
+    arrive(msg(7, "human", LEAD, "Ship it", { createdAtMs: sentAt }));
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+    act(() =>
+      useInboxSessionsStore.setState({
+        sessions: lead({
+          mailNotice: "told",
+          notifiedAt: new Date(sentAt + 1000).toISOString(),
+        }) as never,
+      }),
+    );
+    expect(await screen.findByText("Delivered")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
+  });
+
+  it("marks a send to an idle lead Delivered at once", async () => {
+    api.loadInboxSessions.mockResolvedValue(lead({ state: "idle", unread: 0 }));
+    await renderOverlay(420, 700, "dock");
+    await waitFor(() => expect(useInboxSessionsStore.getState().sessions).toHaveLength(1));
+    arrive(msg(7, "human", LEAD, "Ship it", { createdAtMs: Date.now() }));
+    expect(await screen.findByText("Delivered")).toBeInTheDocument();
+  });
+
+  it("reads a needs-you card as buttons and answers it with the option, replying to it", async () => {
+    await renderOverlay(420, 700, "dock");
+    arrive(
+      msg(
+        8,
+        LEAD,
+        "human",
+        "Merge now?\nOptions: `Merge`, `Wait`. My pick: Merge, because CI is green.",
+        { kind: "needs-you" },
+      ),
+    );
+    const merge = await screen.findByRole("button", { name: "Merge" });
+    expect(screen.getByRole("button", { name: "Wait" })).toBeInTheDocument();
+    expect(screen.getByText("CI is green")).toBeInTheDocument();
+    expect(screen.queryByText(/Options:/)).toBeNull();
+    fireEvent.click(merge);
+    await waitFor(() => expect(api.sendAsHuman).toHaveBeenCalled());
+    expect(api.sendAsHuman.mock.calls[0]).toEqual(expect.arrayContaining([LEAD, "Merge", 8]));
+  });
+
+  it("shows the answer, not the buttons, once the thread holds it", async () => {
+    await renderOverlay(420, 700, "dock");
+    arrive(
+      msg(8, LEAD, "human", "Merge now?\nOptions: `Merge`, `Wait`."),
+      msg(9, "human", LEAD, "Wait", { inReplyTo: 8 }),
+    );
+    expect(await screen.findByText("Answered: Wait")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
+  });
 });
 
 describe("ChatOverlay", () => {

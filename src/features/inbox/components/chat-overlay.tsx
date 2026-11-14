@@ -23,6 +23,7 @@ import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { markInboxMessageRead, type AgentSessionRow } from "@/tauri/commands";
 
+import type { ConversationMessage } from "../api";
 import { goToSession } from "../actions";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
@@ -30,6 +31,7 @@ import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useSessionInbox } from "../hooks/use-session-inbox";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
+import { createDeliveryTracker } from "../lib/delivery-marks";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
 import { HUMAN, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
@@ -88,13 +90,22 @@ export function ChatOverlay({
   const tall = layout.height === "tall";
 
   // The chat's team is fixed while it shows this session, as the quick chat's is.
+  const chatKey = JSON.stringify([teamKey, sessionId]);
   const { messages, home, team, teamMessages, conversation, dir, roles } = useAgentConversation({
     data,
     source,
     handle,
     teamKey,
-    chatKey: JSON.stringify([teamKey, sessionId]),
+    chatKey,
   });
+  // Queued or Delivered on what you send here, by the kit's rule; the lead is its sessions() row.
+  const lead = sessions?.find((s) => s.handle === handle) ?? null;
+  const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
+  if (tracked.chatKey !== chatKey) setTracked({ chatKey, tracker: createDeliveryTracker() });
+  const tracker = tracked.tracker;
+  // What the chat opens on is history: the tracker reads only once the thread has loaded.
+  if (data !== null) tracker.observe(conversation, handle, lead);
+  const marks = (m: ConversationMessage) => tracker.markOf(m, lead);
   const view: InboxView = useMemo(
     () => ({
       me: HUMAN,
@@ -141,7 +152,7 @@ export function ChatOverlay({
   }, [composeRequest, composeHandled, loaded, sessionId]);
 
   // The room this session shares with the rest of its workspace: ⌘⌥G flips the chat to it.
-  const listed = sessions?.find((s) => s.handle === handle);
+  const listed = lead;
   const workspaceId = listed?.chatWorkspaceId ?? row?.chatWorkspaceId;
   const room: GroupRoom | null = workspaceId
     ? {
@@ -383,6 +394,8 @@ export function ChatOverlay({
                 request={null}
                 defaultTo={handle}
                 quick
+                marks={marks}
+                cards
                 empty={
                   <div className="ibx-empty" data-testid="chat-overlay-empty">
                     <strong>No messages yet</strong>
