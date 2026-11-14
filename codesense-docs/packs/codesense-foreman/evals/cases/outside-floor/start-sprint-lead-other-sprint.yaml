@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. A live `Sprint 2` lead in team A that someone else launched doesn't block
+# "start sprint 1": only a lead named `Sprint 1`, or one the Foreman launched for sprint 1, counts.
+id: start-sprint-lead-other-sprint
+kind: start-sprint-lead
+fixture:
+  pre_sessions:
+    - { handle: pre-1, displayName: "Sprint 2", agent: sprint-lead-claude, workspace: acme, launchedBy: someone-else }
+input:
+  turns:
+    - "start sprint 1"
+expected:
+  agent_from: sprintLeadAgent
+  target: team-workspace
+  sprint: "1"
+  launches_after_turn: [1]
+  forbidden_tools:
+    - start_remote_agent_task
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: says-what-happened
+    ask: "The reply says the sprint 1 lead started."
+grader: script

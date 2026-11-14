@@ -4,7 +4,10 @@
 //
 // Driver contract: `driver({ caseDef, fx })` plays `caseDef.input.turns` through `fx.human`, logs
 // every Foreman tool call through `fx.tool("foreman", name, args)` with the real MCP argument
-// names, runs git and gh with `fx.env`, and returns `{ cost_usd, tokens }`. It throws InfraError
+// names, runs the agent's shell through the fixture so graders see it (`fx.git(argv, cwd)` for
+// git, logged as a `git` record without the leading "git"; `fx.run(file, argv, cwd)` for a
+// team script; `fx.gh(argv, cwd)` for gh; `fx.write(file, text)` for a file write, logged as
+// `write_file`), and returns `{ cost_usd, tokens }`. It throws InfraError
 // when the sandbox or the API fails; any other throw grades the run as a fail.
 import console from "node:console";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,20 +18,24 @@ import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
 import { fixtureFor } from "./fixture.mjs";
 import { CASE_IDS, packDir, runtimeOf } from "./floor.mjs";
-import { grade, loadCases } from "./graders.mjs";
+import { grade, loadCases, loadExtraCases } from "./graders.mjs";
 import { stubs } from "./stubs.mjs";
 
 export const BUDGET_USD = 12;
 
 export class InfraError extends Error {}
+// The floor's four cases, or the behaviour cases outside it.
+const SUITES = ["floor", "extra"];
 
-export async function runEval({ variant, model, k = 3, driver, driverName, out, budget = BUDGET_USD, date = new Date() }) {
+export async function runEval({ variant, model, k = 3, driver, driverName, out, budget = BUDGET_USD, date = new Date(), suite = "floor" }) {
   // The name decides whether the report can ever count (floor.mjs), so there is no default.
   if (typeof driverName !== "string" || !driverName) throw new Error("runEval needs a driverName");
   const specHash = parse(readFileSync(path.join(packDir, "pack.yml"), "utf8")).spec_hash?.[variant] ?? null;
-  const cases = loadCases();
+  if (!SUITES.includes(suite)) throw new Error(`unknown suite ${suite}`);
+  const cases = suite === "floor" ? loadCases() : loadExtraCases();
   const ids = cases.map((c) => c.id).sort();
-  if (JSON.stringify(ids) !== JSON.stringify([...CASE_IDS].sort()))
+  if (!ids.length || new Set(ids).size !== ids.length) throw new Error(`the ${suite} suite needs cases with unique ids, got ${ids.join(", ") || "none"}`);
+  if (suite === "floor" && JSON.stringify(ids) !== JSON.stringify([...CASE_IDS].sort()))
     throw new Error(`case files ${ids.join(", ")} do not match the floor's ${CASE_IDS.join(", ")}`);
   const results = Object.fromEntries(cases.map((c) => [c.id, []]));
   const notes = [];
@@ -83,6 +90,8 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
     runtime: runtimeOf(variant),
     model,
     spec_hash: specHash,
+    // Only the floor suite can set a row; the outside-floor cases are run and reported.
+    suite,
     driver: driverName,
     k,
     budget_usd: budget,
@@ -99,13 +108,13 @@ export async function runEval({ variant, model, k = 3, driver, driverName, out, 
   for (let n = 2; existsSync(reportPath); n += 1) reportPath = `${stem}-${n}.md`;
   const body = notes.length ? `\n## Failures\n\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
   writeFileSync(reportPath, `---\n${stringify(report)}---\n\n# ${variant} eval, ${report.at}\n${body}`);
-  const allPass = CASE_IDS.every((id) => results[id]?.length && results[id].every((r) => r === "pass"));
+  const allPass = ids.every((id) => results[id]?.length && results[id].every((r) => r === "pass"));
   return { exitCode: complete && allPass ? 0 : 1, report, reportPath };
 }
 
 const DRIVERS = { "stub:good": stubs.good, "stub:do-nothing": stubs.doNothing };
-const FLAGS = ["driver", "k", "model", "budget", "out"];
-const USAGE = "usage: run.sh <variant> --driver <stub:good|stub:do-nothing> [--k N] [--model M] [--budget USD, at most 12] [--out DIR]";
+const FLAGS = ["driver", "k", "model", "budget", "out", "suite"];
+const USAGE = "usage: run.sh <variant> --driver <stub:good|stub:do-nothing> [--suite floor|extra] [--k N] [--model M] [--budget USD, at most 12] [--out DIR]";
 
 const refuse = (message) => (console.error(message), 2);
 
@@ -131,7 +140,9 @@ async function main(argv) {
   if (!(budget > 0 && budget <= BUDGET_USD)) return refuse(`--budget must be more than 0 and at most ${BUDGET_USD}`);
   // A stub's report is never evidence, so by default it goes to a temp dir, not evals/reports.
   const out = flags.out ?? mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-"));
-  const { exitCode, reportPath, report } = await runEval({ variant, model, driver, driverName: flags.driver, k, budget, out });
+  const suite = flags.suite ?? "floor";
+  if (!SUITES.includes(suite)) return refuse(`--suite must be one of ${SUITES.join(", ")}`);
+  const { exitCode, reportPath, report } = await runEval({ variant, model, driver, driverName: flags.driver, k, budget, out, suite });
   console.log(`${reportPath}: ${report.complete ? "complete" : `incomplete (${report.reason})`}`);
   return exitCode;
 }

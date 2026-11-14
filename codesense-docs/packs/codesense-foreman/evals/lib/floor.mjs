@@ -38,12 +38,14 @@ export function loadReports(dir) {
 const sameKey = (r, key) =>
   r.runtime === key.runtime && r.model === key.model && (r.spec_hash ?? null) === (key.spec_hash ?? null);
 const fromModel = (r) => typeof r.driver === "string" && !r.driver.startsWith("stub:");
+// A report from the outside-floor suite never decides a row.
+const floorSuite = (r) => (r.suite ?? "floor") === "floor";
 const dated = (r) => typeof r.at === "string" && !Number.isNaN(Date.parse(r.at));
 
 // The report that decides a key's status, or undefined.
 export function latestFor(reports, key) {
   return reports
-    .filter((r) => sameKey(r, key) && fromModel(r) && dated(r) && r.complete === true && Number.isInteger(r.k) && r.k >= MIN_K)
+    .filter((r) => sameKey(r, key) && fromModel(r) && floorSuite(r) && dated(r) && r.complete === true && Number.isInteger(r.k) && r.k >= MIN_K)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || String(a.file).replace(/\.md$/, "").localeCompare(String(b.file).replace(/\.md$/, ""), undefined, { numeric: true }))
     .at(-1);
 }

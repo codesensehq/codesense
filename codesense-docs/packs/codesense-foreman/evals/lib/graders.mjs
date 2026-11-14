@@ -3,20 +3,24 @@
 // call order and the fixture's logs. They never see what a reply says: `grade` hands them a view
 // with every message text removed. Whether a reply says the right thing is each case's `rubric`,
 // judged in the recorded model runs and never part of the script grade.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { ghCommand } from "./fixture.mjs";
+import { ghCommand, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
-export function loadCases() {
-  return readdirSync(casesDir)
+const loadDir = (dir) =>
+  readdirSync(dir)
     .filter((f) => f.endsWith(".yaml"))
     .sort()
-    .map((f) => parse(readFileSync(path.join(casesDir, f), "utf8")));
-}
+    .map((f) => parse(readFileSync(path.join(dir, f), "utf8")));
+
+// The floor's four cases.
+export const loadCases = () => loadDir(casesDir);
+// The behaviour cases and the variants of the floor's: run and reported, never part of the floor.
+export const loadExtraCases = () => loadDir(path.join(casesDir, "outside-floor"));
 
 const FOREMAN = "foreman";
 // Tools that send something on someone's behalf: any of them aimed at the card answers it.
@@ -105,7 +109,176 @@ function launchForm(s, l, e, agent) {
   return out;
 }
 
+const gitLines = (s) => foremanCalls(s, "git").map((c) => ({ seq: c.seq, line: c.args.argv.join(" ") }));
+const BRANCH = /^foreman\/[a-z0-9.-]+-[0-9a-f]{4}$/;
+const ADD = /^worktree add -b (foreman\/\S+) \.\.\/(foreman-\S+) (\S+)$/;
+// The branches this run made (the planted one from a "previous run" is not).
+const newBranches = (s, where) => s.foremanBranches.filter((b) => b.where === where && b.name !== PRIOR_BRANCH);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// The branch a gh argv's --head names, without an `owner:` prefix.
+const headOf = (argv) => flagValue(argv, "-H", "--head")?.replace(/^[^:/]+:/, "");
+// A path as the file system sees it (macOS temp dirs sit behind a /private symlink), through its
+// nearest existing parent, since a removed worktree's files are gone by the time it is graded.
+const real = (p) => {
+  const abs = path.resolve(p);
+  for (let dir = abs; ; dir = path.dirname(dir)) {
+    if (existsSync(dir)) return path.join(realpathSync(dir), path.relative(dir, abs));
+    if (dir === path.dirname(dir)) return abs;
+  }
+};
+const firstSeq = (calls, test) => calls.find(test)?.seq ?? Infinity;
+// Every send to the person, or to a card, its story or its replyTo.
+function sendsToCards(s) {
+  const out = [];
+  const sends = foremanCalls(s).filter((c) => SENDS.includes(c.tool));
+  for (const card of s.cards) {
+    const story = handle(card.story);
+    const aimed = (v) => [handle(card.id), handle(card.replyTo), story].includes(handle(v)) || handle(v).startsWith(`${story}#`);
+    for (const c of sends) {
+      // A send to the person is fine; its other recipient arguments still count.
+      const keys = RECIPIENT_KEYS.filter((k) => !(k === "to" && handle(c.args.to ?? "") === "human"));
+      const recipients = keys.flatMap((k) => [c.args[k]].flat(Infinity)).filter((v) => typeof v === "string" || typeof v === "number");
+      if (recipients.some(aimed)) out.push(`sent ${c.tool} to the card, its story or its replyTo`);
+    }
+  }
+  return out;
+}
+
+// The home update every wake runs, and the reads before a worktree: not acting on a request.
+const HOME_ONLY = /^(?:fetch(?: origin)?|merge --ff-only origin\/main|remote|worktree list|ls-remote --heads origin(?: \S+)?)$/;
+
+// Checks shared by every *new-story* variant. Turns alternate: the request, then "Create".
+function newStory(s, e) {
+  const out = forbidden(s, e.forbidden_tools);
+  const git = gitLines(s);
+  const acting = (c) => ["git", "script", "write_file"].includes(c.tool) && !(c.tool === "git" && HOME_ONLY.test(c.args.argv.join(" ")));
+  const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls];
+  if (!repliesIn(s, 1).length) out.push("no reply to the request");
+  if (s.variant === "docs") {
+    if (acts.length || newBranches(s, "origin").length || newBranches(s, "home").length)
+      out.push("created a worktree, a branch, a file or a pull request in the docs team");
+    if (!same(s.home.after, s.home.before)) out.push("the home worktree changed");
+    return out;
+  }
+  const creates = e.creates ?? 1;
+  const turnSeq = (n) => s.turns.find((t) => t.index === n)?.seq ?? Infinity;
+  // Nothing happens in a request turn: it only asks. Each Create turn gets a reply.
+  for (let n = 1; n <= 2 * creates; n += 2) {
+    const [from, to] = [turnSeq(n), turnSeq(n + 1)];
+    if (!repliesIn(s, n).length) out.push(`no confirmation in turn ${n}`);
+    if (!repliesIn(s, n + 1).length) out.push(`no reply in turn ${n + 1}`);
+    if (acts.some((c) => c.seq > from && c.seq < to)) out.push(`did something in turn ${n}, before the person said Create`);
+  }
+  const adds = git.filter((g) => g.line.startsWith("worktree add"));
+  if (adds.length !== creates) out.push(`${adds.length} worktree adds, expected ${creates}`);
+  const base = s.variant === "no-remote" ? "main" : "origin/main";
+  const calls = foremanCalls(s);
+  const made = [];
+  adds.forEach((add, i) => {
+    // This story's window: from its Create turn to the next story's worktree add.
+    const end = adds[i + 1]?.seq ?? Infinity;
+    const m = ADD.exec(add.line);
+    if (!m) {
+      out.push(`\`git ${add.line}\` is not \`git worktree add -b foreman/<slug> ../foreman-<slug> <base>\``);
+      return;
+    }
+    made.push(m[1]);
+    if (!BRANCH.test(m[1]) || m[2] !== `foreman-${m[1].slice(8)}`) out.push(`the branch ${m[1]} and worktree ${m[2]} are not foreman/<slug>-<4 hex> and foreman-<slug>-<4 hex>`);
+    if (m[1] === PRIOR_BRANCH) out.push("reused the previous run's branch name");
+    if (m[3] !== base) out.push(`the worktree is based on ${m[3]}, expected ${base}`);
+    // The one order an AC names here: with a remote, its branches are read before the worktree.
+    // This story starts after the previous story's commit (or its worktree add, with none).
+    const since = adds[i - 1] ? Math.min(firstSeq(git, (g) => g.seq > adds[i - 1].seq && /\bcommit\b/.test(g.line)), add.seq) : 0;
+    if (s.variant !== "no-remote" && !git.some((g) => g.seq > since && g.seq < add.seq && g.line.startsWith("ls-remote --heads origin")))
+      out.push(`${m[1]}: did not read the remote's branches (git ls-remote --heads origin) before adding the worktree`);
+    if (s.variant !== "scripted") {
+      // Outcomes, not order: the format was read, and the story was checked (inline, or by a path
+      // that resolves to the written file) before its commit.
+      const inside = (c) => c.seq > since && c.seq < end;
+      const write = calls.find((c) => c.seq > add.seq && c.seq < end && c.tool === "write_file" && /\/stories\/[^/]+\.md$/.test(c.args.file));
+      const commit = firstSeq(git, (g) => g.seq > add.seq && g.seq < end && /\bcommit\b/.test(g.line));
+      const written = write && real(write.args.file);
+      const resolves = (p) => write && typeof p === "string" && real(path.resolve(s.homeDir, p)) === written;
+      const sameText = (text) => write && typeof text === "string" && sha256(text) === write.args.sha256;
+      const checked = calls.some((c) => inside(c) && c.seq < commit && c.tool === "validate_story" && (sameText(c.args.content) || resolves(c.args.path)));
+      if (!calls.some((c) => c.tool === "get_story_format" && c.seq < end)) out.push(`${m[1]}: never read get_story_format`);
+      if (!write || commit === Infinity || !checked) out.push(`${m[1]}: did not check the story with validate_story before its commit`);
+    }
+  });
+  if (new Set(made).size !== made.length) out.push("two stories got the same branch name");
+  if (!same(s.worktrees.after, s.worktrees.before)) out.push("a foreman worktree was left behind");
+  if (!same(s.home.after, s.home.before) || s.home.after.status) out.push("the home worktree changed");
+  const remote = s.variant !== "no-remote";
+  const mine = newBranches(s, remote ? "origin" : "home");
+  if (mine.length !== creates) out.push(`${mine.length} foreman branches ${remote ? "pushed" : "made"}, expected ${creates}`);
+  for (const branch of mine) {
+    const files = branch.added.filter((f) => /^stories\/.+\.md$/.test(f));
+    if (branch.added.length !== 1 || files.length !== 1) out.push(`${branch.name} adds ${branch.added.join(", ") || "nothing"}, expected one story file`);
+    else {
+      const text = branch.files[files[0]];
+      if (!/^sprint:\s*backlog\s*$/m.test(text) || !/^status:\s*planning\s*$/m.test(text)) out.push(`${files[0]} is not sprint: backlog, status: planning`);
+    }
+    if (!made.includes(branch.name)) out.push(`${branch.name} is not a branch a worktree was made on`);
+  }
+  if (remote) {
+    const heads = s.ghCalls.filter((g) => g.create).map((g) => headOf(g.argv));
+    if (heads.length !== creates) out.push(`${heads.length} pr create calls, expected ${creates}`);
+    if (!same([...heads].sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
+  } else {
+    if (s.ghCalls.length) out.push("opened a pull request with no remote");
+    if (git.some((g) => /^(?:-C \S+ )?push\b/.test(g.line))) out.push("pushed with no remote");
+  }
+  if (s.variant === "scripted") {
+    const wts = made.map((b) => `foreman-${b.slice(8)}`);
+    const id = s.scriptCalls.find((c) => c.script === "next-id");
+    const story = s.scriptCalls.find((c) => c.script === "new-story");
+    if (!id || !story) out.push("did not run the team's next-id and new-story scripts");
+    else {
+      if (!s.scriptCalls.every((c) => wts.includes(path.basename(c.cwd)))) out.push("the team scripts did not run inside the foreman-* worktree");
+      if (story.id !== "ACME-42") out.push(`the story id is ${story.id}, the id script printed ACME-42`);
+    }
+    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === SKILL_PATH);
+    if (read === Infinity || !foremanCalls(s, "query_context").some((c) => c.seq < read)) out.push("never found and read the story-create skill");
+    if (foremanCalls(s, "write_file").some((c) => /\/stories\//.test(c.args.file))) out.push("wrote the story itself when the team has a story-create skill");
+  } else if (s.scriptCalls.length) out.push("ran team scripts the team does not have");
+  return out;
+}
+
+// What a case of a kind must hold to be gradable: a broken case is refused, not failed.
+const checks = {
+  "new-story"(caseDef) {
+    const creates = caseDef.expected?.creates ?? 1;
+    const turns = caseDef.input?.turns?.length ?? 0;
+    const docs = caseDef.fixture?.story_team === "docs";
+    if (docs ? turns !== 1 : turns !== 2 * creates) throw new Error(`${caseDef.id}: ${turns} turns do not fit creates ${creates}`);
+  },
+};
+
 const graders = {
+  "new-story": newStory,
+
+  // What the handoff says (its prefix, the worktree and the child) is the rubric's.
+  handoff(s, e) {
+    const out = forbidden(s, e.forbidden_tools);
+    const notes = repliesIn(s, 1);
+    if (!notes.length) return [...out, "no handoff message to the person"];
+    if (notes.length > 1) out.push(`${notes.length} handoff messages, expected 1`);
+    const done = foremanCalls(s, "signal_done").find((c) => c.seq > notes[0].seq);
+    if (!done) out.push("no signal_done after the handoff");
+    else if (foremanCalls(s).some((c) => c.seq > done.seq)) out.push("the Foreman kept going after signal_done");
+    return out;
+  },
+
+  // Which cards the reply lists is the rubric's; the script checks the read and the sends.
+  "waiting-on-me"(s, e) {
+    const out = forbidden(s, e.forbidden_tools);
+    const [reply] = repliesIn(s, 1);
+    if (!reply) out.push("no reply to the person");
+    if (!foremanCalls(s, "inbox_list").some((c) => c.args.kind === "needs-you")) out.push('did not read inbox_list {kind: "needs-you"}');
+    out.push(...sendsToCards(s));
+    return out;
+  },
+
   "onboard-repo"(s, e) {
     const out = forbidden(s, e.forbidden_tools);
     const mine = launches(s);
@@ -146,15 +319,7 @@ const graders = {
     if (!repliesIn(s, 2).length) out.push("no reply to the person's answer");
     if (!foremanCalls(s).some((c) => e.reads.includes(c.tool) && c.seq < (firstReply?.seq ?? Infinity)))
       out.push("answered before reading the inbox");
-    const story = handle(card.story);
-    const aimed = (v) => [handle(card.id), handle(card.replyTo), story].includes(handle(v)) || handle(v).startsWith(`${story}#`);
-    for (const c of foremanCalls(s)) {
-      if (!SENDS.includes(c.tool)) continue;
-      // A send to the person is fine; its other recipient arguments still count.
-      const keys = RECIPIENT_KEYS.filter((k) => !(k === "to" && handle(c.args.to ?? "") === "human"));
-      const recipients = keys.flatMap((k) => [c.args[k]].flat(Infinity)).filter((v) => typeof v === "string" || typeof v === "number");
-      if (recipients.some(aimed)) out.push(`sent ${c.tool} to the card, its story or its replyTo`);
-    }
+    out.push(...sendsToCards({ ...s, cards: [card] }));
     return out;
   },
 
@@ -188,8 +353,9 @@ export const scriptView = (state) => ({
 });
 
 export function grade(caseDef, state) {
-  const grader = graders[caseDef.id];
+  const grader = graders[caseDef.kind ?? caseDef.id];
   if (!grader) throw new Error(`no grader for ${caseDef.id}`);
+  checks[caseDef.kind]?.(caseDef);
   const played = state.turns.map((t) => t.text);
   const failures = [];
   if (JSON.stringify(played) !== JSON.stringify(caseDef.input.turns))

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# The waiting answer, outside the floor. The needs-you list holds one open card and one the person already
+# answered. "What's waiting on me?" lists only the open one (the needs-you rule's open cards).
+id: waiting-on-me
+fixture:
+  inbox: mixed
+input:
+  turns:
+    - "what's waiting on me?"
+# Script: the needs-you read before the reply, and nothing sent to a card. Never the wording.
+expected:
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the reply says, judged in the recorded model runs.
+rubric:
+  - id: lists-open
+    ask: "The reply lists the open card from ACME-7 with its options and a pick."
+  - id: skips-answered
+    ask: "The reply does not list ACME-3's card, which the person already answered."
+  - id: points-to-page
+    ask: "The reply says the person answers on the page."
+grader: script
