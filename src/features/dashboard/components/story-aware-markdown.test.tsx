@@ -113,6 +113,36 @@ describe("a story file in an .md tab", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it("keeps a warm-opened page mounted, with no read, when another file in the team changes", () => {
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    const view = render(renderViewer({ ...common, filePath: STORY }, md));
+    const page = view.container.querySelector('[data-stub="html"]');
+    expect(page).not.toBeNull();
+    const elsewhere = { ...md, changedPaths: new Set([`${ROOT}/stories/SV-2.md`]) };
+    view.rerender(renderViewer({ ...common, refreshKey: 1, filePath: STORY }, elsewhere));
+    expect(view.container.querySelector('[data-stub="html"]')).toBe(page);
+    expect(screen.queryByTestId("story-detect")).toBeNull();
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps a warm-opened page mounted while its own file is re-read, then follows the new type", async () => {
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    let release: (text: string) => void = () => {};
+    vi.mocked(readFile).mockImplementation(() => new Promise<string>((ok) => (release = ok)));
+    const view = render(renderViewer({ ...common, filePath: STORY }, md));
+    const page = view.container.querySelector('[data-stub="html"]');
+    expect(page).not.toBeNull();
+    const mine = { ...md, changedPaths: new Set([STORY]) };
+    view.rerender(renderViewer({ ...common, refreshKey: 1, filePath: STORY }, mine));
+    expect(readFile).toHaveBeenCalledWith(STORY);
+    expect(screen.queryByTestId("story-detect")).toBeNull();
+    expect(view.container.querySelector('[data-stub="html"]')).toBe(page);
+    release("---\ntype: doc\n---\n# Now a doc\n");
+    await waitFor(() =>
+      expect(view.container.querySelector('[data-stub="markdown"]')).not.toBeNull(),
+    );
+  });
+
   it("carries a link's anchor to the page, consumes the host's pending hash, and keeps the anchor", async () => {
     fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
     const consumed = vi.fn();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo, useState } from "react";
 
+import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import { fileContentCache } from "@/shared/lib/file-content-cache";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import type { CommonViewerProps } from "@/shared/lib/viewer-file-type";
@@ -22,28 +23,37 @@ export const NO_STORY_PAGE_NOTE =
 
 /**
  * The story type of the `.md` at `filePath`, read from its front matter: `undefined` until it is
- * read, then the type or `null`. A current entry in the viewer's file cache answers on the first
+ * first read, then the type or `null`. A current entry in the viewer's file cache answers on the first
  * render, so a warm open paints its viewer at once; otherwise one read fills the cache for the
- * markdown viewer behind it.
+ * markdown viewer behind it. It re-reads only when this file changes (not on every write in the team),
+ * and the last answer for the path stands while that read is pending, so an open story page is never
+ * unmounted by a write.
  */
-function useStoryType(filePath: string, refreshKey: number | undefined) {
-  const version = refreshKey ?? 0;
+function useStoryType(
+  filePath: string,
+  refreshKey: number | undefined,
+  changedPaths: Set<string> | null | undefined,
+) {
+  const version = useEffectiveRefreshKey(refreshKey, changedPaths, filePath) ?? 0;
   const cached = fileContentCache.get(filePath);
   const cachedText = cached?.refreshKey === version ? cached.content : undefined;
   const warm = useMemo(
     () => (cachedText === undefined ? undefined : storyTypeOfMarkdown(cachedText)),
     [cachedText],
   );
-  const [read, setRead] = useState<{
+  const [last, setLast] = useState<{
     path: string;
     type: ReturnType<typeof storyTypeOfMarkdown>;
   }>();
+  // A warm answer is kept too, so it still stands once the cache moves past it.
+  if (warm !== undefined && (last?.path !== filePath || last.type !== warm))
+    setLast({ path: filePath, type: warm });
   const cold = warm === undefined;
   useEffect(() => {
     if (!cold) return;
     let cancelled = false;
     const done = (text: string) => {
-      if (!cancelled) setRead({ path: filePath, type: storyTypeOfMarkdown(text) });
+      if (!cancelled) setLast({ path: filePath, type: storyTypeOfMarkdown(text) });
     };
     readFile(filePath).then(
       (text) => {
@@ -58,7 +68,7 @@ function useStoryType(filePath: string, refreshKey: number | undefined) {
     };
   }, [filePath, version, cold]);
   if (!cold) return warm;
-  return read?.path === filePath ? read.type : undefined;
+  return last?.path === filePath ? last.type : undefined;
 }
 
 /**
@@ -109,7 +119,7 @@ function TeamMarkdown({
   ...props
 }: Props & { org: string; team: string }) {
   const page = useOrgStore((state) => teamStoryPage(state.orgs, org, team));
-  const type = useStoryType(props.filePath, props.refreshKey);
+  const type = useStoryType(props.filePath, props.refreshKey, props.changedPaths);
   const hash = useStoryPageHash(props.filePath, props.pendingHash);
   const opensPage = Boolean(page && type);
   const { pendingHash, onPendingHashConsumed } = props;
