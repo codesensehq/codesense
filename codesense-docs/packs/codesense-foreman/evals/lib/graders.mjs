@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { ghCommand, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
+import { agentId, ghCommand, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -82,8 +82,6 @@ function ghWrites(argv) {
 
 const foremanCalls = (s, tool) => s.calls.filter((c) => c.caller === FOREMAN && (!tool || c.tool === tool));
 const launches = (s) => s.sessions.filter((x) => x.launched_by === FOREMAN);
-// An agent named by key (`acme/sprint-lead-claude`) or bare id is the same agent.
-const agentId = (a) => String(a ?? "").split("/").pop();
 const promptOf = (l) => String(l.initial_prompt ?? "");
 // A recipient compared as the host would: case-folded, `role:` or `story:` dropped, an org prefix
 // dropped, ids as strings.

@@ -61,6 +61,17 @@ export const ANSWERED_CARD = {
 // the onboarding work; this walks the ledger's steps and ends with the hand-back line the setup
 // skill's `foreman-handback` block names (a test ties the two together).
 export const SETUP_STEPS = ["team", "source-repos", "gh"];
+export const stepDone = (ledger, step) => ledger.some((r) => r.step === step && r.state === "done");
+// The setup hand-off's launch form (foreman.md); the stubs and tests share it.
+export const SETUP_LAUNCH = {
+  target: "team-workspace",
+  name: "Setup",
+  agent: `guide-${CONFIG.runtime}`,
+  initial_prompt: "/codesense-setup",
+  mode: "visible-unfocused",
+};
+// An agent named by key (`acme/sprint-lead-claude`) or bare id is the same agent.
+export const agentId = (a) => String(a ?? "").split("/").pop();
 export const HANDBACK_PREFIX = "Setup done:";
 export const HANDBACK_ROLE = "codesense-foreman";
 const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, gh signed in`;
@@ -373,13 +384,11 @@ function build(root, opts) {
     return out;
   };
 
-  const agentOf = (session) => String(session.agent ?? "").split("/").pop();
   // The scripted guide: resume skips the steps the ledger shows done. Its first card is the first
   // step left; each step it finishes goes in the ledger; a full run ends with the hand-back message.
   const runGuide = (session) => {
     const resume = /^\/codesense-setup\s+resume\b/.test(String(session.initial_prompt));
-    const done = (step) => ledger.some((r) => r.step === step && r.state === "done");
-    const todo = SETUP_STEPS.filter((step) => !(resume && done(step)));
+    const todo = SETUP_STEPS.filter((step) => !(resume && stepDone(ledger, step)));
     guideCards.push({ session: session.id, step: todo[0] ?? null });
     const stopAfter = opts.guide === "complete" ? Infinity : opts.guide.stop_after;
     const doing = todo.slice(0, stopAfter);
@@ -415,7 +424,7 @@ function build(root, opts) {
         const { launched_by: launchedByArg, ...rest } = record.args;
         const session = { id: `session-${sessions.length + 1}`, turn, ...rest, launched_by: caller, launched_by_arg: launchedByArg };
         sessions.push(session);
-        if (opts.guide && /^guide-/.test(agentOf(session)) && /^\/codesense-setup\b/.test(String(session.initial_prompt ?? ""))) runGuide(session);
+        if (opts.guide && /^guide-/.test(agentId(session.agent)) && /^\/codesense-setup\b/.test(String(session.initial_prompt ?? ""))) runGuide(session);
         return { status: "launched", handle: session.id };
       }
       // Only fields the real list_sessions has. A rename shows in `displayName` alone.

@@ -8,36 +8,37 @@ import { readFileSync } from "node:fs";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE } = await lib("fixture");
+const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH } = await lib("fixture");
 const { loadExtraCases, grade } = await lib("graders");
-const { stubs } = await lib("stubs");
 
 const extra = loadExtraCases();
 const caseOf = (id) => extra.find((c) => c.id === id);
 const F = "foreman";
-const GUIDE = `guide-${CONFIG.runtime}`;
-const LAUNCH = {
-  target: "team-workspace",
-  name: "Setup",
-  agent: GUIDE,
-  initial_prompt: "/codesense-setup",
-  mode: "visible-unfocused",
-  launched_by: CONFIG.self,
-};
+const LAUNCH = { ...SETUP_LAUNCH, launched_by: CONFIG.self };
 
-// Plays the good agent up to a point, then a wrong one: `wrong({fx, caseDef})` replaces the whole run.
-async function play(id, wrong) {
-  const caseDef = caseOf(id);
+async function withFixture(caseDef, fn) {
   const fx = await fixtureFor(caseDef);
   try {
-    await (wrong
-      ? wrong({ fx, caseDef, turns: caseDef.input.turns })
-      : stubs.good({ caseDef, fx }));
-    return grade(caseDef, fx.state());
+    return await fn(fx);
   } finally {
     fx.teardown();
   }
 }
+// Plays a scripted (wrong or right) agent through a case and grades it.
+const play = (id, run) =>
+  withFixture(caseOf(id), async (fx) => {
+    await run({ fx, turns: caseOf(id).input.turns });
+    return grade(caseOf(id), fx.state());
+  });
+// The first turn, the reuse search, one launch and a reply.
+const launchWith =
+  (launch = LAUNCH) =>
+  ({ fx, turns }) => (
+    fx.human(turns[0]),
+    fx.tool(F, "list_sessions"),
+    fx.tool(F, "open_workspace", launch),
+    fx.say("Starting.")
+  );
 const red = async (id, wrong, reason) => {
   const result = await play(id, wrong);
   assert.equal(result.pass, false, `${id}: expected a fail`);
@@ -123,13 +124,13 @@ test("setup-not-now: records exactly one skipped foreman-offer row, and launches
     ({ fx, turns }) => (offer(fx, turns), fx.say("ok")),
     /0 setup-ledger writes, expected 1/,
   );
-  const write = (fields) => (fx) =>
+  const write = (fx, fields) =>
     fx.tool(F, "records_create", { collection: "setup-ledger", fields });
   await red(
     "setup-not-now",
     ({ fx, turns }) => (
       offer(fx, turns),
-      write({ step: "foreman-offer", state: "done" })(fx),
+      write(fx, { step: "foreman-offer", state: "done" }),
       fx.say("ok")
     ),
     /not step foreman-offer, state skipped/,
@@ -138,25 +139,16 @@ test("setup-not-now: records exactly one skipped foreman-offer row, and launches
     "setup-not-now",
     ({ fx, turns }) => {
       offer(fx, turns);
-      write({ step: "foreman-offer", state: "skipped" })(fx);
-      write({ step: "foreman-offer", state: "skipped" })(fx);
+      write(fx, { step: "foreman-offer", state: "skipped" });
+      write(fx, { step: "foreman-offer", state: "skipped" });
       fx.say("ok");
     },
     /2 setup-ledger writes/,
   );
 });
 
-test("setup-reuse: a live guide this Foreman launched is reused", async () => {
-  await red(
-    "setup-reuse",
-    ({ fx, turns }) => (
-      fx.human(turns[0]),
-      fx.tool(F, "list_sessions"),
-      fx.tool(F, "open_workspace", LAUNCH),
-      fx.say("Starting.")
-    ),
-    /launched 1 sessions, expected 0/,
-  );
+test("setup-reuse: a live guide an earlier Foreman launched is reused", async () => {
+  await red("setup-reuse", launchWith(), /launched 1 sessions, expected 0/);
   await red(
     "setup-reuse",
     ({ fx, turns }) => (fx.human(turns[0]), fx.say("Already running.")),
@@ -175,13 +167,7 @@ test("setup-reuse: a live guide this Foreman launched is reused", async () => {
 });
 
 test("setup-stopped: the ledger is read in the asking turn, and one reply comes", async () => {
-  const first = (fx, turns) => (
-    fx.human(turns[0]),
-    fx.tool(F, "list_sessions"),
-    fx.tool(F, "open_workspace", LAUNCH),
-    fx.say("Starting."),
-    fx.human(turns[1])
-  );
+  const first = (fx, turns) => (launchWith()({ fx, turns }), fx.human(turns[1]));
   await red(
     "setup-stopped",
     ({ fx, turns }) => (first(fx, turns), fx.say("Going fine.")),
@@ -198,58 +184,40 @@ test("setup-stopped: the ledger is read in the asking turn, and one reply comes"
     /2 replies in the last turn/,
   );
   // A stopped guide sends no hand-back.
-  const fx = await fixtureFor(caseOf("setup-stopped"));
-  try {
+  await withFixture(caseOf("setup-stopped"), (fx) => {
     fx.human("x");
     fx.tool(F, "open_workspace", LAUNCH);
-    assert.deepEqual(fx.state().roleMessages, []);
-    assert.deepEqual(fx.state().ledger, [{ step: "team", state: "done" }]);
-  } finally {
-    fx.teardown();
-  }
+    const { roleMessages, ledger } = fx.state();
+    assert.deepEqual(roleMessages, []);
+    assert.deepEqual(ledger, [{ step: "team", state: "done" }]);
+  });
 });
 
 test("launch form: the guide, the visible-unfocused mode, the Foreman's own handle and a /codesense-setup prompt", async () => {
-  const run =
-    (launch) =>
-    ({ fx, turns }) => (
-      fx.human(turns[0]),
-      fx.tool(F, "list_sessions"),
-      fx.tool(F, "open_workspace", launch),
-      fx.say("Starting.")
-    );
   const id = "setup-handback";
-  await red(id, run({ ...LAUNCH, agent: "builtin/claude" }), /expected guide-claude/);
-  await red(id, run({ ...LAUNCH, mode: "focused" }), /expected visible-unfocused/);
-  await red(id, run({ ...LAUNCH, name: "Onboarding" }), /expected Setup/);
-  await red(id, run({ ...LAUNCH, launched_by: "someone" }), /launched_by is someone/);
+  await red(id, launchWith({ ...LAUNCH, agent: "builtin/claude" }), /expected guide-claude/);
+  await red(id, launchWith({ ...LAUNCH, mode: "focused" }), /expected visible-unfocused/);
+  await red(id, launchWith({ ...LAUNCH, name: "Onboarding" }), /expected Setup/);
+  await red(id, launchWith({ ...LAUNCH, launched_by: "someone" }), /launched_by is someone/);
   await red(
     id,
-    run({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }),
+    launchWith({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }),
     /prompt is not \/codesense-setup/,
   );
   await red(
     id,
-    run({ ...LAUNCH, initial_prompt: "set up codesense" }),
+    launchWith({ ...LAUNCH, initial_prompt: "set up codesense" }),
     /prompt is not \/codesense-setup/,
   );
 });
 
 test("setup-resume: a started ledger launches with resume, and the guide's first card is source-repos", async () => {
-  const run =
-    (launch) =>
-    ({ fx, turns }) => (
-      fx.human(turns[0]),
-      fx.tool(F, "list_sessions"),
-      fx.tool(F, "open_workspace", launch),
-      fx.say("Starting.")
-    );
-  await red("setup-resume", run(LAUNCH), /prompt is not \/codesense-setup resume/);
-  await green("setup-resume", run({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }));
+  await red("setup-resume", launchWith(), /prompt is not \/codesense-setup resume/);
+  await green("setup-resume", launchWith({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }));
   // Finished setup is not resumed; a resume carries the thread's latest Guide handoff.
   await red(
     "setup-rerun",
-    run({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }),
+    launchWith({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }),
     /prompt is not \/codesense-setup/,
   );
   const handoff =
@@ -257,7 +225,7 @@ test("setup-resume: a started ledger launches with resume, and the guide's first
     ({ fx, turns }) => (
       fx.human(turns[0]),
       fx.say("Noted."),
-      run({ ...LAUNCH, initial_prompt: prompt })({ fx, turns: turns.slice(1) })
+      launchWith({ ...LAUNCH, initial_prompt: prompt })({ fx, turns: turns.slice(1) })
     );
   const note = caseOf("setup-resume-handoff").input.turns[0].replace("Guide handoff: ", "");
   await red(
@@ -271,23 +239,15 @@ test("setup-resume: a started ledger launches with resume, and the guide's first
     ...caseOf("setup-resume"),
     fixture: { ...caseOf("setup-resume").fixture, ledger: [] },
   };
-  const fx = await fixtureFor(caseDef);
-  try {
+  await withFixture(caseDef, (fx) => {
     fx.human("x");
     fx.tool(F, "open_workspace", { ...LAUNCH, initial_prompt: "/codesense-setup resume" });
     assert.equal(fx.state().guideCards[0].step, "team");
-  } finally {
-    fx.teardown();
-  }
+  });
 });
 
 test("setup-handback: claim, ack, then exactly one reply", async () => {
-  const launch = (fx, turns) => (
-    fx.human(turns[0]),
-    fx.tool(F, "list_sessions"),
-    fx.tool(F, "open_workspace", LAUNCH),
-    fx.say("Starting.")
-  );
+  const launch = (fx, turns) => launchWith()({ fx, turns });
   await red("setup-handback", ({ fx, turns }) => launch(fx, turns), /did not claim the hand-back/);
   await red(
     "setup-handback",
