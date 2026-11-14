@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A setup step (step_format 1)",
+  "description": "One setup step: check, ask, do, confirm, record, undo. The guide agent reads these files and acts only after the person's click; the engine never runs them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["step_format", "id", "title", "summary", "record", "undo"],
+  "properties": {
+    "step_format": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 400 },
+    "needs": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+    "when": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "any_source_repo_host": { "type": "string", "minLength": 1 },
+        "tracker": { "enum": ["github", "jira", "linear", "none"] }
+      }
+    },
+    "probe": { "type": "array", "items": { "$ref": "#/$defs/probe" } },
+    "ask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "act"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "act": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "free_text": { "type": "boolean" },
+        "recommend": { "type": "string", "minLength": 1 }
+      }
+    },
+    "act": { "type": "array", "items": { "$ref": "#/$defs/act" } },
+    "inputs": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern"],
+        "properties": {
+          "pattern": { "type": "string", "pattern": "^\\^.*\\$$" },
+          "label": { "type": "string" }
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe", "expect"],
+      "properties": {
+        "probe": { "type": "string", "minLength": 1 },
+        "expect": { "enum": ["done", "missing", "partial", "unknown"] }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "secret"],
+      "properties": {
+        "scope": { "enum": ["team", "machine"] },
+        "fields": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "secret": { "const": "never" }
+      }
+    },
+    "undo": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\n]+$" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check", "map"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "check": {
+          "type": "object",
+          "required": ["tool"],
+          "properties": { "tool": { "type": "string", "minLength": 1 } }
+        },
+        "map": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "enum": ["done", "missing", "partial", "unknown"] }
+        }
+      }
+    },
+    "act": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "consent", "what", "where", "why"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "consent": { "enum": ["read", "local-write", "install-or-sign-in", "external-write"] },
+        "what": { "type": "string", "minLength": 1 },
+        "where": { "type": "string", "minLength": 1 },
+        "why": { "type": "string", "minLength": 1 },
+        "verb": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool"],
+          "properties": {
+            "tool": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "args": { "type": "object" }
+          }
+        },
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd", "in"],
+          "properties": {
+            "cmd": { "type": "string", "minLength": 1 },
+            "in": { "enum": ["terminal_tab", "headless"] },
+            "cwd": { "type": "string" }
+          }
+        },
+        "open_url": { "type": "string", "pattern": "^https://" },
+        "wait": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["until", "then", "timeout"],
+          "properties": {
+            "until": { "enum": ["tab_exit"] },
+            "then": { "enum": ["verify"] },
+            "timeout": { "type": "string", "pattern": "^[0-9]+[smh]$" }
+          }
+        }
+      },
+      "oneOf": [
+        { "required": ["verb"] },
+        { "required": ["run"] },
+        { "required": ["open_url"] }
+      ]
+    }
+  }
+}

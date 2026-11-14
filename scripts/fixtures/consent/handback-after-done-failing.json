@@ -1,0 +1,187 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__probe_environment",
+            "native_id": "toolu_1",
+            "is_error": false,
+            "input": "{\"envNames\": []}",
+            "result": "{\"clis\": [\"claude\"]}"
+          },
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_2",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"orgs\": []}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_3",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create your team folder?**\\n\\ncard: context-repo \\u00b7 local-write \\u00b7 create-local-organization=Create it | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 101}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_4",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 102, \"text\": \"Create it\", \"inReplyTo\": 101, \"from\": \"human\"}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_local_organization",
+            "native_id": "toolu_5",
+            "is_error": false,
+            "input": "{\"name\": \"acme\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_6",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create the web team?**\\n\\ncard: team \\u00b7 local-write \\u00b7 create-team=Create web | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 103}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_7",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 104, \"text\": \"Create web\", \"inReplyTo\": 103, \"from\": \"human\"}]}"
+          }
+        ]
+      },
+      {
+        "index": 7,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_8",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          },
+          {
+            "name": "mcp__codesense__records_create",
+            "native_id": "toolu_9",
+            "is_error": false,
+            "input": "{\"collection\": \"setup-ledger\", \"org\": \"acme\", \"team\": \"web\", \"fields\": {\"step\": \"team\", \"state\": \"done\"}}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 8,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_10",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Add acme/web?**\\n\\ncard: source-repos \\u00b7 local-write \\u00b7 add-source-repo=Add acme/web | none=Skip\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 105}"
+          }
+        ]
+      },
+      {
+        "index": 9,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_11",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 106, \"text\": \"Add acme/web\", \"inReplyTo\": 105, \"from\": \"human\"}]}"
+          }
+        ]
+      },
+      {
+        "index": 10,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__add_source_repo",
+            "native_id": "toolu_12",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"team\": \"web\", \"url\": \"https://github.com/acme/web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 11,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__signal_done",
+            "native_id": "toolu_h11",
+            "is_error": false,
+            "input": "{\"outcome\": \"success\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 12,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_role_message",
+            "native_id": "toolu_h12",
+            "is_error": false,
+            "input": "{\"role\": \"codesense-foreman\", \"team\": {\"org\": \"codesense/docs\", \"team\": \"getting-started\"}, \"text\": \"Setup done: team web, 1 repo, git access by gh login\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 90}"
+          }
+        ]
+      }
+    ]
+  }
+}

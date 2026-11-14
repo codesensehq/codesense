@@ -95,6 +95,18 @@ describe("start-up routing", () => {
     }
   });
 
+  it("a first launch opens the setup page instead, with the setting on or off", () => {
+    const setup = `${DOCS_ROOT}/getting-started/content/guide/index.html`;
+    for (const on of [true, false]) {
+      resetStartLanding();
+      setting(on);
+      useViewerStore.setState({ openTabs: {}, activeTab: {} });
+      connect([docsOrg], null, null);
+      openStartLanding(README, true);
+      expect(paths(DOCS_TEAM_KEY)).toEqual([setup]);
+    }
+  });
+
   it("lands once per start: a later org refresh does not reopen a closed tab", () => {
     connect([docsOrg], null, null);
     openStartLanding(README);
