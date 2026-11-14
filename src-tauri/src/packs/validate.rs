@@ -196,7 +196,9 @@ pub(super) fn read_regular(path: &Path, cap: u64) -> Result<Vec<u8>, &'static st
         return Err("is over the size cap");
     }
     let mut bytes: Vec<u8> = Default::default();
-    Read::read_to_end(&mut Read::take(file, cap + 1), &mut bytes).map_err(|_| "cannot be read")?;
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot be read")?;
     if bytes.len() as u64 > cap {
         return Err("is over the size cap");
     }
