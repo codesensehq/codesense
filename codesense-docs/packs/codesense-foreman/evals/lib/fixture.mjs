@@ -170,9 +170,10 @@ Run both from the story's worktree:
 //   rename_launched: sessions the Foreman launched show a new display name.
 //   offer_card: "pending": an unanswered setup offer card is already in the inbox.
 //   ledger: rows already in the private setup-ledger ({step, state}).
+//   no_repos: list_source_repos shows no repo, even in a user team.
 //   guide: "complete" or {stop_after: n}: the scripted guide stub runs when the Foreman launches a
 //     guide-* session with a /codesense-setup prompt; it stops after n steps and sends nothing.
-const KEYS = ["offer_card", "ledger", "guide", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+const KEYS = ["offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -217,7 +218,7 @@ export async function createFixture(options = {}) {
   if (unknown.length) throw new Error(`unknown fixture keys: ${unknown.join(", ")}`);
   if (!["generic", "scripted", "docs"].includes(options.story_team ?? "generic")) throw new Error(`unknown story_team ${options.story_team}`);
   if (!["mixed", undefined].includes(options.inbox)) throw new Error(`unknown inbox ${options.inbox}`);
-  for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched"])
+  for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched", "no_repos"])
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);
   if (!Array.isArray(options.pre_sessions ?? [])) throw new Error("pre_sessions must be a list");
   if (!Array.isArray(options.ledger ?? [])) throw new Error("ledger must be a list");
@@ -234,6 +235,7 @@ export async function createFixture(options = {}) {
     preSessions: options.pre_sessions ?? [],
     renameLaunched: options.rename_launched === true,
     offerCard: options.offer_card === "pending",
+    noRepos: options.no_repos === true,
     ledger: options.ledger ?? [],
     guide: options.guide,
   };
@@ -439,7 +441,7 @@ function build(root, opts) {
         return opts.storyTeam === "docs"
           ? [{ org: "codesense/docs", team: "getting-started", synced: true }]
           : [{ org: "codesense/docs", team: "getting-started", synced: true }, { org: CONFIG.team, team: CONFIG.team, synced: true }];
-      if (tool === "list_source_repos") return { repos: opts.storyTeam === "docs" ? [] : [{ org: CONFIG.team, team: CONFIG.team, repo: "acme/demo" }] };
+      if (tool === "list_source_repos") return { repos: opts.storyTeam === "docs" || opts.noRepos ? [] : [{ org: CONFIG.team, team: CONFIG.team, repo: "acme/demo" }] };
       if (tool === "claim_role_messages") {
         const mine = roleMessages.filter((m) => m.role === record.args.role && !m.claimed);
         for (const m of mine) m.claimed = true;

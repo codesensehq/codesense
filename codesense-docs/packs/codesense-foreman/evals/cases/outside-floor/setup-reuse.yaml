@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
-# a live guide session this Foreman launched is reused, not launched twice.
+# a live guide session an earlier Foreman launched (before a relaunch) is reused, not launched twice.
 id: setup-reuse
 kind: setup
 fixture:
   pre_sessions:
-    - { agent: guide-claude, displayName: Setup, workspace: acme, launchedBy: foreman-session-1 }
+    - { handle: foreman-session-0, agent: foreman-claude, displayName: Foreman, workspace: acme }
+    - { agent: guide-claude, displayName: Setup, workspace: acme, launchedBy: foreman-session-0 }
 input:
   turns:
     - "set me up with ~/code/demo"

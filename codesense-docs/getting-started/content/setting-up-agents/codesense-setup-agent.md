@@ -16,6 +16,7 @@ The `/codesense-setup` skill and these CodeSense MCP tools:
 | Source repos | `add_source_repo`, `attach_source_repo_path`, `list_source_repos`, `remove_source_repo`                  |
 | Agents       | `agent_list`, `agent_get`, `agent_preview`, `agent_create`, `agent_update`                               |
 | Routines     | `routine_create`, `routine_list`                                                                         |
+| Hand back    | `send_role_message`                                                                                      |
 
 The workspace tools work only for an agent on this Mac, not on a remote machine.
 

@@ -316,11 +316,16 @@ const graders = {
     mine.forEach((l, i) => {
       if (!looked(launchCalls[i]?.seq ?? 0)) out.push("launched without looking in list_sessions for a live setup session");
       out.push(...launchForm(s, l, { target: "team-workspace" }, `guide-${s.config.runtime}`));
+      if (l.name !== "Setup") out.push(`launched with name ${l.name}, expected Setup`);
       if (l.mode !== "visible-unfocused") out.push(`launched with mode ${l.mode}, expected visible-unfocused`);
       const words = promptOf(l).trim().split(/\s+/);
       const resume = words[1] === "resume";
       const want = e.prompt.split(" ");
       if (words[0] !== want[0] || resume !== (want[1] === "resume")) out.push(`the launch prompt is not ${e.prompt}`);
+      // A resume carries the latest Guide handoff: from the thread, when there is one.
+      const handoff = s.turns.filter((t) => t.seq < (launchCalls[i]?.seq ?? Infinity) && /^Guide handoff:/.test(t.text)).at(-1);
+      if (resume && handoff && !promptOf(l).includes(handoff.text.replace(/^Guide handoff:\s*/, "")))
+        out.push("the resume launch does not carry the latest Guide handoff");
     });
     if (e.guide_first_step && s.guideCards[0]?.step !== e.guide_first_step)
       out.push(`the guide's first card was ${s.guideCards[0]?.step ?? "none"}, expected ${e.guide_first_step}`);

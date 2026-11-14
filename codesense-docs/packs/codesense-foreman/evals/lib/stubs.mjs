@@ -12,6 +12,7 @@ const SELF = CONFIG.self;
 const good = {
   "onboard-repo"({ fx, turns }) {
     fx.human(turns[0]);
+    fx.tool(F, "list_sessions");
     // The setup hand-off's launch form.
     fx.tool(F, "open_workspace", {
       target: "team-workspace",
@@ -104,18 +105,25 @@ const good = {
   // The setup hand-off, in foreman.md's forms. One script serves every setup case; the fixture
   // decides what the ledger, the inbox and the sessions hold.
   setup({ fx, turns }) {
+    let handoff;
     for (const turn of turns) {
       fx.human(turn);
       const ledger = fx.tool(F, "records_list", { collection: "setup-ledger" }).records;
       const skipped = ledger.some((r) => r.step === "foreman-offer" && r.state === "skipped");
-      if (/^not now$/i.test(turn)) {
+      if (/^Guide handoff:/.test(turn)) {
+        handoff = turn;
+        fx.say("Noted.");
+      } else if (/^not now$/i.test(turn)) {
         fx.tool(F, "records_create", { collection: "setup-ledger", fields: { step: "foreman-offer", state: "skipped" } });
         fx.say("No problem. Ask me when you want to set up.");
       } else if (/how is setup going/i.test(turn)) {
         const next = SETUP_STEPS.find((step) => !ledger.some((r) => r.step === step && r.state === "done"));
         fx.say(`Setup stopped at ${next}. Resume?`);
       } else if (/set me up|resume setup/i.test(turn)) {
-        const live = fx.tool(F, "list_sessions").sessions.some((x) => /^guide-/.test(x.agent ?? "") && x.launchedBy === CONFIG.self);
+        // A live guide launched by any Foreman session: this one, or one before a relaunch.
+        const { sessions } = fx.tool(F, "list_sessions");
+        const foreman = (h) => h === SELF || sessions.some((x) => x.handle === h && /^foreman-/.test(x.agent ?? ""));
+        const live = sessions.some((x) => /^guide-/.test(x.agent ?? "") && foreman(x.launchedBy));
         if (live) {
           fx.say("A setup session is already running; open its tab to carry on.");
           continue;
@@ -126,7 +134,7 @@ const good = {
           target: "team-workspace",
           name: "Setup",
           agent: `guide-${CONFIG.runtime}`,
-          initial_prompt: started && !complete ? "/codesense-setup resume" : "/codesense-setup",
+          initial_prompt: started && !complete ? ["/codesense-setup resume", handoff].filter(Boolean).join(" ") : "/codesense-setup",
           mode: "visible-unfocused",
           launched_by: SELF,
         });

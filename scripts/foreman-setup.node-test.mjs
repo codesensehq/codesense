@@ -82,6 +82,27 @@ test("setup-offer: one card, never two, never a launch", async () => {
   );
 });
 
+test("the offer condition: a team with no repo is offered setup, a set-up team is not", async () => {
+  await red(
+    "setup-offer-no-repo",
+    ({ fx, turns }) => (fx.human(turns[0]), fx.say("Hi.")),
+    /0 needs-you cards raised, expected 1/,
+  );
+  await red(
+    "setup-set-up",
+    ({ fx, turns }) => (fx.human(turns[0]), fx.tool(F, "reply", card())),
+    /1 needs-you cards raised, expected 0/,
+  );
+});
+
+test("set me up is the yes: no offer card even with no user team", async () => {
+  await red(
+    "setup-handback",
+    ({ fx, turns }) => (fx.human(turns[0]), fx.tool(F, "reply", card())),
+    /1 needs-you cards raised, expected 0/,
+  );
+});
+
 test("setup-offer-pending and -skipped: an unanswered card or a skipped ledger row means no new card", async () => {
   for (const id of ["setup-offer-pending", "setup-offer-skipped"])
     await red(
@@ -141,6 +162,16 @@ test("setup-reuse: a live guide this Foreman launched is reused", async () => {
     ({ fx, turns }) => (fx.human(turns[0]), fx.say("Already running.")),
     /did not look in list_sessions/,
   );
+  // A guide the person started by hand is not a Foreman's: reusing it launches nothing.
+  await red(
+    "setup-reuse-by-hand",
+    ({ fx, turns }) => (
+      fx.human(turns[0]),
+      fx.tool(F, "list_sessions"),
+      fx.say("Already running.")
+    ),
+    /launched 0 sessions, expected 1/,
+  );
 });
 
 test("setup-stopped: the ledger is read in the asking turn, and one reply comes", async () => {
@@ -190,6 +221,7 @@ test("launch form: the guide, the visible-unfocused mode, the Foreman's own hand
   const id = "setup-handback";
   await red(id, run({ ...LAUNCH, agent: "builtin/claude" }), /expected guide-claude/);
   await red(id, run({ ...LAUNCH, mode: "focused" }), /expected visible-unfocused/);
+  await red(id, run({ ...LAUNCH, name: "Onboarding" }), /expected Setup/);
   await red(id, run({ ...LAUNCH, launched_by: "someone" }), /launched_by is someone/);
   await red(
     id,
@@ -214,6 +246,26 @@ test("setup-resume: a started ledger launches with resume, and the guide's first
     );
   await red("setup-resume", run(LAUNCH), /prompt is not \/codesense-setup resume/);
   await green("setup-resume", run({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }));
+  // Finished setup is not resumed; a resume carries the thread's latest Guide handoff.
+  await red(
+    "setup-rerun",
+    run({ ...LAUNCH, initial_prompt: "/codesense-setup resume" }),
+    /prompt is not \/codesense-setup/,
+  );
+  const handoff =
+    (prompt) =>
+    ({ fx, turns }) => (
+      fx.human(turns[0]),
+      fx.say("Noted."),
+      run({ ...LAUNCH, initial_prompt: prompt })({ fx, turns: turns.slice(1) })
+    );
+  const note = caseOf("setup-resume-handoff").input.turns[0].replace("Guide handoff: ", "");
+  await red(
+    "setup-resume-handoff",
+    handoff("/codesense-setup resume"),
+    /does not carry the latest Guide handoff/,
+  );
+  await green("setup-resume-handoff", handoff(`/codesense-setup resume ${note}`));
   // The guide stub itself: it skips what the ledger shows done, so a fresh run starts at the team step.
   const caseDef = {
     ...caseOf("setup-resume"),

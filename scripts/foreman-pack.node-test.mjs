@@ -448,8 +448,10 @@ test("setup: the offer guard, the Not now ledger write, the reuse search and the
     "`step: foreman-offer, state: skipped`",
     // Not now is the one ledger write.
     "Not now writes that row (`records_create`)",
-    // Reuse: a live guide this Foreman launched, found in list_sessions, before any launch.
-    "Reuse a live `guide-*` session you launched (`list_sessions`), else `open_workspace",
+    // Reuse: a live guide any Foreman launched (this one or one before a relaunch), before any launch.
+    "Reuse a live `guide-*` session any `foreman-*` session launched (`list_sessions`), else `open_workspace",
+    // Resume: only a started, unfinished setup, with the thread's latest Guide handoff.
+    "started, not done: `/codesense-setup resume` plus the latest `Guide handoff:` text",
     // Stopped: no hand-back, so the next wake reads the ledger and offers Resume.
     "Setup ended with none: at your next wake read the ledger, say where it stopped and offer Resume",
   ]) {

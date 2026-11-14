@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
-# the guide stub finishes and sends Setup done: to role:codesense-foreman; the Foreman claims, acks and says one Set up: line.
+# with no user team, "set me up" is the yes: no offer card. The guide stub finishes and sends Setup done: to role:codesense-foreman; the Foreman claims, acks and says one Set up: line.
 id: setup-handback
 kind: setup
 fixture:
+  story_team: docs
   guide: complete
 input:
   turns:
