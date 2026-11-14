@@ -664,7 +664,7 @@ mod tests {
                 segments: vec![PinStatus::OnTrack, PinStatus::NeedsYou],
                 label: "1 of 2 traced".into(),
             }),
-            lines: vec!["AC 5 green on the merged head".into()],
+            lines: vec!["Checks green on the merged head".into()],
         }
     }
 

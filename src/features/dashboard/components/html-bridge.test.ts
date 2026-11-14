@@ -2041,7 +2041,7 @@ describe("agents read model verbs", () => {
       unit: "ACs traced",
       status: "on-track",
       chart: { kind: "segments", segments: ["on-track", "needs-you"], label: "1 of 2" },
-      lines: ["AC 5 green on the merged head"],
+      lines: ["Checks green on the merged head"],
     };
     await runBridgeCommand("pin", { agentId: "a", messageId: 7, preview }, DOC);
     expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "a", null, {
