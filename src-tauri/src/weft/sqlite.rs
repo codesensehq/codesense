@@ -768,6 +768,9 @@ impl WeftStore {
         // SW-AGR-18: what the message asks of the human (`needs-you` / `update`), as the
         // sender set it. Nullable — NULL means the sender set none and reads resolve it.
         ensure_column(&conn, "wv_inbox", "kind", "TEXT")?;
+        // When the recipient's agent was first told about the message: a notice covering
+        // it was confirmed (epoch ms). Nullable — NULL means not told yet.
+        ensure_column(&conn, "wv_inbox", "told_at", "INTEGER")?;
         // When a pin was unpinned (epoch ms). Nullable: NULL is a live pin. An unpinned
         // pin keeps its row so a restore (the Undo) brings it back as it was.
         ensure_column(&conn, "wv_pins", "removed_at", "INTEGER")?;

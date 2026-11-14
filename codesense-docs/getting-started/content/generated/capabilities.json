@@ -800,7 +800,7 @@
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
     "src-tauri/src/verbs/registry.generated.json": "4820ab1efc25955f8b103682e343069bdadfbb8f8557fff302159eaee15a40f0",
-    "src-tauri/src/verbs/registry.rs": "081ab0a2b8de90045131fd6d567f685b2ccff970d0224302f57a94408919584e",
+    "src-tauri/src/verbs/registry.rs": "184d67110c36a852da692e946c073c36263b89c8dde56e1e76563a06dd084d36",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }

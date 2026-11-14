@@ -630,6 +630,34 @@ mod tests {
     }
 
     #[test]
+    fn a_store_from_before_soft_unpin_migrates_forward_and_keeps_its_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("weft.sqlite3");
+        // The pins table as main shipped it, with one pin, and no removed_at column.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE wv_pins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL,
+                    story_id TEXT NOT NULL DEFAULT '', message_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL, pinned_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    preview TEXT, preview_at INTEGER, UNIQUE (agent_id, story_id, message_id));
+                 INSERT INTO wv_pins (agent_id, story_id, message_id, position, pinned_by, created_at)
+                    VALUES ('team/claude-dev', '', 1, 0, 'agent-a', 7);",
+            )
+            .unwrap();
+        }
+        let store = WeftStore::open(&path).unwrap();
+        let a = message(&store);
+        assert_eq!(a, 1);
+        let t = thread(None);
+        assert_eq!(ids(&store, &t), vec![a]);
+        assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unpinned);
+        assert_eq!(pin_restore(&store, &t, a).unwrap(), PinOutcome::Restored);
+        assert_eq!(row_times(&store, &t, a), ("agent-a".to_string(), 7, None));
+    }
+
+    #[test]
     fn restore_brings_an_unpinned_pin_back_in_its_place_as_it_was() {
         let (_d, store) = open_temp();
         let t = thread(Some("DEMO-1"));

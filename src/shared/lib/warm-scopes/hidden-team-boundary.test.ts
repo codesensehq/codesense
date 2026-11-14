@@ -338,6 +338,11 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "window keydown and pointerdown, once each, only clear the just-pinned mark on the person's next input (no timer); they act on nothing, read no element and look up no id, whichever team is shown.",
   },
+  "src/shared/lib/side-frame.tsx": {
+    count: 1,
+    reason:
+      "window message listener for a rendered diff side's unload report; it acts only on its own drawing's nonce and only closes that side (no input, no id lookup), whichever team is shown.",
+  },
   "src/shared/lib/popover-bounds.ts": {
     count: 2,
     reason: "measures the singleton workbench and workspace bar; no input.",

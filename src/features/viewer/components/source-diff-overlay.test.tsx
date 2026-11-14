@@ -15,6 +15,7 @@ const chunkReporter = vi.hoisted(() => ({
   current: null as ((p: { index: number | null; count: number }) => void) | null,
 }));
 import { resetDetectedEditorsCache } from "@/shared/hooks/use-detected-editors";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import type { PublishFile } from "@/features/git-sync/lib/types";
 
 // The redline tail is exercised elsewhere; stub it to a marker so we assert it
@@ -800,8 +801,13 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.getByTestId("source-diff-wrap-toggle-w1")).toBeInTheDocument();
   });
 
-  it("an HTML file is its source diff, with no rendered mode offered", () => {
+  function openHtml(width: number) {
+    const ro = stubResizeObserver(width);
+    onTestFinished(() => ro.restore());
     stubChangeset({ files: [...FILES, { path: "site/page.html", status: "modified" }] });
+    stubRedline({
+      redline: { status: "modified", binary: false, before: "<p>old</p>", after: "<p>new</p>" },
+    });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "site/page.html" } });
     render(
       <SourceDiffOverlay
@@ -811,8 +817,41 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
         isFocused
       />,
     );
-    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Side by side" })).not.toBeInTheDocument();
+  }
+  const frameDocs = () =>
+    Array.from(document.querySelectorAll("iframe")).map((f) => [
+      f.title,
+      f.getAttribute("srcdoc")?.endsWith(f.title === "Before" ? "<p>old</p>" : "<p>new</p>"),
+    ]);
+
+  it("an HTML file renders Before and After live side by side at 900 px", () => {
+    openHtml(900);
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(frameDocs()).toEqual([
+      ["Before", true],
+      ["After", true],
+    ]);
+    expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-rendered-alone")).toBeInTheDocument();
+    // A rendered page has no code-diff controls.
+    expect(screen.queryByTestId("source-diff-ignore-ws-toggle-w1")).not.toBeInTheDocument();
+  });
+
+  it("an HTML file shows one side at a time below 900 px, with the Before | After toggle", () => {
+    openHtml(899);
+    expect(frameDocs()).toEqual([["After", true]]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(frameDocs()).toEqual([["Before", true]]);
+  });
+
+  it("an HTML file's Source mode sits in the view options and is the code diff", () => {
+    openHtml(1200);
+    const modes = screen.getByTestId("source-diff-html-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.html).toBe("source");
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("<p>old</p>→<p>new</p>");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.getByTestId("source-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
   });
 
   it("an MDX file is a code diff, not the prose redline (its imports and JSX are code)", () => {
@@ -977,6 +1016,22 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
     // A binary file also has no dead view-mode toggle.
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
+  });
+
+  it("a changed PNG keeps the binary placeholder, with no rendered mode offered", () => {
+    stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
+    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
+    expect(screen.queryByTestId("source-diff-html-mode-w1")).not.toBeInTheDocument();
   });
 
   it("SLW-DV-2: the Hide control hides the whole overlay (no compact size to fall to)", () => {

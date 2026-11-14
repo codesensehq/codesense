@@ -19,7 +19,8 @@ import {
 import { useContainerWidth } from "@/shared/hooks/use-container-width";
 
 import type { FileDiffKind, FileDiffModes } from "./file-diff-mode";
-import type { ViewerFileType } from "./viewer-file-type";
+import { SideFrame, SideImage } from "./side-frame";
+import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-file-type";
 
 /**
  * The one file-diff dispatch. Every surface that shows a changed
@@ -28,8 +29,9 @@ import type { ViewerFileType } from "./viewer-file-type";
  * here; this decides how the type reads:
  *
  * - markdown: the block redline, rendered side by side, or the source diff;
- * - HTML, image, Excalidraw: rendered side by side where the surface can serve
- *   both sides (`sides.rendered`, Files only today), else the source diff;
+ * - HTML, image, Excalidraw: rendered side by side, or the source diff. Files
+ *   serves both sides (`sides.rendered`); every other surface draws them from
+ *   the text or bytes it already holds (see `./side-frame`);
  * - code: `CodeDiffReview` in the shared code mode, never a markdown redline.
  *
  * Side by side needs a diff body at least {@link SIDE_BY_SIDE_MIN_WIDTH} px
@@ -73,6 +75,8 @@ export interface FileDiffSides {
   afterLabel?: string;
   /** Files only: URL sources for the rendered HTML/image/Excalidraw viewers. */
   rendered?: RenderedSides;
+  /** Off Files: a raster image side's bytes (base64), where the surface holds them. */
+  imageBytes?: { before?: string; after?: string };
 }
 
 export interface FileDiffPrefs {
@@ -124,6 +128,32 @@ export function renderFileDiff(args: FileDiffArgs): ReactElement {
       return <CodeFileDiff {...args} />;
     }
   }
+}
+
+/** HTML, SVG and Excalidraw: drawn from their text where no route serves them. */
+export function rendersFromText(filePath: string): boolean {
+  const fileType = getViewerFileType(filePath);
+  return fileType === "html" || fileType === "excalidraw" || isSvg(filePath);
+}
+
+/** An SVG can carry script, so it renders as a page, never in an `<img>`. */
+function isSvg(filePath: string) {
+  return extensionOf(filePath) === "svg";
+}
+
+/**
+ * Whether a surface without `sides.rendered` can draw this file's rendered
+ * sides: a text type unless a side read as binary, a raster image only when
+ * the surface holds every present side's bytes.
+ */
+export function rendersInline(filePath: string, sides: FileDiffSides, state: FileDiffState) {
+  if (rendersFromText(filePath)) return state.kind !== "binary";
+  if (getViewerFileType(filePath) !== "image") return false;
+  const { hasBefore, hasAfter } = sideAvailability(sides);
+  return (
+    (!hasBefore || sides.imageBytes?.before != null) &&
+    (!hasAfter || sides.imageBytes?.after != null)
+  );
 }
 
 const MODE_LABELS: { [K in FileDiffKind]: [FileDiffModes[K], string][] } = {
@@ -314,18 +344,20 @@ function DiffStrip<K extends FileDiffKind>({
 }
 
 /** The frame every type shares: strip and the surface's header on top, measured
- *  body below. */
+ *  body below, then an optional footer line. */
 function DiffFrame({
   strip,
   header,
   bodyRef,
   children,
+  footer,
   testId,
 }: {
   strip: ReactNode;
   header?: ReactNode;
   bodyRef: (node: HTMLDivElement | null) => void;
   children: ReactNode;
+  footer?: ReactNode;
   testId: string;
 }) {
   return (
@@ -339,6 +371,7 @@ function DiffFrame({
       <div ref={bodyRef} className="min-h-0 flex-1">
         {children}
       </div>
+      {footer}
     </div>
   );
 }
@@ -643,12 +676,14 @@ function RenderedFileDiff({
   const frame = useFrameState(filePath);
   const prefix = prefs.testIdPrefix ?? "file-diff";
   const rendered = sides.rendered;
-  // Off Files there is no serving for both sides yet: Source is the only mode.
-  const mode = rendered ? prefs.modes.html : "source";
+  // Off Files the sides are drawn from what the surface holds; a type it can't
+  // draw that way (a raster image it has no bytes for) has Source only.
+  const renderable = !!rendered || rendersInline(filePath, sides, state);
+  const mode = renderable ? prefs.modes.html : "source";
   const layout = sideLayout(sides, frame.width);
 
   let body: ReactNode;
-  if (mode === "source" || !rendered) {
+  if (mode === "source") {
     body = (
       <SourceBody
         filePath={filePath}
@@ -663,7 +698,7 @@ function RenderedFileDiff({
     body = <ErrorRow prefix={prefix} message={state.message} />;
   } else if (state.kind === "loading") {
     body = <CodeSkeleton prefix={prefix} />;
-  } else {
+  } else if (rendered) {
     body = (
       <SideBySide
         sides={sides}
@@ -673,21 +708,51 @@ function RenderedFileDiff({
         renderSide={(side) => renderRenderedSide(fileType, side, sides, rendered)}
       />
     );
+  } else if (sides.before == null || sides.after == null) {
+    body = <CodeSkeleton prefix={prefix} />;
+  } else {
+    body = (
+      <LargeDiffGate sides={sides} gate={frame.gate} prefix={prefix}>
+        <SideBySide
+          sides={sides}
+          layout={layout}
+          picked={frame.picked}
+          prefix={prefix}
+          renderSide={(side) => (
+            <InlineRenderedSide filePath={filePath} side={side} sides={sides} />
+          )}
+        />
+      </LargeDiffGate>
+    );
   }
 
   const showToggle =
-    !!rendered &&
+    renderable &&
     mode === "side-by-side" &&
     state.kind !== "loading" &&
     state.kind !== "error" &&
     layout === "toggle";
+  // A page drawn from its text has no URL to resolve its linked files against.
+  const alone =
+    !rendered && mode === "side-by-side" && fileType !== "excalidraw" && rendersFromText(filePath);
   return (
     <DiffFrame
       testId={`${prefix}-rendered`}
       bodyRef={frame.bodyRef}
       header={prefs.header}
+      footer={
+        alone && (
+          <p
+            className="flex-none border-t border-border px-3 py-1 text-xs text-muted-foreground"
+            data-testid={`${prefix}-rendered-alone`}
+          >
+            Rendered on its own: linked files such as stylesheets and images aren&apos;t loaded
+            here.
+          </p>
+        )
+      }
       strip={
-        rendered ? (
+        renderable ? (
           <DiffStrip
             sides={sides}
             kind="html"
@@ -702,7 +767,7 @@ function RenderedFileDiff({
             }
           />
         ) : (
-          // Off Files the body is a code diff, so it takes the code modes.
+          // With Source only the body is a code diff, so it takes the code modes.
           <DiffStrip
             sides={sides}
             kind="code"
@@ -716,6 +781,35 @@ function RenderedFileDiff({
     >
       {body}
     </DiffFrame>
+  );
+}
+
+/** A side off Files, from the surface's own text or bytes: nothing it can load
+ *  reaches past that side's content. */
+function InlineRenderedSide({
+  filePath,
+  side,
+  sides,
+}: {
+  filePath: string;
+  side: Side;
+  sides: FileDiffSides;
+}) {
+  const text = (side === "before" ? sides.before : sides.after) ?? "";
+  const label = sideLabel(sides, side);
+  if (getViewerFileType(filePath) === "excalidraw")
+    return (
+      <ExcalidrawViewer
+        key={side}
+        filePath={filePath}
+        teamContentPath=""
+        sceneText={text}
+        readOnly
+      />
+    );
+  if (rendersFromText(filePath)) return <SideFrame key={side} html={text} title={label} />;
+  return (
+    <SideImage key={side} base64={sides.imageBytes?.[side] ?? ""} filePath={filePath} alt={label} />
   );
 }
 

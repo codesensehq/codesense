@@ -18079,10 +18079,10 @@
   "sources": {
     "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "54ee23e0a6373253e1c82053f1720bd2cf36631f73caa9a12345d062865f5179",
     "src-tauri/src/verbs/registry.generated.json": "4820ab1efc25955f8b103682e343069bdadfbb8f8557fff302159eaee15a40f0",
-    "src-tauri/src/verbs/registry.rs": "081ab0a2b8de90045131fd6d567f685b2ccff970d0224302f57a94408919584e",
+    "src-tauri/src/verbs/registry.rs": "184d67110c36a852da692e946c073c36263b89c8dde56e1e76563a06dd084d36",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "a9f4d618d7caa94935652c856182802ab20327fb2ef4fd969ed65c62e65f270a",
+    "src-tauri/src/http/routes/viewer.rs": "d11ec95f319fb30e823098a8669724e0fa3c47cce21c5a6f930407605f590b16",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

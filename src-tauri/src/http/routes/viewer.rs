@@ -2075,6 +2075,7 @@ mod tests {
             attachments: Vec::new(),
             archived_at_ms: None,
             withdrawn_at_ms: None,
+            told_at_ms: None,
             delivery: None,
             on_click: None,
             content_type,

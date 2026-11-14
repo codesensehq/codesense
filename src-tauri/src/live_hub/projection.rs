@@ -352,6 +352,7 @@ impl Default for TopicRegistry {
                 "prefs",
                 "storyTotals",
                 "pins",
+                "messageDelivery",
             ]
             .into_iter()
             .map(|t| (t.into(), CachedProjection::new(t)))
