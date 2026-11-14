@@ -164,9 +164,14 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     expect(h.readFile).toHaveBeenCalledTimes(1);
     expect(h.readFile).toHaveBeenCalledWith("/team/page.html");
     const remote = frames().find((f) => f.title === "Workspace B’s version")!;
-    expect(remote.getAttribute("srcdoc")).toBe(
-      `<meta http-equiv="Content-Security-Policy" content="${SIDE_FRAME_CSP}">${hostile}`,
-    );
+    // The CSP first, then the side's own prelude, then the content as it was read.
+    const doc = remote.getAttribute("srcdoc")!;
+    expect(
+      doc.startsWith(
+        `<meta http-equiv="Content-Security-Policy" content="${SIDE_FRAME_CSP}"><script>`,
+      ),
+    ).toBe(true);
+    expect(doc.endsWith(`</script>${hostile}`)).toBe(true);
     expect(remote.getAttribute("sandbox")).toBe("allow-scripts");
     expect(remote.hasAttribute("src")).toBe(false);
     // The team's side never sees the machine's content, nor the machine's the team's.

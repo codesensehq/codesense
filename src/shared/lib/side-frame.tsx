@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+
+import { OverlayCenteredState } from "@/features/viewer/components/overlay-shell";
 
 import { BASELINE_SANDBOX, extensionOf } from "./viewer-file-type";
 
@@ -23,26 +25,101 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${SIDE_FRA
  *  precede it); `[^>]` ends where the tokenizer ends it. */
 const LEADING_DOCTYPE = /^[\t\n\f\r ]*<!doctype[^>]*>/i;
 
+/** What a side's document posts to the host as it is unloaded by a navigation,
+ *  followed by its drawing's nonce. */
+export const SIDE_LEFT_MESSAGE = "codesense:side-left:";
+
 /**
- * The frame's document: the CSP as its first element, so the parser puts it
- * first in the head before anything the side can load. Only a leading doctype
- * goes ahead of it, which keeps the page in standards mode.
+ * Runs before anything the side holds: when the document is unloaded (it
+ * navigated, even before its own load finished), it tells the host, naming its
+ * drawing by `nonce`. The poster is bound here, and the listener is the first
+ * capture listener on the window, so the side's own scripts can neither replace
+ * it nor stop it. It then removes itself, so the side's DOM is as it was
+ * authored. The nonce is not a secret: a forged message can only close a side.
  */
-export function sideFrameDoc(html: string): string {
-  const doctype = LEADING_DOCTYPE.exec(html)?.[0] ?? "";
-  return doctype + CSP_META + html.slice(doctype.length);
+export function sidePrelude(nonce: string): string {
+  const message = JSON.stringify(SIDE_LEFT_MESSAGE + nonce);
+  return (
+    `<script>(()=>{const post=parent.postMessage.bind(parent);` +
+    `addEventListener("pagehide",()=>post(${message},"*"),true);` +
+    `document.currentScript.remove()})()</script>`
+  );
 }
 
-/** An HTML or SVG side: `srcdoc` in the baseline frame's opaque-origin,
- *  scripts-only sandbox, so it has no URL to resolve siblings against. */
+/**
+ * The frame's document: the CSP as its first element, so the parser puts it
+ * first in the head before anything the side can load, then the prelude. Only a
+ * leading doctype goes ahead of them, which keeps the page in standards mode.
+ */
+export function sideFrameDoc(html: string, nonce = ""): string {
+  const doctype = LEADING_DOCTYPE.exec(html)?.[0] ?? "";
+  return doctype + CSP_META + sidePrelude(nonce) + html.slice(doctype.length);
+}
+
+/** Said in place of a side that navigated away from its own content. */
+export const SIDE_LEFT_NOTE = "This side tried to open another page, so it was closed.";
+
+/**
+ * An HTML or SVG side: `srcdoc` in the baseline frame's opaque-origin,
+ * scripts-only sandbox, so it has no URL to resolve siblings against.
+ *
+ * The CSP can't stop the side navigating itself (`location.href`, a meta
+ * refresh, a link click): that is a GET it can send, the one residual channel.
+ * The frame is torn down as soon as the host learns of it: the prelude's
+ * message as the side's document is unloaded (a navigation before its own load
+ * finished gives no second load), or a second load. "Show again" draws the
+ * side's own content afresh.
+ */
 export function SideFrame({ html, title }: { html: string; title: string }) {
+  const [shown, setShown] = useState(0);
+  const [left, setLeft] = useState<string | null>(null);
+  // One frame per drawing: a new content or a "Show again" is a fresh frame, with its
+  // own nonce, so a frame being replaced (it is unloaded too) never closes the next.
+  const id = useId();
+  const [version, setVersion] = useState({ html, n: 0 });
+  if (version.html !== html) setVersion({ html, n: version.n + 1 });
+  const nonce = `${id}-${shown}-${version.html === html ? version.n : version.n + 1}`;
+  const doc = sideFrameDoc(html, nonce);
+  const drawing = doc;
+  const loads = useRef({ drawing, count: 0 });
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.data === SIDE_LEFT_MESSAGE + nonce) setLeft(drawing);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [drawing, nonce]);
+  if (left === drawing)
+    return (
+      <OverlayCenteredState
+        testId="side-frame-left"
+        action={
+          <button
+            type="button"
+            onClick={() => setShown((n) => n + 1)}
+            className="rounded border border-border px-2 py-0.5 text-[0.7rem] font-medium text-foreground hover:bg-accent"
+          >
+            Show again
+          </button>
+        }
+      >
+        {SIDE_LEFT_NOTE}
+      </OverlayCenteredState>
+    );
+  const onLoad = () => {
+    if (loads.current.drawing !== drawing) loads.current = { drawing, count: 0 };
+    loads.current.count += 1;
+    if (loads.current.count > 1) setLeft(drawing);
+  };
   return (
     <iframe
+      key={drawing}
       title={title}
       sandbox={BASELINE_SANDBOX}
-      srcDoc={sideFrameDoc(html)}
+      srcDoc={doc}
       referrerPolicy="no-referrer"
       loading="lazy"
+      onLoad={onLoad}
       className="h-full w-full border-0 bg-white"
     />
   );

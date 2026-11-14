@@ -2,9 +2,17 @@
 // @vitest-environment jsdom
 // jsdom parses HTML to the spec, which is what the head-placement cases check.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 
-import { SIDE_FRAME_CSP, SideFrame, SideImage, sideFrameDoc } from "./side-frame";
+import {
+  SIDE_FRAME_CSP,
+  SIDE_LEFT_MESSAGE,
+  SIDE_LEFT_NOTE,
+  SideFrame,
+  SideImage,
+  sideFrameDoc,
+  sidePrelude,
+} from "./side-frame";
 
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${SIDE_FRAME_CSP}">`;
 
@@ -20,10 +28,11 @@ function parsed(doc: string) {
 }
 
 describe("sideFrameDoc", () => {
-  it("puts the deny-all CSP before everything the side holds", () => {
+  it("puts the deny-all CSP, then the prelude, before everything the side holds", () => {
     const doc = sideFrameDoc(HOSTILE);
-    expect(doc.startsWith(CSP_META)).toBe(true);
-    expect(doc.slice(CSP_META.length)).toBe(HOSTILE);
+    expect(doc).toBe(CSP_META + sidePrelude("") + HOSTILE);
+    expect(sidePrelude("n1")).toContain(`addEventListener("pagehide"`);
+    expect(sidePrelude("n1")).toContain(JSON.stringify(`${SIDE_LEFT_MESSAGE}n1`));
   });
 
   it("the policy loads nothing from the network, the disk or a sibling file", () => {
@@ -64,15 +73,71 @@ describe("sideFrameDoc", () => {
   });
 });
 
+/** The drawing nonce a frame's prelude names. */
+const nonceOf = (frame: HTMLIFrameElement) =>
+  JSON.parse(/"(codesense:side-left:[^"]*)"/.exec(frame.getAttribute("srcdoc")!)![0]).slice(
+    SIDE_LEFT_MESSAGE.length,
+  ) as string;
+
 describe("SideFrame", () => {
   it("is an opaque-origin, scripts-only sandbox drawn from srcdoc, with no URL to resolve", () => {
     const { container } = render(<SideFrame html={HOSTILE} title="After" />);
     const frame = container.querySelector("iframe")!;
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(frame.getAttribute("srcdoc")).toBe(sideFrameDoc(HOSTILE));
+    expect(frame.getAttribute("srcdoc")).toBe(sideFrameDoc(HOSTILE, nonceOf(frame)));
     expect(frame.hasAttribute("src")).toBe(false);
     expect(frame.getAttribute("title")).toBe("After");
+  });
+});
+
+describe("SideFrame navigation", () => {
+  const frameOf = (container: HTMLElement) => container.querySelector("iframe");
+  const post = (data: string) =>
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data }));
+    });
+
+  it("closes the side on its second load, a navigation away from its own content", () => {
+    const { container, getByRole, getByText } = render(<SideFrame html="<p>a</p>" title="After" />);
+    const first = nonceOf(frameOf(container)!);
+    fireEvent.load(frameOf(container)!);
+    expect(frameOf(container)).not.toBeNull();
+    fireEvent.load(frameOf(container)!);
+    expect(frameOf(container)).toBeNull();
+    expect(getByText(SIDE_LEFT_NOTE)).toBeInTheDocument();
+    fireEvent.click(getByRole("button", { name: "Show again" }));
+    const again = frameOf(container)!;
+    expect(nonceOf(again)).not.toBe(first);
+    expect(again.getAttribute("srcdoc")).toBe(sideFrameDoc("<p>a</p>", nonceOf(again)));
+    // A fresh frame: its own first load is not a navigation, and the old frame's
+    // unload message does not close it.
+    fireEvent.load(again);
+    post(SIDE_LEFT_MESSAGE + first);
+    expect(frameOf(container)).toBe(again);
+  });
+
+  it("closes the side when its document says it was unloaded, even before a second load", () => {
+    const { container, getByText } = render(<SideFrame html="<p>a</p>" title="After" />);
+    const frame = frameOf(container)!;
+    // Another drawing's message, or another message, changes nothing.
+    post(`${SIDE_LEFT_MESSAGE}someone-else`);
+    post("other");
+    expect(frameOf(container)).toBe(frame);
+    post(SIDE_LEFT_MESSAGE + nonceOf(frame));
+    expect(frameOf(container)).toBeNull();
+    expect(getByText(SIDE_LEFT_NOTE)).toBeInTheDocument();
+  });
+
+  it("a side whose content changes loads it fresh, which is not a navigation", () => {
+    const { container, rerender } = render(<SideFrame html="<p>a</p>" title="After" />);
+    const before = nonceOf(frameOf(container)!);
+    fireEvent.load(frameOf(container)!);
+    rerender(<SideFrame html="<p>b</p>" title="After" />);
+    fireEvent.load(frameOf(container)!);
+    post(SIDE_LEFT_MESSAGE + before);
+    const frame = frameOf(container)!;
+    expect(frame.getAttribute("srcdoc")).toBe(sideFrameDoc("<p>b</p>", nonceOf(frame)));
   });
 });
 
