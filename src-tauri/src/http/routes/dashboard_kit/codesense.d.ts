@@ -482,6 +482,16 @@ declare namespace CodesenseSdk {
     queue: string | null;
     follow: boolean;
     leadName(row: Record<string, unknown>): string;
+    /** The live row, for presence and for the row a send goes to. Default: the first row that has not exited (for a send, the first that can be joined). */
+    pick?(peers: Array<Record<string, unknown>>): Record<string, unknown> | null;
+    /** More handles whose messages are the peer's side of the thread (an older peer's). */
+    handles?(peers: Array<Record<string, unknown>>): string[];
+    /** The mailboxes the thread reads, one read each (`transport.threadOf(id)`, plus the role queue), instead of `read`. A source that fails never hides the rest: the thread shows an unread or a stale row with Retry. */
+    sources?(peers: Array<Record<string, unknown>>): string[];
+    /** A launch binds to the row its result names (a result that names only a handle too), and no other row takes its prompt. */
+    bindLaunched?: boolean;
+    /** A failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order. */
+    keepUnsent?: boolean;
   }
   /** A header or head slot's paint: nodes are replaced only when sig changes. */
   interface ChatPaint {
@@ -510,6 +520,8 @@ declare namespace CodesenseSdk {
     cards?: { parse?(text: string): ChatCard | null } | false;
     /** The peer's controls, painted into the page's own header element. */
     headerSlot?: { slot: HTMLElement; render(state: ChatState): ChatPaint };
+    /** The page's own words over the chat's, one level deep: a section it names keeps the keys it leaves out. */
+    copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
     chips?: Array<{ label: string; text: string }>;
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
@@ -531,7 +543,14 @@ declare namespace CodesenseSdk {
     focusLead(): Promise<unknown>;
     stopLead(): Promise<unknown>;
     loaded(): Promise<unknown>;
-    refresh(): Promise<void>;
+    /** Reads the thread again; `onlyNew` reads only the sources not read yet (with `target.sources`). */
+    refresh(onlyNew?: boolean): Promise<void>;
+    /** Sends a message from another control the way a typed one goes; false while the composer is off. */
+    post(text: string): boolean;
+    /** With `target.sources`: some current source has never been read (its history is unknown, not empty). False without sources. */
+    threadFailed(): boolean;
+    /** With `target.sources`: the first read is done and no current source that never answered is still being read. True without sources. */
+    threadSettled(): boolean;
     thread(): ChatRow[];
     setDone(value: boolean): void;
     subscribe(listener: () => void): () => void;

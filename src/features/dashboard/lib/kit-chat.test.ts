@@ -55,14 +55,14 @@ function setup(roster: Row[], thread: Row[] = []) {
   );
   const reply = vi.fn(async () => ({ status: "sent" }));
   const transport = {
-    launch: vi.fn(async () => ({ sessionId: "s1" })),
+    launch: vi.fn(async (): Promise<Row> => ({ sessionId: "s1" })),
     send,
     reply,
     stop: vi.fn(async () => ({})),
     gotoAgent: vi.fn(async () => ({})),
     stream: null,
-    threadOf: async () => thread,
-    roleThread: async () => [],
+    threadOf: async (_id: string): Promise<Row[]> => thread,
+    roleThread: async (): Promise<Row[]> => [],
   };
   const reads = {
     on(event: string, fn: () => void) {
@@ -292,6 +292,225 @@ describe("kit.chat", () => {
     chat.unmount();
     expect(s.el.childNodes.length).toBe(0);
   });
+  describe("page seams", () => {
+    const other = (state: string, extra: Row = {}): Row => ({
+      ...lead(state),
+      sessionId: "s2",
+      handle: "lead-2",
+      ...extra,
+    });
+    const target = (extra: Record<string, unknown> = {}) => ({
+      rows: (sessions: Row[]) => sessions,
+      read: async (peers: Row[], transport: any) =>
+        Promise.all(peers.map((row) => transport.threadOf(row.sessionId))),
+      queue: null,
+      follow: false,
+      leadName: () => "Helper",
+      ...extra,
+    });
+    const placeholder = (el: HTMLElement) =>
+      el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.placeholder;
+
+    it("copy overrides the words it names and keeps the rest", async () => {
+      const s = setup([lead("idle")]);
+      mountOn(s, {
+        target: target(),
+        copy: { placeholder: { idle: "Message the helper" }, row: { typing: "The helper types" } },
+      });
+      await flush();
+      expect(placeholder(s.el)).toBe("Message the helper");
+      s.el.querySelector("#sv-composer-input")!.dispatchEvent(new Event("input"));
+      const plain = setup([lead("running")]);
+      mountOn(plain, {
+        target: target(),
+        copy: { placeholder: { idle: "Message the helper" } },
+      });
+      await flush();
+      expect(placeholder(plain.el)).toBe("It's working; your message waits for its next step");
+    });
+
+    it("without copy the story chat's words are unchanged", async () => {
+      const s = setup([lead("idle")]);
+      mountOn(s);
+      await flush();
+      expect(placeholder(s.el)).toBe("Reply to the story lead");
+    });
+
+    it("target.pick chooses the live row a send goes to, and handles count as the peer's side", async () => {
+      const s = setup(
+        [lead("idle"), other("idle")],
+        [{ messageId: 5, from: "old-peer", text: "from before", createdAtMs: 1000 }],
+      );
+      mountOn(s, {
+        target: target({
+          pick: (rows: Row[]) => rows[rows.length - 1],
+          handles: () => ["old-peer"],
+        }),
+      });
+      await flush();
+      expect(s.el.querySelector('[data-mid="5"]')!.className).toContain("lead");
+      await typeAndSend(s.el, "hello");
+      expect(s.send).toHaveBeenCalledWith("lead-2", "hello");
+    });
+
+    it("without pick a send goes to the first joinable row", async () => {
+      const s = setup([lead("idle"), other("idle")]);
+      mountOn(s, { target: target() });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      expect(s.send).toHaveBeenCalledWith("lead-1", "hello");
+    });
+
+    it("target.sources reads each mailbox on its own: a failed one says so, Retry reads it again", async () => {
+      const s = setup([lead("idle")]);
+      const mail: Record<string, Row[] | Error> = {
+        a: [{ messageId: 1, from: "lead-1", text: "one", createdAtMs: 1000 }],
+        b: new Error("down"),
+      };
+      s.transport.threadOf = async (id: string) => {
+        const answer = mail[id];
+        if (answer instanceof Error) throw answer;
+        return answer;
+      };
+      const chat = mountOn(s, { target: target({ sources: () => ["a", "b"] }) });
+      await flush();
+      expect(s.el.querySelector('[data-mid="1"]')).not.toBeNull();
+      expect(s.el.querySelector("[data-row=unread]")).not.toBeNull();
+      expect(chat.threadFailed()).toBe(true);
+      mail.b = [{ messageId: 2, from: "lead-1", text: "two", createdAtMs: 2000 }];
+      s.el.querySelector<HTMLButtonElement>("[data-thread-retry]")!.click();
+      await flush();
+      expect(s.el.querySelector("[data-row=unread]")).toBeNull();
+      expect(s.el.querySelector('[data-mid="2"]')).not.toBeNull();
+      expect(chat.threadFailed()).toBe(false);
+      expect(chat.threadSettled()).toBe(true);
+    });
+
+    it("target.sources reads the role queue on open, not only after an inbox push", async () => {
+      const s = setup([lead("idle")]);
+      s.transport.roleThread = async () => [
+        { messageId: 7, from: "lead-1", text: "queued", createdAtMs: 500 },
+      ];
+      mountOn(s, { target: target({ sources: () => ["a"] }) });
+      await flush();
+      expect(s.el.querySelector('[data-mid="7"]')).not.toBeNull();
+    });
+
+    it("bindLaunched alone keeps presence's default rule: the first row that has not exited", async () => {
+      const crashed = { ...lead("idle"), effectiveStatus: "crashed" };
+      const plain = setup([crashed]);
+      const a = mountOn(plain, { target: target() });
+      const bound = setup([crashed]);
+      const b = mountOn(bound, { target: target({ bindLaunched: true }) });
+      await flush();
+      expect(a.lead()).not.toBeNull();
+      expect(b.lead()).toEqual(a.lead());
+    });
+
+    it("a source that answered and then failed to refresh is stale, and its mail stays", async () => {
+      const s = setup([lead("idle")]);
+      let down = false;
+      s.transport.threadOf = async () => {
+        if (down) throw new Error("down");
+        return [{ messageId: 1, from: "lead-1", text: "one", createdAtMs: 1000 }];
+      };
+      const chat = mountOn(s, { target: target({ sources: () => ["a"] }) });
+      await flush();
+      expect(s.el.querySelector("[data-row=stale]")).toBeNull();
+      down = true;
+      await chat.refresh();
+      await flush();
+      expect(s.el.querySelector("[data-row=stale]")).not.toBeNull();
+      expect(s.el.querySelector("[data-row=unread]")).toBeNull();
+      expect(s.el.querySelector('[data-mid="1"]')).not.toBeNull();
+    });
+
+    it("a handle that comes back on a new session is read again", async () => {
+      const roster = [lead("idle")];
+      const s = setup(roster);
+      const asked: string[] = [];
+      s.transport.threadOf = async (id: string) => {
+        asked.push(id);
+        return [];
+      };
+      mountOn(s, { target: target({ sources: (rows: Row[]) => rows.map((row) => row.handle) }) });
+      await flush();
+      const first = asked.filter((id) => id === "lead-1").length;
+      roster[0] = { ...roster[0], sessionId: "s9" };
+      await s.reads.sessions();
+      await flush();
+      expect(asked.filter((id) => id === "lead-1").length).toBe(first + 1);
+    });
+
+    it("post sends a message from another control, and is refused while the composer is off", async () => {
+      const s = setup([lead("idle")]);
+      const chat = mountOn(s, { target: target() });
+      await flush();
+      expect(chat.post("a starter")).toBe(true);
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-1", "a starter");
+      chat.setDone(true);
+      expect(chat.post("again")).toBe(false);
+    });
+
+    it("bindLaunched: a launch that names only a handle binds to that row", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      s.transport.launch = vi.fn(async () => ({ handle: "lead-2", promptDelivered: false }));
+      mountOn(s, {
+        target: target({ bindLaunched: true }),
+        timers: { slowMs: 20000, failMs: 120000 },
+      });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      roster.push(lead("idle"), other("idle"));
+      await s.reads.sessions();
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-2", "hello");
+    });
+
+    it("a refusal reads as any failure unless the page has words for it", async () => {
+      const refuse = async () => {
+        throw new Error("refused: no room");
+      };
+      const plain = setup([]);
+      plain.transport.launch = vi.fn(refuse);
+      mountOn(plain, { target: target() });
+      await flush();
+      await typeAndSend(plain.el, "hello");
+      expect(plain.el.querySelector("[data-row=failed] .why")!.textContent).toContain(
+        "Couldn't start the story lead: refused: no room.",
+      );
+      const own = setup([]);
+      own.transport.launch = vi.fn(refuse);
+      mountOn(own, {
+        target: target(),
+        copy: { failure: { refused: (why: string) => `Couldn't start it: ${why}.` } },
+      });
+      await flush();
+      await typeAndSend(own.el, "hello");
+      expect(own.el.querySelector("[data-row=failed] .why")!.textContent).toBe(
+        "Couldn't start it: no room.",
+      );
+    });
+
+    it("keepUnsent: a failed launch keeps its messages and the unload warning says they were not sent", async () => {
+      const s = setup([]);
+      s.transport.launch = vi.fn(async () => {
+        throw new Error("denied: no");
+      });
+      mountOn(s, { target: target({ keepUnsent: true }) });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      expect(s.el.querySelector("[data-row=failed]")).not.toBeNull();
+      let text = "";
+      const event = new Event("beforeunload", { cancelable: true });
+      Object.defineProperty(event, "returnValue", { set: (v) => (text = v), get: () => text });
+      window.dispatchEvent(event);
+      expect(text).toBe("Some messages weren't sent.");
+    });
+  });
+
   it("pinToBottom follows the newest message until the reader scrolls up, and reset follows again", () => {
     const log = document.createElement("div");
     Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
