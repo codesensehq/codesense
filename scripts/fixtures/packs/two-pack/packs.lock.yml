@@ -1,0 +1,16 @@
+lock_format: 1
+packs:
+  - id: pack-a
+    version: 0.1.0
+    source: { kind: folder, path: a }
+    archive_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    trust: unverified
+    installed_at: 2026-11-20T18:00:00Z
+    parts: { installed: [setup-skill] }
+  - id: pack-b
+    version: 0.1.0
+    source: { kind: folder, path: b }
+    archive_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    trust: unverified
+    installed_at: 2026-11-20T18:00:00Z
+    parts: { installed: [setup-skill] }

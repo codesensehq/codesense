@@ -10,8 +10,8 @@ requires:
     - { name: claude, optional: false }
 parts:
   - { id: foreman-claude, kind: agent, file: agents/foreman-claude/agent.yaml }
-# Written by the pack build: sha256 of foreman.md plus its variant and the agent's own fields.
-# Empty until the build exists.
+# sha256 of foreman.md plus its variant and the agent's own fields. The generic pack build
+# doesn't write it; null until a later change does.
 spec_hash:
   foreman-claude: null
 kit:

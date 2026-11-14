@@ -1021,6 +1021,16 @@ pub(crate) async fn note_to_session_with(
     }
 }
 
+/// The saved agent and story a launch's pin thread is keyed by. Only the registry's own
+/// record of the launch names the agent: a remote tab's tag, which `list_sessions` falls
+/// back to, is not what the session was launched from.
+pub(crate) fn registry_thread(
+    row: &super::dashboard_launch::SessionSnapshot,
+) -> Option<(String, Option<String>)> {
+    let agent = crate::agents::manifest::AgentRevisionRef::key_of(row.agent_revision.as_deref()?)?;
+    Some((agent.to_string(), row.meta.story.clone()))
+}
+
 /// `send_message`: the caller (by its self-reported session id) messages `to`. Mail to
 /// a session goes to its team; mail to the human goes to the sender's team. An optional
 /// `attach_file` records a managed-file reference for the human preview — stored
@@ -2888,9 +2898,13 @@ impl InboxHost for AppInboxHost {
     }
 
     async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
-        let rows = Result::ok(crate::mcp::session_list::read_session_list(&self.app, None).await)?;
-        let row = Iterator::find(&mut rows.into_iter(), |row| row.handle == handle)?;
-        Some((row.agent?, row.story))
+        use tauri::Manager;
+        let rows = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()?
+            .snapshot();
+        let row = Iterator::find(&mut rows.iter(), |row| row.handle == handle)?;
+        registry_thread(row)
     }
 
     fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {

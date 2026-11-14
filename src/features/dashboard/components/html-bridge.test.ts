@@ -2065,6 +2065,19 @@ describe("agents read model verbs", () => {
     expect(subscribe).toHaveBeenCalledWith("pins", undefined, { viewKey });
   });
 
+  it("a pins unsubscribe names the thread's view without preparing one", async () => {
+    const unsubscribe = vi.fn(async () => undefined);
+    await runBridgeCommand(
+      "unsubscribe",
+      { topic: "pins", agentId: "acme/default/dev@4", storyId: "DEMO-1" },
+      { ...DOC, liveFrame: async () => ({ unsubscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledWith("pins", {
+      viewKey: "pins:acme/default:acme/default/dev:DEMO-1",
+    });
+  });
+
   it("a page on the pins topic prepares no view: pins has no pages to turn", async () => {
     const page = vi.fn();
     await expect(
