@@ -270,6 +270,7 @@ Row shape 1
 | to | untyped (Value) |
 | state | untyped (Value) |
 | toldAtMs | untyped (Value) |
+| deliveredAtMs | untyped (Value) |
 
 ## ui:<slotId>
 

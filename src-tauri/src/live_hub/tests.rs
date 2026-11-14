@@ -1255,10 +1255,9 @@ async fn team_hydration_preserves_other_views_loaded_pages_and_replay() {
         .any(|row| row["id"] == "message:acme/active/2" && row["message"]["unread"] == false));
 }
 
-#[tokio::test]
-async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
+/// A hub over the teams `names` (each with its own inbox store), for the delivery tests.
+fn delivery_hub(names: &[&str]) -> (tauri::App<tauri::test::MockRuntime>, FootprintHost) {
     use super::*;
-    use crate::weft::{inbox as ledger, WeftStore};
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -1266,13 +1265,33 @@ async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
     listen_sources(app.handle());
     let host = FootprintHost {
         dir: tempfile::tempdir().unwrap(),
-        teams: Mutex::new(vec![FootprintHost::team("active")]),
+        teams: Mutex::new(names.iter().map(|name| FootprintHost::team(name)).collect()),
         discovery_failed: Default::default(),
         store_failed: Default::default(),
         committed: Default::default(),
         presentation_gate: Default::default(),
     };
+    (app, host)
+}
+
+/// The `messageDelivery` rows in `team`'s view.
+fn delivery_rows(hub: &super::LiveHub, team: &str) -> Vec<serde_json::Value> {
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .snapshot("messageDelivery", &format!("team:acme/{team}"))
+        .unwrap()
+        .snapshot
+}
+
+#[tokio::test]
+async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
+    use super::*;
+    use crate::weft::{inbox as ledger, WeftStore};
+    let (app, host) = delivery_hub(&["active", "other"]);
     let store = WeftStore::open(host.path("active")).unwrap();
+    let elsewhere = WeftStore::open(host.path("other")).unwrap();
     let sent =
         ledger::inbox_insert(&store, "human", "H2", "hi", None, None, None, None, None).unwrap();
     // Mail from an agent has no delivery row.
@@ -1280,21 +1299,16 @@ async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
         &store, "worker", "human", "mail", None, None, None, None, None,
     )
     .unwrap();
+    ledger::inbox_insert(
+        &elsewhere, "worker", "human", "mail", None, None, None, None, None,
+    )
+    .unwrap();
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
     let hub = app.state::<LiveHub>();
     let hub: &LiveHub = &hub;
-    let delivery = |hub: &LiveHub| {
-        hub.model
-            .lock()
-            .unwrap()
-            .projections
-            .snapshot("messageDelivery", "team:acme/active")
-            .unwrap()
-            .snapshot
-    };
-    let rows = delivery(hub);
+    let rows = delivery_rows(hub, "active");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["id"], format!("delivery:acme/active/{sent}"));
     assert_eq!(
@@ -1302,6 +1316,9 @@ async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
         (&json!(sent), &json!("H2"), &json!("queued"))
     );
     assert!(rows[0]["toldAtMs"].is_null());
+    assert!(rows[0]["deliveredAtMs"].is_null());
+    // Another team's view never shows this team's delivery rows.
+    assert_eq!(delivery_rows(hub, "other"), Vec::<serde_json::Value>::new());
 
     let ledger::Reservation::Offer { token, .. } =
         ledger::inbox_reserve_announcement_at(&store, "H2", "S2", ledger::now_ms(), "run", false)
@@ -1326,10 +1343,35 @@ async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
-    let rows = delivery(hub);
+    let rows = delivery_rows(hub, "active");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["state"], "delivered");
     assert!(rows[0]["toldAtMs"].is_i64());
+    assert_eq!(rows[0]["deliveredAtMs"], rows[0]["toldAtMs"]);
+    assert_eq!(delivery_rows(hub, "other"), Vec::<serde_json::Value>::new());
+}
+
+#[tokio::test]
+async fn a_message_read_before_any_notice_is_delivered_when_it_was_read() {
+    use super::*;
+    use crate::weft::{inbox as ledger, WeftStore};
+    let (app, host) = delivery_hub(&["active"]);
+    let store = WeftStore::open(host.path("active")).unwrap();
+    let sent =
+        ledger::inbox_insert(&store, "human", "H2", "hi", None, None, None, None, None).unwrap();
+    assert!(ledger::inbox_mark_read(&store, sent, "H2").unwrap());
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    let hub = app.state::<LiveHub>();
+    let hub: &LiveHub = &hub;
+    let rows = delivery_rows(hub, "active");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["state"], "delivered");
+    assert!(rows[0]["toldAtMs"].is_null());
+    let read_at = ledger::inbox_get(&store, sent).unwrap().unwrap().read_at_ms;
+    assert_eq!(rows[0]["deliveredAtMs"], json!(read_at));
+    assert!(rows[0]["deliveredAtMs"].is_i64());
 }
 
 #[tokio::test(start_paused = true)]

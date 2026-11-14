@@ -33,8 +33,10 @@ pub fn delivery_key(team: &LaunchTeam, id: i64) -> String {
     format!("delivery:{}/{}/{id}", team.org, team.team)
 }
 /// The delivery row of a message the human sent to a session: `queued` until its agent
-/// is told about it (a confirmed notice) or it is read, then `delivered`. `None` for any
-/// other message; role mail and withdrawn mail carry their own `delivery`.
+/// is told about it (a confirmed notice) or it is read, then `delivered`, at
+/// `deliveredAtMs` (when told, else when read: mail read before any notice still has a
+/// delivered time). `None` for any other message; role mail and withdrawn mail carry their
+/// own `delivery`.
 pub fn delivery_row(team: &LaunchTeam, m: &InboxMessage) -> Option<Value> {
     if m.from != HUMAN
         || m.to == HUMAN
@@ -44,13 +46,14 @@ pub fn delivery_row(team: &LaunchTeam, m: &InboxMessage) -> Option<Value> {
     {
         return None;
     }
-    let state = if Option::is_some(&m.told_at_ms.or(m.read_at_ms)) {
+    let delivered_at = m.told_at_ms.or(m.read_at_ms);
+    let state = if Option::is_some(&delivered_at) {
         "delivered"
     } else {
         "queued"
     };
     Some(
-        json!({"id":delivery_key(team,m.id),"messageId":m.id,"team":team,"to":m.to,"state":state,"toldAtMs":m.told_at_ms}),
+        json!({"id":delivery_key(team,m.id),"messageId":m.id,"team":team,"to":m.to,"state":state,"toldAtMs":m.told_at_ms,"deliveredAtMs":delivered_at}),
     )
 }
 #[derive(Default, Clone)]
