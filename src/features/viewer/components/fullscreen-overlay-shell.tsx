@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { isTypingTarget } from "@/shared/lib/focus-utils";
 import { isInHiddenTeam } from "@/shared/lib/warm-scopes";
 
 /**
@@ -136,9 +137,7 @@ export function FullscreenOverlayShell({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       if (containerRef.current && isInHiddenTeam(containerRef.current)) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (t?.closest?.(".xterm")) return;
+      if (isTypingTarget(e.target)) return;
       onExit();
     };
     const container = containerRef.current;

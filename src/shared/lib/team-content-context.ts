@@ -15,8 +15,14 @@ export interface ContentSource {
 
 export type TeamContentResolution =
   | { kind: "loading" }
+  | { kind: "no-teams" }
   | { kind: "unavailable"; error: string }
   | { kind: "ready"; source: ContentSource & { teamKey: string } };
+
+/** Whether `org` has a team to work in: an unarchived one. */
+export function orgHasTeams(org: Org | null | undefined): boolean {
+  return !!org && org.teams.some((item) => !item.archived);
+}
 
 export function resolveTeamContentContext(
   teamKey: string,
@@ -25,10 +31,15 @@ export function resolveTeamContentContext(
   mainDoc = "",
 ): TeamContentResolution {
   const { orgSlug, teamName } = parseTeamKey(teamKey);
-  if (!orgSlug || !teamName || /[/\\]|^\.{1,2}$/.test(teamName)) {
-    return { kind: "unavailable", error: "Select an available team to browse its context." };
-  }
+  const unselected = {
+    kind: "unavailable",
+    error: "Select an available team to browse its context.",
+  } as const;
+  if (!orgSlug || (teamName && /[/\\]|^\.{1,2}$/.test(teamName))) return unselected;
   const org = orgs.find((item) => item.slug === orgSlug);
+  // An org with no team has nothing to browse; that is an empty state, not a failure.
+  if (org && !orgHasTeams(org)) return { kind: "no-teams" };
+  if (!teamName) return unselected;
   if (!org)
     return discoveryComplete
       ? { kind: "unavailable", error: "This context is unavailable. Refresh the workspace list." }

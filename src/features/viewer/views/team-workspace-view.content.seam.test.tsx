@@ -479,6 +479,35 @@ describe("team content with no source repository", () => {
     );
     expect(screen.queryByText("Connect your code")).toBeNull();
   });
+  it("shows no error copy in the viewer or the sidebar when the org has no teams", async () => {
+    const noTeamsKey = "acme/plans:_none";
+    useOrgStore.setState({ orgs: [{ ...org, teams: [] }], activeTeamName: null });
+    render(
+      <TooltipProvider>
+        <TeamWorkspaceView teamKey={noTeamsKey} />
+      </TooltipProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/context is unavailable/i)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose a team" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create a team" })).toBeNull();
+  });
+  it("still shows the recovery message when a team's context is really unavailable", async () => {
+    const goneKey = "acme/plans:gone";
+    useViewerStore.setState({ openedTeams: [goneKey] });
+    render(
+      <TooltipProvider>
+        <TeamWorkspaceView teamKey={goneKey} />
+      </TooltipProvider>,
+    );
+    expect(
+      await screen.findByText("Your context is unavailable. See the sidebar for recovery."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose a team" })).toBeTruthy();
+  });
   it("reports scan failure and retries without covering the workspace", async () => {
     scanError = "Content folder cannot be read";
     render(

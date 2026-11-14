@@ -58,8 +58,7 @@ async fn serve(
             if view
                 .messages
                 .iter()
-                .flat_map(|m| &m.attachments)
-                .any(|a| a.state == "cached" && a.sha256.as_deref() == Some(&sha))
+                .any(|m| crate::media::cached_attachment(&m.attachments, &sha).is_some())
             {
                 allowed = true;
                 break;

@@ -1041,6 +1041,22 @@ export interface InboxMediaAttachment {
 }
 export const loadInboxMedia = (team: InboxTeam, messageId: number) =>
   invoke<void>("load_inbox_media", { team, messageId });
+/** A message's cached image for the app window (which has no frame to reach `/media/v1`):
+ *  refused unless the message carries `sha256` as a cached attachment. It crosses as one
+ *  ArrayBuffer: the MIME the host read from the bytes, a newline, then the bytes. */
+export const readInboxMedia = async (
+  team: InboxTeam,
+  messageId: number,
+  sha256: string,
+): Promise<Blob> => {
+  const frame = new Uint8Array(
+    await invoke<ArrayBuffer>("read_inbox_media", { team, messageId, sha256 }),
+  );
+  const newline = frame.indexOf(10);
+  if (newline < 0) throw new Error("media unavailable");
+  const type = new TextDecoder().decode(frame.subarray(0, newline));
+  return new Blob([frame.subarray(newline + 1)], { type });
+};
 
 export interface InboxMessageRow {
   conversation?: string;
@@ -4029,6 +4045,31 @@ export const whyLine = (params: WhyLineParams, frameId?: string, page?: string) 
 /** This machine's attribution and capture status, as MCP describe_setup reports it. */
 export const setupStatus = () => invoke<unknown>("setup");
 
+/** One source repo of a team, with whether a local checkout is bound to it. */
+export interface SetupStateRepo {
+  slug: string;
+  remoteKey: string;
+  attachment: "attached" | "missing" | "unattached";
+}
+export interface SetupStateTeam {
+  name: string;
+  archived: boolean;
+  parentTeam: string | null;
+  starterPage?: string;
+  /** Whether the team's content is present on this Mac. */
+  synced: boolean;
+  sourceRepos: SetupStateRepo[];
+}
+export interface SetupStateOrg {
+  slug: string;
+  displayName: string;
+  /** Registry files that failed to load; when non-empty, `teams` is empty. */
+  loadErrors: string[];
+  teams: SetupStateTeam[];
+}
+/** `setup_state`: this Mac's orgs, teams and source repos, read-only (the page's `setupState()`). */
+export const setupState = () => invoke<{ orgs: SetupStateOrg[] }>("setup_state");
+
 /** `session_read_usage`: token use and spend per session. Times are epoch milliseconds; a
  *  counts by whole local day: `sinceMs`'s day is included, `untilMs`'s day is excluded. */
 export const sessionReadUsage = (
@@ -6767,6 +6808,10 @@ export interface AgentLaunchOpenArgs {
   agent?: string;
   /** Its starting prompt (a /command works too); absent, the agent's own default prompt. */
   initialPrompt?: string;
+  /** The model the agent runs, passed to its CLI as `--model`; absent, the agent's own. */
+  model?: string;
+  /** How it surfaces: `headed` (the default), `visible-unfocused` or `headless`. */
+  mode?: "headed" | "visible-unfocused" | "headless";
   launchedBy?: string;
   role?: string;
   avatar?: string;

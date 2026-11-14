@@ -77,18 +77,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["loading", "unavailable"])(
-  "explains and disables Start while team content is %s",
-  (kind) => {
-    content.kind = kind;
-    mount();
-    const start = screen.getByRole("button", { name: "Start an agent" });
-    expect(start).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      kind === "loading" ? "Loading team content" : "Team content is unavailable",
-    );
-  },
-);
+it.each([
+  ["loading", "Loading team content"],
+  ["unavailable", "Team content is unavailable"],
+  ["no-teams", "Create a team to start an agent."],
+])("explains and disables Start while team content is %s", (kind, copy) => {
+  content.kind = kind;
+  mount();
+  expect(screen.getByRole("button", { name: "Start an agent" })).toBeDisabled();
+  const status = screen.getByRole("status");
+  expect(status).toHaveTextContent(copy);
+  if (kind === "no-teams") expect(status).not.toHaveTextContent("unavailable");
+});
 
 it("starts an agent through the real GlobalCli in the team's folder", () => {
   content.kind = "ready";

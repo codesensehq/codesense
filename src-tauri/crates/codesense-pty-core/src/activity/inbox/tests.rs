@@ -11,6 +11,8 @@ struct Outlet {
     told: Mutex<Vec<String>>,
     states: Mutex<Vec<InboxWaiterState>>,
     audience: Mutex<Option<String>>,
+    /// The tokens of the notices its guarded terminal recovery submitted.
+    recovered: Mutex<Vec<String>>,
 }
 
 impl InboxOutlet for Outlet {
@@ -27,6 +29,17 @@ impl InboxOutlet for Outlet {
     }
     fn has_tools(&self, _: &str) -> Option<bool> {
         Some(true)
+    }
+    fn recover(
+        &self,
+        _: &str,
+        notice: &crate::agent_cli::Notice<'_>,
+    ) -> crate::agent_cli::SubmitOutcome {
+        self.recovered
+            .lock()
+            .unwrap()
+            .push(notice.token.to_string());
+        crate::agent_cli::SubmitOutcome::Accepted
     }
 }
 
@@ -729,6 +742,70 @@ fn the_hosts_own_sweep_tells_a_session_bound_to_another_desktop_meanwhile() {
     host.owner
         .inbox_mail("S1", "n".into(), "t1".into())
         .unwrap();
+}
+
+#[test]
+fn the_sweep_recovers_mail_held_for_an_agent_idle_since_its_turn_ended_with_no_waiter_once() {
+    use crate::inbox_host::REARM_SETTLE;
+    let host = host();
+    let writer = host
+        .owner
+        .prepare_native(
+            "S1",
+            AgentCli::Claude,
+            host.service.path().to_str().unwrap(),
+        )
+        .unwrap();
+    host.owner.register("S1", Some(me())).unwrap();
+    let hook = |event: &str| {
+        let input = serde_json::json!({"hook_event_name": event, "session_id": "provider"});
+        let report = crate::agent_cli::adapter(AgentCli::Claude)
+            .normalize(&serde_json::to_vec(&input).unwrap(), false)
+            .unwrap();
+        host.owner.report_for_test(&writer, me(), report).unwrap()
+    };
+    hook("SessionStart");
+    hook("UserPromptSubmit");
+    hook("Stop");
+    // Its Stop waiter wakes it with the first mail and is not re-armed: only its grace is
+    // left.
+    let waiting = helper(&host, writer.token.clone(), ask("Stop", me()));
+    until(|| host.owner.inbox().state("S1").waiting);
+    host.owner
+        .inbox_mail("S1", "first".into(), "t1".into())
+        .unwrap();
+    assert_eq!(waiting.join().unwrap().as_deref(), Some("first"));
+    until(|| !host.owner.inbox().state("S1").waiting);
+    assert!(host.owner.inbox().state("S1").grace_ms.is_some());
+    // The woken turn ends with no waiter armed, and new mail is held for it.
+    hook("UserPromptSubmit");
+    assert!(hook("Stop").takes_input());
+    let stopped = Instant::now();
+    host.owner
+        .inbox_mail("S1", "second".into(), "t2".into())
+        .unwrap();
+    let recovered = || host.outlet.recovered.lock().unwrap().clone();
+    let incarnation = &writer.identity.session_incarnation;
+    // Its terminal keeps repainting after the stop, which says nothing of its turn end.
+    // Sweeps run at least INBOX_SWEEP (5 s) apart.
+    let second = Duration::from_secs(1);
+    host.owner
+        .output_at("S1", incarnation, stopped + REARM_SETTLE - second * 2);
+    host.owner.decay(stopped + REARM_SETTLE - second);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        recovered().is_empty(),
+        "covered while its turn-end hook may still re-arm"
+    );
+    host.owner
+        .output_at("S1", incarnation, stopped + REARM_SETTLE * 2 - second);
+    host.owner.decay(stopped + REARM_SETTLE * 2);
+    until(|| recovered() == ["t2"]);
+    assert!(!host.owner.inbox().holds("S1"));
+    // A later sweep finds nothing left to recover.
+    host.owner.decay(stopped + REARM_SETTLE * 3);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(recovered(), ["t2"]);
 }
 
 #[test]

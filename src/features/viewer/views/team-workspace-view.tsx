@@ -1795,7 +1795,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                     </div>
                   );
                 })}
-                {!activeTabPath && (
+                {!activeTabPath && teamContent.kind !== "no-teams" && (
                   <div className="absolute inset-0 flex items-center justify-center px-8 text-center text-sm text-muted-foreground">
                     {fullTreeLoading || teamContent.kind === "loading"
                       ? "Loading team context…"

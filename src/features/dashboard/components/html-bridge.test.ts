@@ -66,12 +66,15 @@ const mockSessionReadUsage = vi.fn();
 const mockSessionRead = vi.fn();
 const mockWhyLine = vi.fn();
 const mockSetupStatus = vi.fn();
+const mockAgentLaunchOpen = vi.fn();
+const mockSetupState = vi.fn();
 const mockSessionSetModelRate = vi.fn();
 const mockSessionReadModelRates = vi.fn();
 vi.mock("@/tauri/commands", () => ({
   fileSurfaceCall: (...args: unknown[]) => mockFileSurfaceCall(...args),
   fileSurfacePrepareView: (...args: unknown[]) => mockFileSurfacePrepareView(...args),
   sendPromptToAgent: (...args: unknown[]) => mockSendPromptToAgent(...args),
+  agentLaunchOpen: (...a: unknown[]) => mockAgentLaunchOpen(...a),
   routineReadList: (...a: unknown[]) => mockRoutineReadList(...a),
   routineReadGet: (...a: unknown[]) => mockRoutineReadGet(...a),
   routineReadRuns: (...a: unknown[]) => mockRoutineReadRuns(...a),
@@ -86,6 +89,7 @@ vi.mock("@/tauri/commands", () => ({
   sessionRead: (...a: unknown[]) => mockSessionRead(...a),
   whyLine: (...a: unknown[]) => mockWhyLine(...a),
   setupStatus: (...a: unknown[]) => mockSetupStatus(...a),
+  setupState: (...a: unknown[]) => mockSetupState(...a),
   sessionSetModelRate: (...a: unknown[]) => mockSessionSetModelRate(...a),
   sessionReadModelRates: (...a: unknown[]) => mockSessionReadModelRates(...a),
   queryContext: (q: unknown, page?: string) => mockQueryContext(q, page),
@@ -350,6 +354,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "setStatus",
       "setUiState",
       "setup",
+      "setupState",
       "showMenu",
       "showPopover",
       "stopSession",
@@ -953,6 +958,79 @@ describe("draft action verb", () => {
     await expect(runBridgeCommand("draft", { level: "", from: "/a" })).rejects.toThrow(
       /non-empty strings/,
     );
+  });
+});
+
+describe("openWorkspace team-workspace target", () => {
+  const page = {
+    target: { kind: "team-workspace", name: "Foreman", worktree: "foreman", createWorktree: true },
+    agent: "foreman-claude",
+    model: "opus",
+    role: "foreman",
+    initialPrompt: "Hello",
+    mode: "visible-unfocused",
+  };
+
+  beforeEach(() => mockAgentLaunchOpen.mockReset());
+
+  it("launches through the native team launch, not the story controller", async () => {
+    const opened = { status: "opened", handle: "h", name: "Foreman", message: "Opened Foreman." };
+    mockAgentLaunchOpen.mockResolvedValue(opened);
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toEqual(opened);
+    expect(mockAgentLaunchOpen).toHaveBeenCalledWith({
+      target: "team-workspace",
+      name: "Foreman",
+      worktree: "foreman",
+      createWorktree: true,
+      team: undefined,
+      org: undefined,
+      agent: "foreman-claude",
+      model: "opus",
+      role: "foreman",
+      initialPrompt: "Hello",
+      mode: "visible-unfocused",
+    });
+  });
+
+  it("returns a refusal the page can match, never throws it", async () => {
+    const refusal = {
+      status: "invalid",
+      handle: null,
+      name: null,
+      message: "default has no worktree named 'foreman'. Pass createWorktree:true to create it",
+    };
+    mockAgentLaunchOpen.mockResolvedValue(refusal);
+    await expect(
+      runBridgeCommand("openWorkspace", {
+        target: { kind: "team-workspace", name: "Foreman", worktree: "foreman" },
+      }),
+    ).resolves.toEqual(refusal);
+    expect(mockAgentLaunchOpen.mock.calls[0][0].createWorktree).toBeUndefined();
+  });
+
+  it("reports a repeat launch as alreadyLive", async () => {
+    mockAgentLaunchOpen.mockResolvedValue({ status: "alreadyLive", handle: "h", name: "Foreman" });
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toMatchObject({
+      status: "alreadyLive",
+    });
+  });
+
+  it.each([
+    [{ target: { kind: "team-workspace" } }, /needs a \{ name \}/],
+    [{ target: { kind: "team-workspace", name: " " } }, /name, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", createWorktree: "yes" } },
+      /createWorktree, if present, must be a boolean/,
+    ],
+    [{ target: { kind: "team-workspace", name: "F" }, mode: "loud" }, /mode, if present/],
+    [{ target: { kind: "team-workspace", name: "F" }, model: " " }, /model, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", profile: "dev" } },
+      /^invalid: openWorkspace launches/,
+    ],
+  ])("refuses a malformed call %#", async (args, message) => {
+    await expect(runBridgeCommand("openWorkspace", args)).rejects.toThrow(message);
+    expect(mockAgentLaunchOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -2294,6 +2372,7 @@ describe("routine, run, worktree and machine read verbs", () => {
       "sessionRead",
       "whyLine",
       "setup",
+      "setupState",
       "storyChanges",
       "storyTotals",
       "sessionUsage",
@@ -2409,6 +2488,32 @@ describe("routine, run, worktree and machine read verbs", () => {
     mockSetupStatus.mockResolvedValue(answer);
     await expect(runBridgeCommand("setup", undefined, DOC)).resolves.toBe(answer);
     expect(mockSetupStatus).toHaveBeenCalledWith();
+  });
+
+  it("setupState is the read-only orgs, teams and source repos, passed through unchanged", async () => {
+    const answer = {
+      orgs: [
+        {
+          slug: "acme/ctx",
+          displayName: "Acme",
+          loadErrors: [],
+          teams: [
+            {
+              name: "docs",
+              archived: false,
+              parentTeam: null,
+              synced: true,
+              sourceRepos: [
+                { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    mockSetupState.mockResolvedValue(answer);
+    await expect(runBridgeCommand("setupState", undefined, DOC)).resolves.toBe(answer);
+    expect(mockSetupState).toHaveBeenCalledWith();
   });
 
   it("worktrees is list_worktrees; machines is list_machines for the doc's own team", async () => {
