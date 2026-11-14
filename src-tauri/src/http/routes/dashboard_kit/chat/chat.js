@@ -68,7 +68,7 @@ const storyTarget=(storyId,leadRole)=>({
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
 export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true}){
- const ids=mountIds(win.document,el);
+ const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
  if(styles)linkChatStyles(win.document);
  const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
@@ -327,7 +327,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const roster=reads.sessions();
  if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());});
  return {
-  unmount(){offs.forEach(off=>off&&off());pin.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
+  unmount(){offs.forEach(off=>off&&off());pin.release();mountSlot.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),

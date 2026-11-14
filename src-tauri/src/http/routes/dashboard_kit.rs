@@ -354,16 +354,6 @@ mod tests {
             .unwrap()
             .starts_with("text/css"));
         assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-cache");
-        // Every rule stays inside the chat's own root, so a page's `.log` or `.msg` is not touched.
-        for rule in CHAT_CSS.lines().filter(|l| l.contains('{')) {
-            assert!(
-                rule.starts_with(".cs-chat")
-                    || rule.starts_with("@keyframes")
-                    || rule.starts_with("@media")
-                    || rule.starts_with("@container"),
-                "unscoped chat rule: {rule}"
-            );
-        }
         // The core touches neither the page nor the bridge, so the app can import it as it is.
         for word in ["document", "window", "codesense"] {
             assert!(!CHAT_CORE_JS.contains(word), "chat-core.js names {word}");

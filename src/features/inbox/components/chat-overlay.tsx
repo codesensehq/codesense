@@ -152,8 +152,7 @@ export function ChatOverlay({
   }, [composeRequest, composeHandled, loaded, sessionId]);
 
   // The room this session shares with the rest of its workspace: ⌘⌥G flips the chat to it.
-  const listed = lead;
-  const workspaceId = listed?.chatWorkspaceId ?? row?.chatWorkspaceId;
+  const workspaceId = lead?.chatWorkspaceId ?? row?.chatWorkspaceId;
   const room: GroupRoom | null = workspaceId
     ? {
         workspaceId,
@@ -161,8 +160,8 @@ export function ChatOverlay({
           {
             handle,
             name,
-            unread: listed?.groupUnread ?? row?.groupUnread ?? 0,
-            readId: listed?.groupReadId ?? row?.groupReadId ?? 0,
+            unread: lead?.groupUnread ?? row?.groupUnread ?? 0,
+            readId: lead?.groupReadId ?? row?.groupReadId ?? 0,
           },
         ],
       }
@@ -197,8 +196,8 @@ export function ChatOverlay({
   // it: the launch's agent, else the one its tab says it runs.
   const { pins } = useAgentPins(
     team ?? home,
-    listed?.agent ?? agentKeyOfRevision(row?.agentRevision),
-    row?.story ?? listed?.story ?? null,
+    lead?.agent ?? agentKeyOfRevision(row?.agentRevision),
+    row?.story ?? lead?.story ?? null,
   );
   const pinTitle = (id: number) => {
     const m = messages.find((x) => x.id === id && (!team || sameTeam(x.team, team)));

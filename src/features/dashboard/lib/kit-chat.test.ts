@@ -4,7 +4,7 @@
  * transport and roster. The marks rule and the card parser have their own cases in
  * src/features/inbox/lib/chat-core.test.ts; the browser-level layout cases run where the pages are built.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,12 +108,51 @@ afterEach(() => {
 });
 
 describe("kit.chat stylesheet", () => {
-  it("keeps every rule inside the chat's own root, so a page's .log and .msg are not touched", () => {
-    const css = readFileSync(join(KIT_DIR, "chat.css"), "utf8");
-    const rules = css.split("\n").filter((line) => line.includes("{"));
-    expect(rules.length).toBeGreaterThan(20);
-    for (const rule of rules)
-      expect(rule, rule).toMatch(/^(\.cs-chat|@keyframes|@media|@container)/);
+  const css = readFileSync(join(KIT_DIR, "chat.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // Every rule's selectors, comma by comma, inside @media and @container too; @keyframes steps are not selectors.
+  function selectors(text: string): string[] {
+    const out: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+      const open = text.indexOf("{", i);
+      if (open < 0) break;
+      const head = text.slice(i, open).trim();
+      let depth = 1;
+      let j = open + 1;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "{") depth++;
+        else if (text[j] === "}") depth--;
+        j++;
+      }
+      const body = text.slice(open + 1, j - 1);
+      if (head.startsWith("@keyframes")) {
+        // steps, not selectors
+      } else if (head.startsWith("@")) out.push(...selectors(body));
+      else out.push(...head.split(",").map((s) => s.trim()));
+      i = j;
+    }
+    return out;
+  }
+
+  it("keeps every selector inside the chat's own root, so a page's .log and .msg are not touched", () => {
+    const all = selectors(css);
+    expect(all.length).toBeGreaterThan(80);
+    for (const selector of all) expect(selector, selector).toMatch(/^\.cs-chat\b/);
+  });
+
+  it("styles every class the chat's modules emit, and the page variant", () => {
+    const emitted = new Set<string>();
+    for (const file of readdirSync(join(KIT_DIR, "chat")).filter((f) => f.endsWith(".js"))) {
+      const text = readFileSync(join(KIT_DIR, "chat", file), "utf8");
+      for (const match of text.matchAll(/class:'([^'$]*)'/g))
+        for (const name of match[1]!.split(/\s+/).filter(Boolean)) emitted.add(name);
+    }
+    // cs-avatar is the kit stylesheet's own; the rest are the chat's.
+    emitted.delete("cs-avatar");
+    expect(emitted.size).toBeGreaterThan(25);
+    const styled = selectors(css).join(" ");
+    for (const name of emitted) expect(styled, `.${name}`).toContain(`.${name}`);
+    expect(styled).toContain("[data-variant=page]");
   });
 });
 
@@ -150,6 +189,22 @@ describe("kit.chat mounts on one page", () => {
     expect(third.el.querySelector("#sv-composer-input")).not.toBeNull();
     const all = idsIn(document.body);
     expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("gives two chats mounted into elements that are not in the page yet their own ids", async () => {
+    const make = () => ({ ...setup([lead("idle")]), el: document.createElement("div") });
+    const one = make();
+    const two = make();
+    mountOn(one);
+    mountOn(two);
+    document.body.append(one.el, two.el);
+    await flush();
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+    for (const s of [one, two]) {
+      const hint = s.el.querySelector("textarea")!.getAttribute("aria-describedby")!;
+      expect(s.el.querySelector(`#${hint}`)).not.toBeNull();
+    }
   });
 
   it("links the chat stylesheet once per page, and not when the page opts out", () => {

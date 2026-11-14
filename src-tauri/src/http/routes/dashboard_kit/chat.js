@@ -524,10 +524,17 @@
     const tail = n > 1 ? `-${n}` : "";
     return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}` };
   }
+  var claims = /* @__PURE__ */ new WeakMap();
   function mountIds(doc, el) {
+    const held = claims.get(doc) || /* @__PURE__ */ new Map();
+    claims.set(doc, held);
     for (let n = 1; ; n++) {
-      const ids = idsOf(n), used = doc.getElementById(ids.region);
-      if (!used || el.contains(used)) return ids;
+      const ids = idsOf(n), other = held.get(n), used = doc.getElementById(ids.region);
+      if (other && other !== el || used && !el.contains(used)) continue;
+      held.set(n, el);
+      return { ids, release() {
+        if (held.get(n) === el) held.delete(n);
+      } };
     }
   }
   var CHAT_CSS_HREF = "/kit/v1/chat.css";
@@ -717,7 +724,7 @@
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
   function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true }) {
-    const ids = mountIds(win.document, el);
+    const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
     if (styles) linkChatStyles(win.document);
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
@@ -1111,6 +1118,7 @@
       unmount() {
         offs.forEach((off) => off && off());
         pin.release();
+        mountSlot.release();
         launch.dispose();
         win.removeEventListener("beforeunload", onUnload);
         el.replaceChildren();
