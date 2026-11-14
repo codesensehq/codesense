@@ -2396,7 +2396,7 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// collisions are covered by the SQL review). This cap is a growth tripwire:
 /// raise it only after reviewing the added sites, never by adding sink
 /// exceptions or slack.
-const MAX_UNRESOLVED_METHODS: usize = 6_424;
+const MAX_UNRESOLVED_METHODS: usize = 6_486;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

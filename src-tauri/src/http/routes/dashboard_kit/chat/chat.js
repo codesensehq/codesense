@@ -6,8 +6,10 @@
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
 //  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the peer's current step while it runs, else Working…).
-//  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message).
-//  chips: [{label, text}]: one-tap messages above the composer, sent like typed text.
+//  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
+//  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
+//  faces: true|(row)->{src|face,name,label}: opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run (src draws that image, face or a name goes to kit.avatar, true draws initials from the sender's name), and a run of messages from one sender is one meta line (label is the name on it, else the sender's name); the person's own messages carry no avatar. Unset, the thread is unchanged.
+//  next: true|{edit}: the lead's trailing `Next:` line (chat-core parseNext) becomes chips after its newest message and is left out of the message's text; edit adds each chip's pencil. Off by default.
 //  copy: the page's own words over CHAT_COPY, one level deep (a section it names keeps the keys it leaves out).
 //  target also takes, all off by default:
 //   pick(peerRows)->row: the live row, for presence and for the row a send goes to (default: the first that has not exited, and for a send the first that is joinable).
@@ -24,10 +26,24 @@ import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
-import {cardAnswer,createMarkLatch,parseCard} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
+// A sender's avatar for the faces option: an image by src, else kit.avatar (a face ref or initials from the name); a page without kit.avatar gets the initials in a plain span.
+const initialsOf=name=>{const parts=String(name||'?').split(/[\s_-]+/).filter(Boolean);return(parts.length>1?parts[0][0]+parts[1][0]:(parts[0]||'?').slice(0,2)).toUpperCase();};
+function avatarOf(info){
+ const kit=window.codesense&&window.codesense.kit;
+ if(kit&&typeof kit.avatar==='function')return kit.avatar({face:info.face,name:info.name,size:24});
+ return h('span',{class:'cs-avatar',title:info.name},initialsOf(info.name));
+}
+// An image that fails to load (a dead src) is swapped for the face kit.avatar draws, or the initials without it, so the run never shows a broken image.
+function faceNode(info){
+ if(!info.src)return avatarOf(info);
+ const img=h('img',{src:info.src,alt:info.name}),wrap=h('span',{class:'cs-avatar',title:info.name},img);
+ img.addEventListener('error',()=>{const next=avatarOf(info);if(wrap.parentNode)wrap.replaceWith(next);else wrap.replaceChildren(next);},{once:true});
+ return wrap;
+}
 const face=(state,label)=>h('span',{class:'av','aria-hidden':'true','data-face':state,'data-label':label});
 const ALERT_NS='http://www.w3.org/2000/svg';
 const alertIcon=()=>{const svg=document.createElementNS(ALERT_NS,'svg'),path=document.createElementNS(ALERT_NS,'path');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('class','ico alert');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M8 2l6.5 11.5h-13zM8 6.5v3.5M8 11.8v.2');svg.append(path);return svg;};
@@ -50,8 +66,8 @@ const storyTarget=(storyId,leadRole)=>({
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],activity=false,copy:words=null}){
- const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,copy=words?mergeCopy(words):CHAT_COPY;
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null}){
+ const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
  const cardState=new Map(),drafts=new Map();
  let refocusCard=null;
@@ -78,14 +94,22 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const composer=createComposer({onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
  const sendChip=text=>{awaitBase=leadCount();fails.clear();launch.send(text);};
- const chipsBox=chips.length?h('div',{class:'chips',role:'group','aria-label':copy.chips},...chips.map(chip=>h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label))):null;
+ // Chips: the page's own (chips) and, with next, the ones in the lead's newest Next line. A chip's pencil (edit) puts its text in the composer instead of sending it.
+ const nextOpt=next?(typeof next==='object'?next:{}):null;
+ const pencil=()=>{const svg=document.createElementNS(ALERT_NS,'svg'),path=document.createElementNS(ALERT_NS,'path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M4 20h4L19 9l-4-4L4 16z');svg.append(path);return svg;};
+ const chipNode=chip=>{
+  const main=h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label);
+  return chip.edit?h('span',{class:'pchip'},main,h('button',{type:'button',class:'btn sm ed','data-chip-edit':chip.label,'aria-label':copy.chipEdit.label(chip.label),title:copy.chipEdit.title,onclick:()=>{if(!isDone)composer.setText(chip.text);}},pencil())):main;
+ };
+ const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
  el.replaceChildren(h('div',{class:variant?`chatcol ${variant}`:'chatcol','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
- const bubble=(item,side)=>h('div',{class:`msg ${side}`,'data-mid':item.id===undefined?null:String(item.id)},
-  h('div',{class:'meta'},`${item.who} · ${timeLabel(item.at)}`),h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null);
+ // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar. Unset, first is true and info null, so the node is what it always was.
+ const bubble=(item,side,first=true,info=null)=>h('div',{class:`msg ${side}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
+  first?h('div',{class:'meta'},...(info?[faceNode(info)]:[]),`${info&&info.label||item.who} · ${timeLabel(item.at)}`):null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null);
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
  const alertRow=(kind,why,code,...extra)=>h('div',{class:'sys danger',role:'alert','data-row':kind},alertIcon(),h('span',{class:'why'},why),code?h('code',{class:'code'},code):null,...extra);
@@ -133,12 +157,14 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  // An inline card for a needs-you message from the lead: open, pending, error or answered (here, or in the Inbox, which the thread tells us).
  function cardEntry(row){
-  const id=row.messageId,local=cardState.get(id),remote=cardAnswer(id,thread),text=row.text||row.summary||'',parsed=parseOf(text);
+  // With cards.consent on, a card line ending the text (chat-core parseCardLine) is hidden and gives the card's buttons, class and step; a text without one is parsed as before.
+  const id=row.messageId,local=cardState.get(id),remote=cardAnswer(id,thread),said=row.text||row.summary||'',line=consentOn?parseCardLine(said):null,text=line?line.text:said;
+  const parsed=line?{question:line.text,options:line.acts.map(item=>item.label),pick:null,reason:null,primary:(line.acts.find(item=>item.act!=='none')||{}).label||null}:parseOf(text);
   const state=local&&local.phase==='answered'?'answered':remote?'answered':local?local.phase:'open';
   const answer=state!=='answered'?null:local&&local.phase==='answered'?{text:local.text,at:local.at,where:'here'}:{text:remote.text,at:remote.at,where:'inbox'};
   const failure=state==='error'?local.failure:null;
-  return {t:row.createdAtMs||0,id:'m'+id,sig:['c',id,text,state,answer&&answer.text,answer&&answer.where,failure,row.createdAtMs].join('|'),
-   make:()=>cardNode({lead:target.leadName(row),id,text,parsed,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
+  return {t:row.createdAtMs||0,id:'m'+id,sig:['c',id,said,state,answer&&answer.text,answer&&answer.where,failure,row.createdAtMs].join('|'),
+   make:()=>cardNode({lead:target.leadName(row),id,text,parsed,meta:line,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
  }
  // A sent message is Queued or Delivered by chat-core's rule over the lead's row now; the others are the launch machine's own marks.
  const deliveryOf=createMarkLatch();
@@ -154,21 +180,72 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const line=own||(p.key==='running'?(p.activity===copy.header.activityNone?copy.row.working:p.activity):null);
   return line?{id:'activity',sig:'a|'+line,make:()=>h('div',{class:'act',role:'status','aria-live':'polite','data-row':'activity'},face('working',copy.row.working),h('span',{},line))}:null;
  }
+ // The Next chips: the lead's newest message, when its last line is a Next line and the person has not sent since (a card is not chips).
+ function nextChips(){
+  if(!nextOpt)return [];
+  const handles=leadHandles();let newest=null,mine=0;
+  for(const row of thread){const side=sideOf(row,handles),at=row.createdAtMs||0;if(side==='lead'){if(!newest||at>=newest.at)newest={row,at};}else if(side==='you')mine=Math.max(mine,at);}
+  for(const item of launch.messages)mine=Math.max(mine,item.sentAt);
+  if(!newest||newest.at<mine||(cards!==false&&newest.row.kind==='needs-you'))return [];
+  const parsed=parseNext(newest.row.text||newest.row.summary||'');
+  return parsed?parsed.chips.map(text=>({label:text,text,edit:Boolean(nextOpt.edit)})):[];
+ }
+ function paintChips(){
+  if(!chipsBox)return;
+  const seen=new Set(chips.map(chip=>chip.label)),shown=[...nextChips().filter(chip=>!seen.has(chip.label)&&seen.add(chip.label)),...chips];
+  const sig=JSON.stringify(shown.map(chip=>[chip.label,chip.text,Boolean(chip.edit)]));
+  if(sig!==chipSig.v){chipSig.v=sig;chipsBox.replaceChildren(...shown.map(chipNode));}
+  chipsBox.hidden=!shown.length;
+ }
+ // The faces option for one message: the page's answer for the row, else the sender's name; the person's own messages carry no avatar.
+ function faceInfo(row,side,who){
+  if(!faces||side==='you')return null;
+  const given=typeof faces==='function'?faces(row):null;
+  return {name:(given&&given.name)||who,label:given&&given.label||null,src:given&&given.src||null,face:given&&given.face||null};
+ }
  function threadItems(){
+  let lastLead=null;
   const handles=leadHandles(),entries=[],rowIds=new Set(thread.map(row=>row.messageId)),sentHere=new Map(launch.messages.filter(item=>item.messageId!==undefined).map(item=>[item.messageId,item]));
   for(const row of thread){
    const side=sideOf(row,handles),needs=cards!==false&&row.kind==='needs-you'&&side==='lead';
+   if(side==='lead')lastLead=row;
    if(needs){entries.push(cardEntry(row));continue;}
    const who=side==='you'?copy.who.you:side==='lead'?target.leadName(row):(row.fromName||row.from||''),own=sentHere.get(row.messageId),mark=own?markOfItem(own):null;
-   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,row.text,side,row.createdAtMs,mark].join('|'),make:()=>bubble({id:row.messageId,text:row.text||row.summary||'',mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},side)});
+   // With next on, a lead message's Next line is the chips, not part of the text; a message that is only that line shows nothing.
+   const said=row.text||row.summary||'',shown=nextOpt&&side==='lead'&&row.text?(parseNext(row.text)||{text:said}).text:said;
+   if(nextOpt&&side==='lead'&&row.text&&!shown)continue;
+   const item={id:row.messageId,text:shown,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},info=faceInfo(row,side,who);
+   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark].join('|'),make:()=>bubble(item,side),
+    run:faces?{key:side==='you'?'you':side+'|'+(row.from||''),info,make:(first,info)=>bubble(item,side,first,info)}:null});
   }
   for(const item of launch.messages){
    if(item.messageId!==undefined&&rowIds.has(item.messageId))continue;
    const mark=markOfItem(item);
-   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble({text:item.text,mark:copy.mark[mark]||null,markKey:mark,who:copy.who.you,at:item.sentAt},'you')});
+   const sent={text:item.text,mark:copy.mark[mark]||null,markKey:mark,who:copy.who.you,at:item.sentAt};
+   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble(sent,'you'),run:faces?{key:'you',info:null,make:(first)=>bubble(sent,'you',first)}:null});
   }
   entries.sort((a,b)=>a.t-b.t);
-  for(const [id,text] of streams)if(!rowIds.has(id))entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble({id,text,who:copy.lead,at:clock.now()},'lead')});
+  // A streamed reply is the lead's next message, so under faces it joins the lead's run (the lead's key and face) and shows no meta line of its own that the final message would then drop.
+  for(const [id,text] of streams){
+   if(rowIds.has(id))continue;
+   const item={id,text,who:copy.lead,at:clock.now()};
+   let run=null;
+   if(faces){
+    const ref=lastLead||{from:(live()||{}).handle};
+    item.who=target.leadName(ref);
+    run={key:'lead|'+(ref.from||''),info:faceInfo(ref,'lead',item.who),make:(first,info)=>bubble(item,'lead',first,info)};
+   }
+   entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble(item,'lead'),run});
+  }
+  // faces: a message that follows one from the same sender joins its run (no meta line); a card, a stream row or another sender starts a new one. The signature carries the position and the face, so a node is rebuilt only when either changes.
+  if(faces){
+   let before=null;
+   for(const entry of entries){
+    const run=entry.run,key=run?run.key:null,first=!key||key!==before;
+    before=key;
+    if(run){entry.sig+='|'+(first?'rs':'rc')+'|'+JSON.stringify(run.info);entry.make=()=>run.make(first,run.info);}
+   }
+  }
   return entries;
  }
  const awaiting=()=>awaitBase!==null&&leadCount()<=awaitBase&&(launch.state==='joined'||Boolean(live()&&live().state==='running'));
@@ -190,6 +267,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
   const act=activityItem(),want=[...(layout.empty&&!thread.length&&!launch.messages.length?[{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}]:[]),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
+  paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
   if(refocusCard!==null){const done=log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);if(done){done.focus();refocusCard=null;}}

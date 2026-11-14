@@ -33,6 +33,7 @@ use super::clone_repo;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
+use super::probe_environment::ProbeEnvironmentParams;
 use super::routine_tools;
 use super::setup_tools;
 #[cfg(test)]
@@ -2415,6 +2416,12 @@ impl CodesenseHandler {
                         "available": status.git.available,
                         "path": status.git.path,
                         "version": status.git.version,
+                    },
+                    "gh": {
+                        "available": status.gh.available,
+                        "path": status.gh.path,
+                        "version": status.gh.version,
+                        "resolving": status.gh.resolving,
                     },
                     // Per-agent status keyed by agent basename (was a single
                     // `claude` field). Each entry is `{available, path, resolving}`;
@@ -6256,6 +6263,39 @@ impl CodesenseHandler {
         )
         .await?;
         ok_json(serde_json::json!(repos))
+    }
+
+    #[tool(
+        description = "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned."
+    )]
+    async fn probe_environment(
+        &self,
+        Parameters(params): Parameters<ProbeEnvironmentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = crate::mcp::probe_environment::probe_environment_request(
+            self.app_handle.clone(),
+            params,
+        )
+        .await
+        .map_err(|e| ErrorData::invalid_params(format!("probe_environment: {e}"), None))?;
+        ok_json(report)
+    }
+
+    #[tool(
+        description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
+    )]
+    async fn pack_validate(
+        &self,
+        Parameters(params): Parameters<PackValidateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = pack_validate_request(
+            self.app_handle.clone(),
+            self.connection_session(),
+            self.remote_team().map(Into::into),
+            params.path,
+        )
+        .await?;
+        ok_json(report)
     }
 
     #[tool(
@@ -10737,6 +10777,35 @@ async fn read_epic_repos_request<R: tauri::Runtime>(
     .map_err(|e| ErrorData::invalid_params(format!("read_epic_repos: {e}"), None))
 }
 
+/// Validate before reading, so a path outside the caller's context never reaches the checks.
+async fn pack_validate_request<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session: Option<String>,
+    remote: Option<commands::dashboard_launch::LaunchTeam>,
+    path: String,
+) -> Result<serde_json::Value, ErrorData> {
+    let scope =
+        crate::context_repo::caller_scope::for_session(&app, session.as_deref(), remote).await;
+    commands::await_blocking("mcp.pack_validate", move || {
+        let path = std::path::Path::new(&path);
+        if !path.is_absolute() {
+            return Err("path is the pack folder's absolute path".to_string());
+        }
+        scope.existing(path)?;
+        commands::files::validate_context_path_for(path, &app, &scope)?;
+        // The walk reads the folder's real path, so that is the one held to the scope.
+        let real = std::fs::canonicalize(path).map_err(|_| "not a folder".to_string())?;
+        scope.existing(&real)?;
+        commands::files::validate_context_path_for(&real, &app, &scope)?;
+        if !real.is_dir() {
+            return Err("not a folder".to_string());
+        }
+        serde_json::to_value(crate::packs::validate::validate_dir(&real)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ErrorData::invalid_params(format!("pack_validate: {e}"), None))
+}
+
 fn dispatch_rendered_document_request<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path_str: &str,
@@ -15018,6 +15087,14 @@ pub struct ReadEpicReposParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct PackValidateParams {
+    /// The pack folder's absolute path: the one holding `pack.yml`, inside a context repo
+    /// you can read.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SetEpicReposParams {
     /// The epic main-doc path — pass your `$CODESENSE_EPIC_DOC_PATH`.
     pub epic_file_path: String,
@@ -17391,6 +17468,10 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only look at this Mac for the setup guide.
+        "probe_environment",
+        // Read-only pack folder validator.
+        "pack_validate",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
         // command (the session-less picker). The 7th verb
         // (`gs_snapshot`) is the in-memory snapshot primitive.

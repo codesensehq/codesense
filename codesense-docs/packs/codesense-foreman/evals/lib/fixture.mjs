@@ -60,7 +60,7 @@ export const ANSWERED_CARD = {
 // What the scripted guide stub does, for the setup hand-off cases. The real setup agent belongs to
 // the onboarding work; this walks the ledger's steps and ends with the hand-back line the setup
 // skill's `foreman-handback` block names (a test ties the two together).
-export const SETUP_STEPS = ["team", "source-repos", "gh"];
+export const SETUP_STEPS = ["team", "source-repos", "git-access"];
 export const stepDone = (ledger, step) => ledger.some((r) => r.step === step && r.state === "done");
 // The setup hand-off's launch form (foreman.md); the stubs and tests share it.
 export const SETUP_LAUNCH = {
@@ -74,7 +74,7 @@ export const SETUP_LAUNCH = {
 export const agentId = (a) => String(a ?? "").split("/").pop();
 export const HANDBACK_PREFIX = "Setup done:";
 export const HANDBACK_ROLE = "codesense-foreman";
-const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, gh signed in`;
+const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, git access via git credentials`;
 // A card the Foreman raised and the person has not answered: the offer guard reads it.
 const OFFER_CARD = {
   id: 4200,

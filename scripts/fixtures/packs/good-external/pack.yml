@@ -22,7 +22,7 @@ parts:
     method: setup
     source: { npm: example-cli }
     version: 6.11.0
-    integrity: sha512-AAAA
+    integrity: sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
     setup:
       {
         run: "npx example-cli@6.11.0 init --yes",

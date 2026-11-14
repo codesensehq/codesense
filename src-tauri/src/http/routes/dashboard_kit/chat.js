@@ -27,7 +27,7 @@
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
-    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
+    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
     send: "Send",
     hint: "Enter to send · Shift+Enter for a new line",
     who: { you: "You" },
@@ -35,7 +35,8 @@
     unload: "Messages you sent are still waiting for the story lead.",
     unloadKept: "Some messages weren't sent.",
     logLabel: "Story lead chat",
-    chips: "Quick replies"
+    chips: "Quick replies",
+    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" }
   };
   var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
   var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
@@ -128,6 +129,49 @@
     const pick = options.filter((option) => said.startsWith(option.toLowerCase()) && !/[a-z0-9]/.test(said.charAt(option.length))).sort((a, b) => b.length - a.length)[0] || null;
     const because = pick ? after.replace(/`/g, "").trim().slice(pick.length).match(/^[\s,.;:-]*because\s+([\s\S]*?)\.?\s*$/i) : null;
     return { question, options: pick ? [pick, ...options.filter((option) => option !== pick)] : options, pick, reason: because ? because[1].trim() : null };
+  }
+  var MAX_NEXT = 4;
+  var MAX_CHIP = 80;
+  function parseNext(text) {
+    if (typeof text !== "string") return null;
+    const lines = text.split(/\r?\n/);
+    let at = lines.length - 1;
+    while (at >= 0 && !lines[at].trim()) at--;
+    if (at < 0 || !/^\s*Next:/i.test(lines[at])) return null;
+    const rest = lines[at].replace(/^\s*Next:\s*/i, "");
+    const quoted = [...rest.matchAll(/`([^`]+)`/g)].map((match) => match[1].trim());
+    const chips = (quoted.length ? quoted : rest.split("·").map((part) => part.trim())).filter(Boolean);
+    const distinct = new Set(chips.map((chip) => chip.toLowerCase()));
+    if (!chips.length || chips.length > MAX_NEXT || distinct.size !== chips.length) return null;
+    if (chips.some((chip) => chip.length > MAX_CHIP || /[<>]/.test(chip))) return null;
+    return { text: lines.slice(0, at).join("\n").trimEnd(), chips };
+  }
+  var CONSENT_CLASSES = Object.freeze(["read", "local-write", "install-or-sign-in", "external-write"]);
+  var CARD_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  var MAX_ID = 64;
+  var SEP = " · ";
+  var idOk = (id) => typeof id === "string" && id.length <= MAX_ID && CARD_ID.test(id);
+  var labelOk = (label) => typeof label === "string" && label.length > 0 && label.length <= MAX_OPTION && label === label.trim() && !/[<>|\r\n]/.test(label);
+  var actsOk = (acts) => Array.isArray(acts) && acts.length >= 1 && acts.length <= MAX_OPTIONS && acts.every((item) => item && idOk(item.act) && labelOk(item.label)) && new Set(acts.map((item) => item.label.toLowerCase())).size === acts.length;
+  function formatCardLine({ step, consent, acts }) {
+    if (!idOk(step) || !CONSENT_CLASSES.includes(consent) || !actsOk(acts)) throw new TypeError("not a card line");
+    return `card: ${step}${SEP}${consent}${SEP}${acts.map((item) => `${item.act}=${item.label}`).join(" | ")}`;
+  }
+  function parseCardLine(text) {
+    if (typeof text !== "string") return null;
+    const lines = text.split(/\r?\n/);
+    let at = lines.length - 1;
+    while (at >= 0 && !lines[at].trim()) at--;
+    if (at < 0 || !lines[at].startsWith("card: ")) return null;
+    const rest = lines[at].slice(6).trimEnd(), first = rest.indexOf(SEP), second = first < 0 ? -1 : rest.indexOf(SEP, first + SEP.length);
+    if (second < 0) return null;
+    const step = rest.slice(0, first), consent = rest.slice(first + SEP.length, second);
+    const acts = rest.slice(second + SEP.length).split(" | ").map((part) => {
+      const eq = part.indexOf("=");
+      return eq < 0 ? null : { act: part.slice(0, eq), label: part.slice(eq + 1) };
+    });
+    if (!idOk(step) || !CONSENT_CLASSES.includes(consent) || acts.includes(null) || !actsOk(acts)) return null;
+    return { text: lines.slice(0, at).join("\n").trimEnd(), step, consent, acts };
   }
   function cardAnswer(cardId, thread) {
     const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
@@ -505,6 +549,14 @@
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
       },
+      // setText(text): puts text in the box for the person to edit (a chip's pencil), cursor at the end; false while the composer is disabled.
+      setText(text) {
+        if (input.disabled) return false;
+        input.value = text;
+        input.focus();
+        input.setSelectionRange(text.length, text.length);
+        return true;
+      },
       // post(text): another control's message (a page's starter) on the same path as a typed one, refused while the composer is disabled. True when it went.
       post(text) {
         if (!text || input.disabled) return false;
@@ -554,13 +606,13 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/card.js
   var CARD_COPY = CHAT_COPY.card;
-  function cardNode({ id, text, parsed, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
+  function cardNode({ id, text, parsed, meta = null, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
     const answered = state === "answered", busy = state === "pending", inInbox = answered && answer.where === "inbox";
-    const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
+    const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), meta ? h("span", { class: "cls", "data-consent": meta.consent }, CARD_COPY.consent[meta.consent]) : null, h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
     const body = h("div", { class: "body" }, parsed ? parsed.question : text);
     const parts = [head, body];
     if (parsed && !(answered && !inInbox)) {
-      parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: option === parsed.pick && !answered ? "btn primary" : "btn", "data-ans": option, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
+      parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: (option === parsed.pick || option === parsed.primary) && !answered ? "btn primary" : "btn", "data-ans": option, "data-act": meta ? (meta.acts.find((item) => item.label === option) || {}).act : null, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
     } else if (!parsed && !answered) {
       const input = h("textarea", { rows: "2", "aria-label": CARD_COPY.replyLabel, spellcheck: "true", disabled: busy ? "" : null });
       input.value = draft || "";
@@ -579,11 +631,30 @@
     }
     if (answered) parts.push(h("div", { class: "chosen", tabindex: "-1", role: "status" }, CARD_COPY.chose, " ", h("b", {}, answer.text), ` · ${inInbox ? CARD_COPY.inbox : CARD_COPY.here} · ${timeLabel(answer.at)}`));
     if (state === "error" && failure) parts.push(h("div", { class: "sys danger", role: "alert" }, h("span", { class: "why" }, CARD_COPY.failed(failure))));
-    return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state }, ...parts));
+    return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state, "data-step": meta ? meta.step : null, "data-consent": meta ? meta.consent : null }, ...parts));
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
   var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
+  var initialsOf = (name) => {
+    const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
+    return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
+  };
+  function avatarOf(info) {
+    const kit = window.codesense && window.codesense.kit;
+    if (kit && typeof kit.avatar === "function") return kit.avatar({ face: info.face, name: info.name, size: 24 });
+    return h("span", { class: "cs-avatar", title: info.name }, initialsOf(info.name));
+  }
+  function faceNode(info) {
+    if (!info.src) return avatarOf(info);
+    const img = h("img", { src: info.src, alt: info.name }), wrap = h("span", { class: "cs-avatar", title: info.name }, img);
+    img.addEventListener("error", () => {
+      const next = avatarOf(info);
+      if (wrap.parentNode) wrap.replaceWith(next);
+      else wrap.replaceChildren(next);
+    }, { once: true });
+    return wrap;
+  }
   var face = (state, label) => h("span", { class: "av", "aria-hidden": "true", "data-face": state, "data-label": label });
   var ALERT_NS = "http://www.w3.org/2000/svg";
   var alertIcon = () => {
@@ -625,8 +696,8 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], activity = false, copy: words = null }) {
-    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, copy = words ? mergeCopy(words) : CHAT_COPY;
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null }) {
+    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
     let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
@@ -669,9 +740,25 @@
       fails.clear();
       launch.send(text);
     };
-    const chipsBox = chips.length ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }, ...chips.map((chip) => h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
-      if (!isDone) sendChip(chip.text);
-    } }, chip.label))) : null;
+    const nextOpt = next ? typeof next === "object" ? next : {} : null;
+    const pencil = () => {
+      const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("class", "ico");
+      svg.setAttribute("aria-hidden", "true");
+      path.setAttribute("d", "M4 20h4L19 9l-4-4L4 16z");
+      svg.append(path);
+      return svg;
+    };
+    const chipNode = (chip) => {
+      const main = h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
+        if (!isDone) sendChip(chip.text);
+      } }, chip.label);
+      return chip.edit ? h("span", { class: "pchip" }, main, h("button", { type: "button", class: "btn sm ed", "data-chip-edit": chip.label, "aria-label": copy.chipEdit.label(chip.label), title: copy.chipEdit.title, onclick: () => {
+        if (!isDone) composer.setText(chip.text);
+      } }, pencil())) : main;
+    };
+    const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
     el.replaceChildren(h("div", { class: variant ? `chatcol ${variant}` : "chatcol", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
@@ -686,10 +773,10 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const bubble = (item, side) => h(
+    const bubble = (item, side, first = true, info = null) => h(
       "div",
-      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id) },
-      h("div", { class: "meta" }, `${item.who} · ${timeLabel(item.at)}`),
+      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
+      first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
       h("div", { class: "body" }, item.text),
       item.note ? h("div", { class: "note" }, item.note) : null,
       item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null
@@ -769,15 +856,16 @@
       });
     }
     function cardEntry(row) {
-      const id = row.messageId, local = cardState.get(id), remote = cardAnswer(id, thread), text = row.text || row.summary || "", parsed = parseOf(text);
+      const id = row.messageId, local = cardState.get(id), remote = cardAnswer(id, thread), said = row.text || row.summary || "", line = consentOn ? parseCardLine(said) : null, text = line ? line.text : said;
+      const parsed = line ? { question: line.text, options: line.acts.map((item) => item.label), pick: null, reason: null, primary: (line.acts.find((item) => item.act !== "none") || {}).label || null } : parseOf(text);
       const state2 = local && local.phase === "answered" ? "answered" : remote ? "answered" : local ? local.phase : "open";
       const answer = state2 !== "answered" ? null : local && local.phase === "answered" ? { text: local.text, at: local.at, where: "here" } : { text: remote.text, at: remote.at, where: "inbox" };
       const failure = state2 === "error" ? local.failure : null;
       return {
         t: row.createdAtMs || 0,
         id: "m" + id,
-        sig: ["c", id, text, state2, answer && answer.text, answer && answer.where, failure, row.createdAtMs].join("|"),
-        make: () => cardNode({ lead: target.leadName(row), id, text, parsed, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
+        sig: ["c", id, said, state2, answer && answer.text, answer && answer.where, failure, row.createdAtMs].join("|"),
+        make: () => cardNode({ lead: target.leadName(row), id, text, parsed, meta: line, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
       };
     }
     const deliveryOf = createMarkLatch();
@@ -792,24 +880,87 @@
       const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
       return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
     }
+    function nextChips() {
+      if (!nextOpt) return [];
+      const handles = leadHandles();
+      let newest = null, mine = 0;
+      for (const row of thread) {
+        const side = sideOf(row, handles), at = row.createdAtMs || 0;
+        if (side === "lead") {
+          if (!newest || at >= newest.at) newest = { row, at };
+        } else if (side === "you") mine = Math.max(mine, at);
+      }
+      for (const item of launch.messages) mine = Math.max(mine, item.sentAt);
+      if (!newest || newest.at < mine || cards !== false && newest.row.kind === "needs-you") return [];
+      const parsed = parseNext(newest.row.text || newest.row.summary || "");
+      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit) })) : [];
+    }
+    function paintChips() {
+      if (!chipsBox) return;
+      const seen = new Set(chips.map((chip) => chip.label)), shown = [...nextChips().filter((chip) => !seen.has(chip.label) && seen.add(chip.label)), ...chips];
+      const sig = JSON.stringify(shown.map((chip) => [chip.label, chip.text, Boolean(chip.edit)]));
+      if (sig !== chipSig.v) {
+        chipSig.v = sig;
+        chipsBox.replaceChildren(...shown.map(chipNode));
+      }
+      chipsBox.hidden = !shown.length;
+    }
+    function faceInfo(row, side, who) {
+      if (!faces || side === "you") return null;
+      const given = typeof faces === "function" ? faces(row) : null;
+      return { name: given && given.name || who, label: given && given.label || null, src: given && given.src || null, face: given && given.face || null };
+    }
     function threadItems() {
+      let lastLead = null;
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
       for (const row of thread) {
         const side = sideOf(row, handles), needs = cards !== false && row.kind === "needs-you" && side === "lead";
+        if (side === "lead") lastLead = row;
         if (needs) {
           entries.push(cardEntry(row));
           continue;
         }
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
-        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
+        const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
+        if (nextOpt && side === "lead" && row.text && !shown) continue;
+        const item = { id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        entries.push({
+          t: row.createdAtMs || 0,
+          id: "m" + row.messageId,
+          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"),
+          make: () => bubble(item, side),
+          run: faces ? { key: side === "you" ? "you" : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
+        });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt }, "you") });
+        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt };
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: "you", info: null, make: (first) => bubble(sent, "you", first) } : null });
       }
       entries.sort((a, b) => a.t - b.t);
-      for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: copy.lead, at: clock.now() }, "lead") });
+      for (const [id, text] of streams) {
+        if (rowIds.has(id)) continue;
+        const item = { id, text, who: copy.lead, at: clock.now() };
+        let run = null;
+        if (faces) {
+          const ref = lastLead || { from: (live() || {}).handle };
+          item.who = target.leadName(ref);
+          run = { key: "lead|" + (ref.from || ""), info: faceInfo(ref, "lead", item.who), make: (first, info) => bubble(item, "lead", first, info) };
+        }
+        entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble(item, "lead"), run });
+      }
+      if (faces) {
+        let before = null;
+        for (const entry of entries) {
+          const run = entry.run, key = run ? run.key : null, first = !key || key !== before;
+          before = key;
+          if (run) {
+            entry.sig += "|" + (first ? "rs" : "rc") + "|" + JSON.stringify(run.info);
+            entry.make = () => run.make(first, run.info);
+          }
+        }
+      }
       return entries;
     }
     const awaiting = () => awaitBase !== null && leadCount() <= awaitBase && (launch.state === "joined" || Boolean(live() && live().state === "running"));
@@ -839,6 +990,7 @@
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
       const act = activityItem(), want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
+      paintChips();
       pin.onContentChanged();
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
@@ -863,8 +1015,8 @@
         render();
       }));
     }
-    function took(next) {
-      thread = next;
+    function took(next2) {
+      thread = next2;
       if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
       for (const row of thread) streams.delete(row.messageId);
       if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;
@@ -888,19 +1040,19 @@
       fails.delete("thread");
       took(mergeThread(...lists));
     }
-    function onRows(next) {
+    function onRows(next2) {
       const firstRoster = !gotRows;
       gotRows = true;
       const before = live();
-      rows = next;
+      rows = next2;
       const now = live();
       if (now && now.state === "running" && (!before || before.state !== "running") && lastLiveState !== null) runningSince = clock.now();
       lastLiveState = now ? now.state : "none";
-      launch.rows(next);
+      launch.rows(next2);
       const moved = target.follow && (before && before.handle) !== (now && now.handle);
       if (moved) pin.reset();
-      const again = sources ? sources.seen(target.rows(next), firstRoster) : false;
-      if (!started || moved || again || target.rows(next).some((row) => !watched.has(row.sessionId))) {
+      const again = sources ? sources.seen(target.rows(next2), firstRoster) : false;
+      if (!started || moved || again || target.rows(next2).some((row) => !watched.has(row.sessionId))) {
         const more = started && Boolean(sources);
         const read = readThread(more);
         if (!started) firstRead = read;
@@ -980,6 +1132,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

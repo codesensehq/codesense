@@ -451,6 +451,26 @@ declare namespace CodesenseSdk {
     pick: string | null;
     reason: string | null;
   }
+  /** A message's trailing `Next:` line: the text above it and the suggested prompts. */
+  interface ChatNext {
+    text: string;
+    chips: string[];
+  }
+  /** One of the four consent classes a card line names. */
+  type ChatConsent = "read" | "local-write" | "install-or-sign-in" | "external-write";
+  interface ChatCardAct {
+    /** The act's id; `none` is the decline. */
+    act: string;
+    /** The button's label, and the text a click sends. */
+    label: string;
+  }
+  /** A card line: the message above it, the step, the consent class and the acts (one button each). */
+  interface ChatCardLine {
+    text: string;
+    step: string;
+    consent: ChatConsent;
+    acts: ChatCardAct[];
+  }
   /** A roster row of the chat's peer, as far as the marks rule reads it. */
   interface ChatLeadRow {
     state?: string;
@@ -519,13 +539,17 @@ declare namespace CodesenseSdk {
       variant?: "page";
     };
     /** Inline needs-you cards: `parse` replaces the built-in parser; `false` shows those rows as messages. */
-    cards?: { parse?(text: string): ChatCard | null } | false;
+    cards?: { parse?(text: string): ChatCard | null; consent?: boolean } | false;
     /** The peer's controls, painted into the page's own header element. */
     headerSlot?: { slot: HTMLElement; render(state: ChatState): ChatPaint };
     /** The page's own words over the chat's, one level deep: a section it names keeps the keys it leaves out. */
     copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
-    chips?: Array<{ label: string; text: string }>;
+    chips?: Array<{ label: string; text: string; /** A pencil beside the chip puts its text in the composer instead of sending it. */ edit?: boolean }>;
+    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
+    faces?: boolean | ((row: ChatRow) => { src?: string; face?: string; name?: string; label?: string } | null | undefined);
+    /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
+    next?: boolean | { edit?: boolean };
     /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
@@ -577,6 +601,14 @@ declare namespace CodesenseSdk {
       createMarkLatch(): (key: string | number, input: ChatMarkInput) => "queued" | "delivered";
       /** A needs-you message read as buttons, or null when it is not in the card format. */
       parseCard(text: unknown): ChatCard | null;
+      /** The trailing `Next:` line of a message as chips (one to four), or null when it does not end with one. */
+      parseNext(text: unknown): ChatNext | null;
+      /** The four consent classes, in the contract's order. */
+      CONSENT_CLASSES: readonly ChatConsent[];
+      /** `card: <step> · <class> · <act>=<label> | <act>=<label>`, the line that ends a card's text. Throws when it would not parse back. */
+      formatCardLine(line: { step: string; consent: ChatConsent; acts: readonly ChatCardAct[] }): string;
+      /** The card line that ends a message, with the text above it, or null when the last line is not one. */
+      parseCardLine(text: unknown): ChatCardLine | null;
       /** The person's own row replying to the card, from whichever place sent it. */
       cardAnswer(
         cardId: string | number,

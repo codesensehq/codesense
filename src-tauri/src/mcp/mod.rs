@@ -31,6 +31,7 @@ pub(crate) mod local_setup;
 pub(crate) mod machine_tools;
 pub(crate) mod notes_tools;
 pub(crate) mod overview;
+pub(crate) mod probe_environment;
 pub(crate) mod pane_tools;
 pub(crate) mod records_tools;
 pub(crate) mod remote_terminal;

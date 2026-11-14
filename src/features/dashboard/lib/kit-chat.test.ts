@@ -78,7 +78,7 @@ function setup(roster: Row[], thread: Row[] = []) {
   };
   const el = document.createElement("div");
   document.body.append(el);
-  return { transport, reads, el, send, reply };
+  return { transport, reads, el, send, reply, emit };
 }
 
 const kitOf = () => (window as unknown as { codesense: { kit: Kit } }).codesense.kit;
@@ -111,11 +111,15 @@ describe("kit.chat", () => {
     expect(CHAT_JS).not.toMatch(/^\s*(import|export)\b/m);
     expect(Object.keys(kitOf().chat).sort()).toEqual(["core", "mount", "pinToBottom", "thread"]);
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
+      "CONSENT_CLASSES",
       "cardAnswer",
       "createMarkLatch",
       "deliveryMark",
+      "formatCardLine",
       "isBusy",
       "parseCard",
+      "parseCardLine",
+      "parseNext",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
       "mergeThread",
@@ -617,5 +621,539 @@ describe("kit.chat page layout and activity", () => {
     expect(row.compareDocumentPosition(s.el.querySelector(".log .msg")!)).toBe(
       Node.DOCUMENT_POSITION_PRECEDING,
     );
+  });
+});
+
+describe("kit.chat suggestion chips from the Next line", () => {
+  const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
+    messageId: id,
+    from,
+    text,
+    createdAtMs: at,
+  });
+  const chipsOf = (el: HTMLElement) =>
+    [...el.querySelectorAll<HTMLElement>(".chips [data-chip]")].map((node) => node.dataset.chip);
+  const bodies = (el: HTMLElement) =>
+    [...el.querySelectorAll(".log .msg .body")].map((node) => node.textContent);
+  const NEXT = "All set.\n\nNext: `Bring in my issues`, `What have you set up?`";
+
+  it("is off by default: the Next line stays in the message and no chips appear", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".chips")).toBeNull();
+    expect(bodies(s.el)).toEqual([NEXT]);
+  });
+
+  it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, { next: true });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues", "What have you set up?"]);
+    expect(bodies(s.el)).toEqual(["All set."]);
+    expect(s.el.querySelector(".chips")!.getAttribute("role")).toBe("group");
+    expect(s.el.querySelectorAll(".chips [data-chip-edit]").length).toBe(0);
+  });
+
+  it("a Next chip sends its text like a typed message, and the chips go once the person has sent", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, { next: true });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Bring in my issues"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenCalledWith("lead-1", "Bring in my issues");
+    expect(chipsOf(s.el)).toEqual([]);
+  });
+
+  it("offers no chips when the lead's newest message has no Next line, or the person spoke last", async () => {
+    const newer = setup([lead("idle")], [reply(1, NEXT), reply(2, "Working on it.")]);
+    mountOn(newer, { next: true });
+    await flush();
+    expect(chipsOf(newer.el)).toEqual([]);
+    const answered = setup([lead("idle")], [reply(1, NEXT), reply(2, "later", "human")]);
+    mountOn(answered, { next: true });
+    await flush();
+    expect(chipsOf(answered.el)).toEqual([]);
+  });
+
+  it("a card is not chips: a needs-you message keeps its own buttons", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          ...reply(1, "Create your team?\nOptions: `Do it`, `Not now`.\nNext: `a`, `b`"),
+          kind: "needs-you",
+        },
+      ],
+    );
+    mountOn(s, { next: true });
+    await flush();
+    expect(chipsOf(s.el)).toEqual([]);
+  });
+
+  it("static chips follow the Next chips, and a Next chip with the same label as a static one shows once", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, {
+      next: true,
+      chips: [
+        { label: "What have you set up?", text: "What have you set up?" },
+        { label: "Status?", text: "What is the status?" },
+      ],
+    });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues", "What have you set up?", "Status?"]);
+  });
+
+  it("with next off, static chips with the same label all show, as on main", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s, {
+      chips: [
+        { label: "Same", text: "one" },
+        { label: "Same", text: "two" },
+      ],
+    });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Same", "Same"]);
+  });
+
+  it("a lead message that is only a Next line shows no bubble, and its chips remain", async () => {
+    const s = setup(
+      [lead("idle")],
+      [reply(1, "Hello there."), reply(2, "Next: `Bring in my issues`")],
+    );
+    mountOn(s, { next: true });
+    await flush();
+    expect(bodies(s.el)).toEqual(["Hello there."]);
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues"]);
+  });
+
+  describe("the edit pencil", () => {
+    const pencil = (el: HTMLElement, label: string) =>
+      el.querySelector<HTMLButtonElement>(`[data-chip-edit="${label}"]`);
+
+    it("next: {edit: true} adds a pencil that puts the text in the composer and sends nothing", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, { next: { edit: true } });
+      await flush();
+      const edit = pencil(s.el, "Bring in my issues")!;
+      expect(edit.getAttribute("aria-label")).toBe("Edit “Bring in my issues” before sending");
+      expect(edit.title).toBe("Edit before sending");
+      edit.click();
+      await flush();
+      const input = s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!;
+      expect(input.value).toBe("Bring in my issues");
+      expect(document.activeElement).toBe(input);
+      expect(input.selectionStart).toBe(input.value.length);
+      expect(s.send).not.toHaveBeenCalled();
+      // The person edits, then sends it: the edited text goes, not the chip's.
+      input.value += " from acme/web";
+      s.el.querySelector<HTMLButtonElement>("#sv-send")!.click();
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-1", "Bring in my issues from acme/web");
+    });
+
+    it("a static chip takes a pencil with edit: true, and without it has none", async () => {
+      const s = setup([lead("idle")]);
+      mountOn(s, {
+        chips: [
+          { label: "Status?", text: "What is the status?", edit: true },
+          { label: "Plain", text: "plain" },
+        ],
+      });
+      await flush();
+      expect(pencil(s.el, "Status?")).not.toBeNull();
+      expect(pencil(s.el, "Plain")).toBeNull();
+      pencil(s.el, "Status?")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe(
+        "What is the status?",
+      );
+    });
+
+    it("the pencil does nothing once the chat is done", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, { next: { edit: true }, done: true });
+      await flush();
+      pencil(s.el, "Bring in my issues")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");
+    });
+
+    it("the pencil's own guard holds when the page keeps the composer enabled", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, {
+        next: { edit: true },
+        done: true,
+        layout: { composer: () => ({ disabled: false }) },
+      });
+      await flush();
+      pencil(s.el, "Bring in my issues")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");
+    });
+  });
+});
+
+describe("kit.chat consent cards (the card line)", () => {
+  const LINE = "card: clone · local-write · clone-repos=Do it | none=Not now";
+  const BODY = "Clone these 2 repos?\n\nWhat: acme/api, acme/worker";
+  const card = (text: string, id = 7): Row => ({
+    messageId: id,
+    from: "lead-1",
+    kind: "needs-you",
+    text,
+    createdAtMs: 1000,
+  });
+  const labels = (el: HTMLElement) =>
+    [...el.querySelectorAll<HTMLButtonElement>("[data-ans]")].map((node) => node.dataset.ans);
+
+  it("is off by default: the line stays in the text, and a card with an Options line is the same as before", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".card .body")!.textContent).toContain(LINE);
+    expect(s.el.querySelector("[data-consent]")).toBeNull();
+    expect(s.el.querySelector("[data-act]")).toBeNull();
+    const plain = setup([lead("idle")], [card("Go?\nOptions: `A`, `B`. My pick: B, because x.")]);
+    mountOn(plain, { cards: { consent: false } });
+    await flush();
+    expect(labels(plain.el)).toEqual(["B", "A"]);
+    expect(plain.el.querySelector("[data-consent]")).toBeNull();
+  });
+
+  it("cards.consent hides the line, shows its labels as buttons and its class in the header", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    const el = s.el.querySelector<HTMLElement>(".card")!;
+    expect(el.querySelector(".body")!.textContent).toBe(BODY);
+    expect(el.textContent).not.toContain("card:");
+    expect(labels(s.el)).toEqual(["Do it", "Not now"]);
+    const cls = el.querySelector<HTMLElement>(".card-h .cls")!;
+    expect(cls.textContent).toBe("local change");
+    expect(cls.dataset.consent).toBe("local-write");
+    expect(el.dataset.step).toBe("clone");
+    expect(el.dataset.consent).toBe("local-write");
+    expect(
+      [...el.querySelectorAll<HTMLElement>("[data-ans]")].map((node) => node.dataset.act),
+    ).toEqual(["clone-repos", "none"]);
+    expect(el.querySelector("[data-ans='Do it']")!.className).toBe("btn primary");
+    expect(el.querySelector("[data-ans='Not now']")!.className).toBe("btn");
+    expect(el.querySelector(".rec")).toBeNull();
+  });
+
+  it("a click sends the label through the transport's reply, to this card", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`, 9)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>("[data-ans='Not now']")!.click();
+    await flush();
+    expect(s.reply).toHaveBeenCalledTimes(1);
+    expect(s.reply).toHaveBeenCalledWith(9, "Not now");
+    expect(s.el.querySelector(".card")!.getAttribute("data-state")).toBe("answered");
+    expect(s.el.querySelector(".card .cls")!.textContent).toBe("local change");
+  });
+
+  it("names each class in words, and a card with no line is as it was", async () => {
+    const lines = [
+      ["read", "read"],
+      ["install-or-sign-in", "install or sign-in"],
+      ["external-write", "external write"],
+    ];
+    for (const [consent, words] of lines) {
+      const s = setup([lead("idle")], [card(`Q?\ncard: s · ${consent} · go=Go | none=No`)]);
+      mountOn(s, { cards: { consent: true } });
+      await flush();
+      expect(s.el.querySelector(".card .cls")!.textContent).toBe(words);
+    }
+    const s = setup([lead("idle")], [card("Go?\nOptions: `A`, `B`.")]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    expect(labels(s.el)).toEqual(["A", "B"]);
+    expect(s.el.querySelector(".card .cls")).toBeNull();
+    expect(s.el.querySelector(".card")!.hasAttribute("data-step")).toBe(false);
+  });
+
+  it("a line that is not well formed stays in the text and the card falls back to the page's parser", async () => {
+    const bad = "Go?\ncard: clone · write · x=Go";
+    const s = setup([lead("idle")], [card(bad)]);
+    mountOn(s, { cards: { consent: true } });
+    await flush();
+    expect(s.el.querySelector(".card .body")!.textContent).toBe(bad);
+    expect(s.el.querySelector(".card .cls")).toBeNull();
+  });
+
+  it("the line wins over a custom parse, which still reads a text with no line", async () => {
+    const parse = vi.fn((text: string) => ({
+      question: text,
+      options: ["Yes", "No"],
+      pick: "Yes",
+      reason: null,
+    }));
+    const s = setup([lead("idle")], [card(`Q?\n${LINE}`), card("Other?", 8)]);
+    mountOn(s, { cards: { consent: true, parse } });
+    await flush();
+    const first = s.el.querySelector<HTMLElement>("[data-card='7']")!;
+    expect(
+      [...first.querySelectorAll<HTMLElement>("[data-ans]")].map((n) => n.dataset.ans),
+    ).toEqual(["Do it", "Not now"]);
+    const second = s.el.querySelector<HTMLElement>("[data-card='8']")!;
+    expect(
+      [...second.querySelectorAll<HTMLElement>("[data-ans]")].map((n) => n.dataset.ans),
+    ).toEqual(["Yes", "No"]);
+  });
+
+  it("cards: false still shows the whole text as a message", async () => {
+    const s = setup([lead("idle")], [card(`${BODY}\n${LINE}`)]);
+    mountOn(s, { cards: false });
+    await flush();
+    expect(s.el.querySelector(".card")).toBeNull();
+    expect(s.el.querySelector(".log .msg .body")!.textContent).toContain(LINE);
+  });
+});
+
+describe("kit.chat faces", () => {
+  const said = (messageId: number, from: string, text: string, extra: Row = {}): Row => ({
+    messageId,
+    from,
+    fromName: from === "human" ? "You" : from === "dev-2" ? "Dev two" : "Lead one",
+    text,
+    createdAtMs: messageId * 60_000,
+    ...extra,
+  });
+  const THREAD = [
+    said(1, "lead-1", "first"),
+    said(2, "lead-1", "second"),
+    said(3, "dev-2", "from another agent"),
+    said(4, "human", "my reply"),
+    said(5, "lead-1", "back again"),
+  ];
+  // What a message node is made of, with the time left out of the meta line (it depends on the clock and the locale).
+  const shape = (el: HTMLElement) =>
+    [...el.querySelectorAll<HTMLElement>(".log .msg")].map((m) => ({
+      cls: m.className,
+      attrs: m.getAttributeNames().sort(),
+      kids: [...m.children].map((c) => c.className),
+      meta: m.querySelector(".meta")?.textContent?.replace(/ · .*$/, "") ?? null,
+      body: m.querySelector(".body")?.textContent,
+    }));
+  const withAvatar = () => {
+    const calls: Array<Record<string, unknown>> = [];
+    (kitOf() as unknown as { avatar: unknown }).avatar = (opts: Record<string, unknown>) => {
+      calls.push(opts);
+      const span = document.createElement("span");
+      span.className = "cs-avatar";
+      span.setAttribute("data-name", String(opts.name));
+      if (opts.face) span.setAttribute("data-face", String(opts.face));
+      return span;
+    };
+    return calls;
+  };
+
+  it("with faces unset the thread is exactly what it was: one meta line and one body per message, no run marks", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s);
+    await flush();
+    expect(shape(s.el)).toEqual([
+      {
+        cls: "msg lead",
+        attrs: ["class", "data-mid"],
+        kids: ["meta", "body"],
+        meta: "Story lead",
+        body: "first",
+      },
+      {
+        cls: "msg lead",
+        attrs: ["class", "data-mid"],
+        kids: ["meta", "body"],
+        meta: "Story lead",
+        body: "second",
+      },
+      {
+        cls: "msg other",
+        attrs: ["class", "data-mid"],
+        kids: ["meta", "body"],
+        meta: "Dev two",
+        body: "from another agent",
+      },
+      {
+        cls: "msg you",
+        attrs: ["class", "data-mid"],
+        kids: ["meta", "body"],
+        meta: "You",
+        body: "my reply",
+      },
+      {
+        cls: "msg lead",
+        attrs: ["class", "data-mid"],
+        kids: ["meta", "body"],
+        meta: "Story lead",
+        body: "back again",
+      },
+    ]);
+    expect(s.el.querySelector(".cs-avatar")).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("faces(row) puts the sender's avatar at the start of a run, and one meta line covers the run", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s, { faces: (row: Row) => ({ name: row.fromName, label: `${row.fromName}!` }) });
+    await flush();
+    const rows = shape(s.el);
+    // lead run (1, 2), another agent (3), the person (4), the lead again (5)
+    expect(rows.map((r) => r.kids)).toEqual([
+      ["meta", "body"],
+      ["body"],
+      ["meta", "body"],
+      ["meta", "body"],
+      ["meta", "body"],
+    ]);
+    const msgs = [...s.el.querySelectorAll<HTMLElement>(".log .msg")];
+    expect(msgs.map((m) => m.getAttribute("data-run"))).toEqual([
+      "start",
+      "cont",
+      "start",
+      "start",
+      "start",
+    ]);
+    expect(
+      msgs.map((m) => m.querySelector(".cs-avatar")?.getAttribute("data-name") ?? null),
+    ).toEqual(["Lead one", null, "Dev two", null, "Lead one"]);
+    // the label is the meta line's name; the person's own messages carry no avatar
+    expect(msgs[0]!.querySelector(".meta")!.textContent).toMatch(/^Lead one! · /);
+    expect(rows.map((r) => r.body)).toEqual([
+      "first",
+      "second",
+      "from another agent",
+      "my reply",
+      "back again",
+    ]);
+    expect(calls.map((c) => c.name)).toEqual(["Lead one", "Dev two", "Lead one"]);
+  });
+
+  it("faces: true draws initials through kit.avatar from the sender's name", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD.slice(0, 3));
+    mountOn(s, { faces: true });
+    await flush();
+    expect(calls.map((c) => c.name)).toEqual(["Story lead", "Dev two"]);
+  });
+
+  it("a face with src draws that image; a face ref goes to kit.avatar", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD.slice(0, 3));
+    mountOn(s, {
+      faces: (row: Row) =>
+        row.from === "dev-2"
+          ? { src: "/img/dev.png", name: "Dev two" }
+          : { face: "builtin-funny:coffee-bot", name: "Lead one" },
+    });
+    await flush();
+    const img = s.el.querySelector<HTMLImageElement>(".log .msg.other .cs-avatar img")!;
+    expect(img.getAttribute("src")).toBe("/img/dev.png");
+    expect(img.getAttribute("alt")).toBe("Dev two");
+    expect(calls).toEqual([
+      expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Lead one" }),
+    ]);
+  });
+
+  it("an avatar image that fails to load is swapped for kit.avatar's face, or the initials without it", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD.slice(2, 3));
+    mountOn(s, {
+      faces: () => ({ src: "/img/gone.png", face: "builtin-funny:coffee-bot", name: "Dev two" }),
+    });
+    await flush();
+    const img = s.el.querySelector<HTMLImageElement>(".log .msg .cs-avatar img")!;
+    img.dispatchEvent(new Event("error"));
+    expect(s.el.querySelector(".log .msg img")).toBeNull();
+    expect(s.el.querySelector(".log .msg .meta .cs-avatar")!.getAttribute("data-name")).toBe(
+      "Dev two",
+    );
+    expect(calls.at(-1)).toEqual(
+      expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Dev two" }),
+    );
+
+    // Without kit.avatar the swap is the initials span.
+    delete (kitOf() as unknown as { avatar?: unknown }).avatar;
+    const bare = setup([lead("idle")], THREAD.slice(2, 3));
+    mountOn(bare, { faces: () => ({ src: "/img/gone.png", name: "Dev two" }) });
+    await flush();
+    bare.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
+    expect(bare.el.querySelector(".log .msg img")).toBeNull();
+    expect(bare.el.querySelector(".log .msg .meta .cs-avatar")!.textContent).toBe("DT");
+  });
+
+  it("a streamed reply joins the lead's run and keeps no meta line the final message would drop", async () => {
+    withAvatar();
+    const thread = [said(1, "lead-1", "first")];
+    const s = setup([lead("idle")], thread);
+    let push!: (chunk: { messageId: number; text: string }) => void;
+    (s.transport as unknown as { stream: unknown }).stream = (
+      cb: (chunk: { messageId: number; text: string }) => void,
+    ) => {
+      push = cb;
+      return () => {};
+    };
+    mountOn(s, { faces: true });
+    await flush();
+    push({ messageId: 2, text: "partial" });
+    await flush();
+    const runs = () =>
+      [...s.el.querySelectorAll<HTMLElement>(".log .msg")].map((m) => [
+        m.getAttribute("data-run"),
+        Boolean(m.querySelector(".meta")),
+        m.querySelector(".body")!.textContent,
+      ]);
+    expect(runs()).toEqual([
+      ["start", true, "first"],
+      ["cont", false, "partial"],
+    ]);
+    // The final message replaces the stream row; the run reads the same.
+    thread.push(said(2, "lead-1", "partial and done"));
+    s.emit("inbox");
+    await flush();
+    expect(runs()).toEqual([
+      ["start", true, "first"],
+      ["cont", false, "partial and done"],
+    ]);
+  });
+
+  it("a card between two messages from one sender ends the run: the next message has its own avatar", async () => {
+    withAvatar();
+    const card = said(
+      2,
+      "lead-1",
+      "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.",
+      {
+        kind: "needs-you",
+      },
+    );
+    const s = setup(
+      [lead("idle")],
+      [said(1, "lead-1", "before"), card, said(3, "lead-1", "after")],
+    );
+    mountOn(s, { faces: true });
+    await flush();
+    const msgs = [...s.el.querySelectorAll<HTMLElement>(".log .msg")];
+    // the card is its own node with no run mark; the messages around it each start a run
+    expect(msgs.map((m) => m.getAttribute("data-run"))).toEqual(["start", null, "start"]);
+    expect(msgs.filter((m) => m.querySelector(".cs-avatar")).length).toBe(2);
+  });
+
+  it("a sender run keeps its nodes when a later message joins it", async () => {
+    withAvatar();
+    const thread = [said(1, "lead-1", "first")];
+    const s = setup([lead("idle")], thread);
+    mountOn(s, { faces: true });
+    await flush();
+    const first = s.el.querySelector(".log .msg")!;
+    thread.push(said(2, "lead-1", "second"));
+    s.emit("inbox");
+    await flush();
+    expect(s.el.querySelector(".log .msg")).toBe(first);
+    expect([...s.el.querySelectorAll(".log .msg")].map((m) => m.getAttribute("data-run"))).toEqual([
+      "start",
+      "cont",
+    ]);
   });
 });
