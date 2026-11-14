@@ -51,6 +51,8 @@ import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
+import { openForeman } from "@/features/foreman/open-foreman";
+import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
 
@@ -126,6 +128,7 @@ export function CommandPaletteMount() {
 
   // The Routines row carries the needs-you count the title-bar entry keeps live.
   const routinesNeedingYou = useRoutinesStore((s) => s.needsYouCount);
+  const foremanMailWaiting = useForemanMailWaiting(open);
 
   const profiles = useLocalProfileStore((s) => s.status);
   const openedViewerPaths = useViewerStore((s) => s.openedViewerPaths);
@@ -174,10 +177,20 @@ export function CommandPaletteMount() {
         canAttach: teams.length > 0,
         canAddMachine,
         routinesNeedingYou,
+        foremanMailWaiting,
         panes,
         commands,
       }),
-    [teams, accounts, recentEpics, canAddMachine, routinesNeedingYou, panes, commands],
+    [
+      teams,
+      accounts,
+      recentEpics,
+      canAddMachine,
+      routinesNeedingYou,
+      foremanMailWaiting,
+      panes,
+      commands,
+    ],
   );
 
   // --- Async epic-file index (fire-and-forget on open; disk-only, AC-6) -----
@@ -322,6 +335,7 @@ export function CommandPaletteMount() {
       openRoutines: () => openRoutines(),
       openAgents: () => openAgents(),
       openScratchSpace: () => openScratchSpace(),
+      openForeman: () => openForeman(),
       addMachine: () => openMachinesPanel({ mode: "add" }),
     };
   }, [activeOrg, enterTeam]);

@@ -9,7 +9,7 @@
 //
 // What it reads, in turn order:
 //   * a card: a `send_message` to `human` with `kind: needs-you` whose text ends in a card
-//     line (`parseCardLine` in the kit's `chat/chat-core.js`). A needs-you message without one is a question, not
+//     line (`parseCardLine` in the dashboard kit's `chat/chat-core.js`, the one parser). A needs-you message without one is a question, not
 //     a card. Its message id comes from the call's result.
 //   * its click: the person's first answer to it, read from a `read_messages` result (the
 //     page's `replyAsHuman` lands there). When the thread carries `inReplyTo`, the answer is
@@ -24,6 +24,9 @@
 // a `run` act (`run`, `run-…`) allows `run_in_terminal_tab`. Ledger writes
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
 // already allowed.
+// `send_role_message` is bound too: it is allowed only as the Foreman hand-back (`HANDBACK`),
+// once, after the last setup act and before `signal_done`. Nothing that acts (a setup verb, a
+// ledger write, `open_workspace`) may follow the hand-back or `signal_done`; reads may.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +34,46 @@ import { parseCardLine } from "../src-tauri/src/http/routes/dashboard_kit/chat/c
 import { SETUP_VERBS } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
+
+// The one `send_role_message` the guide may send (the pack skill's `foreman-handback` block).
+export const HANDBACK = Object.freeze({
+  role: "codesense-foreman",
+  org: "codesense/docs",
+  team: "getting-started",
+  prefix: "Setup done:",
+});
+
+// What may not follow the hand-back or `signal_done`: the setup verbs and these other writes.
+export const WRITES_AFTER_HANDBACK = [
+  "records_create",
+  "records_set_fields",
+  "records_write",
+  "records_delete",
+  "open_workspace",
+];
+
+// The server's `role_name` strips one leading `role:` and trims, so both spellings name one queue.
+const roleName = (role) =>
+  typeof role === "string"
+    ? role
+        .trim()
+        .replace(/^role:/, "")
+        .trim()
+    : role;
+
+/** The reasons a `send_role_message` is not the Foreman hand-back. */
+function handbackFaults(input) {
+  const faults = [];
+  if (roleName(input.role) !== HANDBACK.role)
+    faults.push(`role is ${JSON.stringify(input.role)}, not ${HANDBACK.role}`);
+  if (input.team?.org !== HANDBACK.org || input.team?.team !== HANDBACK.team)
+    faults.push(`team is not ${HANDBACK.org} / ${HANDBACK.team}`);
+  if (typeof input.text !== "string" || !input.text.startsWith(HANDBACK.prefix))
+    faults.push(`text does not start with "${HANDBACK.prefix}"`);
+  for (const field of ["replyTo", "reply_to", "attachFile", "attach_file"])
+    if (input[field] !== undefined && input[field] !== null) faults.push(`${field} is set`);
+  return faults;
+}
 
 // Claude names a tool `mcp__codesense__<tool>`, OpenCode `codesense_<tool>`, and the by-name
 // wrapper is `codesense_call_tool` under either.
@@ -108,6 +151,8 @@ export function checkConsent(
   let cards = 0;
   let calls = 0;
   let clicks = 0;
+  let handback; // the turn of the hand-back, once sent
+  let done = false; // signal_done has been called
 
   for (const [at, turn] of turns.entries()) {
     const index = turn.index ?? at;
@@ -155,9 +200,25 @@ export function checkConsent(
             why = `the click on ${card.label} sent at turn ${card.turn} allows act ${chosen.act} (${allowed.join(", ") || "no setup verb"}) only`;
           }
         }
-      } else if (setupVerbs.includes(name)) {
-        calls += 1;
-        if (!allowed.includes(name))
+      } else if (name === "send_role_message") {
+        const faults = handbackFaults(input);
+        if (handback !== undefined)
+          faults.push(`a second hand-back (the first was at turn ${handback})`);
+        if (done) faults.push("sent after signal_done");
+        if (faults.length)
+          errors.push(
+            `turn ${index}: send_role_message is not the Foreman hand-back: ${faults.join("; ")}`,
+          );
+        handback ??= index;
+      } else if (name === "signal_done") {
+        done = true;
+      } else if (setupVerbs.includes(name) || WRITES_AFTER_HANDBACK.includes(name)) {
+        const setup = setupVerbs.includes(name);
+        if (setup) calls += 1;
+        if (handback !== undefined)
+          errors.push(`turn ${index}: ${name} came after the hand-back at turn ${handback}`);
+        else if (done) errors.push(`turn ${index}: ${name} came after signal_done`);
+        if (setup && !allowed.includes(name))
           errors.push(`turn ${index}: ${name} was called with no consent click for it: ${why}`);
       }
     }

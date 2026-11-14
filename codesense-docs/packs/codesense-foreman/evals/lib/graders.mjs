@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { agentId, ghCommand, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
+import { agentId, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -113,8 +113,11 @@ const ADD = /^worktree add -b (foreman\/\S+) \.\.\/(foreman-\S+) (\S+)$/;
 // The branches this run made (the planted one from a "previous run" is not).
 const newBranches = (s, where) => s.foremanBranches.filter((b) => b.where === where && b.name !== PRIOR_BRANCH);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-// The branch a gh argv's --head names, without an `owner:` prefix.
-const headOf = (argv) => flagValue(argv, "-H", "--head")?.replace(/^[^:/]+:/, "");
+// A PR head without an `owner:` prefix, and the branch a gh argv's --head names.
+const bareHead = (head) => head?.replace(/^[^:/]+:/, "");
+const headOf = (argv) => bareHead(flagValue(argv, "-H", "--head"));
+// A read_content_file call of one context path (the git-access record, a team skill).
+const reads = (file) => (c) => c.tool === "read_content_file" && c.args.path === file;
 // A path as the file system sees it (macOS temp dirs sit behind a /private symlink), through its
 // nearest existing parent, since a removed worktree's files are gone by the time it is graded.
 const real = (p) => {
@@ -150,7 +153,9 @@ function newStory(s, e) {
   const out = forbidden(s, e.forbidden_tools);
   const git = gitLines(s);
   const acting = (c) => ["git", "script", "write_file"].includes(c.tool) && !(c.tool === "git" && HOME_ONLY.test(c.args.argv.join(" ")));
-  const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls];
+  // A pull request through the GitHub MCP tool counts like one through gh.
+  const mcpPrs = foremanCalls(s, GITHUB_PR);
+  const acts = [...s.calls.filter((c) => c.caller === FOREMAN && acting(c)), ...s.scriptCalls, ...s.ghCalls, ...mcpPrs];
   if (!repliesIn(s, 1).length) out.push("no reply to the request");
   if (s.variant === "docs") {
     if (acts.length || newBranches(s, "origin").length || newBranches(s, "home").length)
@@ -219,11 +224,30 @@ function newStory(s, e) {
     if (!made.includes(branch.name)) out.push(`${branch.name} is not a branch a worktree was made on`);
   }
   if (remote) {
-    const heads = s.ghCalls.filter((g) => g.create).map((g) => headOf(g.argv));
-    if (heads.length !== creates) out.push(`${heads.length} pr create calls, expected ${creates}`);
-    if (!same([...heads].sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
+    // The recorded method opens each PR: gh's, or the GitHub MCP tool's. None recorded, or a
+    // method that can't open a PR: the branch is pushed and handed over, with no gh call.
+    const viaGh = s.ghCalls.filter((g) => g.create).map((g) => ({ seq: g.seq, head: headOf(g.argv) }));
+    const viaMcp = mcpPrs.map((c) => ({ seq: c.seq, head: bareHead(c.args.head) }));
+    if (s.gitAccess !== "gh" && s.ghCalls.length) out.push(`${s.ghCalls.length} gh calls with no gh git-access method`);
+    const wanted = (method) => (s.gitAccess === method ? creates : 0);
+    if (viaGh.length !== wanted("gh")) out.push(`${viaGh.length} pr create calls, expected ${wanted("gh")}`);
+    if (viaMcp.length !== wanted("github-mcp")) out.push(`${viaMcp.length} GitHub MCP pull requests, expected ${wanted("github-mcp")}`);
+    const prs = [...viaGh, ...viaMcp].sort((a, b) => a.seq - b.seq);
+    if (prs.length && !same(prs.map((p) => p.head).sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
+    // The record is read before each PR (after the one before it), and at least once.
+    const isRead = reads(GIT_ACCESS_PATH);
+    // With no PR to open, the read still decides the hand-over: it comes before the worktree goes.
+    const removedBy = () => Math.max(...git.filter((g) => g.line.startsWith("worktree remove")).map((g) => g.seq));
+    if (!calls.some(isRead)) out.push("never read the recorded git-access method");
+    else if (!prs.length && !calls.some((c) => isRead(c) && c.seq < removedBy()))
+      out.push("handed over the branch before reading the recorded git-access method");
+    else
+      prs.forEach((pr, i) => {
+        if (!calls.some((c) => isRead(c) && c.seq > (prs[i - 1]?.seq ?? 0) && c.seq < pr.seq))
+          out.push(`opened a pull request before reading the recorded git-access method (${pr.head})`);
+      });
   } else {
-    if (s.ghCalls.length) out.push("opened a pull request with no remote");
+    if (s.ghCalls.length || mcpPrs.length) out.push("opened a pull request with no remote");
     if (git.some((g) => /^(?:-C \S+ )?push\b/.test(g.line))) out.push("pushed with no remote");
   }
   if (s.variant === "scripted") {
@@ -235,7 +259,7 @@ function newStory(s, e) {
       if (!s.scriptCalls.every((c) => wts.includes(path.basename(c.cwd)))) out.push("the team scripts did not run inside the foreman-* worktree");
       if (story.id !== "ACME-42") out.push(`the story id is ${story.id}, the id script printed ACME-42`);
     }
-    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === SKILL_PATH);
+    const read = firstSeq(calls, reads(SKILL_PATH));
     if (read === Infinity || !foremanCalls(s, "query_context").some((c) => c.seq < read)) out.push("never found and read the story-create skill");
     if (foremanCalls(s, "write_file").some((c) => /\/stories\//.test(c.args.file))) out.push("wrote the story itself when the team has a story-create skill");
   } else if (s.scriptCalls.length) out.push("ran team scripts the team does not have");
@@ -385,8 +409,10 @@ const graders = {
     if (writes.length !== e.gh_writes) out.push(`${writes.length} gh writes, expected ${e.gh_writes} (the failed pr create)`);
     const failedCall = s.ghCalls.find((g) => g.create && g.ok === false);
     if (!failedCall) return [...out, "no pr create was attempted"];
+    const read = firstSeq(foremanCalls(s), reads(GIT_ACCESS_PATH));
+    if (!(read < failedCall.seq)) out.push("attempted the pull request before reading the recorded git-access method");
     // `--head owner:branch` names the same branch.
-    const head = (flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch)?.replace(/^[^:/]+:/, "");
+    const head = bareHead(flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch);
     if (!new RegExp(e.pr_head).test(head ?? "")) out.push(`the pull request was opened from ${head}, not a foreman branch`);
     else if (!s.branches.includes(head)) out.push(`the head ${head} was never created`);
     if (!(failedCall.foremanWorktrees >= 1)) out.push("the pull request was attempted with no foreman worktree");

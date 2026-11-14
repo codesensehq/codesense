@@ -627,7 +627,7 @@ pub struct RemovedSourceRepo {
 /// A refusal as the tool's envelope: an unknown team is `unauthorizedTeam`, an
 /// I/O failure is a hard error, anything else is a `validation` the agent can
 /// correct.
-fn refusal<T>(error: AddRepoError) -> Reply<T> {
+pub(crate) fn refusal<T>(error: AddRepoError) -> Reply<T> {
     match error {
         AddRepoError::UnknownTeam { .. } => Ok(ToolEnvelope::UnauthorizedTeam),
         AddRepoError::Failure { message } => Err(message),
@@ -666,7 +666,7 @@ where
 }
 
 /// The team's tracked repo `repo` names, read on the blocking pool.
-async fn tracked_repo(
+pub(crate) async fn tracked_repo(
     home: &Path,
     user_id: u64,
     org: &str,

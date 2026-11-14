@@ -31,5 +31,5 @@ expected:
 # Rubric: what the replies say, judged in the recorded model runs.
 rubric:
   - id: set-up-line
-    ask: "After the hand-back the Foreman says one line starting Set up: that summarises what the ledger shows (team, repos, gh)."
+    ask: "After the hand-back the Foreman says one line starting Set up: that summarises what the ledger shows (team, repos, git access method)."
 grader: script

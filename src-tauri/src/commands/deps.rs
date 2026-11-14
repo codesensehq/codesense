@@ -874,6 +874,16 @@ impl DependencyManager {
         }
     }
 
+    /// Mark `gh` found at `path` with `version`, as a resolution would.
+    pub(crate) fn set_gh_for_test(&self, path: &str, version: &str) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.gh = GhEntry {
+            path: Some(PathBuf::from(path)),
+            version: Some(version.to_string()),
+            resolving: false,
+        };
+    }
+
     /// [`Self::re_resolve_stale`] against the PATH value `login_path` instead of a
     /// login-shell probe.
     pub(crate) fn re_resolve_stale_for_test(
@@ -1264,10 +1274,7 @@ fn resolve_versioned_binary(
 fn login_probe_shell() -> String {
     if let Ok(shell) = std::env::var("SHELL") {
         let path = Path::new(&shell);
-        let base_ok = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .is_some_and(|base| matches!(base, "zsh" | "bash"));
+        let base_ok = takes_lic(path);
         // Require the path to actually exist — a stale `$SHELL` (e.g. Homebrew
         // zsh after uninstall) would otherwise make every spawn fail with no
         // fallback. `exists()` here is fine: this runs on the background thread.
@@ -1276,6 +1283,24 @@ fn login_probe_shell() -> String {
         }
     }
     "zsh".to_string()
+}
+
+/// Whether `shell` is one the probes run with `-lic`: zsh or bash.
+fn takes_lic(shell: &Path) -> bool {
+    shell
+        .file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|base| matches!(base, "zsh" | "bash"))
+}
+
+/// The shell the env-set probe runs, given `$SHELL` (`shell_env`): the login probe's
+/// shell, or `None` when `$SHELL` names another shell (fish, nu, ...), whose variables a
+/// zsh stand-in would misread as unset.
+fn env_probe_shell(shell_env: Option<&str>) -> Option<String> {
+    match shell_env {
+        Some(shell) if !takes_lic(Path::new(shell)) => None,
+        _ => Some(login_probe_shell()),
+    }
 }
 
 /// SW-OB-12 (Central risk #1): resolve a binary the way the user's shell would.
@@ -1316,25 +1341,83 @@ pub fn resolve_binary_via_login_shell(name: &str, timeout: Duration) -> Option<P
 /// value). `script` MUST be caller-controlled — the charset check for
 /// interpolated user input lives in each caller, not here.
 fn run_login_shell_capture(script: &str, timeout: Duration) -> Option<String> {
-    let mut command = Command::new(login_probe_shell());
+    run_shell_capture(&login_probe_shell(), script, timeout)
+}
+
+/// [`run_login_shell_capture`] with the shell named, so tests can pass a fake one.
+fn run_shell_capture(shell: &str, script: &str, timeout: Duration) -> Option<String> {
+    let mut command = Command::new(shell);
     command.args(["-lic", script]);
     capture_stdout_within(command, timeout)
+}
+
+/// Brackets the env-set probe's answer, like [`PATH_SENTINEL_BEGIN`]/[`PATH_SENTINEL_END`].
+const ENV_SENTINEL_BEGIN: &str = "CS_ENV_BEGIN>>";
+const ENV_SENTINEL_END: &str = "<<CS_ENV_END";
+
+/// A shell variable name: a letter or `_`, then letters, digits and `_`.
+fn is_shell_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && !name.contains(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+}
+
+/// The fixed env-set probe for `names`: for each, `1` when the shell exports it with a
+/// non-empty value, else `0`, between the sentinels. A value is only expanded inside a
+/// test or sent to /dev/null; the script never prints it. `None` for an invalid name.
+fn login_env_set_script(names: &[&str]) -> Option<String> {
+    if names.iter().any(|name| !is_shell_name(name)) {
+        return None;
+    }
+    // Like the PATH probe, the sentinels exist only once printf joins them.
+    let tests: String = names
+        .iter()
+        .map(|name| {
+            format!(
+                " {{ [ -n \"${{{name}:-}}\" ] && printenv {name} >/dev/null 2>&1; }} && printf 1 || printf 0;"
+            )
+        })
+        .collect();
+    Some(format!(
+        "printf '%sBEGIN>>' 'CS_ENV_';{tests} printf '<<%sEND' 'CS_ENV_'"
+    ))
+}
+
+/// Which of `names` the user's login shell (the one agent CLIs start from) exports with a
+/// non-empty value, in order. Only `0`/`1` per name comes back from the shell, never a
+/// value. `None` when a name is invalid, `$SHELL` is not zsh or bash, or the shell fails,
+/// times out or answers in another shape. Blocking: spawns `$SHELL -lic`, bounded by
+/// `timeout`.
+pub fn login_shell_env_set(names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    let shell = env_probe_shell(std::env::var("SHELL").ok().as_deref())?;
+    env_set_in_shell(&shell, names, timeout)
+}
+
+fn env_set_in_shell(shell: &str, names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    let script = login_env_set_script(names)?;
+    let raw = run_shell_capture(shell, &script, timeout)?;
+    let bits = extract_sentinel_value(&raw, ENV_SENTINEL_BEGIN, ENV_SENTINEL_END)?;
+    (bits.len() == names.len() && !bits.contains(|c: char| c != '0' && c != '1'))
+        .then(|| bits.chars().map(|c| c == '1').collect())
 }
 
 /// Run `command` and return its stdout, the whole capture bounded by
 /// `timeout`: an interactive shell may hang without a tty, and a process an rc
 /// file backgrounds inherits stdout and can hold the pipe open long after the
 /// shell exits. stdout drains on its own thread; past the deadline a shell
-/// still running is killed and reaped (None), and a shell that exited returns
-/// what it printed while the backgrounded holder keeps the detached reader.
+/// still running is killed and reaped (None), with everything in its process
+/// group (what its rc started), and a shell that exited returns what it printed
+/// while the backgrounded holder keeps the detached reader.
 fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<String> {
     use std::io::Read;
     use std::sync::mpsc;
 
-    let mut child = command
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // A new session, so a timeout stops what the rc started too.
+    in_new_session(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| warn!(target: "deps", "login-shell probe spawn failed: {}", e))
         .ok()?;
@@ -1365,16 +1448,14 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
             Ok(None) => {
                 if Instant::now() >= deadline {
                     warn!(target: "deps", "login-shell probe timed out after {:?}", timeout);
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_group_and_reap(&mut child);
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(e) => {
                 warn!(target: "deps", "login-shell probe wait failed: {}", e);
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group_and_reap(&mut child);
                 return None;
             }
         }
@@ -1387,6 +1468,36 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
     }
     let bytes = collected.lock().map(|buf| buf.clone()).unwrap_or_default();
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Start `command` as the leader of a new session, so its pid is also its group's id
+/// and a timeout can kill the group. Not just a new process group: under a terminal, an
+/// interactive shell in a background group stops on its first terminal access until the
+/// timeout; a new session has no terminal.
+#[cfg(unix)]
+fn in_new_session(command: &mut Command) {
+    // SAFETY: the hook runs in the child between fork and exec, and `setsid` is
+    // async-signal-safe and touches no memory of the parent.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(command, || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn in_new_session(_command: &mut Command) {}
+
+/// Kill `child`'s process group (it leads a session, see [`capture_stdout_within`]), then the
+/// child itself, and reap it.
+fn kill_group_and_reap(child: &mut std::process::Child) {
+    // Not reaped yet, so its pid is still its group's id.
+    crate::commands::dashboard_launch::kill_process_group(std::process::Child::id(child));
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Extract the value bracketed by `begin`/`end` sentinels from probe stdout.
@@ -2378,6 +2489,175 @@ mod tests {
         let started = Instant::now();
         assert_eq!(capture_stdout_within(command, Duration::from_secs(1)), None);
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// A stand-in login shell: it ignores `-lic`, sets the variables an rc file would, prints
+    /// rc noise that includes a value, then runs the probe script with `/bin/sh`.
+    #[cfg(unix)]
+    fn fake_login_shell(dir: &Path, secret: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-zsh");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"rc noise {secret}\"\nexport SECRET_ONE='{secret}'\nexport EMPTY_ONE=''\nNOT_EXPORTED=x\nexec /bin/sh -c \"$2\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_reads_the_login_shell_and_returns_bools_only() {
+        let dir = fresh_test_dir("env_set_shell");
+        // Built at run time so no token-shaped literal sits in the source.
+        let secret = ["ghp", "_", &"x".repeat(36)].concat();
+        let shell = fake_login_shell(&dir, &secret);
+        let names = [
+            "SECRET_ONE",
+            "EMPTY_ONE",
+            "NOT_EXPORTED",
+            "NOT_THERE_AT_ALL",
+        ];
+        assert_eq!(
+            env_set_in_shell(shell.to_str().unwrap(), &names, Duration::from_secs(5)),
+            Some(vec![true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn env_set_script_never_prints_a_value_and_refuses_a_bad_name() {
+        let script = login_env_set_script(&["GH_TOKEN", "_X1"]).unwrap();
+        assert!(!script.contains(ENV_SENTINEL_BEGIN) && !script.contains(ENV_SENTINEL_END));
+        assert!(script.contains("printenv GH_TOKEN >/dev/null 2>&1"));
+        assert!(!script.contains("echo"));
+        for bad in ["", "1A", "A B", "A;B", "A$(x)", "A}", "a\nb"] {
+            assert_eq!(login_env_set_script(&["OK", bad]), None, "{bad:?}");
+            assert_eq!(
+                env_set_in_shell("/bin/sh", &[bad], Duration::from_secs(1)),
+                None
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_is_none_when_the_shell_hangs_or_answers_oddly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("env_set_odd");
+        let hang = dir.join("hang-zsh");
+        std::fs::write(&hang, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        assert_eq!(
+            env_set_in_shell(hang.to_str().unwrap(), &["A"], Duration::from_millis(300)),
+            None
+        );
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        let odd = dir.join("odd-zsh");
+        std::fs::write(&odd, "#!/bin/sh\nprintf 'CS_ENV_BEGIN>>1x<<CS_ENV_END'\n").unwrap();
+        std::fs::set_permissions(&odd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            env_set_in_shell(odd.to_str().unwrap(), &["A", "B"], Duration::from_secs(5)),
+            None
+        );
+    }
+
+    /// A login shell that times out is stopped with whatever its rc started.
+    #[cfg(unix)]
+    #[test]
+    fn an_env_probe_that_times_out_stops_what_the_rc_started() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("env_set_group");
+        let pid_file = dir.join("helper.pid");
+        let shell = dir.join("rc-zsh");
+        std::fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nsleep 30 &\necho $! > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            env_set_in_shell(shell.to_str().unwrap(), &["A"], Duration::from_millis(500)),
+            None
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only asks whether the process still exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the rc's helper outlived the probe"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The probe's shell leads a new session, not just a process group: an interactive
+    /// shell started in a background group of a terminal's session stops on its first
+    /// terminal access until the timeout, and a new session has no terminal at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_shell_probe_runs_in_its_own_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("probe_session");
+        let pid_file = dir.join("shell.pid");
+        let shell = dir.join("session-zsh");
+        std::fs::write(
+            &shell,
+            format!("#!/bin/sh\necho $$ > '{}'\nsleep 2\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = std::thread::spawn({
+            let shell = shell.clone();
+            move || run_shell_capture(shell.to_str().unwrap(), "true", Duration::from_secs(10))
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the shell never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: getsid only reads the session id of a live process.
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the shell leads its own session"
+        );
+        assert!(probe.join().unwrap().is_some());
+    }
+
+    /// The env-set probe answers only for zsh and bash: another `$SHELL` reads as unknown,
+    /// where a zsh stand-in would read its variables as unset.
+    #[test]
+    fn the_env_probe_runs_only_for_zsh_or_bash() {
+        for other in [
+            "/usr/bin/fish",
+            "/opt/homebrew/bin/nu",
+            "/bin/sh",
+            "/bin/tcsh",
+        ] {
+            assert_eq!(env_probe_shell(Some(other)), None, "{other}");
+        }
+        assert!(env_probe_shell(Some("/bin/zsh")).is_some());
+        assert!(env_probe_shell(Some("/usr/local/bin/bash")).is_some());
+        assert!(env_probe_shell(None).is_some());
     }
 
     #[test]

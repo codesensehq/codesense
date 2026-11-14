@@ -378,6 +378,9 @@ declare namespace CodesenseSdk {
     onRoutinesChanged(cb: () => void): Unsubscribe;
     onMachinesChanged(cb: () => void): Unsubscribe;
     onWorktreesChanged(cb: () => void): Unsubscribe;
+    /** Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
+     * record's `sessionIds` to hear only about that agent's session. */
+    onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
     /** Runs `cb` when the answer to canPasteToTerminal() flips between true and false.
      * Re-read then. */
     onPasteTargetChanged(cb: () => void): Unsubscribe;
@@ -546,6 +549,8 @@ declare namespace CodesenseSdk {
     copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
     chips?: Array<{ label: string; text: string; /** A pencil beside the chip puts its text in the composer instead of sending it. */ edit?: boolean }>;
+    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
+    faces?: boolean | ((row: ChatRow) => { src?: string; face?: string; name?: string; label?: string } | null | undefined);
     /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
     next?: boolean | { edit?: boolean };
     /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
@@ -1871,6 +1876,10 @@ declare namespace CodesenseSdk {
       sessionId: string;
       toolUseId?: string | null;
       turn?: number | null;
+    }): Promise<unknown>;
+    /** read · sessions:read */
+    sessionRecord(args: {
+      handle: string;
     }): Promise<unknown>;
     /** read · sessions:read · MCP twin session_usage */
     sessionUsage(args?: Record<string, unknown>): Promise<unknown>;

@@ -37,7 +37,12 @@ impl CostRollup {
         if matches!(self.models.len(), 0) || self.models.values().any(|(_, unpriced)| *unpriced) {
             return None;
         }
-        Some(self.models.values().map(|(cost, _)| *cost).sum())
+        Some(Self::priced(self))
+    }
+
+    /// The sum of the rows that have a price, whether or not other rows have none.
+    pub(crate) fn priced(&self) -> f64 {
+        self.models.values().map(|(cost, _)| *cost).sum()
     }
 
     /// The models with an unpriced row, sorted.

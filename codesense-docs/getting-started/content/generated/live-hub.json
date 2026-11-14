@@ -1113,7 +1113,7 @@
     "src-tauri/src/live_hub/agent_list/rows.rs": "86be0bbd951d279e47bd938be31f1f5a4f8c70e24c0fc9e2db4fd9d07fa6dce2",
     "src-tauri/src/live_hub/agent_list/views.rs": "0fbc27242d28517476f53c8395fab13ba460850539003dd7d5bea97b685c5ebf",
     "src-tauri/src/records/projection.rs": "ff7eb296d7dc0ec988570db058eca494c34009e9ffca8ef7de1c65d2d064d913",
-    "src/features/dashboard/lib/live-hub.ts": "b468ff8b4e7c531b74c93c1ca33e3e9aafbe9cd363cf8836a2e8b3bc6acbe1f7",
+    "src/features/dashboard/lib/live-hub.ts": "8e399c46d4940cf8643435ad6052ef97e373e48f900595341c75b5efabbcb7e6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7"
   },
   "untypedTopics": [
