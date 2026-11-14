@@ -384,7 +384,7 @@ pub struct ResolvedLaunchProfile {
     /// `(allow ∪ {bridge}) ∩ present` via an ephemeral config. `None` = unfiltered.
     #[serde(default)]
     pub mcp_allow: Option<Vec<String>>,
-    /// Codex's declared bridge restriction: null allows all, [] allows none.
+    /// The declared bridge restriction: null allows all, [] allows none.
     pub bridge_tools: Option<Vec<String>>,
     /// Registered bridge tools this launch can call, after the restriction.
     pub effective_bridge_tools: Vec<String>,

@@ -12,7 +12,7 @@ or `untrusted`. Bridge calls do not prompt. The captured bridge grant plus
 `mcp.bridge_tools` are the least-privilege controls. Other servers, including
 codegraph, keep their existing approval behavior.
 
-Tool restrictions apply to local Codex and OpenCode launches. A remote saved agent with an
+Tool restrictions apply to local Claude, Codex and OpenCode launches. A remote saved agent with an
 explicit `bridge_tools` list, including `[]`, is refused with an unsupported-policy error,
 so a restriction is never silently dropped; `agent_preview` reports this as
 `bridge_tools_local_only`. A remote agent with no list (omitted or `null`) has the full
@@ -36,9 +36,8 @@ mcp:
 
 The list uses exact, unqualified tool names: 1–128 ASCII letters, digits,
 underscores or hyphens, without duplicates, namespace prefixes or wildcards.
-Omitted or `null` allows all bridge tools; `[]` allows none. It applies to
-runtimes that enforce it (today Codex and OpenCode); other runtimes reject an
-explicit list. Unknown names warn and grant nothing.
+Omitted or `null` allows all bridge tools; `[]` allows none. Every runtime
+enforces it: Claude, Codex, OpenCode and Hermes. Unknown names warn and grant nothing.
 An explicit list never automatically acquires newly introduced tools.
 
 Use `mcpBridgeTools` on `agent_create`, `agent_update` and `agent_preview`.
@@ -57,6 +56,20 @@ of Codex filtering. A by-name call through `codesense_call_tool` needs both its
 own name and the trimmed target name enabled. Preview explains this when the
 wrapper is listed. Search and schema tools may describe excluded tools; they
 cannot execute them.
+
+## Claude
+
+A Claude agent's per-launch settings get one `deny` rule for each served bridge
+tool its list leaves out, such as `mcp__codesense__notes_write`. The rules are per
+tool, never `mcp__codesense__*`: in Claude a deny beats any allow, so a wildcard would
+also block the tools every agent keeps. Claude hides a denied tool from the model
+and refuses a call to it. A Claude list always keeps `signal_done`,
+`read_messages`, `reply`, `react`, `ask_user`, `post_agent_message`, `who_am_i`,
+`list_sessions`, `signal_progress` and the routine-run tools, so
+`launch.effective_bridge_tools` includes them. A by-name call through
+`codesense_call_tool` is refused unless its target is in the effective list.
+The server instructions a restricted agent receives leave out the paragraphs
+about tools it can't call.
 
 You do not need to know or override the generated `codesense_scope_<hash>` alias.
 The allowlist belongs in the saved agent definition, rather than in CLI `-c` args.

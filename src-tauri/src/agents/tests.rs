@@ -315,17 +315,15 @@ fn the_bridge_tools_error_names_every_enforcing_runtime() {
 }
 
 #[test]
-fn bridge_tool_allowlist_validation_follows_the_runtime_capability() {
-    for tools in [vec![], vec!["signal_done".to_string()]] {
-        let mut definition = agent("bridge-reviewer");
-        definition.revision = 1;
-        definition.mcp.bridge_tools = Some(tools);
-        assert_eq!(
-            definition.validate(),
-            Err(ValidationError::BridgeToolsUnsupported)
-        );
-        definition.runtime = AgentCli::Codex;
-        assert_eq!(definition.validate(), Ok(()));
+fn every_runtime_accepts_a_bridge_tool_allowlist() {
+    for runtime in AgentCli::ALL {
+        for tools in [vec![], vec!["signal_done".to_string()]] {
+            let mut definition = agent("bridge-reviewer");
+            definition.revision = 1;
+            definition.runtime = runtime;
+            definition.mcp.bridge_tools = Some(tools);
+            assert_eq!(definition.validate(), Ok(()), "{runtime}");
+        }
     }
 }
 

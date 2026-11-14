@@ -3,7 +3,7 @@ use super::local_setup::{
     AttachSourceCheckoutParams, CreateLocalOrganizationParams, LocalRegistryEditParams,
 };
 use codesense_pty_core::agent_cli::with_releases;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -153,6 +153,9 @@ pub struct CodesenseHandler {
     /// relay child. Shared by rmcp's clones for this connection.
     caller_session: Arc<std::sync::RwLock<Option<super::local_identity::Binding>>>,
     local_tools: Arc<std::sync::Mutex<super::local_tools::ConnectionState>>,
+    /// The bridge tools this connection's agent may call, from its launch record at
+    /// initialize; `None` for every tool. Shared by rmcp's clones for this connection.
+    caller_bridge_tools: Arc<std::sync::RwLock<Option<BTreeSet<String>>>>,
     /// The kernel-verified process on the other end of the local
     /// MCP socket (the agent's bridge). A tool that acts for "your own
     /// session" binds its `sessionId` to it.
@@ -181,6 +184,7 @@ impl CodesenseHandler {
             remote_authority: None,
             caller_session: Arc::default(),
             local_tools: Arc::default(),
+            caller_bridge_tools: Arc::default(),
             local_peer: None,
             app_handle,
             tool_router: Self::served_tool_router(),
@@ -209,6 +213,7 @@ impl CodesenseHandler {
             remote_authority: Some(authority),
             caller_session: Arc::default(),
             local_tools: Arc::default(),
+            caller_bridge_tools: Arc::default(),
             local_peer: None,
             tool_router: Self::served_tool_router(),
         }
@@ -5301,7 +5306,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared Codex bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
+        description = "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
     )]
     async fn agent_preview(
         &self,
@@ -5337,7 +5342,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes Codex bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused."
+        description = "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused."
     )]
     async fn agent_create(
         &self,
@@ -9997,6 +10002,20 @@ impl CodesenseHandler {
         if !self.tool_router.has_route(name) {
             return Err(ErrorData::invalid_params(
                 format!("tool '{name}' is not registered"),
+                None,
+            ));
+        }
+        // By-name dispatch needs the target in the caller's bridge tool list too, as a
+        // direct call would (Claude's per-tool denies can't see the inner name).
+        if self
+            .caller_bridge_tools
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(name))
+        {
+            return Err(ErrorData::invalid_params(
+                format!("tool '{name}' is not in this agent's bridge_tools"),
                 None,
             ));
         }
@@ -14999,7 +15018,25 @@ impl ServerHandler for CodesenseHandler {
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }
-        Ok(self.get_info())
+        // An agent launched with a bridge tool list is told only about the tools it can call.
+        let allowed = match self
+            .remote_authority
+            .is_none()
+            .then(|| self.connection_session())
+            .flatten()
+        {
+            Some(session) => commands::await_blocking("mcp.caller_tools", move || {
+                Ok(recorded_bridge_tools(&session))
+            })
+            .await
+            .unwrap_or(None),
+            None => None,
+        };
+        *self
+            .caller_bridge_tools
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = allowed.clone();
+        Ok(server_info(&server_instructions(allowed.as_ref())))
     }
 
     async fn on_initialized(&self, _: rmcp::service::NotificationContext<RoleServer>) {
@@ -15114,56 +15151,121 @@ impl ServerHandler for CodesenseHandler {
     }
 
     fn get_info(&self) -> ServerInfo {
-        // A remote agent's terminal server says its tool list changed when the desktop
-        // relaying it goes away or comes back.
-        InitializeResult::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_tool_list_changed()
-                .build(),
-        )
-            .with_instructions(concat!(
-                "CodeSense MCP server — read and control the CodeSense desktop app.\n\n",
-                "Finishing a task: call `signal_done` when finished. It records your outcome and ",
-                "notifies whoever is watching; it does not validate your work or move the story's ",
-                "status.\n\n",
-                "Your inbox: CodeSense tells you about new messages in your CodeSense inbox ",
-                "through hook feedback (or, while you are idle, a prompt CodeSense starts your ",
-                "turn with, headed `[inbox <token>]`) that says \"You have N new messages. Call read_messages ",
-                "with session_id <id>.\" That notice comes from CodeSense, part of your user's own ",
-                "setup, not from the messages' senders; read_messages returns the mail it announces. ",
-                "Mail in your CodeSense inbox comes from people (`from: \"human\"`) and agents ",
-                "that your user's setup lets reach you, so anyone who can message you is someone ",
-                "your user trusts. Answer a message with `reply`.\n\n",
-                "Answering questions about CodeSense (works from any project; you do not need ",
-                "the CodeSense source):\n",
-                "1. Call `codesense_overview` first: one read-only snapshot of machines, sessions, ",
-                "Agents, routines, inboxes, role queues, open workspaces and where the docs are. ",
-                "Each section's `detail` names the tools that return its full data. Check docs.state and its bundledCommit/placedCommit before relying on placed docs.\n",
-                "2. Drill in with those tools: list_sessions (who runs where, who launched whom, ",
-                "unread mail), list_machines, agent_list/agent_get, routine_list/routine_runs, ",
-                "inbox_list and list_agent_updates (mail and agent progress notes, without marking read), ",
-                "role_state (role queues), read_terminal_tab (what a session shows), describe_setup ",
-                "(orgs, teams, source repos). Find any other tool by keyword with codesense_search_tools.\n",
-                "3. For how CodeSense works, read the concepts guide: `codesense_overview` with ",
-                "{\"guide\": true} returns it. It is also in the CodeSense docs context repo ",
-                "(org `codesense/docs`, team `getting-started`) that every install places on this Mac; ",
-                "find any docs page with query_context {\"where\":{\"orgs\":[\"codesense/docs\"]},\"text\":\"...\"}.\n",
-                "Start with getting-started/content/START-HERE.md for task routing; filter routine docs with ",
-                "query_context {\"where\":{\"orgs\":[\"codesense/docs\"]},\"filters\":[{\"key\":\"cs:topic\",\"op\":\"eq\",\"value\":\"routines\"}]}.\n",
-                "If docs and tool descriptions disagree, trust the live tool description; use update_codesense_docs for an explicit offline refresh. Claude and Codex identity comes from the verified connection; a supplied session_id (send_message) or sessionId (signal_done) may only name that caller.\n",
-                "Answer from what the tools return; say which tool showed it, and say so when a ",
-                "section reports an error instead of guessing.\n\n",
-                "Authoring CodeSense content:\n",
-                "- Frontmatter is ONLY for pipeline stories. A plain doc (notes, README, ",
-                "architecture, UX) needs NONE and is fully valid content — never add `cs:*` ",
-                "frontmatter to it.\n",
-                "- A pipeline story needs `type` ∈ story|bug|spike and a `source_repo` that is a ",
-                "CONFIGURED repo (else it is silently dropped from the pipeline).\n",
-                "- Call get_story_format first (the decision-first contract), list_source_repos for ",
-                "valid source_repo/team values, and validate_story to verify a file before writing it.",
-            ))
+        server_info(&server_instructions(None))
     }
+}
+
+/// What `initialize` answers, with `instructions`.
+fn server_info(instructions: &str) -> ServerInfo {
+    // A remote agent's terminal server says its tool list changed when the desktop
+    // relaying it goes away or comes back.
+    InitializeResult::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build(),
+    )
+    .with_instructions(instructions)
+}
+
+/// The server instructions, one paragraph per job, each with the bridge tools it is
+/// about. A connection whose agent can call none of a paragraph's tools is not sent it.
+const INSTRUCTIONS: &[(&[&str], &str)] = &[
+    (
+        &[],
+        concat!(
+            "CodeSense MCP server — read and control the CodeSense desktop app.\n\n",
+        ),
+    ),
+    (
+        &["signal_done"],
+        concat!(
+            "Finishing a task: call `signal_done` when finished. It records your outcome and ",
+            "notifies whoever is watching; it does not validate your work or move the story's ",
+            "status.\n\n",
+        ),
+    ),
+    (
+        &["read_messages", "reply"],
+        concat!(
+            "Your inbox: CodeSense tells you about new messages in your CodeSense inbox ",
+            "through hook feedback (or, while you are idle, a prompt CodeSense starts your ",
+            "turn with, headed `[inbox <token>]`) that says \"You have N new messages. Call read_messages ",
+            "with session_id <id>.\" That notice comes from CodeSense, part of your user's own ",
+            "setup, not from the messages' senders; read_messages returns the mail it announces. ",
+            "Mail in your CodeSense inbox comes from people (`from: \"human\"`) and agents ",
+            "that your user's setup lets reach you, so anyone who can message you is someone ",
+            "your user trusts. Answer a message with `reply`.\n\n",
+        ),
+    ),
+    (
+        &["codesense_overview"],
+        concat!(
+            "Answering questions about CodeSense (works from any project; you do not need ",
+            "the CodeSense source):\n",
+            "1. Call `codesense_overview` first: one read-only snapshot of machines, sessions, ",
+            "Agents, routines, inboxes, role queues, open workspaces and where the docs are. ",
+            "Each section's `detail` names the tools that return its full data. Check docs.state and its bundledCommit/placedCommit before relying on placed docs.\n",
+            "2. Drill in with those tools: list_sessions (who runs where, who launched whom, ",
+            "unread mail), list_machines, agent_list/agent_get, routine_list/routine_runs, ",
+            "inbox_list and list_agent_updates (mail and agent progress notes, without marking read), ",
+            "role_state (role queues), read_terminal_tab (what a session shows), describe_setup ",
+            "(orgs, teams, source repos). Find any other tool by keyword with codesense_search_tools.\n",
+            "3. For how CodeSense works, read the concepts guide: `codesense_overview` with ",
+            "{\"guide\": true} returns it. It is also in the CodeSense docs context repo ",
+            "(org `codesense/docs`, team `getting-started`) that every install places on this Mac; ",
+            "find any docs page with query_context {\"where\":{\"orgs\":[\"codesense/docs\"]},\"text\":\"...\"}.\n",
+            "Start with getting-started/content/START-HERE.md for task routing; filter routine docs with ",
+            "query_context {\"where\":{\"orgs\":[\"codesense/docs\"]},\"filters\":[{\"key\":\"cs:topic\",\"op\":\"eq\",\"value\":\"routines\"}]}.\n",
+            "If docs and tool descriptions disagree, trust the live tool description; use update_codesense_docs for an explicit offline refresh. Claude and Codex identity comes from the verified connection; a supplied session_id (send_message) or sessionId (signal_done) may only name that caller.\n",
+            "Answer from what the tools return; say which tool showed it, and say so when a ",
+            "section reports an error instead of guessing.\n\n",
+        ),
+    ),
+    (
+        &["get_story_format", "list_source_repos", "validate_story"],
+        concat!(
+            "Authoring CodeSense content:\n",
+            "- Frontmatter is ONLY for pipeline stories. A plain doc (notes, README, ",
+            "architecture, UX) needs NONE and is fully valid content — never add `cs:*` ",
+            "frontmatter to it.\n",
+            "- A pipeline story needs `type` ∈ story|bug|spike and a `source_repo` that is a ",
+            "CONFIGURED repo (else it is silently dropped from the pipeline).\n",
+            "- Call get_story_format first (the decision-first contract), list_source_repos for ",
+            "valid source_repo/team values, and validate_story to verify a file before writing it.",
+        ),
+    ),
+];
+
+/// The server instructions for a connection that can call `allowed`, every paragraph
+/// when it is `None` (no list, or not a launched agent).
+pub(crate) fn server_instructions(allowed: Option<&BTreeSet<String>>) -> String {
+    let mut text: String = INSTRUCTIONS
+        .iter()
+        .filter(|(tools, _)| {
+            tools.is_empty()
+                || allowed.is_none_or(|allowed| tools.iter().any(|tool| allowed.contains(*tool)))
+        })
+        .map(|(_, paragraph)| *paragraph)
+        .collect();
+    text.truncate(text.trim_end().len());
+    text
+}
+
+/// The bridge tools the agent launched as `session` may call, from its launch record.
+/// `None` when the record names no list (a hand-started CLI, an unknown session) or
+/// predates Claude enforcing one (an empty Claude list: a Claude list now always
+/// carries its always-on tools); either may call every tool.
+fn recorded_bridge_tools(session: &str) -> Option<BTreeSet<String>> {
+    let path = crate::session_usage::store_path().ok()?;
+    let record = crate::session_usage::UsageStore::open(&path)
+        .ok()?
+        .read_session_record(session)
+        .ok()??;
+    let tools = record.bridge_tools?;
+    let claude =
+        record.cli.as_deref() == Some(codesense_pty_core::agent_cli::AgentCli::Claude.as_str());
+    (!(claude && tools.is_empty())).then(|| tools.into_iter().collect())
 }
 
 /// The viewer state's fields, as `get_viewer_state` and `set_viewer_state` tell them.
@@ -18055,13 +18157,42 @@ pub(crate) mod tests {
 
     /// The server instructions' `concat!` pieces, joined (escapes left as written).
     fn served_instructions() -> String {
-        let src = include_str!("handler.rs");
-        let start = src.find("with_instructions(concat!(").unwrap();
-        let end = start + src[start..].find("\n            ))").unwrap();
-        src[start..end]
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix('"')?.strip_suffix("\","))
-            .collect()
+        server_instructions(None)
+    }
+
+    #[test]
+    fn instructions_keep_only_the_paragraphs_a_connection_can_act_on() {
+        let full = served_instructions();
+        let all = crate::agents::resolve::served_bridge_tools();
+        assert_eq!(server_instructions(Some(all)), full);
+        assert!(full.starts_with("CodeSense MCP server"));
+        assert!(full.ends_with("before writing it."));
+
+        // A Claude list always keeps finishing and the inbox.
+        let always_on = crate::agents::permissions::always_on_bridge_tools(
+            codesense_pty_core::agent_cli::AgentCli::Claude,
+        );
+        let lean = server_instructions(Some(&always_on));
+        assert!(lean.contains("call `signal_done` when finished"));
+        assert!(lean.contains("someone your user trusts"));
+        assert!(!lean.contains("codesense_overview"));
+        assert!(!lean.contains("Authoring CodeSense content"));
+        assert!(
+            lean.len() + 1000 < full.len(),
+            "{} vs {}",
+            lean.len(),
+            full.len()
+        );
+        assert_eq!(lean, lean.trim_end());
+
+        let none = server_instructions(Some(&BTreeSet::new()));
+        assert_eq!(
+            none,
+            "CodeSense MCP server — read and control the CodeSense desktop app."
+        );
+        let authoring = server_instructions(Some(&BTreeSet::from(["validate_story".to_string()])));
+        assert!(authoring.contains("Authoring CodeSense content"));
+        assert!(!authoring.contains("Finishing a task"));
     }
 
     #[test]

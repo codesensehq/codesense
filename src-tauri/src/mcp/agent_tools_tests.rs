@@ -177,7 +177,7 @@ fn bridge_tool_validation_and_unknown_names_never_expand_the_grant() {
     let home = tmp.path();
     write_org(home, &alice());
     for (runtime, tools) in [
-        ("claude", json!(["who_am_i"])),
+        ("claude", json!(["*"])),
         ("codex", json!(["*"])),
         ("codex", json!(["mcp__codesense__who_am_i"])),
         ("codex", json!(["reply", "reply"])),
