@@ -57,10 +57,11 @@ function earlierUnspent(allowed, name) {
 }
 
 /**
- * The teams a `describe_setup` result lists that the guide may work in: non-archived, outside
- * the docs' org. Each is `{org, orgRoot, team, repos}`.
+ * The teams a `describe_setup` result lists that the guide may work in (non-archived, outside
+ * the docs' org, each `{org, orgRoot, team, repos}`) and every such org's folder; `undefined`
+ * when the result lists no org.
  */
-function listedTeams(result) {
+function listedSetup(result) {
   let orgs;
   const walk = (value) => {
     if (orgs || !value || typeof value !== "object") return;
@@ -68,19 +69,23 @@ function listedTeams(result) {
     else Object.values(value).forEach(walk);
   };
   walk(json(result));
-  const found = [];
-  for (const org of orgs ?? []) {
+  // A result with no orgs (an error, a cut-off export, nobody set up) says nothing.
+  if (!orgs?.length) return undefined;
+  const teams = [];
+  const roots = new Map(); // each non-docs org's folder, even when it has no team yet
+  for (const org of orgs) {
     if (org.slug === DOCS_ORG) continue;
+    roots.set(org.slug, org.orgRoot);
     for (const team of org.teams ?? [])
       if (team.archived === false)
-        found.push({
+        teams.push({
           org: org.slug,
           orgRoot: org.orgRoot,
           team: team.name,
           repos: (team.sourceRepos ?? []).map((r) => r.slug),
         });
   }
-  return found;
+  return { teams, roots };
 }
 
 const nameOf = (t) => `${t.org}/${t.team}`;
@@ -206,8 +211,9 @@ export function checkConsent(
   let card; // the latest card: { id, turn, name, line, answered }
   let allowed = new Map(); // the verbs the latest click allows: name to {uses, used, cmd, click}
   let why = "no card has been sent";
-  let listed = []; // the teams the latest describe_setup lists
-  let switched; // the team the latest set_active_team (or activating create_team) switched to
+  let listed = []; // the teams the latest good describe_setup lists
+  let roots = new Map(); // the orgs it lists, with their folders
+  let switched; // {org, team, seen}: the latest set_active_team (or activating create_team)
   const seenHandles = new Set(); // the tabs an open_terminal_tab or clone_repo result returned
   let cards = 0;
   let calls = 0;
@@ -290,7 +296,8 @@ export function checkConsent(
           }
         }
       } else if (name === "describe_setup") {
-        listed = listedTeams(raw.result);
+        const setup = listedSetup(raw.result);
+        if (setup) ({ teams: listed, roots } = setup);
       } else if (name === "read_terminal_tab") {
         if (typeof input.handle !== "string" || input.handle === "")
           errors.push(
@@ -338,28 +345,29 @@ export function checkConsent(
             const org = String(input.org ?? "").trim();
             const team = String(input.team ?? "").trim();
             const found = listed.find((t) => t.org === org && t.team === team);
-            if (found) switched = found;
+            if (found) switched = { org, team, seen: found };
             else
               errors.push(
                 `turn ${index}: set_active_team switched to ${org}/${team}, but describe_setup listed ${listed.length ? `only ${listed.map(nameOf).join(", ")}` : "no team"}`,
               );
           } else if (name === "create_team" && input.activate === true) {
             const org = String(input.org ?? "").trim();
-            const known = listed.find((t) => t.org === org);
-            switched = {
-              org,
-              orgRoot: known?.orgRoot,
-              team: String(input.name ?? "").trim(),
-              repos: [],
-            };
+            const team = String(input.name ?? "").trim();
+            switched = { org, team, seen: { org, team, repos: [] } };
           }
-          const teams = switched ? [switched] : listed;
+          // The switch is the team's name; its folder and repos are the latest listing's.
+          const inForce = switched && {
+            ...switched.seen,
+            ...listed.find((t) => t.org === switched.org && t.team === switched.team),
+          };
+          if (inForce && inForce.orgRoot === undefined) inForce.orgRoot = roots.get(inForce.org);
+          const teams = inForce ? [inForce] : listed;
           const file = input[FILE_ARGS[name]];
-          if (
-            typeof file === "string" &&
-            teams.length &&
-            !teams.some((t) => inTeamContent(file, t))
-          )
+          if (typeof file === "string" && !teams.length)
+            errors.push(
+              `turn ${index}: ${name} wrote ${file}, but no describe_setup listed a team to write in`,
+            );
+          else if (typeof file === "string" && !teams.some((t) => inTeamContent(file, t)))
             errors.push(
               `turn ${index}: ${name} wrote ${file}, outside the content folder of ${teams.map(nameOf).join(" or ")}`,
             );

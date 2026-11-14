@@ -174,11 +174,13 @@ const PRIVATE_VALUE =
   /^~|^\/|\/(?:Users|home)\/|\{\{[^}]*(?:path|user|account|token|secret)[^}]*\}\}/i;
 
 // One piece of a pattern a typed command may take: a character class whose members are
-// letters, digits and `._/-`, or one such character, with an optional quantifier. Anything
-// else (a wildcard, a group, an alternation, a negated class, a space, a symbol a shell reads)
-// is more than a word, so the rule is on the pattern's shape and not on what it happens to match.
-const CLASS_MEMBER = "(?:[A-Za-z0-9]-[A-Za-z0-9]|[A-Za-z0-9._/-])";
-const WORD_ATOM = `(?:\\[${CLASS_MEMBER}+\\]|\\\\\\.|[A-Za-z0-9_/-])(?:[+*?]|\\{\\d+(?:,\\d*)?\\})?`;
+// letters, digits and `._/` (a range only within a-z, A-Z or 0-9, a `-` only first or last,
+// so no range can span punctuation), or one such character, with an optional quantifier.
+// Anything else (a wildcard, a group, an alternation, a negated class, a space, a symbol a
+// shell reads) is more than a word, so the rule is on the pattern's shape and not on what it
+// happens to match.
+const CLASS_MEMBER = "(?:[A-Z]-[A-Z]|[a-z]-[a-z]|[0-9]-[0-9]|[A-Za-z0-9._/])";
+const WORD_ATOM = `(?:\\[-?${CLASS_MEMBER}+-?\\]|\\\\\\.|[A-Za-z0-9_/-])(?:[+*?]|\\{\\d+(?:,\\d*)?\\})?`;
 const WORD_PATTERN = new RegExp(`^\\^?(?:${WORD_ATOM})+\\$?$`);
 
 /** Whether an input pattern can match text with a shell metacharacter in it. */
