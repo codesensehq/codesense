@@ -280,7 +280,8 @@
   // ---- launch and the transport kit.chat sends through ----
   const promptFor = (text) => {
     const body = String(text || '').trim();
-    const resumed = S.chat && S.chat.thread().length > 0;
+    // The app's "Set up CodeSense" reopen opens this page at #resume.
+    const resumed = (S.chat && S.chat.thread().length > 0) || window.location.hash === '#resume';
     return [SKILL[S.runtime], body || (resumed ? 'resume' : '')].filter(Boolean).join(' ');
   };
   async function openGuide(prompt) {
