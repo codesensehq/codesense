@@ -100,5 +100,11 @@
     "reason": "timing-sensitive under full-suite load; flaked in merge-queue and main runs",
     "issue": "https://github.com/codesensehq/codesense/issues/4",
     "added": "2026-11-14"
+  },
+  {
+    "id": "vitest:src/features/routines/components/routine-editor.seam.test.tsx#Routine editor over the mock backend > saves a task its agent cannot start and shows the warning under it",
+    "reason": "timing-sensitive under full-suite load; flaked in merge-queue and pull request runs",
+    "issue": "https://github.com/codesensehq/codesense/issues/4",
+    "added": "2026-11-14"
   }
 ]
