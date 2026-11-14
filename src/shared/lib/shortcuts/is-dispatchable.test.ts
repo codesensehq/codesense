@@ -35,7 +35,6 @@ const TEAM_ALLOWED_ON_SETTINGS = [
   "viewer.toggle-nav",
   "viewer.toggle-right-pane",
   "viewer.toggle-pane-full-screen",
-  "viewer.open-story-dashboard",
   "viewer.toggle-console",
   "viewer.cycle-foreground-layout",
   "weft.jump-to-next-needs-you",

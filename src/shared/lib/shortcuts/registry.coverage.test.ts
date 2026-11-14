@@ -24,11 +24,11 @@ describe("SHORTCUT_ACTIONS", () => {
     expect(binding.keystroke).toBe("CmdOrCtrl+Alt+I");
   });
 
-  it("View → Dashboard is a team action with no default chord", () => {
+  it("View → Dashboard is a global action with no default chord, so it fires with no team open", () => {
     const action = SHORTCUT_ACTIONS.find((a) => a.id === "viewer.open-story-dashboard")!;
     expect(action.menuPath).toEqual(["View", "Dashboard"]);
     expect(action.defaultKeystroke).toBe("");
-    expect(action.scope).toBe("team");
+    expect(action.scope).toBe("global");
   });
 
   it("contains exactly 74 configurable actions", () => {

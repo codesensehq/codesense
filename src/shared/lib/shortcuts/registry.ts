@@ -541,9 +541,9 @@ const shortcutActions: readonly ShortcutAction[] = [
     label: "Dashboard",
     menuPath: ["View", "Dashboard"],
     defaultKeystroke: "",
-    scope: "team",
+    // Global, so with no team open the item still fires and says there is no story in focus.
+    scope: "global",
     run: () => {
-      // With no team active there is no story in focus, and the item says so.
       void openStoryDashboard(liveStoryDashboardDeps(getActiveWorkspaceContext()));
     },
   },
