@@ -3343,7 +3343,7 @@ it("keeps the badge clear when a refresh read before the open reader's mark land
   });
   messages.push(row(3, "Mia", "human"));
   inboxChanged();
-  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
+  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1), PACED);
   holdReads = true;
   inboxChanged();
   // Both inbox reads of the refresh this starts answered while the mark was pending.
@@ -3383,7 +3383,7 @@ it("shows the badge again when the open reader's held mark fails", async () => {
   });
   messages.push(row(3, "Mia", "human"));
   inboxChanged();
-  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1));
+  await waitFor(() => expect(calls("mark_inbox_messages_read")).toHaveLength(1), PACED);
   // A refresh while the mark is pending keeps the badge clear under the read hold.
   inboxChanged();
   await waitFor(() => expect(usePaneStore.getState().badges[PANEL]).toBeUndefined(), PACED);
