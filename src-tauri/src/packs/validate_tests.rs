@@ -4,7 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::validate::{path_rule, validate_dir, validate_dir_with, Limits, PackReport};
+use super::validate::{
+    path_rule, validate_dir, validate_dir_with, Limits, PackReport, MAX_MANIFEST_BYTES,
+};
+
+const INTEGRITY: &str = "integrity: sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -60,6 +64,7 @@ fn the_good_packs_validate_with_their_parts() {
         "good-external",
         "good-setup",
         "risky",
+        "risky-more",
         "two-pack/a",
         "two-pack/b",
     ] {
@@ -157,7 +162,7 @@ fn each_rule_violation_is_a_named_error_with_its_path() {
 
 #[test]
 fn the_path_rules_table() {
-    let rows: [(&str, Option<&str>); 15] = [
+    let rows: [(&str, Option<&str>); 22] = [
         ("content/a.md", None),
         ("agents/x/agent.yaml", None),
         (".claude/skills/s/SKILL.md", None),
@@ -173,6 +178,14 @@ fn the_path_rules_table() {
         ("content//a", Some("path_invalid")),
         ("content\\a", Some("path_invalid")),
         ("", Some("path_invalid")),
+        // Case-insensitive file systems fold these into `.git` and `config`.
+        (".GIT/config", Some("path_git")),
+        ("content/.Git/x", Some("path_git")),
+        ("content/git~1/x", Some("path_git")),
+        ("Content/Config/x.yml", Some("path_config")),
+        ("content/a./b", Some("path_invalid")),
+        ("content/a /b", Some("path_invalid")),
+        ("content/.git./x", Some("path_invalid")),
     ];
     for (path, expected) in rows {
         assert_eq!(path_rule(path).map(|(code, _)| code), expected, "{path:?}");
@@ -215,6 +228,7 @@ fn the_size_caps_refuse_a_big_file_and_a_big_pack() {
     let tight = Limits {
         max_file: 64,
         max_pack: 1 << 30,
+        ..Default::default()
     };
     let report = validate_dir_with(&pack, tight);
     assert!(refused(
@@ -230,6 +244,7 @@ fn the_size_caps_refuse_a_big_file_and_a_big_pack() {
     let small_pack = Limits {
         max_file: 1 << 20,
         max_pack: 100,
+        ..Default::default()
     };
     let report = validate_dir_with(&pack, small_pack);
     assert!(report
@@ -310,11 +325,7 @@ fn external_parts_are_declared_pinned_and_never_fetched() {
             "external_unpinned",
         ),
         // An npm source needs the registry integrity.
-        (
-            "integrity: sha512-AAAA",
-            "integrity: md5-AAAA",
-            "external_unpinned",
-        ),
+        (INTEGRITY, "integrity: md5-AAAA", "external_unpinned"),
         // method setup needs its upstream command.
         (
             "run: \"npx example-cli@6.11.0 init --yes\"",
@@ -445,4 +456,448 @@ fn pack_validate_is_served_read_only_with_its_docs_pointer() {
     );
     let schema = serde_json::Value::Object((*tool.input_schema).clone());
     assert_eq!(schema["required"], serde_json::json!(["path"]));
+}
+
+fn has(report: &PackReport, code: &str) -> bool {
+    report.errors.iter().any(|e| e.code == code)
+}
+
+/// `edit` applied to a scratch copy of `name`, then validated.
+fn edited(name: &str, from: &str, to: &str) -> PackReport {
+    let (_guard, pack) = scratch(name);
+    write_manifest(&pack, |t| {
+        assert!(t.contains(from), "{name}: {from}");
+        t.replacen(from, to, 1)
+    });
+    validate_dir(&pack)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_pack_yml_is_refused_and_never_read() {
+    let (guard, pack) = scratch("good");
+    let outside = guard.path().join("outside.txt");
+    std::fs::write(&outside, "outside-sentinel-text\n").unwrap();
+    std::fs::remove_file(pack.join("pack.yml")).unwrap();
+    std::os::unix::fs::symlink(&outside, pack.join("pack.yml")).unwrap();
+    let report = validate_dir(&pack);
+    assert!(
+        refused(&report, "symlink", "pack.yml"),
+        "{:?}",
+        codes(&report)
+    );
+    let text = serde_json::to_string(&report).unwrap();
+    assert!(!text.contains("outside-sentinel-text"), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pack_yml_that_is_not_a_small_regular_file_is_refused() {
+    let (_guard, pack) = scratch("good");
+    std::fs::write(
+        pack.join("pack.yml"),
+        "#".repeat(MAX_MANIFEST_BYTES as usize + 1),
+    )
+    .unwrap();
+    assert!(refused(
+        &validate_dir(&pack),
+        "manifest_too_large",
+        "pack.yml"
+    ));
+
+    let (_guard, pack) = scratch("good");
+    std::fs::remove_file(pack.join("pack.yml")).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(pack.join("pack.yml"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    // Returns at once: a FIFO is never opened for a blocking read.
+    assert!(refused(
+        &validate_dir(&pack),
+        "manifest_invalid",
+        "pack.yml"
+    ));
+}
+
+#[test]
+fn a_manifest_error_quotes_at_most_a_short_clip_of_the_file() {
+    let (_guard, pack) = scratch("good");
+    let body = format!("just-text-{}\n", "x".repeat(2_000));
+    std::fs::write(pack.join("pack.yml"), body).unwrap();
+    let report = validate_dir(&pack);
+    assert!(refused(&report, "manifest_invalid", "pack.yml"));
+    assert!(
+        report.errors.iter().all(|e| e.message.len() <= 240),
+        "{:?}",
+        report.errors
+    );
+}
+
+#[test]
+fn a_listed_path_outside_the_pack_is_never_opened() {
+    let (guard, pack) = scratch("good");
+    let outside = guard.path().join("elsewhere/SKILL.md");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    std::fs::write(&outside, "---\nlicense: GPL-3.0\n---\n").unwrap();
+    let listed = outside.display().to_string();
+    write_manifest(&pack, |t| {
+        format!(
+            "{t}  - path: {listed}\n    sha256: {}\n    exec: false\n",
+            "0".repeat(64)
+        )
+    });
+    let report = validate_dir(&pack);
+    assert!(
+        refused(&report, "path_absolute", &listed),
+        "{:?}",
+        codes(&report)
+    );
+    assert!(
+        !refused(&report, "third_party_bundled", &listed),
+        "the outside file's license was read: {:?}",
+        codes(&report)
+    );
+}
+
+#[test]
+fn unknown_keys_are_refused_and_a_risk_claim_only_warned() {
+    let report = edited("good", "setup_steps:", "neds: [x]\nsetup_steps:");
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.code == "unknown_key" && e.message.contains("neds")),
+        "{:?}",
+        codes(&report)
+    );
+    let report = edited(
+        "good",
+        "file: agents/helper/agent.yaml, needs: [handbook]",
+        "file: agents/helper/agent.yaml, neds: [handbook]",
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.code == "unknown_key" && e.message.contains("parts/1/neds")),
+        "{:?}",
+        codes(&report)
+    );
+    let report = edited(
+        "good",
+        "  kit: { chat: 1 }",
+        "  kit: { chat: 1 }\n  clis_extra: []",
+    );
+    assert!(has(&report, "unknown_key"), "{:?}", codes(&report));
+}
+
+#[test]
+fn requires_codesense_is_held_to_this_app() {
+    let rows = [
+        (">=99.0.0", Some("requires_newer_codesense")),
+        (">=0.0.1 <99", Some("requires_invalid")),
+        ("soon", Some("requires_invalid")),
+        (">=0.0.1", None),
+        (">=0.0.1 <99.0.0", None),
+    ];
+    for (range, code) in rows {
+        let report = edited(
+            "good",
+            "requires:\n",
+            &format!("requires:\n  codesense: \"{range}\"\n"),
+        );
+        match code {
+            Some(code) => assert!(
+                refused(&report, code, "pack.yml"),
+                "{range}: {:?}",
+                codes(&report)
+            ),
+            None => assert!(report.ok, "{range}: {:?}", codes(&report)),
+        }
+    }
+}
+
+#[test]
+fn external_sources_and_pins_are_strict() {
+    let rows = [
+        // A git source is an https forge URL, nothing a git client would run or read locally.
+        ("\"https://github.com/example/tool\"", "\"ext::sh -c touch%20x\"", "external_source_invalid"),
+        ("\"https://github.com/example/tool\"", "\"file:///tmp/x\"", "external_source_invalid"),
+        ("\"https://github.com/example/tool\"", "\"--upload-pack=x\"", "external_source_invalid"),
+        ("\"https://github.com/example/tool\"", "\"http://github.com/example/tool\"", "external_source_invalid"),
+        // An npm source is a registry package name.
+        ("{ npm: example-cli }", "{ npm: \"file:../x\" }", "external_source_invalid"),
+        ("{ npm: example-cli }", "{ npm: \"https://host/x.tgz\" }", "external_source_invalid"),
+        // The integrity decodes to the digest's length.
+        (INTEGRITY, "integrity: sha512-", "external_unpinned"),
+        (INTEGRITY, "integrity: sha512-AAAA", "external_unpinned"),
+        // An exact version, not a range or a tag.
+        ("version: 1.2.3", "version: latest", "external_unpinned"),
+        ("version: 6.11.0", "version: \"^6.11.0\"", "external_unpinned"),
+        // method files pins the mapped tree.
+        (
+            "    tree_sha256: \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
+            "",
+            "external_unpinned",
+        ),
+        // Setup paths follow the path rules; `.` is the team folder itself.
+        ("cwd: \".\"", "cwd: /etc", "path_absolute"),
+        ("read: .example/manifest.yaml", "read: ../x", "path_traversal"),
+    ];
+    for (from, to, code) in rows {
+        let report = edited("good-external", from, to);
+        assert!(
+            has(&report, code),
+            "{to}: wanted {code}, got {:?}",
+            codes(&report)
+        );
+    }
+    let report = edited("risky-more", "cwd: content/tools", "cwd: ../..");
+    assert!(has(&report, "path_traversal"), "{:?}", codes(&report));
+}
+
+#[test]
+fn every_segment_of_a_glob_is_held_to_the_path_rules() {
+    let rows = [
+        (
+            "\"content/handbook/**\"",
+            "\"content/*/../../x\"",
+            "path_traversal",
+        ),
+        ("\"content/handbook/**\"", "\"**/.git/**\"", "path_git"),
+        (
+            "\"content/handbook/**\"",
+            "\"{../../etc,content}/*\"",
+            "path_invalid",
+        ),
+        (
+            "\"content/handbook/**\"",
+            "\"content/{config,x}/*\"",
+            "path_config",
+        ),
+        ("\"content/handbook/**\"", "\"**\"", "path_outside_roots"),
+        (
+            "\"content/handbook/**\"",
+            "\"elsewhere/**\"",
+            "path_outside_roots",
+        ),
+        (
+            "[\"setup/steps/*.yml\"]",
+            "[\"*/../../x\"]",
+            "path_traversal",
+        ),
+        (
+            "[\"setup/steps/*.yml\"]",
+            "[\"setup/steps/[\"]",
+            "invalid_glob",
+        ),
+    ];
+    for (from, to, code) in rows {
+        let report = edited("good", from, to);
+        assert!(
+            has(&report, code),
+            "{to}: wanted {code}, got {:?}",
+            codes(&report)
+        );
+    }
+}
+
+#[test]
+fn the_parts_graph_names_its_other_mistakes() {
+    let rows = [
+        ("targets: [claude, codex, opencode]", "targets: []", "skill_targets_empty"),
+        (
+            "default: true }",
+            "default: true }\n  - { id: second, kind: preset, includes: [helper], default: true }",
+            "preset_default_duplicate",
+        ),
+        ("- { name: claude }", "- { name: claude, for: [nope] }", "unknown_part"),
+        (
+            "    targets: [claude, codex, opencode]\n",
+            "    targets: [claude, codex, opencode]\n  - { id: hello-too, kind: skill, name: hello, source: commands/hello.md, targets: [claude] }\n",
+            "skill_name_duplicate",
+        ),
+    ];
+    for (from, to, code) in rows {
+        let report = edited("good", from, to);
+        assert!(has(&report, code), "{code}: {:?}", codes(&report));
+    }
+}
+
+fn chain(len: usize, cycle: bool) -> String {
+    let mut parts: Vec<String> = (0..len)
+        .map(|i| {
+            format!(
+                "  - {{ id: p{i}, kind: preset, includes: [], needs: [p{}] }}\n",
+                i + 1
+            )
+        })
+        .collect();
+    let last = if cycle { "p0" } else { "" };
+    parts.push(format!(
+        "  - {{ id: p{len}, kind: preset, includes: [], needs: [{last}] }}\n"
+    ));
+    parts.concat()
+}
+
+#[test]
+fn a_long_needs_chain_is_capped_and_a_deep_cycle_is_found_without_recursion() {
+    let (_guard, pack) = scratch("good");
+    write_manifest(&pack, |t| {
+        t.replacen("parts:\n", &format!("parts:\n{}", chain(1_500, false)), 1)
+    });
+    assert!(has(&validate_dir(&pack), "too_many_parts"));
+
+    let (_guard, pack) = scratch("good");
+    write_manifest(&pack, |t| {
+        t.replacen("parts:\n", &format!("parts:\n{}", chain(900, true)), 1)
+    });
+    let report = validate_dir(&pack);
+    assert!(has(&report, "part_cycle"), "{:?}", codes(&report));
+}
+
+#[test]
+fn the_entry_cap_stops_the_walk() {
+    let (_guard, pack) = scratch("good");
+    let few = Limits {
+        max_entries: 5,
+        ..Default::default()
+    };
+    let report = validate_dir_with(&pack, few);
+    assert!(has(&report, "pack_too_many_files"), "{:?}", codes(&report));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_in_the_pack_is_refused_not_read() {
+    let (_guard, pack) = scratch("good");
+    let made = std::process::Command::new("mkfifo")
+        .arg(pack.join("content/pipe"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert!(refused(
+        &validate_dir(&pack),
+        "special_file",
+        "content/pipe"
+    ));
+}
+
+#[test]
+fn foreign_licenses_and_vendored_folders_are_third_party() {
+    for path in [
+        "content/x/LICENSE-MIT",
+        "content/x/LICENSE_APACHE",
+        "content/x/NOTICE",
+        "content/x/COPYRIGHT.txt",
+        "content/vendor/a.md",
+        "content/node_modules/a/index.js",
+    ] {
+        let (_guard, pack) = scratch("good");
+        let full = pack.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(&full, "x\n").unwrap();
+        assert!(
+            refused(&validate_dir(&pack), "third_party_bundled", path),
+            "{path}"
+        );
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Rewrite the listed sha256 of `path` in a scratch pack's `files`.
+fn relist(pack: &Path, path: &str, sha: &str) {
+    write_manifest(pack, |t| {
+        let marker = format!("- path: {path}\n    sha256: ");
+        let at = t.find(&marker).unwrap() + marker.len();
+        format!("{}{sha}{}", &t[..at], &t[at + 64..])
+    });
+}
+
+#[test]
+fn a_built_copy_that_differs_from_its_source_is_drift() {
+    let (_guard, pack) = scratch("good");
+    let copy = ".claude/skills/hello/SKILL.md";
+    let body = b"a different skill\n";
+    std::fs::write(pack.join(copy), body).unwrap();
+    relist(&pack, copy, &sha256_hex(body));
+    let report = validate_dir(&pack);
+    assert!(
+        refused(&report, "skill_copy_drift", copy),
+        "{:?}",
+        codes(&report)
+    );
+    assert!(!has(&report, "hash_mismatch"), "{:?}", codes(&report));
+}
+
+#[test]
+fn a_listed_exec_bit_must_match_the_file() {
+    let report = edited(
+        "good",
+        "- path: LICENSE\n    sha256: 78ccf3c3f93a5edd22317674793f47d6f233ae4ffaf3d04c3bcbc2c064c71120\n    exec: false",
+        "- path: LICENSE\n    sha256: 78ccf3c3f93a5edd22317674793f47d6f233ae4ffaf3d04c3bcbc2c064c71120\n    exec: true",
+    );
+    assert!(
+        refused(&report, "exec_mismatch", "LICENSE"),
+        "{:?}",
+        codes(&report)
+    );
+}
+
+#[test]
+fn risk_facts_cover_every_agent_part_config_and_setup_step() {
+    let report = report("risky-more");
+    assert!(report.ok, "{:?}", codes(&report));
+    let facts = &report.risk;
+    let skipping: Vec<_> = facts
+        .skip_permission_agents
+        .iter()
+        .map(|s| s.agent.as_str())
+        .collect();
+    assert_eq!(
+        skipping,
+        ["agents/one/claude.yaml", "agents/two/codex.yaml"]
+    );
+    let hooks: Vec<_> = facts
+        .cli_hooks
+        .iter()
+        .map(|h| (h.path.as_str(), h.detail.as_str()))
+        .collect();
+    for (path, detail) in [
+        ("content/.claude/settings.json", "statusLine"),
+        ("content/.claude/settings.json", "apiKeyHelper"),
+        ("content/.codex/config.toml", "notify"),
+        ("content/.codex/hooks/after.sh", ".codex/hooks"),
+        ("content/.opencode/plugin/guard.js", ".opencode/plugin"),
+    ] {
+        assert!(
+            hooks.iter().any(|(p, d)| *p == path && d.contains(detail)),
+            "{path} {detail}: {hooks:?}"
+        );
+    }
+    let servers: Vec<_> = facts
+        .mcp_servers
+        .iter()
+        .map(|m| m.server.as_str())
+        .collect();
+    assert!(servers.contains(&"codex-server"), "{servers:?}");
+    assert!(servers.contains(&"opencode-server"), "{servers:?}");
+    assert!(facts.scripts.contains(&"content/bin/tool".to_string()));
+    assert_eq!(facts.setup_step_files, ["setup/steps/access.yml"]);
+    assert_eq!(facts.setup_steps.len(), 1);
+    assert_eq!(facts.network_fetches.len(), 1);
+    assert_eq!(facts.network_fetches[0].part, "init");
+
+    let external = super::validate::validate_dir(&fixtures().join("good-external")).risk;
+    assert_eq!(external.setup_steps.len(), 1);
+    assert_eq!(external.setup_steps[0].part, "cli");
+    assert!(external
+        .network_fetches
+        .iter()
+        .any(|f| f.source == "https://github.com/example/tool" && f.version == "1.2.3"));
 }

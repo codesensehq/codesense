@@ -6258,7 +6258,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the folder that holds `pack.yml`, inside a context repo you can read. Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
+        description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
     )]
     async fn pack_validate(
         &self,
@@ -10513,12 +10513,19 @@ async fn pack_validate_request<R: tauri::Runtime>(
         crate::context_repo::caller_scope::for_session(&app, session.as_deref(), remote).await;
     commands::await_blocking("mcp.pack_validate", move || {
         let path = std::path::Path::new(&path);
+        if !path.is_absolute() {
+            return Err("path is the pack folder's absolute path".to_string());
+        }
         scope.existing(path)?;
         commands::files::validate_context_path_for(path, &app, &scope)?;
-        if !path.is_dir() {
+        // The walk reads the folder's real path, so that is the one held to the scope.
+        let real = std::fs::canonicalize(path).map_err(|_| "not a folder".to_string())?;
+        scope.existing(&real)?;
+        commands::files::validate_context_path_for(&real, &app, &scope)?;
+        if !real.is_dir() {
             return Err("not a folder".to_string());
         }
-        serde_json::to_value(crate::packs::validate::validate_dir(path)).map_err(|e| e.to_string())
+        serde_json::to_value(crate::packs::validate::validate_dir(&real)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| ErrorData::invalid_params(format!("pack_validate: {e}"), None))
@@ -14784,7 +14791,8 @@ pub struct ReadEpicReposParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PackValidateParams {
-    /// The pack folder: the one holding `pack.yml`, inside a context repo you can read.
+    /// The pack folder's absolute path: the one holding `pack.yml`, inside a context repo
+    /// you can read.
     pub path: String,
 }
 

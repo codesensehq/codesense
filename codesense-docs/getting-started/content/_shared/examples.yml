@@ -87,7 +87,7 @@
       "tools": ["pack_validate"],
       "docs": "arc-e-agents/packs.html",
       "searchTerms": ["pack", "packs", "validate", "manifest"],
-      "calls": [{"tool": "pack_validate", "arguments": {"path": "packs/my-pack"}}]
+      "calls": [{"tool": "pack_validate", "arguments": {"path": "/path/to/team/content/packs/my-pack"}}]
     },
     {
       "id": "stories",

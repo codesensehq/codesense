@@ -31,6 +31,7 @@ publisher: me
 summary: What it is for.
 license: MIT
 requires:
+  codesense: ">=0.1.0"
   clis: [{ name: claude }]
   kit: { chat: 1 }
 parts:
@@ -45,17 +46,23 @@ setup_steps: ["setup/steps/*.yml"]</code></pre>
           <code>routine</code>, <code>dashboards</code>, <code>seed</code>, <code>external</code> and
           <code>setup</code>. A <code>skill</code> part has one source file and a list of
           <code>targets</code>; the pack build writes a copy of it where each runtime looks for skills
-          and commands. <code>requires.kit</code> names the dashboard kit modules the pack's pages use.
+          and commands (Claude, Codex, OpenCode and Hermes). <code>requires.codesense</code> is the range
+          of CodeSense versions the pack needs: an older app refuses the pack, which is how a pack uses
+          fields newer than its <code>pack_format</code>. A key the format doesn't know is refused with
+          <code>unknown_key</code>, so a typo can't skip a rule. <code>requires.kit</code> names the dashboard kit modules the pack's pages use.
           The full field list is the exported schema, <code>generated/schemas/pack-yml.schema.json</code>;
           the lock a later install writes is <code>packs-lock-yml.schema.json</code>.</p>
       </section>
       <section id="external" data-search="external part npm git commit integrity pinned setup command recipe">
         <h2>Other people's code is an external part</h2>
-        <p>A pack never bundles a third-party file. An <code>external</code> part names an npm package or a
-          git repository, pins a version plus a full 40-character commit (or the registry integrity), and
+        <p>A pack never bundles a third-party file. An <code>external</code> part names an npm package or an
+          <code>https://</code> git URL, pins an exact version plus a full 40-character commit (or the
+          registry integrity, <code>sha512-</code> and the digest), and
           says whether CodeSense maps files (<code>method: files</code>) or your agent runs the upstream
           installer (<code>method: setup</code>). It is declared and previewed; validation never fetches it.
-          A bundled file under a <code>third_party</code> folder, a nested LICENSE file, or a
+          <code>method: files</code> also pins <code>tree_sha256</code>, the hash of the mapped files.
+          A bundled file under a <code>third_party</code>, <code>vendor</code> or <code>node_modules</code>
+          folder, a nested LICENSE, COPYING or NOTICE file, or a
           <code>SKILL.md</code> whose <code>license:</code> differs from the pack's is refused with
           <code>third_party_bundled</code>.</p>
       </section>
@@ -63,31 +70,42 @@ setup_steps: ["setup/steps/*.yml"]</code></pre>
         <h2>Building a pack</h2>
         <p><code>node scripts/pack-build.mjs</code> checks every pack's <code>pack.yml</code> against the
           schema, copies each skill part to each target runtime's location, and writes the
-          <code>files</code> list: every bundled file with its sha256. <code>--check</code> changes nothing and
+          <code>files</code> list: every bundled file with its sha256. It plans every change first and writes
+          nothing when any part, path or symlink is wrong. <code>--check</code> changes nothing and
           fails when a copy was edited by hand or a file changed after the list was written.</p>
       </section>
       <section id="validate" data-search="pack_validate path errors risk executables hooks mcp servers routines setup steps network fetches">
         <h2>pack_validate</h2>
-        <p>Call <code>pack_validate {path}</code> with a pack folder inside a context repo you can read. It is
-          read-only. It returns <code>ok</code>, a list of <code>errors</code> (each with a
-          <code>code</code>, the <code>path</code> at fault and a message), <code>warnings</code>, the
-          pack's <code>parts</code> and its <code>risk</code> facts.</p>
+        <p>Call <code>pack_validate {path}</code> with the absolute path of a pack folder inside a context
+          repo you can read. It is read-only. It returns <code>ok</code>, a list of <code>errors</code> (each
+          with a <code>code</code>, the <code>path</code> at fault and a message), <code>warnings</code>, the
+          <code>pack</code> summary, its <code>parts</code> and its <code>risk</code> facts.</p>
         <pre><code>{ "ok": false,
   "errors": [{ "code": "hash_mismatch", "path": "LICENSE",
                "message": "the file's sha256 differs from the one in files" }],
-  "risk": { "executables": [], "cliHooks": [], "skipPermissionAgents": [],
-            "mcpServers": [], "routines": [], "setupSteps": [], "networkFetches": [] } }</code></pre>
-        <p>The rules it checks: every path is relative and under a declared root (<code>content</code>,
-          <code>panes</code>, <code>seed</code>, <code>agents</code>, <code>routines</code>, <code>roles</code>,
-          <code>docs</code>, <code>media</code>, <code>commands</code>, <code>setup</code>) with no symlink,
-          <code>..</code> or <code>.git/</code>; 5 MB per file and 200 MB per pack; every file listed in
-          <code>files</code> with a matching hash; no unknown part id, duplicate or cycle in the parts graph;
-          and external parts pinned. Each error code names its rule, for example <code>symlink</code>,
+  "warnings": [],
+  "pack": { "id": "my-pack", "name": "My pack", "version": "0.1.0",
+            "publisher": "me", "license": "MIT" },
+  "parts": [{ "id": "helper", "kind": "agent", "needs": [] }],
+  "risk": { "executables": [], "scripts": [], "cliHooks": [], "skipPermissionAgents": [],
+            "mcpServers": [], "routines": [], "setupStepFiles": [], "setupSteps": [],
+            "networkFetches": [] } }</code></pre>
+        <p>The rules it checks: every path is relative and under a declared root (the folders
+          <code>content</code>, <code>panes</code>, <code>seed</code>, <code>agents</code>,
+          <code>routines</code>, <code>roles</code>, <code>docs</code>, <code>media</code>,
+          <code>commands</code> and <code>setup</code>; the root files <code>CHANGELOG.md</code>,
+          <code>LICENSE</code> and <code>NOTICE.md</code>; and the built skill folders), never under
+          <code>content/config/</code>, with no symlink, special file, <code>..</code> or <code>.git</code>
+          in any spelling or case; <code>pack.yml</code> is a regular file of at most 1 MB; 5 MB per file,
+          200 MB and 10,000 entries per pack; every file listed in <code>files</code> with a matching hash
+          and exec bit, and each built skill copy the same bytes as its source; no unknown key; no unknown
+          part id, duplicate or cycle in the parts graph, and at most 1,000 parts; and external parts
+          pinned. Each error code names its rule, for example <code>symlink</code>,
           <code>path_traversal</code>, <code>file_unlisted</code>, <code>hash_mismatch</code>,
           <code>unknown_part</code>, <code>external_unpinned</code> and <code>third_party_bundled</code>.</p>
         <h3 id="risk">Risk is derived, never declared</h3>
         <p>The <code>risk</code> block comes from the files: executable files and scripts, CLI hooks, agents
-          whose arguments skip permission checks, MCP servers, routines, setup steps (the exact upstream
+          that skip permission checks (by a flag or by their own permissions), MCP servers, routines, setup steps (the exact upstream
           command your agent would run) and every network fetch an external part implies. A
           <code>risk:</code> key in <code>pack.yml</code> is ignored, with a <code>risk_claim_ignored</code> warning.</p>
       </section>

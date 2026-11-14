@@ -4,6 +4,7 @@
 //! servers, routines, setup steps (an upstream command the person's agent runs) and every
 //! network fetch an external part implies. A `risk:` key in `pack.yml` is not read.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use globset::Glob;
@@ -87,37 +88,59 @@ fn is_script(name: &str, bytes: &[u8]) -> bool {
     bytes.starts_with(b"#!") || extension.is_some_and(|e| SCRIPT_EXTENSIONS.contains(&e.as_str()))
 }
 
+// Every string in `value`, mapping keys included (`{bypassPermissions: true}`).
 fn collect_strings(value: &serde_yaml::Value, out: &mut Vec<String>) {
     match value {
         serde_yaml::Value::String(s) => out.push(s.clone()),
         serde_yaml::Value::Sequence(items) => items.iter().for_each(|v| collect_strings(v, out)),
-        serde_yaml::Value::Mapping(map) => map.values().for_each(|v| collect_strings(v, out)),
+        serde_yaml::Value::Mapping(map) => {
+            for (key, v) in map {
+                collect_strings(key, out);
+                collect_strings(v, out);
+            }
+        }
         _ => {}
     }
 }
 
+// A bypass flag or marker, alone or as the value of `--flag=value`.
 fn skips_permissions(arg: &str) -> bool {
-    crate::agents::adapter::is_escalating_flag(arg) || SKIP_MARKERS.contains(&arg)
+    let value = arg.split_once('=').map(|(_, v)| v);
+    [Some(arg), value]
+        .into_iter()
+        .flatten()
+        .any(|a| crate::agents::adapter::is_escalating_flag(a) || SKIP_MARKERS.contains(&a))
 }
 
 fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) {
     let Ok(agent) = serde_yaml::from_slice::<serde_yaml::Value>(bytes) else {
         return;
     };
-    let mut strings = Vec::new();
+    let mut strings: Vec<String> = Default::default();
     for key in ["args", "permissions"] {
         if let Some(value) = agent.get(key) {
             collect_strings(value, &mut strings);
         }
     }
+    let before = facts.skip_permission_agents.len();
     for marker in strings.into_iter().filter(|s| skips_permissions(s)) {
         facts.skip_permission_agents.push(SkipPermissionFact {
             agent: rel.to_string(),
             marker,
         });
     }
+    // The app's own reading of the agent: a runtime's flag pairs and permission keys
+    // (Codex `-s danger-full-access -a never`) that no single string shows.
+    let escalating = serde_yaml::from_slice::<crate::agents::model::Agent>(bytes)
+        .is_ok_and(|agent| crate::agents::model::Agent::is_escalating(&agent));
+    if escalating && facts.skip_permission_agents.len() == before {
+        facts.skip_permission_agents.push(SkipPermissionFact {
+            agent: rel.to_string(),
+            marker: "skips permission checks (its runtime's flags or permissions)".to_string(),
+        });
+    }
     if let Some(servers) = agent.get("mcp").and_then(|m| m.get("servers")) {
-        let mut names = Vec::new();
+        let mut names: Vec<String> = Default::default();
         collect_strings(servers, &mut names);
         for server in names {
             facts.mcp_servers.push(McpFact {
@@ -128,30 +151,51 @@ fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) {
     }
 }
 
+// Keys whose value is a command the CLI runs on its own.
+const SETTINGS_COMMANDS: &[&str] = &["hooks", "statusLine", "apiKeyHelper"];
+const CODEX_COMMANDS: &[&str] = &["hooks", "notify"];
+
+fn hook(facts: &mut RiskFacts, rel: &str, detail: String) {
+    facts.cli_hooks.push(HookFact {
+        path: rel.to_string(),
+        detail,
+    });
+}
+
 fn config_facts(rel: &str, name: &str, bytes: &[u8], facts: &mut RiskFacts) {
     let text = String::from_utf8_lossy(bytes);
     let json: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+    let toml: Option<toml::Table> = (name == "config.toml")
+        .then(|| text.parse::<toml::Table>().ok())
+        .flatten();
     match name {
         "settings.json" | "settings.local.json" | "hooks.json" | "opencode.json" => {
-            if json.as_ref().is_some_and(|j| j.get("hooks").is_some()) {
-                facts.cli_hooks.push(HookFact {
-                    path: rel.to_string(),
-                    detail: format!("`hooks` in {name}"),
-                });
+            for key in SETTINGS_COMMANDS {
+                if json.as_ref().is_some_and(|j| j.get(key).is_some()) {
+                    hook(facts, rel, format!("`{key}` in {name}"));
+                }
             }
         }
         "config.toml" => {
-            if text
-                .parse::<toml::Table>()
-                .is_ok_and(|t| t.contains_key("hooks"))
-            {
-                facts.cli_hooks.push(HookFact {
-                    path: rel.to_string(),
-                    detail: "`hooks` in config.toml".to_string(),
-                });
+            for key in CODEX_COMMANDS {
+                if toml.as_ref().is_some_and(|t| t.contains_key(*key)) {
+                    hook(facts, rel, format!("`{key}` in config.toml"));
+                }
             }
         }
         _ => {}
+    }
+    if let Some(servers) = toml
+        .as_ref()
+        .and_then(|t| t.get("mcp_servers"))
+        .and_then(|s| s.as_table())
+    {
+        for server in servers.keys() {
+            facts.mcp_servers.push(McpFact {
+                path: rel.to_string(),
+                server: server.clone(),
+            });
+        }
     }
     let servers = match name {
         ".mcp.json" => json.as_ref().and_then(|j| j.get("mcpServers")),
@@ -173,10 +217,18 @@ fn part_facts(manifest: &PackManifest, facts: &mut RiskFacts) {
         let id = part.id().to_string();
         match part {
             Part::Routine { file, .. } => facts.routines.push(file.clone()),
-            Part::Setup { command, .. } => facts.setup_steps.push(SetupFact {
-                part: id,
-                command: command.clone(),
-            }),
+            // An upstream command fetches what it runs (`npx tool@1.2.3`).
+            Part::Setup { command, .. } => {
+                facts.network_fetches.push(FetchFact {
+                    part: id.clone(),
+                    source: command.clone(),
+                    version: Default::default(),
+                });
+                facts.setup_steps.push(SetupFact {
+                    part: id,
+                    command: command.clone(),
+                });
+            }
             Part::External {
                 method,
                 source,
@@ -207,7 +259,7 @@ fn part_facts(manifest: &PackManifest, facts: &mut RiskFacts) {
 }
 
 /// The facts for the pack at `root`. `files` are its regular files, relative with `/`;
-/// a file over `max_file` bytes is not read.
+/// a file over `max_file` bytes is not read, and nothing is read through a symlink.
 pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: u64) -> RiskFacts {
     let mut facts: RiskFacts = Default::default();
     let steps: Vec<_> = manifest
@@ -215,6 +267,15 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
         .iter()
         .filter_map(|g| Glob::new(g).ok())
         .map(|g| g.compile_matcher())
+        .collect();
+    // Every agent part's file is an agent, whatever its name.
+    let agents: BTreeSet<&str> = manifest
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Agent { file, .. } => Some(file.as_str()),
+            _ => None,
+        })
         .collect();
     for rel in files {
         let path = root.join(rel);
@@ -226,26 +287,28 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
         }
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let slashed = format!("/{rel}");
-        let bytes = if meta.len() <= max_file {
-            std::fs::read(&path).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let bytes = super::validate::read_regular(&path, max_file).unwrap_or_default();
         if is_executable(&meta) {
             facts.executables.push(rel.clone());
         }
         if is_script(name, &bytes) {
             facts.scripts.push(rel.clone());
         }
-        for hooks in ["/.claude/hooks/", "/.codex/hooks/"] {
+        for hooks in [
+            "/.claude/hooks/",
+            "/.codex/hooks/",
+            "/.opencode/plugin/",
+            "/.opencode/plugins/",
+        ] {
             if slashed.contains(hooks) {
-                facts.cli_hooks.push(HookFact {
-                    path: rel.clone(),
-                    detail: format!("a file under {}", hooks.trim_matches('/')),
-                });
+                hook(
+                    &mut facts,
+                    rel,
+                    format!("a file under {}", hooks.trim_matches('/')),
+                );
             }
         }
-        if name == "agent.yaml" {
+        if name == "agent.yaml" || agents.contains(rel.as_str()) {
             agent_facts(rel, &bytes, &mut facts);
         }
         config_facts(rel, name, &bytes, &mut facts);
@@ -254,6 +317,12 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
         }
         if steps.iter().any(|m| m.is_match(rel)) {
             facts.setup_step_files.push(rel.clone());
+        }
+    }
+    // A file the pack lists as executable is one: the installer applies that bit.
+    for entry in manifest.files.iter().filter(|f| f.exec) {
+        if files.contains(&entry.path) {
+            facts.executables.push(entry.path.clone());
         }
     }
     part_facts(manifest, &mut facts);

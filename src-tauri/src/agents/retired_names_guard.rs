@@ -129,6 +129,11 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
         ),
         // Classifies the same tool's identity needs.
         ("src-tauri/src/mcp/identity_guard.rs", &["pack_validate"]),
+        // Proves the same tool's caller scope.
+        (
+            "src-tauri/src/mcp/handler/caller_scope_tests.rs",
+            &["pack_validate_request"],
+        ),
         // The avatar list's default face pack, on the wire and in its mock.
         ("src/tauri/commands.ts", &["default_pack"]),
         ("src/app/mock/handlers/agents.ts", &["default_pack"]),

@@ -46,7 +46,15 @@ function scratch(name, fn) {
 }
 
 test("every good fixture builds clean under --check", () => {
-  for (const name of ["good", "good-external", "good-setup", "risky", "two-pack/a", "two-pack/b"]) {
+  for (const name of [
+    "good",
+    "good-external",
+    "good-setup",
+    "risky",
+    "risky-more",
+    "two-pack/a",
+    "two-pack/b",
+  ]) {
     const { errors, written } = check(name);
     assert.deepEqual(errors, [], name);
     assert.deepEqual(written, [], name);
