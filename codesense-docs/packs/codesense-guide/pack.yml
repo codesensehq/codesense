@@ -22,13 +22,13 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    sha256: 902f52b7e1ff3b59be63488e8ffb547172d3e5b3abacf855a11419183b590030
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    sha256: 902f52b7e1ff3b59be63488e8ffb547172d3e5b3abacf855a11419183b590030
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    sha256: 902f52b7e1ff3b59be63488e8ffb547172d3e5b3abacf855a11419183b590030
     exec: false
   - path: CHANGELOG.md
     sha256: 1614f9071daad5e4ad06d57852c6f8fada52966e9b37834344252edac00549b7
@@ -37,25 +37,22 @@ files:
     sha256: d0d1bba570c135a2a51273d7261df49c4ce5d63332a304d03626c5836cbbec4f
     exec: false
   - path: agents/guide-claude/agent.yaml
-    sha256: 7005b56ef9f16c77f5ed4f5d5b663eeaa6bedfd3559a42879e8d64009f1b77a8
+    sha256: a2e5d05871c120c7b6510cd0016bc5f76d1a1bef1b80318bb76ce9d03ebc5886
     exec: false
   - path: agents/guide-codex/agent.yaml
-    sha256: 7a3a453690194f2e92e777795d88255bd2510b879601fd4b770c3919e690fdd3
+    sha256: 1d700f905584322fc352cfaf8a9f600d8511822fec03228d3da47efd8984e181
     exec: false
   - path: agents/guide-opencode/agent.yaml
-    sha256: a1a7dcceb362250486a7af4b6198f652a6bd953bd8bb2c1057d60417f5d029bf
+    sha256: 0d94957543a4d3373e506d955bd3e73b96d287454d105d28c17785b23f7737d4
     exec: false
   - path: commands/codesense-setup.md
-    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
-    exec: false
-  - path: content/guide/PROMPT.md
-    sha256: 1473df30e726dbeea0020707d0dd5cfd1f81178510a17d2fa482a6a119de5f1f
+    sha256: 902f52b7e1ff3b59be63488e8ffb547172d3e5b3abacf855a11419183b590030
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
     exec: false
   - path: docs/README.md
-    sha256: 41022d3bc60420eaddd3c18e1d547a5f0a420046ad0c63ca688090c9543e55f6
+    sha256: ba5b6709d14bdb7b6f26d93d03b2346ad6fb3d65965eff63bf77c817ea3aee59
     exec: false
   - path: setup/ledger/setup-ledger.yaml
     sha256: 64e8d67d2dfcbf127787fe10e9145e8d0af29fc071ed531b8ec0f1335d557e5c

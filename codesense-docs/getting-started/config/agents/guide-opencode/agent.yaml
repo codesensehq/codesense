@@ -4,15 +4,16 @@ description: Sets up CodeSense with you. It checks this Mac, asks what you work 
 created_by: codesense
 runtime: opencode
 launch: foreground
-context:
-  - { path: guide/PROMPT.md, dest: AGENTS.md }
-  - { path: .opencode/command/codesense-setup.md }
+# The page passes the model when it launches (setup model while setup is incomplete, the cheaper one after).
 permissions:
   opencode:
     permission:
       bash: deny
       edit: deny
       webfetch: deny
+      websearch: deny
+      codesearch: deny
+      task: deny
       external_directory: deny
 mcp:
   bridge_tools:
