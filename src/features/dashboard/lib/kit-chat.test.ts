@@ -1056,6 +1056,68 @@ describe("kit.chat faces", () => {
     ]);
   });
 
+  it("an avatar image that fails to load is swapped for kit.avatar's face, or the initials without it", async () => {
+    const calls = withAvatar();
+    const s = setup([lead("idle")], THREAD.slice(2, 3));
+    mountOn(s, {
+      faces: () => ({ src: "/img/gone.png", face: "builtin-funny:coffee-bot", name: "Dev two" }),
+    });
+    await flush();
+    const img = s.el.querySelector<HTMLImageElement>(".log .msg .cs-avatar img")!;
+    img.dispatchEvent(new Event("error"));
+    expect(s.el.querySelector(".log .msg img")).toBeNull();
+    expect(s.el.querySelector(".log .msg .meta .cs-avatar")!.getAttribute("data-name")).toBe(
+      "Dev two",
+    );
+    expect(calls.at(-1)).toEqual(
+      expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Dev two" }),
+    );
+
+    // Without kit.avatar the swap is the initials span.
+    delete (kitOf() as unknown as { avatar?: unknown }).avatar;
+    const bare = setup([lead("idle")], THREAD.slice(2, 3));
+    mountOn(bare, { faces: () => ({ src: "/img/gone.png", name: "Dev two" }) });
+    await flush();
+    bare.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
+    expect(bare.el.querySelector(".log .msg img")).toBeNull();
+    expect(bare.el.querySelector(".log .msg .meta .cs-avatar")!.textContent).toBe("DT");
+  });
+
+  it("a streamed reply joins the lead's run and keeps no meta line the final message would drop", async () => {
+    withAvatar();
+    const thread = [said(1, "lead-1", "first")];
+    const s = setup([lead("idle")], thread);
+    let push!: (chunk: { messageId: number; text: string }) => void;
+    (s.transport as unknown as { stream: unknown }).stream = (
+      cb: (chunk: { messageId: number; text: string }) => void,
+    ) => {
+      push = cb;
+      return () => {};
+    };
+    mountOn(s, { faces: true });
+    await flush();
+    push({ messageId: 2, text: "partial" });
+    await flush();
+    const runs = () =>
+      [...s.el.querySelectorAll<HTMLElement>(".log .msg")].map((m) => [
+        m.getAttribute("data-run"),
+        Boolean(m.querySelector(".meta")),
+        m.querySelector(".body")!.textContent,
+      ]);
+    expect(runs()).toEqual([
+      ["start", true, "first"],
+      ["cont", false, "partial"],
+    ]);
+    // The final message replaces the stream row; the run reads the same.
+    thread.push(said(2, "lead-1", "partial and done"));
+    s.emit("inbox");
+    await flush();
+    expect(runs()).toEqual([
+      ["start", true, "first"],
+      ["cont", false, "partial and done"],
+    ]);
+  });
+
   it("a card between two messages from one sender ends the run: the next message has its own avatar", async () => {
     withAvatar();
     const card = said(

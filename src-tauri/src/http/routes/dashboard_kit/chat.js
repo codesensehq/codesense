@@ -640,14 +640,20 @@
     const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
     return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
   };
-  function faceNode(info) {
-    if (info.src) {
-      const img = h("img", { src: info.src, alt: info.name });
-      return h("span", { class: "cs-avatar", title: info.name }, img);
-    }
+  function avatarOf(info) {
     const kit = window.codesense && window.codesense.kit;
     if (kit && typeof kit.avatar === "function") return kit.avatar({ face: info.face, name: info.name, size: 24 });
     return h("span", { class: "cs-avatar", title: info.name }, initialsOf(info.name));
+  }
+  function faceNode(info) {
+    if (!info.src) return avatarOf(info);
+    const img = h("img", { src: info.src, alt: info.name }), wrap = h("span", { class: "cs-avatar", title: info.name }, img);
+    img.addEventListener("error", () => {
+      const next = avatarOf(info);
+      if (wrap.parentNode) wrap.replaceWith(next);
+      else wrap.replaceChildren(next);
+    }, { once: true });
+    return wrap;
   }
   var face = (state, label) => h("span", { class: "av", "aria-hidden": "true", "data-face": state, "data-label": label });
   var ALERT_NS = "http://www.w3.org/2000/svg";
@@ -905,9 +911,11 @@
       return { name: given && given.name || who, label: given && given.label || null, src: given && given.src || null, face: given && given.face || null };
     }
     function threadItems() {
+      let lastLead = null;
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
       for (const row of thread) {
         const side = sideOf(row, handles), needs = cards !== false && row.kind === "needs-you" && side === "lead";
+        if (side === "lead") lastLead = row;
         if (needs) {
           entries.push(cardEntry(row));
           continue;
@@ -931,7 +939,17 @@
         entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: "you", info: null, make: (first) => bubble(sent, "you", first) } : null });
       }
       entries.sort((a, b) => a.t - b.t);
-      for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: copy.lead, at: clock.now() }, "lead") });
+      for (const [id, text] of streams) {
+        if (rowIds.has(id)) continue;
+        const item = { id, text, who: copy.lead, at: clock.now() };
+        let run = null;
+        if (faces) {
+          const ref = lastLead || { from: (live() || {}).handle };
+          item.who = target.leadName(ref);
+          run = { key: "lead|" + (ref.from || ""), info: faceInfo(ref, "lead", item.who), make: (first, info) => bubble(item, "lead", first, info) };
+        }
+        entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble(item, "lead"), run });
+      }
       if (faces) {
         let before = null;
         for (const entry of entries) {

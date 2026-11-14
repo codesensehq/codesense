@@ -32,11 +32,17 @@ const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms)
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
 // A sender's avatar for the faces option: an image by src, else kit.avatar (a face ref or initials from the name); a page without kit.avatar gets the initials in a plain span.
 const initialsOf=name=>{const parts=String(name||'?').split(/[\s_-]+/).filter(Boolean);return(parts.length>1?parts[0][0]+parts[1][0]:(parts[0]||'?').slice(0,2)).toUpperCase();};
-function faceNode(info){
- if(info.src){const img=h('img',{src:info.src,alt:info.name});return h('span',{class:'cs-avatar',title:info.name},img);}
+function avatarOf(info){
  const kit=window.codesense&&window.codesense.kit;
  if(kit&&typeof kit.avatar==='function')return kit.avatar({face:info.face,name:info.name,size:24});
  return h('span',{class:'cs-avatar',title:info.name},initialsOf(info.name));
+}
+// An image that fails to load (a dead src) is swapped for the face kit.avatar draws, or the initials without it, so the run never shows a broken image.
+function faceNode(info){
+ if(!info.src)return avatarOf(info);
+ const img=h('img',{src:info.src,alt:info.name}),wrap=h('span',{class:'cs-avatar',title:info.name},img);
+ img.addEventListener('error',()=>{const next=avatarOf(info);if(wrap.parentNode)wrap.replaceWith(next);else wrap.replaceChildren(next);},{once:true});
+ return wrap;
 }
 const face=(state,label)=>h('span',{class:'av','aria-hidden':'true','data-face':state,'data-label':label});
 const ALERT_NS='http://www.w3.org/2000/svg';
@@ -198,9 +204,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   return {name:(given&&given.name)||who,label:given&&given.label||null,src:given&&given.src||null,face:given&&given.face||null};
  }
  function threadItems(){
+  let lastLead=null;
   const handles=leadHandles(),entries=[],rowIds=new Set(thread.map(row=>row.messageId)),sentHere=new Map(launch.messages.filter(item=>item.messageId!==undefined).map(item=>[item.messageId,item]));
   for(const row of thread){
    const side=sideOf(row,handles),needs=cards!==false&&row.kind==='needs-you'&&side==='lead';
+   if(side==='lead')lastLead=row;
    if(needs){entries.push(cardEntry(row));continue;}
    const who=side==='you'?copy.who.you:side==='lead'?target.leadName(row):(row.fromName||row.from||''),own=sentHere.get(row.messageId),mark=own?markOfItem(own):null;
    // With next on, a lead message's Next line is the chips, not part of the text; a message that is only that line shows nothing.
@@ -217,7 +225,18 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble(sent,'you'),run:faces?{key:'you',info:null,make:(first)=>bubble(sent,'you',first)}:null});
   }
   entries.sort((a,b)=>a.t-b.t);
-  for(const [id,text] of streams)if(!rowIds.has(id))entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble({id,text,who:copy.lead,at:clock.now()},'lead')});
+  // A streamed reply is the lead's next message, so under faces it joins the lead's run (the lead's key and face) and shows no meta line of its own that the final message would then drop.
+  for(const [id,text] of streams){
+   if(rowIds.has(id))continue;
+   const item={id,text,who:copy.lead,at:clock.now()};
+   let run=null;
+   if(faces){
+    const ref=lastLead||{from:(live()||{}).handle};
+    item.who=target.leadName(ref);
+    run={key:'lead|'+(ref.from||''),info:faceInfo(ref,'lead',item.who),make:(first,info)=>bubble(item,'lead',first,info)};
+   }
+   entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble(item,'lead'),run});
+  }
   // faces: a message that follows one from the same sender joins its run (no meta line); a card, a stream row or another sender starts a new one. The signature carries the position and the face, so a node is rebuilt only when either changes.
   if(faces){
    let before=null;
