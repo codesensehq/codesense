@@ -9,6 +9,7 @@ import {
   deliveryMark,
   isBusy,
   parseCard,
+  parseNext,
   type ChatLeadRow,
 } from "./chat-core";
 
@@ -192,5 +193,65 @@ describe("cardAnswer", () => {
       cardAnswer(7, [{ messageId: 9, from: "role:x", inReplyTo: 7 }]),
       "only the person",
     ).toBeNull();
+  });
+});
+
+describe("parseNext", () => {
+  it("reads the trailing Next line as chips and returns the text above it", () => {
+    expect(
+      parseNext(
+        "Done. Your repos are set up.\n\nNext: `Bring in my issues`, `What have you set up?`",
+      ),
+    ).toEqual({
+      text: "Done. Your repos are set up.",
+      chips: ["Bring in my issues", "What have you set up?"],
+    });
+  });
+
+  it("splits an unquoted line on the middle dot, so a chip may hold a comma", () => {
+    expect(parseNext("Hi.\nNext: I work on acme/web, acme/api · What is CodeSense?\n")).toEqual({
+      text: "Hi.",
+      chips: ["I work on acme/web, acme/api", "What is CodeSense?"],
+    });
+  });
+
+  it("takes backticked chips when the line has any, and any case of the word Next", () => {
+    expect(parseNext("A\nnext: `x` · `y`")?.chips).toEqual(["x", "y"]);
+  });
+
+  it("has no chips when the Next line is not the last line, or there is none", () => {
+    for (const text of [
+      "Next: `a`, `b`\nand then more",
+      "Just a reply.",
+      "",
+      "Next:",
+      "Hi\nNext: ",
+      null,
+      undefined,
+      42,
+    ])
+      expect(parseNext(text), String(text)).toBeNull();
+  });
+
+  it("refuses a line that is not chips: a duplicate, an over-long or placeholder chip, or more than four", () => {
+    expect(parseNext("Q\nNext: `a`, `A`")).toBeNull();
+    expect(parseNext(`Q\nNext: \`${"x".repeat(81)}\``)).toBeNull();
+    expect(parseNext("Q\nNext: `<your repo>`, `b`")).toBeNull();
+    expect(parseNext("Q\nNext: `1`, `2`, `3`, `4`, `5`")).toBeNull();
+    expect(parseNext("Q\nNext: `1`, `2`, `3`, `4`")?.chips).toHaveLength(4);
+  });
+
+  it("keeps a lone chip and a body that is only the line", () => {
+    expect(parseNext("Next: `Start my first story`")).toEqual({
+      text: "",
+      chips: ["Start my first story"],
+    });
+  });
+
+  it("reads the last Next line only", () => {
+    expect(parseNext("Earlier: Next: `x`\nNext: `y`, `z`")).toEqual({
+      text: "Earlier: Next: `x`",
+      chips: ["y", "z"],
+    });
   });
 });

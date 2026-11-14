@@ -13,6 +13,11 @@ export interface ChatCard {
   pick: string | null;
   reason: string | null;
 }
+/** The agent's trailing `Next:` line: the message text above it and the suggested prompts. */
+export interface ChatNext {
+  text: string;
+  chips: string[];
+}
 export interface ChatThreadRow {
   messageId?: string | number;
   from?: string;
@@ -42,6 +47,8 @@ export function createMarkLatch(): (
 ) => "queued" | "delivered";
 /** A needs-you message read as buttons, or null when it is not in the card format. */
 export function parseCard(text: unknown): ChatCard | null;
+/** The trailing `Next:` line of a message as chips (one to four), or null when it does not end with one. */
+export function parseNext(text: unknown): ChatNext | null;
 /** The person's own row replying to the card, from whichever place sent it. */
 export function cardAnswer(
   cardId: string | number,
