@@ -51,13 +51,16 @@ test("a remote diff side renders and runs inline, but makes no request of its ow
     "requestfailed",
     (r) => outward(r.url()) && failed.set(r.url(), r.failure()?.errorText ?? ""),
   );
-  await page.goto(url);
+  await page.goto(`${url}&case=probes`);
   const side = page.frameLocator('iframe[title="Remote side"]');
   await expect(side.locator("#marker")).toHaveText("remote side", { timeout: 30_000 });
   // Its own script ran: the sandbox allows scripts, only the network is closed.
   await expect(side.locator("#marker")).toHaveAttribute("data-ran", "yes");
   const frame = page.frames().find((f) => f.url() === "about:srcdoc")!;
   await expect.poll(() => frame.evaluate(() => (window as any).fetched)).toBe("refused");
+  await expect.poll(() => frame.evaluate(() => (window as any).socket)).toBe("refused");
+  // A blob worker is a script the policy doesn't list: it never starts, or starts unable to fetch.
+  expect(await frame.evaluate(() => (window as any).worker)).toMatch(/refused|started/);
   // Each attempt was stopped by the side's own policy, not by a missing server.
   await expect
     .poll(() => frame.evaluate(() => (window as any).violations as string[]))
@@ -66,8 +69,14 @@ test("a remote diff side renders and runs inline, but makes no request of its ow
         expect.stringContaining(`127.0.0.1:${probePort}/fetch`),
         expect.stringContaining(`127.0.0.1:${probePort}/img`),
         expect.stringContaining("x.css"),
+        expect.stringContaining(`127.0.0.1:${probePort}/ws`),
       ]),
     );
+  // A nested frame and an object report only their origin when blocked; a blob worker, "blob".
+  const violations = (await frame.evaluate(() => (window as any).violations)) as string[];
+  expect(violations.filter((v) => v === `http://127.0.0.1:${probePort}`).length).toBe(2);
+  if ((await frame.evaluate(() => (window as any).worker)) === "started")
+    expect(violations).toContain("blob");
   // An opaque origin: the side can't read the app page around it.
   expect(await frame.evaluate(() => origin)).toBe("null");
   expect(
@@ -84,3 +93,29 @@ test("a remote diff side renders and runs inline, but makes no request of its ow
   expect(answered).toEqual([]);
   for (const [u, reason] of failed) if (!u.startsWith("file:")) expect(reason, u).toBe("csp");
 });
+
+// The CSP can't stop a side navigating itself: that one GET is the residual channel, and
+// the side is torn down on the load it causes, before the page it reached can do more.
+for (const [name, path] of [
+  ["location.href", "/nav-href"],
+  ["a meta refresh", "/nav-refresh"],
+  ["a link click", "/nav-click"],
+] as const) {
+  test(`a side that navigates itself by ${name} sends at most one request and is closed`, async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await page.goto(`${url}&case=${path.slice(5)}`);
+    await expect(page.getByTestId("side-frame-left")).toBeVisible({ timeout: 30_000 });
+    expect(await page.locator('iframe[title="Remote side"]').count()).toBe(0);
+    await page.waitForTimeout(500);
+    expect(probeHits.length).toBeLessThanOrEqual(1);
+    for (const hit of probeHits) expect(hit).toBe(path);
+    // "Show again" draws the side's own content afresh (and it navigates once more).
+    probeHits = [];
+    await page.getByRole("button", { name: "Show again" }).click();
+    await expect(page.getByTestId("side-frame-left")).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(500);
+    expect(probeHits.length).toBeLessThanOrEqual(1);
+  });
+}
