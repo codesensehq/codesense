@@ -128,8 +128,7 @@ function makeStory(
     base = "origin/main",
     validate = true,
     keep = false,
-    readRecord = true,
-    readAfter = false,
+    read = "before",
     pr = "gh",
     push = true,
   } = {},
@@ -151,8 +150,8 @@ function makeStory(
   fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
   if (base === "origin/main") {
     if (push) fx.git(["-C", wt, "push", "-u", "origin", branch]);
-    const read = () => fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
-    if (readRecord && !readAfter) read();
+    const readRecord = () => fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    if (read === "before") readRecord();
     if (pr === "gh") fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
     if (pr === "mcp")
       fx.tool(F, GITHUB_PR, {
@@ -163,7 +162,7 @@ function makeStory(
         title: "x",
         body: "y",
       });
-    if (readRecord && readAfter) read();
+    if (read === "after") readRecord();
   }
   if (!keep) fx.git(["worktree", "remove", wt]);
   fx.say("Done.");
@@ -835,13 +834,13 @@ test("new-story: a pull request head given as owner:branch or -H<branch> is the 
 // The generic case's one story, ending where a driver chooses: read the record (before the PR,
 // after it, or not at all); open the PR with gh, with the GitHub MCP tool, or not.
 const gitAccessStory =
-  ({ read = true, pr = false, ...rest } = {}) =>
+  ({ pr = false, ...rest } = {}) =>
   async ({ caseDef, fx }) => {
     const [request, create] = caseDef.input.turns;
     fx.human(request);
     fx.say("Create · Change · Not now?");
     fx.human(create);
-    makeStory(fx, { readRecord: read, pr, ...rest });
+    makeStory(fx, { pr, ...rest });
   };
 
 test("git access: a recorded gh method opens the pull request with gh", async () => {
@@ -854,7 +853,7 @@ test("git access: a recorded gh method opens the pull request with gh", async ()
     /never read the recorded git-access method/,
   );
   redFor(
-    await play(gitAccessStory({ pr: "gh", readAfter: true }), id),
+    await play(gitAccessStory({ pr: "gh", read: "after" }), id),
     /opened a pull request before reading the recorded git-access method/,
   );
 });
@@ -862,7 +861,7 @@ test("git access: a recorded gh method opens the pull request with gh", async ()
 test("git access: each story's pull request reads the record first, not just the first story's", async () => {
   redFor(
     await play(
-      generic((i) => ({ readRecord: i === 0 })),
+      generic((i) => ({ read: i === 0 && "before" })),
       "new-story-generic",
     ),
     /opened a pull request before reading the recorded git-access method \(foreman\/dark-mode-cd34\)/,
@@ -881,7 +880,7 @@ test("git access: a recorded GitHub MCP method opens the pull request with its t
   redFor(await play(gitAccessStory({ pr: false }), id), /0 GitHub MCP pull requests, expected 1/);
   redFor(await play(gitAccessStory({ pr: "gh" }), id), /1 gh calls with no gh git-access method/);
   redFor(
-    await play(gitAccessStory({ pr: "mcp", readAfter: true }), id),
+    await play(gitAccessStory({ pr: "mcp", read: "after" }), id),
     /opened a pull request before reading the recorded git-access method/,
   );
 });
@@ -894,6 +893,14 @@ test("git access: with none recorded, or plain git credentials, push and hand ov
     redFor(
       await play(gitAccessStory({ read: false }), id),
       /never read the recorded git-access method/,
+    );
+    const readLate = async (args) => {
+      await gitAccessStory({ read: false })(args);
+      args.fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    };
+    redFor(
+      await play(readLate, id),
+      /handed over the branch before reading the recorded git-access method/,
     );
     redFor(
       await play(gitAccessStory({ push: false }), id),

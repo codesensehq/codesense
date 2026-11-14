@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
 const text = (rel) => readFileSync(new URL(rel, pack), "utf8");
@@ -59,8 +60,6 @@ const FORBIDDEN = [
   "create_local_organization",
 ];
 const mcp = (name) => `mcp__codesense__${name}`;
-// The one tool beyond CodeSense's: a recorded GitHub MCP git-access method opens the PR with it.
-const GITHUB_PR = "mcp__github__create_pull_request";
 
 // Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
 // system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
@@ -413,8 +412,8 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "`validate_story`",
     "`sprint: backlog`",
     "`planning`",
-    "Commit and push what the skill didn't, open the PR as above (no remote: neither), remove the worktree",
-    "With no remote, give the one command to merge",
+    "open the PR as above, remove the worktree",
+    "with no remote, no push or PR",
     "one command to merge",
     "never touch the canonical clone",
     "Home gets no commit",

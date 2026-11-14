@@ -116,6 +116,8 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // A PR head without an `owner:` prefix, and the branch a gh argv's --head names.
 const bareHead = (head) => head?.replace(/^[^:/]+:/, "");
 const headOf = (argv) => bareHead(flagValue(argv, "-H", "--head"));
+// A read_content_file call of one context path (the git-access record, a team skill).
+const reads = (file) => (c) => c.tool === "read_content_file" && c.args.path === file;
 // A path as the file system sees it (macOS temp dirs sit behind a /private symlink), through its
 // nearest existing parent, since a removed worktree's files are gone by the time it is graded.
 const real = (p) => {
@@ -233,8 +235,12 @@ function newStory(s, e) {
     const prs = [...viaGh, ...viaMcp].sort((a, b) => a.seq - b.seq);
     if (prs.length && !same(prs.map((p) => p.head).sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
     // The record is read before each PR (after the one before it), and at least once.
-    const isRead = (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH;
+    const isRead = reads(GIT_ACCESS_PATH);
+    // With no PR to open, the read still decides the hand-over: it comes before the worktree goes.
+    const removedBy = () => Math.max(...git.filter((g) => g.line.startsWith("worktree remove")).map((g) => g.seq));
     if (!calls.some(isRead)) out.push("never read the recorded git-access method");
+    else if (!prs.length && !calls.some((c) => isRead(c) && c.seq < removedBy()))
+      out.push("handed over the branch before reading the recorded git-access method");
     else
       prs.forEach((pr, i) => {
         if (!calls.some((c) => isRead(c) && c.seq > (prs[i - 1]?.seq ?? 0) && c.seq < pr.seq))
@@ -253,7 +259,7 @@ function newStory(s, e) {
       if (!s.scriptCalls.every((c) => wts.includes(path.basename(c.cwd)))) out.push("the team scripts did not run inside the foreman-* worktree");
       if (story.id !== "ACME-42") out.push(`the story id is ${story.id}, the id script printed ACME-42`);
     }
-    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === SKILL_PATH);
+    const read = firstSeq(calls, reads(SKILL_PATH));
     if (read === Infinity || !foremanCalls(s, "query_context").some((c) => c.seq < read)) out.push("never found and read the story-create skill");
     if (foremanCalls(s, "write_file").some((c) => /\/stories\//.test(c.args.file))) out.push("wrote the story itself when the team has a story-create skill");
   } else if (s.scriptCalls.length) out.push("ran team scripts the team does not have");
@@ -403,10 +409,10 @@ const graders = {
     if (writes.length !== e.gh_writes) out.push(`${writes.length} gh writes, expected ${e.gh_writes} (the failed pr create)`);
     const failedCall = s.ghCalls.find((g) => g.create && g.ok === false);
     if (!failedCall) return [...out, "no pr create was attempted"];
-    const read = firstSeq(foremanCalls(s), (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH);
+    const read = firstSeq(foremanCalls(s), reads(GIT_ACCESS_PATH));
     if (!(read < failedCall.seq)) out.push("attempted the pull request before reading the recorded git-access method");
     // `--head owner:branch` names the same branch.
-    const head = (flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch)?.replace(/^[^:/]+:/, "");
+    const head = bareHead(flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch);
     if (!new RegExp(e.pr_head).test(head ?? "")) out.push(`the pull request was opened from ${head}, not a foreman branch`);
     else if (!s.branches.includes(head)) out.push(`the head ${head} was never created`);
     if (!(failedCall.foremanWorktrees >= 1)) out.push("the pull request was attempted with no foreman worktree");
