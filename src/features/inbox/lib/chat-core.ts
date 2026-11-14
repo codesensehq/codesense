@@ -8,9 +8,7 @@ export {
   deliveryMark,
   isBusy,
   parseCard,
+  type ChatCard,
+  type ChatLeadRow,
+  type ChatThreadRow,
 } from "../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
-export type {
-  ChatCard,
-  ChatLeadRow,
-  ChatThreadRow,
-} from "../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.d.ts";
