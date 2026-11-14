@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,6 +22,8 @@ import {
   TARGET_PATHS,
   buildPack,
   listPackFiles,
+  parseArgs,
+  run as runPacks,
   schemaErrors,
   skillCopies,
 } from "./pack-build.mjs";
@@ -92,6 +103,16 @@ test("a skill part builds one copy per target, at that runtime's own path", () =
   const source = readFileSync(join(fixture("good"), "commands/hello.md"));
   for (const copy of copies)
     assert.ok(source.equals(readFileSync(join(fixture("good"), copy.path))), copy.path);
+});
+
+test("a hermes target builds to Hermes's own skill folder", () => {
+  const copies = skillCopies({
+    parts: [{ id: "s", kind: "skill", source: "c.md", targets: ["hermes"] }],
+  });
+  assert.deepEqual(
+    copies.map((c) => c.path),
+    [".hermes/skills/s/SKILL.md"],
+  );
 });
 
 test("the node and Rust target paths agree", () => {
@@ -249,4 +270,178 @@ test("the exported lock schema accepts the design example and the two-pack lock"
     ["pack-a", "pack-b"].map((id) => yaml(join(fixture(`two-pack/${id.at(-1)}`), "pack.yml")).id),
   );
   assert.ok(existsSync(join(fixture("two-pack/a"), "setup/steps/access.yml")));
+});
+
+/** Swap the `hello` skill part of a scratch pack for `fields`. */
+function setSkill(dir, fields) {
+  const path = join(dir, "pack.yml");
+  const manifest = yaml(path);
+  manifest.parts = manifest.parts.map((p) => (p.id === "hello" ? { ...p, ...fields } : p));
+  writeFileSync(path, JSON.stringify(manifest));
+}
+
+test("a skill name that climbs out of the pack is refused before anything is written", () => {
+  scratch("good", (dir) => {
+    setSkill(dir, { name: "../../../escape" });
+    const { errors, written } = buildPack(dir);
+    assert.match(errors.join("|"), /hello: a skill name is \[a-z0-9-\]/);
+    assert.deepEqual(written, []);
+    assert.equal(existsSync(join(dir, "../escape")), false, "nothing written outside the pack");
+  });
+});
+
+test("a symlinked skill source or built-copy folder is refused, not read or written through", () => {
+  scratch("good", (dir) => {
+    const outside = join(dir, "../outside");
+    mkdirSync(outside);
+    rmSync(join(dir, ".claude/skills/hello"), { recursive: true });
+    symlinkSync(outside, join(dir, ".claude/skills/hello"));
+    writeFileSync(join(dir, "commands/hello.md"), "changed\n");
+    const { errors, written } = buildPack(dir);
+    assert.match(errors.join("|"), /\.claude\/skills\/hello: symlinks are refused/);
+    assert.equal(existsSync(join(outside, "SKILL.md")), false, "nothing written through the link");
+    assert.deepEqual(written, []);
+  });
+  scratch("good", (dir) => {
+    const secret = join(dir, "../secret.md");
+    writeFileSync(secret, "not the pack's\n");
+    rmSync(join(dir, "commands/hello.md"));
+    symlinkSync(secret, join(dir, "commands/hello.md"));
+    const { errors } = buildPack(dir);
+    assert.match(errors.join("|"), /commands\/hello\.md: symlinks are refused/);
+    const copy = readFileSync(join(dir, ".claude/skills/hello/SKILL.md"), "utf8");
+    assert.notEqual(copy, "not the pack's\n");
+  });
+});
+
+test("two skill parts building to one path, or a copy over another part's file, are refused", () => {
+  scratch("good", (dir) => {
+    const path = join(dir, "pack.yml");
+    const manifest = yaml(path);
+    manifest.parts.push({
+      id: "hello-again",
+      kind: "skill",
+      name: "hello",
+      source: "commands/hello.md",
+      targets: ["claude"],
+    });
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.match(
+      buildPack(dir).errors.join("|"),
+      /\.claude\/skills\/hello\/SKILL\.md is built by both hello and hello-again/,
+    );
+  });
+  scratch("good", (dir) => {
+    setSkill(dir, { source: ".opencode/command/hello.md" });
+    assert.match(
+      buildPack(dir).errors.join("|"),
+      /hello: \.opencode\/command\/hello\.md is both a built copy and a source/,
+    );
+  });
+});
+
+test("a pack.yml that is missing or malformed is a named error, and --root checks the rest", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pack-build-"));
+  try {
+    cpSync(fixture("good"), join(dir, "a-good"), { recursive: true });
+    cpSync(fixture("good"), join(dir, "b-broken"), { recursive: true });
+    writeFileSync(join(dir, "b-broken/pack.yml"), "parts: [\n");
+    cpSync(fixture("good"), join(dir, "c-good"), { recursive: true });
+    const broken = buildPack(join(dir, "b-broken"), { check: true });
+    assert.match(broken.errors.join("|"), /^pack\.yml: cannot parse: /);
+    assert.match(
+      buildPack(join(dir, "missing"), { check: true }).errors.join("|"),
+      /^pack\.yml: cannot read: /,
+    );
+    const seen = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = console.error = (line) => seen.push(line);
+    try {
+      assert.equal(
+        runPacks([join(dir, "a-good"), join(dir, "b-broken"), join(dir, "c-good")], {
+          check: true,
+        }),
+        false,
+      );
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+    assert.ok(
+      seen.some((l) => /b-broken: pack\.yml: cannot parse/.test(l)),
+      seen.join("|"),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a duplicate files entry is named", () => {
+  scratch("good", (dir) => {
+    const path = join(dir, "pack.yml");
+    const manifest = yaml(path);
+    manifest.files.push(manifest.files.find((f) => f.path === "LICENSE"));
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.match(
+      buildPack(dir, { check: true }).errors.join("|"),
+      /files: LICENSE is listed twice/,
+    );
+  });
+});
+
+test("the command line refuses unknown flags and flags with no value", () => {
+  assert.deepEqual(parseArgs(["--check"]), { check: true, pack: undefined, root: undefined });
+  assert.equal(parseArgs(["--pack", "x"]).pack.endsWith("/x"), true);
+  for (const args of [["--chek"], ["--pack"], ["--root"], ["--pack", "--check"], ["extra"]])
+    assert.throws(() => parseArgs(args), /pack-build: /, args.join(" "));
+});
+
+test("one bad part stops every write, even the copies that were fine", () => {
+  scratch("good", (dir) => {
+    rmSync(join(dir, ".claude"), { recursive: true });
+    const path = join(dir, "pack.yml");
+    const manifest = yaml(path);
+    manifest.parts.push({
+      id: "later",
+      kind: "skill",
+      source: "commands/gone.md",
+      targets: ["codex"],
+    });
+    writeFileSync(path, JSON.stringify(manifest));
+    const before = readFileSync(path, "utf8");
+    const { errors, written } = buildPack(dir);
+    assert.match(errors.join("|"), /later: skill source commands\/gone\.md is missing/);
+    assert.deepEqual(written, []);
+    assert.equal(existsSync(join(dir, ".claude/skills/hello/SKILL.md")), false);
+    assert.equal(readFileSync(path, "utf8"), before);
+  });
+});
+
+test("a symlinked pack.yml is refused and never written through", () => {
+  scratch("good", (dir) => {
+    const outside = join(dir, "../outside.yml");
+    const stripped = readFileSync(join(dir, "pack.yml"), "utf8").replace(/\nfiles:[\s\S]*$/, "\n");
+    writeFileSync(outside, stripped);
+    rmSync(join(dir, "pack.yml"));
+    symlinkSync(outside, join(dir, "pack.yml"));
+    const { errors, written } = buildPack(dir);
+    assert.match(errors.join("|"), /pack\.yml: symlinks are refused/);
+    assert.deepEqual(written, []);
+    assert.equal(readFileSync(outside, "utf8"), stripped);
+  });
+});
+
+test("a FIFO, an oversized file and a .GIT folder are reported, never read", () => {
+  scratch("good", (dir) => {
+    assert.equal(spawnSync("mkfifo", [join(dir, "content/pipe")]).status, 0);
+    writeFileSync(join(dir, "content/big.bin"), Buffer.alloc(5 * 1024 * 1024 + 1));
+    mkdirSync(join(dir, "content/.GIT"));
+    const { problems } = listPackFiles(dir);
+    const all = problems.join("|");
+    assert.match(all, /content\/pipe: not a regular file/);
+    assert.match(all, /content\/big\.bin: over the 5 MB file cap/);
+    assert.match(all, /content\/\.GIT: \.git is not part of a pack/);
+    assert.notDeepEqual(buildPack(dir, { check: true }).errors, []);
+  });
 });

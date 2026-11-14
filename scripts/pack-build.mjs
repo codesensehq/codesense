@@ -20,9 +20,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { parse, parseDocument } from "yaml";
@@ -40,7 +41,11 @@ export const TARGET_PATHS = {
   claude: (name) => `.claude/skills/${name}/SKILL.md`,
   codex: (name) => `.agents/skills/${name}/SKILL.md`,
   opencode: (name) => `.opencode/command/${name}.md`,
+  hermes: (name) => `.hermes/skills/${name}/SKILL.md`,
 };
+
+// The validator's per-file cap; a bigger file is reported, never read.
+export const MAX_FILE = 5 * 1024 * 1024;
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -81,7 +86,10 @@ export function schemaErrors(manifest) {
   return errors;
 }
 
-/** Every file of the pack except `pack.yml`, sorted; symlinks and `.git` are reported. */
+/**
+ * Every file of the pack except `pack.yml`, sorted. Symlinks, `.git` (in any case),
+ * anything that isn't a regular file and files over the cap are reported, never read.
+ */
 export function listPackFiles(dir) {
   const files = [];
   const problems = [];
@@ -89,14 +97,24 @@ export function listPackFiles(dir) {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const path = join(current, entry.name);
       const rel = relative(dir, path).split(sep).join("/");
-      if (entry.name === ".git") problems.push(`${rel}: .git is not part of a pack`);
-      else if (lstatSync(path).isSymbolicLink()) problems.push(`${rel}: symlinks are refused`);
-      else if (entry.isDirectory()) walk(path);
+      const stat = lstatSync(path);
+      if (entry.name.toLowerCase() === ".git") problems.push(`${rel}: .git is not part of a pack`);
+      else if (stat.isSymbolicLink()) problems.push(`${rel}: symlinks are refused`);
+      else if (stat.isDirectory()) walk(path);
+      else if (!stat.isFile()) problems.push(`${rel}: not a regular file`);
+      else if (stat.size > MAX_FILE) problems.push(`${rel}: over the 5 MB file cap`);
       else if (rel !== "pack.yml") files.push(rel);
     }
   };
   walk(dir);
   return { files: files.sort(), problems };
+}
+
+/** Write through a temporary sibling and a rename, so a failed write leaves the old file. */
+function writeAtomic(path, bytes) {
+  const temp = join(dirname(path), `.${basename(path)}.pack-build-${process.pid}`);
+  writeFileSync(temp, bytes, { flag: "wx" });
+  renameSync(temp, path);
 }
 
 export function skillCopies(manifest) {
@@ -116,6 +134,46 @@ const insidePack = (dir, rel) => {
   const full = resolve(dir, rel);
   return !rel.startsWith("/") && (full === dir || full.startsWith(dir + sep));
 };
+
+/** The first component of `rel` under `dir` that is a symlink, or null. */
+function symlinkOnPath(dir, rel) {
+  const parts = rel.split("/");
+  for (let i = 1; i <= parts.length; i++) {
+    const sub = parts.slice(0, i).join("/");
+    try {
+      if (lstatSync(join(dir, sub)).isSymbolicLink()) return sub;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Duplicate ids, bad skill names and built copies that land on another part's file. */
+function partErrors(manifest, copies) {
+  const errors = [];
+  const ids = new Set();
+  for (const part of manifest.parts) {
+    if (ids.has(part.id)) errors.push(`parts: duplicate id ${part.id}`);
+    ids.add(part.id);
+    if (part.kind === "skill" && !NAME.test(part.name ?? part.id))
+      errors.push(`${part.id}: a skill name is [a-z0-9-]`);
+  }
+  const builtBy = new Map();
+  for (const copy of copies) {
+    const other = builtBy.get(copy.path);
+    if (other && other !== copy.part)
+      errors.push(`${copy.path} is built by both ${other} and ${copy.part}`);
+    builtBy.set(copy.path, copy.part);
+  }
+  const partFiles = manifest.parts.flatMap((p) =>
+    [p.file, p.from, p.kind === "skill" ? p.source : undefined].filter(Boolean),
+  );
+  for (const path of new Set(partFiles))
+    if (builtBy.has(path))
+      errors.push(`${builtBy.get(path)}: ${path} is both a built copy and a source`);
+  return errors;
+}
 
 /** The page-source rule for a pack that mounts the shared chat. */
 const SECOND_CHAT = [
@@ -149,8 +207,21 @@ export function buildPack(dir, { check = false, force = false } = {}) {
   const errors = [];
   const written = [];
   const manifestPath = join(dir, "pack.yml");
-  const text = readFileSync(manifestPath, "utf8");
-  const manifest = parse(text);
+  let text;
+  let manifest;
+  try {
+    const stat = lstatSync(manifestPath);
+    if (stat.isSymbolicLink()) return { errors: ["pack.yml: symlinks are refused"], written };
+    if (!stat.isFile()) return { errors: ["pack.yml: not a regular file"], written };
+    text = readFileSync(manifestPath, "utf8");
+  } catch (e) {
+    return { errors: [`pack.yml: cannot read: ${e.message}`], written };
+  }
+  try {
+    manifest = parse(text);
+  } catch (e) {
+    return { errors: [`pack.yml: cannot parse: ${e.message.split("\n")[0]}`], written };
+  }
   errors.push(...schemaErrors(manifest));
   if (errors.length) return { errors, written };
 
@@ -158,21 +229,34 @@ export function buildPack(dir, { check = false, force = false } = {}) {
   const legacy = !force && copies.length === 0 && manifest.files === undefined;
   if (legacy) return { errors, written, legacy: true };
 
-  const ids = new Set();
-  for (const part of manifest.parts) {
-    if (ids.has(part.id)) errors.push(`parts: duplicate id ${part.id}`);
-    ids.add(part.id);
-    if (part.kind === "skill" && !NAME.test(part.name ?? part.id))
-      errors.push(`${part.id}: a skill name is [a-z0-9-]`);
-  }
+  errors.push(...partErrors(manifest, copies));
   for (const copy of copies) {
-    if (!insidePack(dir, copy.source) || !existsSync(join(dir, copy.source))) {
+    if (!insidePack(dir, copy.source) || !insidePack(dir, copy.path))
+      errors.push(`${copy.part}: ${copy.source} or ${copy.path} is outside the pack`);
+    else
+      for (const rel of [copy.source, copy.path]) {
+        const link = symlinkOnPath(dir, rel);
+        if (link) errors.push(`${link}: symlinks are refused`);
+      }
+  }
+  // Nothing is read or written until every name, path and link is known to be safe.
+  if (errors.length) return { errors: [...new Set(errors)], written };
+
+  // Plan every change first; nothing is written unless the whole pack is clean.
+  const plan = new Map();
+  for (const copy of copies) {
+    const sourcePath = join(dir, copy.source);
+    if (!existsSync(sourcePath)) {
       errors.push(`${copy.part}: skill source ${copy.source} is missing or outside the pack`);
       continue;
     }
-    const source = readFileSync(join(dir, copy.source));
+    if (!lstatSync(sourcePath).isFile()) {
+      errors.push(`${copy.source}: not a regular file`);
+      continue;
+    }
+    const source = readFileSync(sourcePath);
     const target = join(dir, copy.path);
-    const current = existsSync(target) ? readFileSync(target) : null;
+    const current = existsSync(target) && lstatSync(target).isFile() ? readFileSync(target) : null;
     if (current && sha256(current) === sha256(source)) continue;
     if (check)
       errors.push(
@@ -180,17 +264,16 @@ export function buildPack(dir, { check = false, force = false } = {}) {
           ? `drift: ${copy.path} differs from ${copy.source}`
           : `drift: ${copy.path} is missing (build from ${copy.source})`,
       );
-    else {
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, source);
-      written.push(copy.path);
-    }
+    else plan.set(copy.path, source);
   }
+  const { files: present, problems } = listPackFiles(dir);
+  errors.push(...problems);
   if (errors.length) return { errors, written };
 
-  const { files, problems } = listPackFiles(dir);
-  errors.push(...problems);
+  // The files list as it will be once the planned copies are written (new files, mode 644).
+  const files = [...new Set([...present, ...plan.keys()])].sort();
   const wanted = files.map((path) => {
+    if (plan.has(path)) return { path, sha256: sha256(plan.get(path)), exec: false };
     const full = join(dir, path);
     return {
       path,
@@ -203,27 +286,40 @@ export function buildPack(dir, { check = false, force = false } = {}) {
     sha256: f.sha256,
     exec: !!f.exec,
   }));
-  if (JSON.stringify(listed) !== JSON.stringify(wanted)) {
-    if (check) {
-      const byPath = new Map(listed.map((f) => [f.path, f]));
-      for (const f of wanted) {
-        const had = byPath.get(f.path);
-        if (!had) errors.push(`files: ${f.path} is not listed`);
-        else if (had.sha256 !== f.sha256) errors.push(`files: ${f.path} hash differs`);
-        else if (had.exec !== f.exec) errors.push(`files: ${f.path} exec bit differs`);
-      }
-      for (const f of listed)
-        if (!wanted.some((w) => w.path === f.path))
-          errors.push(`files: ${f.path} is listed but missing`);
-      if (!errors.length) errors.push("files: order differs; run the pack build");
-    } else {
-      const doc = parseDocument(text);
-      doc.set("files", doc.createNode(wanted));
-      writeFileSync(manifestPath, doc.toString({ lineWidth: 0 }));
-      written.push("pack.yml");
+  const relist = JSON.stringify(listed) !== JSON.stringify(wanted);
+  if (relist && check) {
+    const seen = new Set();
+    for (const f of listed) {
+      if (seen.has(f.path)) errors.push(`files: ${f.path} is listed twice`);
+      seen.add(f.path);
     }
+    const byPath = new Map(listed.map((f) => [f.path, f]));
+    for (const f of wanted) {
+      const had = byPath.get(f.path);
+      if (!had) errors.push(`files: ${f.path} is not listed`);
+      else if (had.sha256 !== f.sha256) errors.push(`files: ${f.path} hash differs`);
+      else if (had.exec !== f.exec) errors.push(`files: ${f.path} exec bit differs`);
+    }
+    for (const f of listed)
+      if (!wanted.some((w) => w.path === f.path))
+        errors.push(`files: ${f.path} is listed but missing`);
+    if (!errors.length) errors.push("files: order differs; run the pack build");
   }
-  errors.push(...chatCodeErrors(dir, manifest, files));
+  errors.push(...chatCodeErrors(dir, manifest, present));
+  if (errors.length || check) return { errors, written };
+
+  for (const [path, bytes] of plan) {
+    const target = join(dir, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeAtomic(target, bytes);
+    written.push(path);
+  }
+  if (relist) {
+    const doc = parseDocument(text);
+    doc.set("files", doc.createNode(wanted));
+    writeAtomic(manifestPath, doc.toString({ lineWidth: 0 }));
+    written.push("pack.yml");
+  }
   return { errors, written };
 }
 
@@ -251,13 +347,30 @@ export function run(dirs, { check, force = false }) {
   return !failed;
 }
 
+/** `--check`, `--pack <dir>`, `--root <dir>`; anything else throws. */
+export function parseArgs(args) {
+  const out = { check: false, pack: undefined, root: undefined };
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (flag === "--check") out.check = true;
+    else if (flag === "--pack" || flag === "--root") {
+      const value = args[++i];
+      if (value === undefined || value.startsWith("--"))
+        throw new Error(`pack-build: ${flag} needs a folder`);
+      out[flag.slice(2)] = resolve(value);
+    } else throw new Error(`pack-build: unknown argument ${flag}`);
+  }
+  return out;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  const value = (flag) => {
-    const i = args.indexOf(flag);
-    return i >= 0 ? resolve(args[i + 1]) : undefined;
-  };
-  const pack = value("--pack");
-  const dirs = pack ? [pack] : packDirs(value("--root") ?? PACKS_ROOT);
-  process.exit(run(dirs, { check: args.includes("--check"), force: !!pack }) ? 0 : 1);
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(2);
+  }
+  const dirs = args.pack ? [args.pack] : packDirs(args.root ?? PACKS_ROOT);
+  process.exit(run(dirs, { check: args.check, force: !!args.pack }) ? 0 : 1);
 }
