@@ -357,8 +357,8 @@ describe("IdentityMenu — the menu", () => {
     render(<IdentityMenu />);
     const cases: [string, () => void][] = [
       ["identity-menu-private", () => expect(mockOpenScratchSpace).toHaveBeenCalled()],
-      ["identity-menu-setup", () => expect(mockOpenSetup).toHaveBeenCalledWith({ resume: true })],
       ["identity-menu-agents", () => expect(mockOpenAgents).toHaveBeenCalled()],
+      ["identity-menu-setup", () => expect(mockOpenSetup).toHaveBeenCalledWith({ resume: true })],
       ["identity-menu-routines", () => expect(mockOpenRoutines).toHaveBeenCalled()],
       ["identity-menu-machines", () => expect(mockOpenMachines).toHaveBeenCalled()],
       ["identity-menu-settings", () => expect(mockOpenAppSettings).toHaveBeenCalledWith("general")],

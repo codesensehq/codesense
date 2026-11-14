@@ -454,18 +454,6 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
       <button
         type="button"
         role="menuitem"
-        data-testid="identity-menu-setup"
-        onClick={go(() => openCodesenseSetup({ resume: true }))}
-        className={MENU_ITEM}
-      >
-        <MenuLeadIcon>
-          <MessageSquare size={15} strokeWidth={1.75} />
-        </MenuLeadIcon>
-        <span>Set up CodeSense</span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
         data-testid="identity-menu-agents"
         onClick={go(() => openAgents())}
         className={MENU_ITEM}
@@ -474,6 +462,18 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
           <Bot size={15} strokeWidth={1.75} />
         </MenuLeadIcon>
         <span>Agent definitions</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-testid="identity-menu-setup"
+        onClick={go(() => openCodesenseSetup({ resume: true }))}
+        className={MENU_ITEM}
+      >
+        <MenuLeadIcon>
+          <MessageSquare size={15} strokeWidth={1.75} />
+        </MenuLeadIcon>
+        <span>Set up CodeSense</span>
       </button>
       <button
         type="button"
