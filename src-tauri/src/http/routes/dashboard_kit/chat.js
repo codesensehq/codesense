@@ -23,7 +23,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", retry: "Retry", needsTerminal: "Needs you in its terminal" },
+    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", stale: (time) => `Couldn't refresh · ${time}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -33,11 +33,13 @@
     who: { you: "You" },
     composerLabel: "Message to the story lead",
     unload: "Messages you sent are still waiting for the story lead.",
+    unloadKept: "Some messages weren't sent.",
     logLabel: "Story lead chat",
     chips: "Quick replies"
   };
-  var failureText = (failure) => failure.kind === "busy" ? CHAT_COPY.failure.busy : failure.kind === "denied" ? CHAT_COPY.failure.denied(failure.why) : failure.kind === "unavailable" ? CHAT_COPY.failure.unavailable(failure.why) : failure.kind === "timeout" ? CHAT_COPY.failure.timeout : failure.kind === "exited" ? CHAT_COPY.failure.exited : CHAT_COPY.failure.other(failure.code);
-  var failureReason = (failure) => failure.kind === "busy" ? CHAT_COPY.failure.reasonBusy : failure.kind === "timeout" ? CHAT_COPY.failure.reasonTimeout : failure.kind === "exited" ? CHAT_COPY.failure.reasonExited : failure.why || failure.code;
+  var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
+  var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
+  var mergeCopy = (over = {}) => Object.fromEntries(Object.entries({ ...CHAT_COPY, ...over }).map(([key, value]) => [key, value && typeof value === "object" && !Array.isArray(value) && CHAT_COPY[key] && typeof CHAT_COPY[key] === "object" ? { ...CHAT_COPY[key], ...value } : value]));
   var modelLabel = (id) => {
     const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{6,})?$/.exec(String(id || ""));
     return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}` : String(id || "");
@@ -47,30 +49,40 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/presence.js
   var leadRowsOf = (rows, storyId, role) => (Array.isArray(rows) ? rows : []).filter((row) => row.story === storyId && row.role === role);
   var liveOf = (rows) => rows.find((row) => row.state !== "exited") || null;
-  var activityOf = (row, runningSince) => {
+  var activityOf = (row, runningSince, copy = CHAT_COPY) => {
     const p = row && row.progress;
-    return p && typeof p.note === "string" && p.note && Number.isFinite(p.atMs) && p.atMs >= (runningSince || 0) ? p.note : CHAT_COPY.header.activityNone;
+    return p && typeof p.note === "string" && p.note && Number.isFinite(p.atMs) && p.atMs >= (runningSince || 0) ? p.note : copy.header.activityNone;
   };
-  var by = {
-    starting: { face: "starting", header: CHAT_COPY.header.starting, placeholder: CHAT_COPY.placeholder.starting },
-    none: { face: "off", header: CHAT_COPY.header.none, placeholder: CHAT_COPY.placeholder.none },
-    idle: { face: "idle", header: CHAT_COPY.header.idle, placeholder: CHAT_COPY.placeholder.idle },
-    needs: { face: "working", header: CHAT_COPY.header.needs, placeholder: CHAT_COPY.placeholder.needs },
-    unknown: { face: "off", header: CHAT_COPY.header.unknown, placeholder: CHAT_COPY.placeholder.unknown }
+  var rowTable = (copy) => ({
+    starting: { face: "starting", header: copy.header.starting, placeholder: copy.placeholder.starting },
+    none: { face: "off", header: copy.header.none, placeholder: copy.placeholder.none },
+    idle: { face: "idle", header: copy.header.idle, placeholder: copy.placeholder.idle },
+    needs: { face: "working", header: copy.header.needs, placeholder: copy.placeholder.needs },
+    unknown: { face: "off", header: copy.header.unknown, placeholder: copy.placeholder.unknown }
+  });
+  var tables = /* @__PURE__ */ new WeakMap();
+  var tableOf = (copy) => {
+    let table = tables.get(copy);
+    if (!table) {
+      table = rowTable(copy);
+      tables.set(copy, table);
+    }
+    return table;
   };
-  function presenceOf(row, { launch, runningSince, done } = {}) {
+  function presenceOf(row, { launch, runningSince, done } = {}, copy = CHAT_COPY) {
     let out;
-    if (launch && launch.state === "failed") out = { key: "failed", face: "failed", header: CHAT_COPY.header.failed(failureReason(launch.failure)), placeholder: CHAT_COPY.placeholder.failed };
+    const by = tableOf(copy);
+    if (launch && launch.state === "failed") out = { key: "failed", face: "failed", header: copy.header.failed(failureReason(launch.failure, copy)), placeholder: copy.placeholder.failed };
     else if (launch && launch.stuck && (launch.state === "starting" || launch.state === "slow")) out = { key: "needs", ...by.needs };
     else if (launch && (launch.state === "starting" || launch.state === "slow")) out = { key: "starting", ...by.starting };
     else if (!row || row.state === "exited") out = { key: "none", ...by.none };
     else if (row.state === "running") {
-      const activity = activityOf(row, runningSince);
-      out = { key: "running", face: "working", header: CHAT_COPY.header.working(activity), placeholder: CHAT_COPY.placeholder.running, activity };
+      const activity = activityOf(row, runningSince, copy);
+      out = { key: "running", face: "working", header: copy.header.working(activity), placeholder: copy.placeholder.running, activity };
     } else if (row.state === "idle") out = { key: "idle", ...by.idle };
     else if (row.state === "needs-you") out = { key: "needs", ...by.needs };
     else out = { key: "unknown", ...by.unknown };
-    if (done) out = { key: "done", face: "off", header: CHAT_COPY.header.done, placeholder: CHAT_COPY.placeholder.done };
+    if (done) out = { key: "done", face: "off", header: copy.header.done, placeholder: copy.placeholder.done };
     return out;
   }
 
@@ -128,15 +140,33 @@
     if (/^busy\b/.test(code)) return { kind: "busy", code };
     if (/^denied:/.test(code)) return { kind: "denied", code, why: code.replace(/^denied:\s*/, "") };
     if (/^unavailable:/.test(code)) return { kind: "unavailable", code, why: code.replace(/^unavailable:\s*/, "") };
+    if (/^refused:/.test(code)) return { kind: "refused", code, why: code.replace(/^refused:\s*/, "") };
     return { kind: "other", code };
   };
+  var died = (row) => row.state === "exited" || row.effectiveStatus === "crashed";
+  var joinable = (row) => Boolean(row) && !died(row) && row.needsYouKind !== "startup";
+  var firstJoinable = (list) => list.find(joinable) || null;
   function createLaunch({ transport, clock, storyId, leadRole, timers, card, onChange = () => {
-  }, rowsOf: rowsOf2 = (sessions) => leadRowsOf(sessions, storyId, leadRole), queue = null }) {
-    let state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Set();
-    const messages = [], outbox = [], peerRows = () => rowsOf2(rows);
-    const died = (row) => row.state === "exited" || row.effectiveStatus === "crashed";
-    const live = () => peerRows().find((row) => !died(row) && row.needsYouKind !== "startup") || null, emit = () => onChange();
-    const launchedRow = () => launchResult && launchResult.sessionId ? peerRows().find((row) => row.sessionId === launchResult.sessionId) || null : null;
+  }, rowsOf: rowsOf2 = (sessions) => leadRowsOf(sessions, storyId, leadRole), queue = null, pickLive = firstJoinable, bindLaunched = false, keepUnsent = false }) {
+    let promptItems = /* @__PURE__ */ new Set(), state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Map();
+    const messages = [], outbox = [], peerRows = () => rowsOf2(rows), emit = () => onChange();
+    const identity = (row) => row.sessionId || row.handle;
+    const rank = (row) => (staleDead.has(identity(row)) ? 2 : 0) + (row.state === "exited" ? 1 : 0);
+    const launchedIn = (list) => {
+      if (!launchResult) return null;
+      if (launchResult.sessionId) return rowsOf2(list).find((row) => row.sessionId === launchResult.sessionId) || null;
+      if (!bindLaunched || !launchResult.handle) return null;
+      return rowsOf2(list).filter((row) => row.handle === launchResult.handle).sort((a, b) => rank(a) - rank(b))[0] || null;
+    };
+    const launchedRow = () => launchedIn(rows);
+    const hasKept = () => keepUnsent && messages.some((item) => item.mark === "kept");
+    const live = () => {
+      if (bindLaunched) {
+        const row = launchedIn(rows);
+        if (joinable(row)) return row;
+      }
+      return pickLive(peerRows());
+    };
     const starting = () => state === "starting" || state === "slow";
     const clearTimers = () => {
       if (slowTimer !== null) clock.clearTimeout(slowTimer);
@@ -180,8 +210,9 @@
       stuck = false;
       state = "failed";
       failure = next;
+      if (keepUnsent) outbox.splice(0);
       messages.forEach((item) => {
-        if (item.mark === "starting") item.mark = "kept";
+        if (item.mark === "starting" || keepUnsent && item.mark === "held") item.mark = "kept";
       });
       emit();
     }
@@ -202,11 +233,15 @@
       }, timers.failMs);
     }
     function tryJoin() {
+      const own = bindLaunched ? launchedRow() : null;
+      if (state !== "failed" && own && !joinable(own)) return false;
       const row = live();
       if (!row || !["starting", "slow", "failed"].includes(state) || state !== "failed" && !settled) return false;
       clearTimers();
       stuck = false;
-      const first = messages.filter((item) => item.mark === "starting" || item.mark === "kept"), held = outbox.splice(0);
+      const carried = (item) => item.mark === "starting" || item.mark === "kept";
+      const first = messages.filter((item) => carried(item) && (!keepUnsent || promptItems.has(item)));
+      const held = [...keepUnsent ? messages.filter((item) => item.mark === "kept" && !promptItems.has(item)) : [], ...outbox.splice(0)];
       state = "joined";
       failure = null;
       if (first.length) {
@@ -222,8 +257,14 @@
     }
     function inspect() {
       const row = launchedRow();
-      if (launchResult && staleDead.has(launchResult.sessionId) && !(row && died(row))) staleDead.delete(launchResult.sessionId);
-      if (starting() && settled && row && died(row) && !staleDead.has(row.sessionId)) {
+      if (launchResult && !(row && died(row))) {
+        if (row) staleDead.delete(identity(row));
+        else if (launchResult.sessionId) staleDead.delete(launchResult.sessionId);
+        else if (bindLaunched) {
+          for (const [key, handle] of staleDead) if (handle === launchResult.handle) staleDead.delete(key);
+        }
+      }
+      if (starting() && settled && row && died(row) && !staleDead.has(identity(row))) {
         fail({ kind: "exited", code: row.endReason || (row.effectiveStatus === "crashed" ? "crashed" : "exited") });
         return true;
       }
@@ -245,13 +286,14 @@
     }
     function startLaunch(list) {
       const mine = ++seq;
+      promptItems = new Set(list);
       state = "starting";
       failure = null;
       sendFailure = null;
       settled = false;
       stuck = false;
       launchResult = null;
-      staleDead = new Set(peerRows().filter(died).map((row) => row.sessionId));
+      staleDead = new Map(peerRows().filter(died).map((row) => [identity(row), row.handle]));
       list.forEach((item) => {
         item.mark = "starting";
       });
@@ -290,7 +332,11 @@
       get held() {
         return outbox.length;
       },
-      hasHeld: () => outbox.length > 0,
+      hasHeld: () => outbox.length > 0 || hasKept(),
+      // Some message a failed launch or send kept (keepUnsent): it was not sent, which the unload warning says rather than "still waiting".
+      hasKept,
+      launchedRow,
+      launchedIn,
       // Enter or Send. Typing, focus and Shift+Enter never reach here.
       send(text) {
         const item = { id: ++ids, text, mark: null, sentAt: clock.now() };
@@ -357,6 +403,78 @@
   var sideOf = (row, leadHandles) => row.from === "human" ? "you" : leadHandles.has(row.from) || /^role:/.test(row.from || "") ? "lead" : "other";
   var newestFrom = (rows, leadHandles) => rows.filter((row) => sideOf(row, leadHandles) === "lead").reduce((at, row) => Math.max(at, row.createdAtMs || 0), 0);
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/sources.js
+  var ROLE = "\0role";
+  function createSources({ transport, clock, peers, sourcesOf }) {
+    const bySource = /* @__PURE__ */ new Map(), readOf = /* @__PURE__ */ new Map(), asked = /* @__PURE__ */ new Set(), pending = /* @__PURE__ */ new Map(), failed = /* @__PURE__ */ new Set(), failedAt = /* @__PURE__ */ new Map(), missOf = /* @__PURE__ */ new Map(), sessionsOf = /* @__PURE__ */ new Map();
+    let mergedKey = null, threadRead = false;
+    const flight = (id, by) => {
+      const n = (pending.get(id) || 0) + by;
+      if (n > 0) pending.set(id, n);
+      else pending.delete(id);
+    };
+    const current = () => [...sourcesOf(peers()), ROLE];
+    const merged = () => mergeThread(...current().map((id) => bySource.get(id) || []));
+    const waiting = () => current().some((id) => pending.has(id) && !bySource.has(id));
+    const settled = () => threadRead && !waiting();
+    const failedNow = () => current().some((id) => failed.has(id) && !bySource.has(id));
+    const staleAt = () => {
+      const times = current().filter((id) => failedAt.has(id)).map((id) => failedAt.get(id));
+      return times.length ? Math.min(...times) : null;
+    };
+    function seen(rows, firstRoster) {
+      let again = false;
+      for (const row of rows) {
+        if (!row.handle) continue;
+        const known = sessionsOf.get(row.handle), sessions = known || /* @__PURE__ */ new Set();
+        if (!known) sessionsOf.set(row.handle, sessions);
+        if (row.state === "exited" || sessions.has(row.sessionId)) continue;
+        sessions.add(row.sessionId);
+        if (known && !firstRoster) {
+          asked.delete(row.handle);
+          again = true;
+        }
+      }
+      return again;
+    }
+    async function read(mine, onlyNew, onEarly) {
+      const all = current();
+      for (const id of asked) if (!all.includes(id)) asked.delete(id);
+      const ids = onlyNew ? all.filter((id) => !asked.has(id)) : all;
+      ids.forEach((id) => {
+        asked.add(id);
+        flight(id, 1);
+      });
+      const key = current().join("\n");
+      if (key !== mergedKey) {
+        mergedKey = key;
+        onEarly(merged());
+      }
+      const newer = (id) => (readOf.get(id) || 0) < mine;
+      const keep = (id, list) => {
+        if (!newer(id)) return;
+        readOf.set(id, mine);
+        bySource.set(id, list);
+        if ((missOf.get(id) || 0) < mine) {
+          failed.delete(id);
+          failedAt.delete(id);
+        } else if (!failedAt.has(id)) failedAt.set(id, clock.now());
+      };
+      const miss = (id) => {
+        if (!newer(id)) return;
+        missOf.set(id, Math.max(missOf.get(id) || 0, mine));
+        failed.add(id);
+        if (!bySource.has(id)) asked.delete(id);
+        else if (!failedAt.has(id)) failedAt.set(id, clock.now());
+      };
+      await Promise.all(ids.map((id) => (id === ROLE ? transport.roleThread() : transport.threadOf(id)).then((list) => keep(id, list), () => miss(id)).then(() => flight(id, -1))));
+      mergedKey = current().join("\n");
+      if (!waiting()) threadRead = true;
+      return merged();
+    }
+    return { read, seen, settled, failedNow, staleAt };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/composer.js
   var COMPOSER_IDS = { region: "sv-composer", input: "sv-composer-input", send: "sv-send", hint: "sv-composer-hint" };
   function createComposer({ onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
@@ -386,6 +504,12 @@
         send.disabled = Boolean(disabled);
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
+      },
+      // post(text): another control's message (a page's starter) on the same path as a typed one, refused while the composer is disabled. True when it went.
+      post(text) {
+        if (!text || input.disabled) return false;
+        onSend(text);
+        return true;
       }
     };
   }
@@ -501,11 +625,11 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [] }) {
-    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard;
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], copy: words = null }) {
+    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
-    let started = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
+    let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
     const streams = /* @__PURE__ */ new Map(), watched = /* @__PURE__ */ new Set(), listeners = /* @__PURE__ */ new Set(), cache = /* @__PURE__ */ new Map();
     const fails = /* @__PURE__ */ new Map();
     const wrapped = { launch: async (prompt) => {
@@ -513,35 +637,39 @@
       if (result && result.sessionId) launchSessionId = result.sessionId;
       return result;
     }, send: (handle, text) => transport.send(handle, text) };
-    const launch = createLaunch({ transport: wrapped, clock, storyId, leadRole, timers, card, onChange: () => render(), rowsOf: target.rows, queue: target.queue });
-    const live = () => liveOf(target.rows(rows));
-    const leadHandles = () => new Set(target.rows(rows).map((row) => row.handle));
+    const launch = createLaunch({ transport: wrapped, clock, storyId, leadRole, timers, card, onChange: () => render(), rowsOf: target.rows, queue: target.queue, pickLive: target.pick, bindLaunched: target.bindLaunched, keepUnsent: target.keepUnsent });
+    const live = () => {
+      const own2 = target.bindLaunched ? launch.launchedIn(rows) : null;
+      return joinable(own2) ? own2 : (target.pick || liveOf)(target.rows(rows));
+    };
+    const leadHandles = () => /* @__PURE__ */ new Set([...target.rows(rows).map((row) => row.handle), ...target.handles ? target.handles(target.rows(rows)) : []]);
+    const sources = target.sources ? createSources({ transport, clock, peers: () => target.rows(rows), sourcesOf: target.sources }) : null;
     const leadCount = () => {
       const handles = leadHandles();
       return thread.filter((row) => sideOf(row, handles) === "lead").length + streams.size;
     };
-    const presence = () => presenceOf(live(), { launch: { state: launch.state, failure: launch.failure, stuck: launch.stuck }, runningSince, done: isDone });
+    const presence = () => presenceOf(live(), { launch: { state: launch.state, failure: launch.failure, stuck: launch.stuck }, runningSince, done: isDone }, copy);
     const launchedFirst = () => launch.stuck || launch.state === "failed" && launch.failure.kind === "exited";
     const terminalTarget = () => launchedFirst() && launchSessionId || live() && live().sessionId || launchSessionId || null;
     const showTerminal = () => {
       const target2 = terminalTarget();
       if (target2) transport.gotoAgent(target2);
     };
-    const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || "Story lead chat" });
+    const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
     const pin = pinToBottom(log, { win });
     const status = h("div", { class: "status-slot", id: "sv-status", tabindex: "-1" });
     const composer = createComposer({ onSend: (text) => {
       awaitBase = leadCount();
       fails.clear();
       launch.send(text);
-    }, rows: layout.composerRows, label: layout.composerLabel });
+    }, rows: layout.composerRows, label: layout.composerLabel === void 0 ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
     const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
     const sendChip = (text) => {
       awaitBase = leadCount();
       fails.clear();
       launch.send(text);
     };
-    const chipsBox = chips.length ? h("div", { class: "chips", role: "group", "aria-label": CHAT_COPY.chips }, ...chips.map((chip) => h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
+    const chipsBox = chips.length ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }, ...chips.map((chip) => h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
       if (!isDone) sendChip(chip.text);
     } }, chip.label))) : null;
     el.replaceChildren(h("div", { class: "chatcol" }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
@@ -565,51 +693,59 @@
       item.note ? h("div", { class: "note" }, item.note) : null,
       item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null
     );
-    const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", CHAT_COPY.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, CHAT_COPY.row.typing));
+    const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
       const on = Boolean(terminalTarget());
-      return h("button", { type: "button", class: "btn sm quiet term", id, "data-term": "1", disabled: on ? null : "", onclick: showTerminal }, on ? CHAT_COPY.terminal : CHAT_COPY.terminalOff);
+      return h("button", { type: "button", class: "btn sm quiet term", id, "data-term": "1", disabled: on ? null : "", onclick: showTerminal }, on ? copy.terminal : copy.terminalOff);
     };
     const alertRow = (kind, why, code, ...extra) => h("div", { class: "sys danger", role: "alert", "data-row": kind }, alertIcon(), h("span", { class: "why" }, why), code ? h("code", { class: "code" }, code) : null, ...extra);
     const statusCache = /* @__PURE__ */ new Map();
+    const readRows = () => {
+      if (!sources) return [];
+      const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
+        readThread();
+      } }, copy.row.retry), stale = sources.staleAt();
+      if (sources.failedNow()) return [{ id: "unread", sig: "u", make: () => alertRow("unread", copy.row.unread, "", retry()) }];
+      return stale === null ? [] : [{ id: "stale", sig: "st|" + stale, make: () => h("div", { class: "sys warn", role: "status", "data-row": "stale" }, h("span", {}, copy.row.stale(timeLabel(stale))), retry()) }];
+    };
     function statusItems() {
-      const state2 = launch.state, p = presence(), on = Boolean(terminalTarget()), out = [];
+      const state2 = launch.state, p = presence(), on = Boolean(terminalTarget()), out = [...readRows()];
       for (const [what, text] of fails) out.push({ id: "fail-" + what, sig: "x|" + what + "|" + text, make: () => {
         const row = alertRow("act-failed", text, "");
         row.setAttribute("data-fail", what);
         return row;
       } });
       if ((state2 === "starting" || state2 === "slow") && launch.stuck) {
-        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, CHAT_COPY.row.needsTerminal), termButton("sv-term-stuck")) });
+        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, copy.row.needsTerminal), termButton("sv-term-stuck")) });
       } else if (state2 === "starting" || state2 === "slow") {
-        out.push({ id: "starting", sig: "s", make: () => h("div", { class: "sys", "data-row": "starting" }, face("starting", `${CHAT_COPY.lead} · ${CHAT_COPY.header.starting}`), h("span", {}, CHAT_COPY.row.starting)) });
-        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, CHAT_COPY.row.slow), termButton("sv-term-slow")) });
+        out.push({ id: "starting", sig: "s", make: () => h("div", { class: "sys", "data-row": "starting" }, face("starting", `${copy.lead} · ${copy.header.starting}`), h("span", {}, copy.row.starting)) });
+        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, copy.row.slow), termButton("sv-term-slow")) });
       } else if (state2 === "failed") {
         const failure = launch.failure;
-        out.push({ id: "failed", sig: ["f", failure.kind, failure.code, failureText(failure), on].join("|"), make: () => alertRow(
+        out.push({ id: "failed", sig: ["f", failure.kind, failure.code, failureText(failure, copy), on].join("|"), make: () => alertRow(
           "failed",
-          failureText(failure),
+          failureText(failure, copy),
           failure.code,
           failure.kind === "timeout" || failure.kind === "exited" ? termButton("sv-term-failed") : null,
           h("button", { type: "button", class: "btn sm", "data-retry": "1", onclick: () => {
             refocus = true;
             launch.retry();
             status.focus();
-          } }, CHAT_COPY.row.retry)
+          } }, copy.row.retry)
         ) });
       } else {
         const sf = launch.sendFailure;
         if (sf) out.push({ id: "send-failed", sig: ["sf", sf.why, sf.code].join("|"), make: () => alertRow(
           "send-failed",
-          CHAT_COPY.failure.send(sf.why || sf.code),
+          copy.failure.send(sf.why || sf.code),
           sf.code,
           h("button", { type: "button", class: "btn sm", "data-retry-send": "1", onclick: () => {
             launch.retrySend();
-          } }, CHAT_COPY.row.retry)
+          } }, copy.row.retry)
         ) });
         if (joinedAt !== null) {
-          const text = CHAT_COPY.row.joined(model ? modelLabel(model) : CHAT_COPY.row.modelNone, activityOf(live(), runningSince));
-          out.push({ id: "joined", sig: ["j", p.face, p.header, text].join("|"), make: () => h("div", { class: "sys", "data-row": "joined" }, face(p.face, `${CHAT_COPY.lead} · ${p.header}`), h("span", {}, text)) });
+          const text = copy.row.joined(model ? modelLabel(model) : copy.row.modelNone, activityOf(live(), runningSince, copy));
+          out.push({ id: "joined", sig: ["j", p.face, p.header, text].join("|"), make: () => h("div", { class: "sys", "data-row": "joined" }, face(p.face, `${copy.lead} · ${p.header}`), h("span", {}, text)) });
         }
       }
       return out;
@@ -657,20 +793,26 @@
           entries.push(cardEntry(row));
           continue;
         }
-        const who = side === "you" ? CHAT_COPY.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
-        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && CHAT_COPY.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
+        const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
+        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: CHAT_COPY.mark[mark] || null, markKey: mark, who: CHAT_COPY.who.you, at: item.sentAt }, "you") });
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble({ text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt }, "you") });
       }
       entries.sort((a, b) => a.t - b.t);
-      for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: CHAT_COPY.lead, at: clock.now() }, "lead") });
+      for (const [id, text] of streams) if (!rowIds.has(id)) entries.push({ t: Infinity, id: "s" + id, sig: "s|" + id + "|" + text, make: () => bubble({ id, text, who: copy.lead, at: clock.now() }, "lead") });
       return entries;
     }
     const awaiting = () => awaitBase !== null && leadCount() <= awaitBase && (launch.state === "joined" || Boolean(live() && live().state === "running"));
+    function noteLaunched() {
+      if (!target.bindLaunched) return;
+      const row = launch.launchedRow();
+      if (row) launchSessionId = row.sessionId;
+    }
     function render() {
+      noteLaunched();
       const p = presence();
       if (launch.state === "joined" && joinedAt === null) {
         joinedAt = clock.now();
@@ -706,7 +848,23 @@
       composer.update({ placeholder: p.placeholder, disabled: isDone, ...layout.composer ? layout.composer(here) : {} });
       for (const fn of listeners) fn();
     }
-    async function readThread() {
+    async function readSources(onlyNew) {
+      const mine = ++gen, peers = target.rows(rows);
+      for (const row of peers) watched.add(row.sessionId);
+      took(await sources.read(mine, onlyNew, (early) => {
+        thread = early;
+        render();
+      }));
+    }
+    function took(next) {
+      thread = next;
+      if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
+      for (const row of thread) streams.delete(row.messageId);
+      if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;
+      render();
+    }
+    async function readThread(onlyNew = false) {
+      if (sources) return readSources(onlyNew);
       const mine = ++gen, peers = target.rows(rows);
       for (const row of peers) watched.add(row.sessionId);
       let lists;
@@ -721,13 +879,11 @@
       }
       if (mine !== gen) return;
       fails.delete("thread");
-      thread = mergeThread(...lists);
-      if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
-      for (const row of thread) streams.delete(row.messageId);
-      if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;
-      render();
+      took(mergeThread(...lists));
     }
     function onRows(next) {
+      const firstRoster = !gotRows;
+      gotRows = true;
       const before = live();
       rows = next;
       const now = live();
@@ -736,8 +892,10 @@
       launch.rows(next);
       const moved = target.follow && (before && before.handle) !== (now && now.handle);
       if (moved) pin.reset();
-      if (!started || moved || target.rows(next).some((row) => !watched.has(row.sessionId))) {
-        const read = readThread();
+      const again = sources ? sources.seen(target.rows(next), firstRoster) : false;
+      if (!started || moved || again || target.rows(next).some((row) => !watched.has(row.sessionId))) {
+        const more = started && Boolean(sources);
+        const read = readThread(more);
         if (!started) firstRead = read;
         started = true;
       } else render();
@@ -751,15 +909,23 @@
     }));
     const onUnload = (event) => {
       if (launch.hasHeld()) {
+        const text = launch.hasKept() ? copy.unloadKept : copy.unload;
         event.preventDefault();
-        event.returnValue = CHAT_COPY.unload;
-        return CHAT_COPY.unload;
+        event.returnValue = text;
+        return text;
       }
     };
     win.addEventListener("beforeunload", onUnload);
     render();
     if (layout.autofocus !== false) composer.input.focus();
-    reads.sessions();
+    if (sources) {
+      started = true;
+      firstRead = readThread(true);
+    }
+    const roster = reads.sessions();
+    if (sources) roster.then(() => {
+      if (!gotRows) onRows(reads.latestSessions());
+    });
     return {
       unmount() {
         offs.forEach((off) => off && off());
@@ -781,7 +947,11 @@
       },
       // The first thread read, once the first roster is in: a page that paints around the chat waits on it. refresh() re-reads the thread.
       loaded: () => reads.sessions().then(() => firstRead),
-      refresh: () => readThread(),
+      refresh: (onlyNew) => readThread(onlyNew),
+      // A message from another control (a page's starter) goes the way a typed one does; true when it went.
+      post: (text) => composer.post(text),
+      threadFailed: () => Boolean(sources && sources.failedNow()),
+      threadSettled: () => !sources || sources.settled(),
       presence,
       launch,
       showTerminal,

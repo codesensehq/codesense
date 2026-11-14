@@ -16,5 +16,7 @@ export function createComposer({onSend,rows='2',label=CHAT_COPY.composerLabel,hi
    input.placeholder=placeholder;input.disabled=Boolean(disabled);send.disabled=Boolean(disabled);
    if(nextHint!==undefined)region.querySelector('.hint').textContent=nextHint;
    if(nextSend!==undefined)send.textContent=nextSend;
-  }};
+  },
+  // post(text): another control's message (a page's starter) on the same path as a typed one, refused while the composer is disabled. True when it went.
+  post(text){if(!text||input.disabled)return false;onSend(text);return true;}};
 }
