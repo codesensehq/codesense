@@ -243,11 +243,27 @@ fn without_data_volume(path: &Path) -> PathBuf {
     }
 }
 
+/// Whether `path` starts with a hidden top-level name, such as the macOS alias paths
+/// `/.vol/<dev>/<inode>`, `/.nofollow/<path>` and `/.resolve/<n>/<path>`, which reach any
+/// file without naming the folder it is in.
+fn is_hidden_root(path: &Path) -> bool {
+    path.components()
+        .find_map(|part| match part {
+            Component::Normal(name) => Some(name.to_string_lossy().starts_with('.')),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// Whether `path` is in a folder macOS guards with a privacy prompt, and not inside a
 /// folder the user already attached (which they picked, so its prompt is already settled).
+/// A path under a hidden top-level name is always refused (see [`is_hidden_root`]).
 fn is_privacy_guarded(path: &Path, home: Option<&Path>, attached: &[PathBuf]) -> bool {
     let path = without_data_volume(path);
     let path = path.as_path();
+    if is_hidden_root(path) {
+        return true;
+    }
     let guarded = is_within(path, Path::new("/Volumes"))
         || home.is_some_and(|home| {
             PRIVACY_HOME_DIRS
@@ -285,7 +301,8 @@ fn checked_repo_path(
 
 const PRIVACY_REFUSAL: &str = "gitRepoPath: CodeSense does not look inside ~/Documents, \
      ~/Desktop, ~/Downloads, the cloud storage folders in ~/Library or /Volumes unless the \
-     folder is inside one already attached as a source repo";
+     folder is inside one already attached as a source repo, or under a hidden top-level \
+     folder such as /.vol";
 
 /// One step left to resolve: a name, or `..` from a link target.
 enum Step {
@@ -818,6 +835,11 @@ mod tests {
             "/System/Volumes/Data/home/user/Documents/other",
             "/system/volumes/data/home/user/Desktop",
             "/System/Volumes/Data/Volumes/USB/repo",
+            "/.vol/16777220/12345",
+            "/.nofollow/home/user/Documents/x",
+            "/.resolve/1/home/user/Documents/x",
+            "/.vol",
+            "/System/Volumes/Data/.vol/16777220/12345",
         ] {
             let error = check(refused).unwrap_err();
             assert!(error.contains("does not look inside"), "{refused}: {error}");
@@ -860,6 +882,8 @@ mod tests {
         // A link outside any guarded folder is followed as before.
         symlink("../real/app", home.join("code/app")).unwrap();
         symlink(home.join("code/loop"), home.join("code/loop")).unwrap();
+        // A link to a macOS alias path is refused before the alias is looked up.
+        symlink("/.vol/16777220/12345", home.join("code/vol")).unwrap();
         let probe = |path: PathBuf| {
             let params = ProbeEnvironmentParams {
                 git_repo_path: Some(path.display().to_string()),
@@ -874,7 +898,7 @@ mod tests {
                 |_| None,
             )
         };
-        for link in ["abs", "rel", "hop", "through"] {
+        for link in ["abs", "rel", "hop", "through", "vol"] {
             let error = probe(home.join("code").join(link)).unwrap_err();
             assert!(error.contains("does not look inside"), "{link}: {error}");
         }
