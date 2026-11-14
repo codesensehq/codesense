@@ -5,7 +5,6 @@ import { create } from "zustand";
 
 /** How a tab's inbox is drawn: conversations, a dense log, or a sequence diagram. */
 export type InboxLens = "threads" | "spool" | "wire";
-export const DEFAULT_INBOX_LENS: InboxLens = "threads";
 
 /** One session's rail state. Present → the rail is open on that session. */
 export interface AgentInboxRailTarget {
@@ -23,28 +22,12 @@ export interface AgentInboxRailTarget {
 interface AgentInboxRailState {
   /** Keyed by terminal `sessionId`. Kept for the app's lifetime only. */
   bySession: Record<string, AgentInboxRailTarget | undefined>;
-  /**
-   * SW-IB1-B2: per-tab remembered push-pane width in CSS px, keyed by the
-   * terminal tab's stable `tab.id` (NOT `sessionId`). This way a resize
-   * survives the tab's session changing mid-tab (e.g. a re-attach that mints
-   * a new PTY session id), but is still bounded to this app session —
-   * nothing writes it to disk, so cold-boot falls back to the default
-   * (`INBOX_RAIL_WIDTH_DEFAULT`).
-   */
-  widthByTab: Record<string, number | undefined>;
-  /** The lens each tab's inbox shows, keyed like `widthByTab` so it survives a re-attach. */
-  lensByTab: Record<string, InboxLens | undefined>;
   open: (sessionId: string, opts?: { compose?: boolean }) => void;
   close: (sessionId: string) => void;
   openGroup: (sessionId: string) => void;
   markGroupHandled: (sessionId: string, n: number) => void;
   /** Record that the rail on `sessionId` acted on compose request `n`. */
   markComposeHandled: (sessionId: string, n: number) => void;
-  /** SW-IB1-B2: commit a remembered pane width for a tab. */
-  setWidth: (tabId: string, px: number) => void;
-  setLens: (tabId: string, lens: InboxLens) => void;
-  /** SW-IB1-B2: drop a tab's remembered width and lens (called when the tab closes). */
-  cleanupTab: (tabId: string) => void;
 }
 
 let watchingEligibility = false;
@@ -76,8 +59,6 @@ function watchEligibility(): void {
  */
 export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
   bySession: {},
-  widthByTab: {},
-  lensByTab: {},
   open: (sessionId, opts) =>
     set((s) => {
       if (!isRunningAgent(useAgentStateStore.getState(), sessionId)) return s;
@@ -115,29 +96,6 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
     set((s) =>
       s.bySession[sessionId] ? { bySession: { ...s.bySession, [sessionId]: undefined } } : s,
     ),
-  setWidth: (tabId, px) =>
-    set((s) => {
-      // Preserve the store identity when the value is already current — the
-      // live-drag path writes on every pointermove, so a no-op write mustn't
-      // churn subscribers.
-      if (s.widthByTab[tabId] === px) return s;
-      return { widthByTab: { ...s.widthByTab, [tabId]: px } };
-    }),
-  setLens: (tabId, lens) =>
-    set((s) =>
-      s.lensByTab[tabId] === lens ? s : { lensByTab: { ...s.lensByTab, [tabId]: lens } },
-    ),
-  cleanupTab: (tabId) =>
-    set((s) => {
-      if (!(tabId in s.widthByTab) && !(tabId in s.lensByTab)) return s;
-      // Delete to keep the maps bounded; closing + reopening the tab is a
-      // fresh contract that falls back to the defaults.
-      const widthByTab = { ...s.widthByTab };
-      const lensByTab = { ...s.lensByTab };
-      delete widthByTab[tabId];
-      delete lensByTab[tabId];
-      return { widthByTab, lensByTab };
-    }),
 }));
 
 /** Open the per-tab rail on `sessionId`, optionally with the composer focused. */
@@ -160,31 +118,13 @@ export function closeAgentInboxRail(sessionId: string) {
 }
 
 /**
- * SW-IB1-B2: subscribe to a tab's remembered push-pane width (in px) or
- * `undefined` when it has none (consumer falls back to the default). Keyed by the
- * stable `tab.id`, so a session change within the same tab preserves width.
+ * Close the chat on `sessionId`, then focus the terminal in `pane` (the tab's pane, if known).
+ * A terminal the chat covered is inert until the chat is gone, so focus waits for the next frame.
  */
-export function useAgentInboxRailWidth(tabId: string | undefined | null): number | undefined {
-  return useAgentInboxRailStore((s) => (tabId ? s.widthByTab[tabId] : undefined));
-}
-
-/** SW-IB1-B2: commit a tab's remembered push-pane width in CSS px. */
-export function setAgentInboxRailWidth(tabId: string, px: number): void {
-  useAgentInboxRailStore.getState().setWidth(tabId, px);
-}
-
-/** SW-IB1-B2: drop the stored width and lens for a tab (call on tab close). */
-export function cleanupAgentInboxRailTab(tabId: string): void {
-  useAgentInboxRailStore.getState().cleanupTab(tabId);
-}
-
-/** A tab's inbox lens, defaulting to Threads. */
-export function useAgentInboxRailLens(tabId: string | undefined | null): InboxLens {
-  return useAgentInboxRailStore(
-    (s) => (tabId ? s.lensByTab[tabId] : undefined) ?? DEFAULT_INBOX_LENS,
-  );
-}
-
-export function setAgentInboxRailLens(tabId: string, lens: InboxLens): void {
-  useAgentInboxRailStore.getState().setLens(tabId, lens);
+export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element | null) {
+  closeAgentInboxRail(sessionId);
+  if (pane)
+    requestAnimationFrame(() =>
+      pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
+    );
 }

@@ -148,6 +148,10 @@ fn spec(
                 | "react"
                 | "updates"
                 | "humanStatus"
+                | "pins"
+                | "pin"
+                | "unpin"
+                | "reorderPins"
         ),
         confirmable,
         mcp_twin: mcp_twin.map(str::to_owned),
@@ -178,12 +182,12 @@ fn capability_for_verb(name: &str) -> &'static str {
         "closeTerminalTab" | "closeWorkspace" | "stopSession" => "sessions:stop",
         "openTab" | "openWorkspace" | "runSkill" => "launch",
         "humanStatus" | "inbox" | "roles" | "updates" | "watchInbox" | "watchAgentInbox"
-        | "watchAgentActivity" | "openMessage" | "embedMessage" | "openAgentInbox" => {
-            "inbox:read:team"
-        }
+        | "watchAgentActivity" | "openMessage" | "embedMessage" | "openAgentInbox"
+        | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" => "inbox:write",
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
+        | "unpin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -222,6 +226,9 @@ impl VerbSpec {
                 .unwrap_or(crate::records::Scope::Private);
             return crate::records::binding::capability(scope, self.class == Class::Metadata);
         }
+        if matches!(&*self.name, "subscribe" | "unsubscribe" | "page") && args["topic"] == "pins" {
+            return "inbox:read:team";
+        }
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
             && args["topic"] == "inbox"
         {
@@ -259,6 +266,27 @@ fn register_resources(registry: &mut Registry) {
                 class != Class::Read,
             ),
         );
+    }
+    // An agent thread's pin list. An agent pins and unpins its own thread with the `pin`
+    // tool; reading another thread and reordering are the person's, from a page.
+    for (verb, class, twin, reason) in [
+        (
+            "pins",
+            Class::Read,
+            None,
+            Some("Agents read their pins in the result of the pin tool; pages read any thread of their team"),
+        ),
+        ("pin", Class::Metadata, Some("pin"), None),
+        ("unpin", Class::Metadata, Some("pin"), None),
+        (
+            "reorderPins",
+            Class::Metadata,
+            None,
+            Some("The person arranges a thread's pins; an agent places a pin with the pin tool's position"),
+        ),
+    ] {
+        let write = class != Class::Read;
+        registry.register("inbox", spec(verb, class, false, twin, reason, write, write));
     }
     registry.register(
         "commands",

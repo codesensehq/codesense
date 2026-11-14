@@ -818,7 +818,7 @@ pub fn run() {
             app.manage(commands::deps::DependencyManager::resolve());
             commands::deps::start_dep_watching(app.handle().clone());
             // SW-OB-12: if the cheap startup fast-path missed the bundled agent,
-            // resolve it via a login-shell PATH probe on a background thread so
+            // resolve it (and gh) via a login-shell PATH probe on a background thread so
             // `.setup()` (and first paint) never blocks. Emits `dep-status-changed`
             // on completion; the frontend gate stays on the splash while resolving.
             commands::deps::spawn_agent_background_resolve(app.handle().clone());
@@ -1279,6 +1279,8 @@ pub fn run() {
             commands::agent_inbox::list_inbox_messages,
             commands::agent_inbox::reply_as_human,
             commands::agent_inbox::react_as_human,
+            commands::agent_inbox::pins::agent_pins,
+            commands::agent_inbox::pins::agent_pins_prepare_view,
             commands::agent_inbox::inbox_reply_recipient,
             commands::agent_inbox::mark_inbox_message_read,
             commands::agent_inbox::mark_inbox_messages_read,

@@ -325,6 +325,7 @@ export function getTauriMockInitScript(overrides?: Record<string, unknown>): str
       case "get_dependency_status":
         return {
           git: { available: true, path: "/mock/codesense/bin/git", version: "2.51.0" },
+          gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0", resolving: false },
           agents: {
             claude: { available: true, path: "/usr/local/bin/claude", resolving: false }
           }

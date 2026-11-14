@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
+# a live guide session an earlier Foreman launched (before a relaunch) is reused, not launched twice.
+id: setup-reuse
+kind: setup
+fixture:
+  pre_sessions:
+    - { handle: foreman-session-0, agent: foreman-claude, displayName: Foreman, workspace: acme }
+    - { agent: guide-claude, displayName: Setup, workspace: acme, launchedBy: foreman-session-0 }
+input:
+  turns:
+    - "set me up with ~/code/demo"
+# Script: the cards, the launch, the ledger and the hand-back calls. Never the wording.
+expected:
+  offer_cards: 0
+  launches: 0
+  reuses: true
+  forbidden_tools:
+    - create_team
+    - delete_team
+    - archive_team
+    - add_source_repo
+    - remove_source_repo
+    - attach_source_repo_path
+    - attach_context_repository
+    - detach_context_repository
+    - create_local_organization
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: points-to-live-setup
+    ask: "The reply says a setup session is already running and where to find it."
+grader: script

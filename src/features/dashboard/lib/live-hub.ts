@@ -197,7 +197,7 @@ export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
         Number(b.kind === "dir") - Number(a.kind === "dir") ||
         String(a.name).localeCompare(String(b.name), undefined, { numeric: true }),
     );
-  if (topic === "agentList" || topic === "records")
+  if (topic === "agentList" || topic === "records" || topic === "pins")
     return rows.sort(
       (a, b) => Number(a.order ?? 0) - Number(b.order ?? 0) || a.id.localeCompare(b.id),
     );
