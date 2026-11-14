@@ -427,6 +427,13 @@ describe("pinTitleOf (DOM-free, so the kit and the app name pins the same)", () 
     expect(pinTitleOf(html("<p>none</p>"), "Story lead")).toBe("Dashboard from Story lead");
   });
 
+  it("an entity outside Unicode stays as written instead of throwing", () => {
+    const html = (text: string) => ({ text, contentType: "html" });
+    expect(pinTitleOf(html("<title>A &#99999999; B</title>"), "Lead")).toBe("A &#99999999; B");
+    expect(pinTitleOf(html("<h1>&#x110000;x</h1>"), "Lead")).toBe("&#x110000;x");
+    expect(pinTitleOf(html("<h1>&#xD800;ok</h1>"), "Lead")).toBe("&#xD800;ok");
+  });
+
   it("any other message: summary, else its first sentence, else who sent it", () => {
     expect(pinTitleOf({ text: "Ship it. Then tag." }, "Lead")).toBe("Ship it.");
     expect(pinTitleOf({ text: " " }, "Lead")).toBe("Message from Lead");

@@ -209,7 +209,7 @@
     return squashSpace(String(markup || "").replace(/<[^>]*>/g, " ").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
       if (code[0] === "#") {
         const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-        return Number.isFinite(n) ? String.fromCodePoint(n) : all;
+        return Number.isInteger(n) && n >= 0 && n <= 1114111 && !(n >= 55296 && n <= 57343) ? String.fromCodePoint(n) : all;
       }
       const named = ENTITIES[code.toLowerCase()];
       return named === void 0 ? all : named;
