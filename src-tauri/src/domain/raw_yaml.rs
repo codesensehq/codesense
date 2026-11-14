@@ -566,50 +566,28 @@ impl RawTeamEntry {
             }
         }
         team.parent_team = self.parent_team;
-        // A landing page is a convenience, never a reason to refuse the team: one
-        // that would leave the team's content (absolute, `..`) or name a hidden
-        // file or folder is dropped.
-        team.landing_page = match self.landing_page.map(|p| p.trim().to_string()) {
-            Some(page) if is_content_relative(&page) => Some(page),
-            Some(page) => {
-                log::warn!(
-                    target: "domain::raw_yaml",
-                    "ignoring landing_page {page:?} of team {}: it must be a path inside the team's content",
-                    team.name
-                );
-                None
-            }
-            None => None,
-        };
-        // The same rule for the agent page: a path that would leave the team's content is dropped,
-        // never a reason to refuse the team.
-        team.agent_page = match self.agent_page.map(|p| p.trim().to_string()) {
-            Some(page) if is_content_relative(&page) => Some(page),
-            Some(page) => {
-                log::warn!(
-                    target: "domain::raw_yaml",
-                    "ignoring agent_page {page:?} of team {}: it must be a path inside the team's content",
-                    team.name
-                );
-                None
-            }
-            None => None,
-        };
-        // And for the story page.
-        team.story_page = match self.story_page.map(|p| p.trim().to_string()) {
-            Some(page) if is_content_relative(&page) => Some(page),
-            Some(page) => {
-                log::warn!(
-                    target: "domain::raw_yaml",
-                    "ignoring story_page {page:?} of team {}: it must be a path inside the team's content",
-                    team.name
-                );
-                None
-            }
-            None => None,
-        };
+        // A content page (landing, agent or story page) is a convenience, never a reason to refuse
+        // the team: one that would leave the team's content (absolute, `..`) or name a hidden file
+        // or folder is dropped.
+        team.landing_page = content_page("landing_page", self.landing_page, &team.name);
+        team.agent_page = content_page("agent_page", self.agent_page, &team.name);
+        team.story_page = content_page("story_page", self.story_page, &team.name);
         Ok(team)
     }
+}
+
+/// A team's `field` page path, trimmed, or `None` (with a warning) when it would leave the team's
+/// content.
+fn content_page(field: &str, value: Option<String>, team: &str) -> Option<String> {
+    let page = value?.trim().to_string();
+    if is_content_relative(&page) {
+        return Some(page);
+    }
+    log::warn!(
+        target: "domain::raw_yaml",
+        "ignoring {field} {page:?} of team {team}: it must be a path inside the team's content"
+    );
+    None
 }
 
 /// A relative `/`-separated path with no empty segment and no hidden one (a

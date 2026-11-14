@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { createElement } from "react";
+import { createElement, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor } from "@/test-utils";
@@ -91,6 +91,41 @@ describe("a story file in an .md tab", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it("chooses on the first render from a current cache, with no blank frame", () => {
+    // One commit, and it holds the viewer: no blank detection frame is painted before it.
+    const commits = (path: string) => {
+      let count = 0;
+      const view = render(
+        createElement(
+          Profiler,
+          { id: "md", onRender: () => count++ },
+          renderViewer({ ...common, filePath: path }, md),
+        ),
+      );
+      view.unmount();
+      return count;
+    };
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    fileContentCache.set(`${ROOT}/README.md`, "# Readme\n", 0);
+    expect(commits(STORY)).toBe(1);
+    expect(html).toHaveBeenCalledTimes(1);
+    expect(commits(`${ROOT}/README.md`)).toBe(1);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("carries a link's anchor to the page, consumes the host's pending hash, and keeps the anchor", async () => {
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    const consumed = vi.fn();
+    const at = { ...md, pendingHash: "#acceptance-criteria", onPendingHashConsumed: consumed };
+    const view = render(renderViewer({ ...common, filePath: STORY }, at));
+    const hash = `#story=${encodeURIComponent(STORY)}&at=acceptance-criteria`;
+    expect((html.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(hash);
+    await waitFor(() => expect(consumed).toHaveBeenCalled());
+    // Once the host clears its pending hash, the page keeps the anchor it was opened at.
+    view.rerender(renderViewer({ ...common, filePath: STORY }, md));
+    expect((html.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(hash);
+  });
+
   it("opens as markdown, and says why, when the team has no story page", async () => {
     declare(undefined);
     files({ [STORY]: "---\ntype: story\n---\n# One\n" });
@@ -119,6 +154,19 @@ describe("any other .md", () => {
     files({});
     const { container } = open();
     await waitFor(() => expect(container.querySelector('[data-stub="markdown"]')).not.toBeNull());
+  });
+});
+
+describe("a host that names no team (the worktree editor)", () => {
+  it("is the markdown viewer for a story file, with no read and no note", () => {
+    files({ [STORY]: "---\ntype: story\n---\n# One\n" });
+    const { container } = render(
+      renderViewer({ filePath: STORY, teamContentPath: ROOT, refreshKey: 0 }, md),
+    );
+    expect(container.querySelector('[data-stub="markdown"]')).not.toBeNull();
+    expect(screen.queryByTestId("story-no-page")).toBeNull();
+    expect(screen.queryByTestId("story-detect")).toBeNull();
+    expect(readFile).not.toHaveBeenCalled();
   });
 });
 

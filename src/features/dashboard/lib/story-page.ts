@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { teamContentPage } from "@/shared/lib/team-content-page";
 import type { Org } from "@/shared/types/domain";
 
 /** The `type` values that make a file a story (the pipeline's own set). */
@@ -36,14 +37,18 @@ function typeBefore(lines: string[], end: number): StoryType | null {
  * or `null` when it declares none. The app names no page of its own: without the setting a story
  * file opens as markdown.
  */
-export function teamStoryPage(orgs: readonly Org[], org: string, team: string): string | null {
-  const declared = orgs.find((o) => o.slug === org)?.teams.find((t) => t.name === team)?.story_page;
-  return declared?.trim() || null;
-}
+export const teamStoryPage = (orgs: readonly Org[], org: string, team: string) =>
+  teamContentPage(orgs, org, team, "story_page");
 
 /** The story page's path under the team's content root. */
 export const storyPagePath = (teamContentPath: string, page: string) =>
   `${teamContentPath.replace(/\/+$/, "")}/${page}`;
 
-/** The page's route: it names the story file in the fragment, which the viewer replays to the page. */
-export const storyPageHash = (storyPath: string) => `#story=${encodeURIComponent(storyPath)}`;
+/**
+ * The page's route: it names the story file in the fragment, which the viewer replays to the page,
+ * and a link's anchor (`SV-1.md#tasks`) as `at`.
+ */
+export function storyPageHash(storyPath: string, anchor?: string | null): string {
+  const at = anchor?.replace(/^#/, "");
+  return `#story=${encodeURIComponent(storyPath)}${at ? `&at=${encodeURIComponent(at)}` : ""}`;
+}

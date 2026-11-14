@@ -55,5 +55,9 @@ describe("the team's story page", () => {
     expect(storyPageHash("/ctx/acme/web/content/stories/a b.md")).toBe(
       "#story=%2Fctx%2Facme%2Fweb%2Fcontent%2Fstories%2Fa%20b.md",
     );
+    // A link's anchor rides along as `at`, with or without its `#`.
+    for (const anchor of ["#tasks & notes", "tasks & notes"])
+      expect(storyPageHash("/s/A.md", anchor)).toBe("#story=%2Fs%2FA.md&at=tasks%20%26%20notes");
+    expect(storyPageHash("/s/A.md", "#")).toBe("#story=%2Fs%2FA.md");
   });
 });
