@@ -2336,6 +2336,14 @@ compareNavNames(a: string, b: string): number;
 
 The nav's name order (numeric, case-insensitive); a sort comparator.
 
+## Kit: kit.runtimes
+
+```ts
+runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;
+```
+
+The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked.
+
 ## Kit: kit.createEditor
 
 ```ts

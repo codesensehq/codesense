@@ -525,6 +525,14 @@
       "feature": null
     },
     {
+      "name": "kit.runtimes",
+      "owner": "Kit",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
       "name": "kit.createEditor",
       "owner": "Kit",
       "signature": "createEditor?: (element: HTMLElement, options?: KitEditorOptions) => KitEditor;",
@@ -6026,6 +6034,14 @@
       "owner": "Kit",
       "signature": "compareNavNames(a: string, b: string): number;",
       "description": "The nav's name order (numeric, case-insensitive); a sort comparator.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "kit.runtimes",
+      "owner": "Kit",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -13963,7 +13979,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "91f7a78447da3c7717a0777be92c9e16188cbfff9a57fd51d72bb7ddb9cb3a33",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "b24936956eaa2d243cd13224bff2b77b956b27429c69eef9136030d171cd97eb",
     "src-tauri/src/verbs/registry.generated.json": "9ca0e89edfa86d1ea1acbd68682224a82e2db8291e4097af0e0a1e867b00a035",
     "src-tauri/src/verbs/registry.rs": "cf974e31fcabf851da86c45ba5e8ee828d061fd3806e52bff19b12b8fe4107d6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

@@ -3208,6 +3208,29 @@
     subscribe: subscribe,
   });
 
+  /** The agent CLIs installed on this Mac, from the app's dependency status: the last used one first, then Claude,
+   *  Codex, OpenCode, then any other (Hermes last). `pick` is the one to start with; Hermes is never picked for a person. */
+  var RUNTIME_ORDER = ["claude", "codex", "opencode"];
+  function runtimes(options) {
+    return call("getDependencyStatus").then(function (status) {
+      var agents = (status && status.agents) || {};
+      var last = options && typeof options.lastUsed === "string" ? options.lastUsed : "";
+      var ids = Object.keys(agents).filter(function (id) { return agents[id] && agents[id].available === true; });
+      function rank(id) {
+        if (id === last) return -1;
+        var i = RUNTIME_ORDER.indexOf(id);
+        return i < 0 ? RUNTIME_ORDER.length + (id === "hermes" ? 1 : 0) : i;
+      }
+      ids.sort(function (a, b) { return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0); });
+      var list = ids.map(function (id) {
+        var a = agents[id];
+        return { id: id, version: typeof a.version === "string" ? a.version : null, autoPick: id !== "hermes" };
+      });
+      var pick = list.filter(function (r) { return r.autoPick; })[0];
+      return { list: list, pick: pick ? pick.id : null };
+    });
+  }
+
   cs.kit = Object.assign({
     version: "1",
     stageRail: stageRail,
@@ -3255,6 +3278,7 @@
     storyTotals: storyTotals,
     subscribeAll: subscribeAll,
     partialList: partialList,
+    runtimes: runtimes,
   }, csCore.api);
   // The same patterns under the name a hosted page uses. Never clobbers a CS that is already there.
   if (!window.CS) window.CS = cs.kit;

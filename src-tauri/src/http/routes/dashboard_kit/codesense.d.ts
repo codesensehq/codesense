@@ -769,6 +769,12 @@ declare namespace CodesenseSdk {
       stop(): void;
     };
   }
+  interface KitRuntime {
+    id: string;
+    version: string | null;
+    /** False for Hermes: listed, never chosen for the person. */
+    autoPick: boolean;
+  }
   interface Kit extends KitCore {
     stageRail(role: "not_started" | "active" | "review" | "blocked" | "done" | null | undefined, ready?: boolean): HTMLSpanElement;
     /** `size` is 6, 7 (default) or 8; `still` draws the mark without its motion. */
@@ -790,6 +796,8 @@ declare namespace CodesenseSdk {
     stageGroupOf(story: NavStory): string;
     /** The nav's name order (numeric, case-insensitive); a sort comparator. */
     compareNavNames(a: string, b: string): number;
+    /** The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. */
+    runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;
     /** The createEditor export of /kit/v1/editor.js (loaded separately as an ES module). */
     createEditor?: (element: HTMLElement, options?: KitEditorOptions) => KitEditor;
     readonly version: string;
