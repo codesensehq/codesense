@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { formatCardLine, parseCardLine } from "./lib/card-line.mjs";
+import {
+  formatCardLine,
+  parseCardLine,
+} from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { SETUP_VERBS, checkConsent, defaultActVerbs, turnsOf } from "./setup-consent-check.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -251,6 +254,41 @@ test("the card line format is the kit's: it parses back what it formats and refu
   assert.throws(() => formatCardLine({ step: "x", consent: "read", acts: [] }), TypeError);
 });
 
+test("a correct Foreman hand-back, last and before signal_done, passes", () => {
+  const { errors, calls } = checkConsent(load("handback"));
+  assert.deepEqual(errors, []);
+  assert.equal(calls, 3);
+});
+
+test("each rule on send_role_message has its own failing fixture", () => {
+  const bad = "send_role_message is not the Foreman hand-back:";
+  const cases = {
+    "handback-wrong-role-failing": `turn 11: ${bad} role is "sprint-lead", not codesense-foreman`,
+    "handback-wrong-team-failing": `turn 11: ${bad} team is not codesense/docs / getting-started`,
+    "handback-other-text-failing": `turn 11: ${bad} text does not start with "Setup done:"`,
+    "handback-reply-to-failing": `turn 11: ${bad} replyTo is set`,
+    "handback-attach-file-failing": `turn 11: ${bad} attachFile is set`,
+    "handback-twice-failing": `turn 12: ${bad} a second hand-back (the first was at turn 11)`,
+    "handback-after-done-failing": `turn 12: ${bad} sent after signal_done`,
+    "handback-before-act-failing": "turn 11: add_source_repo came after the hand-back at turn 10",
+  };
+  for (const [name, error] of Object.entries(cases))
+    assert.deepEqual(checkConsent(load(name)).errors, [error], name);
+});
+
+test("a send_role_message with no hand-back shape fails, under every tool name form", () => {
+  for (const name of [`${P}send_role_message`, "codesense_send_role_message"])
+    assert.equal(
+      checkConsent(session([call(name, { role: "story-lead", text: "hi" })])).errors.length,
+      1,
+    );
+  const wrapped = call(`${P}codesense_call_tool`, {
+    tool: "send_role_message",
+    arguments: { role: "codesense-foreman", text: "Setup done: ok" },
+  });
+  assert.match(checkConsent(session([wrapped])).errors[0], /team is not/);
+});
+
 test("a click read twice is one click", () => {
   const again = session(
     [card(1)],
@@ -308,6 +346,15 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "order-fallback",
     "order-fallback-failing",
     "threaded-chip",
+    "handback",
+    "handback-wrong-role-failing",
+    "handback-wrong-team-failing",
+    "handback-other-text-failing",
+    "handback-reply-to-failing",
+    "handback-attach-file-failing",
+    "handback-twice-failing",
+    "handback-after-done-failing",
+    "handback-before-act-failing",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);
