@@ -4,16 +4,25 @@
 //! The agent has no shell, so the inputs of a clone are checked here, in Rust,
 //! before anything runs. [`validate_clone`] holds the rules; the `#[tool]` method
 //! in [`super::handler`] calls it first, and only a [`ValidClone`] reaches the
-//! terminal tab, which runs `gh repo clone <repo> <path>` as an argument vector
-//! (the tab's first process, no shell, nothing interpolated).
+//! terminal tab, which runs `git clone -- https://github.com/<repo>.git <path>` as an
+//! argument vector (the tab's first process, no shell, nothing interpolated). Setup
+//! needs no `gh`: git signs in to the host however the person has set it up.
 //!
-//! `path` is the clone's own folder; its parent is the folder the person chose, so
-//! containment reduces to: `path` is exactly one segment under a real, non-symlink
-//! parent, and that segment is the repo's name.
+//! `path` is the clone's own folder and its parent is derived from it, so the bound
+//! on where a clone may land is the home rule: `path` sits under the profile's home
+//! folder, not under `~/Library`, and no segment below home starts with `.` (so no
+//! dot folder like `~/.ssh` or `~/.config/git`). The parent must be a real,
+//! non-symlink directory, and the last segment is the repo's name.
 //!
-//! A directory the verb creates is recorded in [`CloneRecords`]; `stop` removes
-//! only a recorded one. A folder that was already there (empty) is never recorded,
-//! so Stop leaves it alone.
+//! A directory the verb creates is recorded in [`CloneRecords`] with the tab that
+//! clones into it; `stop` closes that tab, then removes only a recorded folder whose
+//! clone hasn't finished. A folder that was already there (empty) is never recorded,
+//! so Stop leaves it alone, and the record ends when the clone is bound.
+//!
+//! Accepted residual: between validation and the clone, a local writer could swap
+//! the parent for a symlink or create the target first. Closing that needs a clone
+//! anchored on an open directory handle, which `git clone` can't take; Stop's
+//! refusal of a finished checkout bounds the second case.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -21,6 +30,11 @@ use std::sync::{Mutex, OnceLock};
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The host every clone comes from, fixed for now.
+pub(crate) const CLONE_HOST: &str = "https://github.com";
+/// How long a call waits for the clone before it replies, kept well under the
+/// shortest MCP tool timeout a runtime applies (60 s).
+pub(crate) const CLONE_WAIT_SECS: u64 = 25;
 /// The longest `path` accepted, in bytes.
 pub(crate) const MAX_PATH_BYTES: usize = 1024;
 const MAX_OWNER_BYTES: usize = 39;
@@ -32,9 +46,10 @@ pub struct CloneRepoParams {
     /// `owner/name` on GitHub, e.g. `acme/api`. A URL, `@`, `:`, a space or any
     /// non-ASCII character is refused.
     pub repo: String,
-    /// The absolute folder to clone into: `<a parent folder that exists>/<name>`. Its last
-    /// segment must equal the repo's name; the target must be absent or empty; the
-    /// parent must be a real directory with no symlink in its path.
+    /// The absolute folder to clone into: `<a parent folder that exists>/<name>`, under
+    /// your home folder but not `~/Library`, with no segment below home starting with
+    /// `.`. Its last segment must equal the repo's name; the target must be absent or
+    /// empty; the parent must be a real directory with no symlink in its path.
     pub path: String,
     /// The team's org (`owner/repo` slug) whose tracked `repo` the clone is bound to.
     /// Required unless `stop` is true.
@@ -47,7 +62,8 @@ pub struct CloneRepoParams {
     /// `stop` is true.
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// `true` removes `path` only when an earlier `clone_repo` call created it; nothing
+    /// `true` stops the clone: it closes the clone's tab, then removes `path` only when
+    /// an earlier `clone_repo` call created it and the clone hasn't finished. Nothing
     /// else is touched. Use it when the person stops a clone.
     #[serde(default)]
     pub stop: Option<bool>,
@@ -63,12 +79,14 @@ pub struct CloneStarted {
     pub created: bool,
     /// The visible tab running the clone, for `read_terminal_tab`.
     pub tab: serde_json::Value,
+    /// `git` exited before the clone finished: it failed, and the tab says why.
+    pub git_exited: bool,
     /// The clone had finished and was bound with `attach_source_repo_path`.
     pub attached: bool,
     /// The binding, when `attached`.
     pub source: Option<crate::commands::source_repo_add::TrackedSourceRepo>,
     /// Why it isn't attached yet: the clone is still running (probe the folder, then call
-    /// `attach_source_repo_path`), or the binding was refused.
+    /// `attach_source_repo_path`), `git` exited first, or the binding was refused.
     pub note: Option<String>,
 }
 
@@ -78,6 +96,21 @@ pub struct CloneStarted {
 pub struct CloneStopped {
     /// The folder was created by `clone_repo` and is now gone.
     pub removed: bool,
+    /// Why nothing was removed: `not_recorded` (not a folder this verb created, or
+    /// already stopped or bound), `not_a_folder` (gone, or now a symlink or a file),
+    /// `finished` (a finished checkout is never Stop's to remove) or `remove_failed`
+    /// (kept on record, so Stop can be retried).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+}
+
+impl CloneStopped {
+    fn kept(reason: &'static str) -> Self {
+        Self {
+            removed: false,
+            reason: Some(reason),
+        }
+    }
 }
 
 /// The rule a refused input broke.
@@ -90,7 +123,9 @@ pub(crate) enum CloneRefusal {
     PathTooLong,
     PathCharacter,
     PathSegment,
+    PathHidden,
     Containment,
+    PathLibrary,
     NameMismatch,
     ParentMissing,
     ParentNotDirectory,
@@ -109,7 +144,9 @@ impl CloneRefusal {
             Self::PathTooLong => "path_too_long",
             Self::PathCharacter => "path_character",
             Self::PathSegment => "path_segment",
+            Self::PathHidden => "path_hidden",
             Self::Containment => "containment",
+            Self::PathLibrary => "path_library",
             Self::NameMismatch => "name_mismatch",
             Self::ParentMissing => "parent_missing",
             Self::ParentNotDirectory => "parent_not_directory",
@@ -131,7 +168,9 @@ impl CloneRefusal {
             Self::PathTooLong => "path must be at most 1024 bytes",
             Self::PathCharacter => "path may only use letters, digits, `.`, `_`, `-`, space and `/`",
             Self::PathSegment => "path must have no `..`, `.`, empty (`//`) or trailing-`/` segment",
-            Self::Containment => "path must sit directly under its parent folder",
+            Self::PathHidden => "no folder in path below home may start with `.`",
+            Self::Containment => "path must sit inside your home folder",
+            Self::PathLibrary => "path must not be under `~/Library`",
             Self::NameMismatch => "path's last segment must equal the repo's name",
             Self::ParentMissing => "the parent folder must exist",
             Self::ParentNotDirectory => "the parent must be a directory",
@@ -219,44 +258,72 @@ pub(crate) fn parent_of(path: &str) -> &Path {
         .unwrap_or(std::path::Path::new("/"))
 }
 
-/// The rules that need no filesystem: the repo and path text, containment, and the
-/// name. This is all a Stop needs; the target holds the clone by then.
-pub(crate) fn validate_text(
-    repo: &str,
-    parent: &Path,
-    path: &str,
-) -> Result<PathBuf, CloneRefusal> {
+/// The profile's home folder, which bounds where a clone may land.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
+/// Where a clone may land: strictly inside `home`, not under `~/Library`, and with
+/// no segment below home starting with `.`. Case is ignored for `Library`, since
+/// the Mac's default volume is case-insensitive.
+fn check_home(target: &Path, home: &Path) -> Result<(), CloneRefusal> {
+    let Ok(rest) = target.strip_prefix(home) else {
+        return Err(CloneRefusal::Containment);
+    };
+    let mut below = rest.components().peekable();
+    let Some(Component::Normal(first)) = below.peek().copied() else {
+        return Err(CloneRefusal::Containment);
+    };
+    if std::ffi::OsStr::eq_ignore_ascii_case(first, "Library") {
+        return Err(CloneRefusal::PathLibrary);
+    }
+    // The path is ASCII by now, so every segment is valid UTF-8.
+    let hidden = below.any(|segment| {
+        std::ffi::OsStr::to_str(segment.as_os_str()).is_some_and(|text| text.starts_with('.'))
+    });
+    if hidden {
+        return Err(CloneRefusal::PathHidden);
+    }
+    Ok(())
+}
+
+/// The rules that need no filesystem: the repo and path text, the home rule, and
+/// the name. The parent is always `path`'s own parent.
+pub(crate) fn validate_text(repo: &str, path: &str, home: &Path) -> Result<PathBuf, CloneRefusal> {
     let name = check_repo(repo)?;
     check_path_text(path)?;
     let target = std::path::Path::new(path);
-    let Ok(rest) = target.strip_prefix(parent) else {
-        return Err(CloneRefusal::Containment);
-    };
-    let mut segments = rest.components();
-    let (Some(Component::Normal(segment)), None) = (segments.next(), segments.next()) else {
-        return Err(CloneRefusal::Containment);
-    };
-    if segment != std::ffi::OsStr::new(name) {
+    check_home(target, home)?;
+    if target.file_name() != Some(std::ffi::OsStr::new(name)) {
         return Err(CloneRefusal::NameMismatch);
     }
     Ok(target.to_path_buf())
 }
 
-/// Check `repo`, `parent` and `path` against every rule, in order: the text rules,
-/// then containment and the name, then the filesystem. Nothing is created.
+/// Check `repo` and `path` against every rule, in order: the text rules, then the
+/// home rule and the name, then the filesystem. Nothing is created.
 pub(crate) fn validate_clone(
     repo: &str,
-    parent: &Path,
     path: &str,
+    home: &Path,
 ) -> Result<ValidClone, CloneRefusal> {
-    let target = validate_text(repo, parent, path)?;
-    check_parent(parent)?;
+    let target = validate_text(repo, path, home)?;
+    check_parent(parent_of(path))?;
     let creates = check_target(&target)?;
     Ok(ValidClone {
         repo: repo.to_string(),
         path: target,
         creates,
     })
+}
+
+/// The rules a Stop checks: the text rules and the parent, which must still be a
+/// real directory, so a removal can't resolve through a parent that has become a
+/// symlink. The target holds the clone by then, so it isn't checked.
+pub(crate) fn validate_stop(repo: &str, path: &str, home: &Path) -> Result<PathBuf, CloneRefusal> {
+    let target = validate_text(repo, path, home)?;
+    check_parent(parent_of(path))?;
+    Ok(target)
 }
 
 /// The parent exists, is a directory, and is its own canonical path (so no
@@ -294,58 +361,138 @@ fn check_target(target: &Path) -> Result<bool, CloneRefusal> {
     }
 }
 
-/// The argument vector the tab runs. Operands never start with `-`: the repo's owner
-/// starts with a letter or digit and the path with `/`.
-pub(crate) fn clone_argv(gh: &str, valid: &ValidClone) -> Vec<String> {
+/// What a `clone_repo` call does, decided before anything runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Plan {
+    /// Stop the clone at this folder.
+    Stop(PathBuf),
+    /// Clone into a checked target, for this org, team and workspace.
+    Clone {
+        valid: ValidClone,
+        org: String,
+        team: String,
+        workspace_id: String,
+    },
+}
+
+/// The handler's first step: every input rule, then the fields a clone needs. A
+/// refusal is the message the tool returns; only a [`Plan::Clone`] reaches the code
+/// that looks up the team and opens a tab.
+pub(crate) fn plan(params: &CloneRepoParams, home: &Path) -> Result<Plan, String> {
+    if params.stop == Some(true) {
+        return validate_stop(&params.repo, &params.path, home)
+            .map(Plan::Stop)
+            .map_err(|refusal| refusal.to_string());
+    }
+    let valid =
+        validate_clone(&params.repo, &params.path, home).map_err(|refusal| refusal.to_string())?;
+    let (Some(org), Some(team), Some(workspace_id)) =
+        (&params.org, &params.team, &params.workspace_id)
+    else {
+        return Err("clone_repo needs org, team and workspaceId".to_string());
+    };
+    Ok(Plan::Clone {
+        valid,
+        org: org.clone(),
+        team: team.clone(),
+        workspace_id: workspace_id.clone(),
+    })
+}
+
+/// The argument vector the tab runs: `git clone -- <url> <path>`. The URL is built
+/// from the fixed host and the checked `owner/name`; `--` ends git's options, and
+/// neither operand could start with `-` anyway (the URL starts with the host, the
+/// path with `/`).
+pub(crate) fn clone_argv(git: &str, valid: &ValidClone) -> Vec<String> {
     vec![
-        gh.to_string(),
-        "repo".to_string(),
+        git.to_string(),
         "clone".to_string(),
-        valid.repo.clone(),
+        "--".to_string(),
+        format!("{CLONE_HOST}/{}.git", valid.repo),
         valid.path.to_string_lossy().into_owned(),
     ]
+}
+
+/// A folder `clone_repo` created, and the tab cloning into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Created {
+    path: PathBuf,
+    tab: Option<String>,
 }
 
 /// The folders `clone_repo` created and Stop may remove.
 #[derive(Debug, Default)]
 pub(crate) struct CloneRecords {
-    created: Mutex<Vec<PathBuf>>,
+    created: Mutex<Vec<Created>>,
 }
 
 impl CloneRecords {
-    pub(crate) fn note_created(&self, path: &Path) {
-        let mut created = self.created.lock().unwrap_or_else(|e| e.into_inner());
-        if !created.iter().any(|p| p == path) {
-            created.push(path.to_path_buf());
-        }
+    fn entries(&self) -> std::sync::MutexGuard<'_, Vec<Created>> {
+        Mutex::lock(&self.created).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Record a folder this call is creating, with the handle of the tab cloning into
+    /// it. A second record for the same folder replaces the first.
+    pub(crate) fn note_created(&self, path: &Path, tab: Option<&str>) {
+        let mut created = self.entries();
+        Vec::retain(&mut created, |entry| entry.path != path);
+        Vec::push(
+            &mut created,
+            Created {
+                path: path.to_path_buf(),
+                tab: tab.map(str::to_string),
+            },
+        );
     }
 
     pub(crate) fn is_recorded(&self, path: &Path) -> bool {
-        let created = self.created.lock().unwrap_or_else(|e| e.into_inner());
-        created.iter().any(|p| p == path)
+        <[Created]>::iter(&self.entries()).any(|entry| entry.path == path)
     }
 
-    /// Remove `path` when this verb created it, and forget it either way. A path that
-    /// was never recorded is left alone; so is one that has since become a symlink
-    /// or a file.
+    /// The tab cloning into a recorded folder; `None` when the folder isn't recorded.
+    pub(crate) fn tab_of(&self, path: &Path) -> Option<String> {
+        <[Created]>::iter(&self.entries())
+            .find(|entry| entry.path == path)
+            .and_then(|entry| entry.tab.clone())
+    }
+
+    /// Forget a folder: its clone was bound, or it never came to exist.
+    pub(crate) fn forget(&self, path: &Path) {
+        Vec::retain(&mut self.entries(), |entry| entry.path != path);
+    }
+
+    /// Remove `path` when this verb created it and its clone hasn't finished. The
+    /// record is dropped once the folder is gone or can never be Stop's (it is no
+    /// longer a real folder, or it holds a finished checkout); a failed removal keeps
+    /// it, so Stop can be retried. A path that was never recorded is left alone.
+    /// The caller closes the clone's tab first.
     pub(crate) fn stop(&self, path: &Path) -> CloneStopped {
-        let mut created = self.created.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(at) = created.iter().position(|p| p == path) else {
-            return CloneStopped { removed: false };
-        };
-        created.remove(at);
+        let mut created = self.entries();
+        if !<[Created]>::iter(&created).any(|entry| entry.path == path) {
+            return CloneStopped::kept("not_recorded");
+        }
         let real_dir = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
-        let removed = real_dir && std::fs::remove_dir_all(path).is_ok();
-        CloneStopped { removed }
+        let outcome = if !real_dir {
+            CloneStopped::kept("not_a_folder")
+        } else if finished(path) {
+            CloneStopped::kept("finished")
+        } else if std::fs::remove_dir_all(path).is_ok() {
+            CloneStopped {
+                removed: true,
+                reason: None,
+            }
+        } else {
+            return CloneStopped::kept("remove_failed");
+        };
+        Vec::retain(&mut created, |entry| entry.path != path);
+        outcome
     }
 }
 
 /// The process-wide record of created folders.
 pub(crate) fn records() -> &'static CloneRecords {
     static RECORDS: OnceLock<CloneRecords> = std::sync::OnceLock::new();
-    RECORDS.get_or_init(|| CloneRecords {
-        created: std::sync::Mutex::new(vec![]),
-    })
+    RECORDS.get_or_init(Default::default)
 }
 
 /// Whether the clone at `path` has finished: git writes the index when its checkout

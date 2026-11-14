@@ -8375,15 +8375,20 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<CloseTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
+        ok_json(self.close_tab_by_handle(params.handle.trim()).await?)
+    }
+
+    /// Close the tab a handle names, killing what runs in it, and return
+    /// `close_terminal_tab`'s reply. The caller has admitted the tool.
+    async fn close_tab_by_handle(&self, handle: &str) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::machines::{RuntimeSessionReference, LOCAL_MACHINE_ID};
         use crate::commands::pty_layout::terminal_close_tab;
         use codesense_pty_core::layout::{CloseMode, CloseOutcome};
 
-        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
-
-        let handle = params.handle.trim();
         if handle.is_empty() {
             return Err(invalid_err(
                 "close_terminal_tab",
@@ -8410,13 +8415,13 @@ impl CodesenseHandler {
             // NEVER-KNOWN (the handle is forged or belongs to another install).
             // Both close cleanly but a caller should be able to tell them apart.
             if resolved_session.is_some() || known_remote {
-                return ok_json(serde_json::json!({
+                return Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": known_remote,
                 }));
             }
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "unknownHandle",
                 "message": format!("no live terminal tab for handle '{handle}'"),
@@ -8429,7 +8434,7 @@ impl CodesenseHandler {
         // killed before the reply could travel back. Refuse before any work.
         let caller = self.connection_session();
         if is_self_closing_tab(caller.as_deref(), std::iter::once(tab.session.as_str())) {
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "selfClose",
                 "message": "a tab cannot close itself mid-call",
@@ -8450,7 +8455,7 @@ impl CodesenseHandler {
                     CloseOutcome::Killed | CloseOutcome::Backgrounded => true,
                     CloseOutcome::Removed => false,
                 };
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "hadCliRunning": had_cli_running,
                     "remote": is_remote,
@@ -8459,7 +8464,7 @@ impl CodesenseHandler {
             Err(error) if is_already_closed_error(&error) => {
                 // An already-gone session reads as a benign idempotent
                 // close (we HAD it, it's now gone).
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": is_remote,
@@ -9854,14 +9859,19 @@ impl CodesenseHandler {
             home: &home,
             user_id,
         };
+        let path = params.path.clone();
         let reply = setup_tools::attach_source_repo_path(&env, params)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
+        // A bound clone is no longer an unfinished one that `clone_repo`'s Stop may remove.
+        if let tool_envelope::ToolEnvelope::Ok(_) = &reply {
+            clone_repo::records().forget(std::path::Path::new(&path));
+        }
         envelope_json(&reply)
     }
 
     #[tool(
-        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; its last segment equals the repo's name (so it sits directly under its parent); the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `gh repo clone <repo> <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `gh` must be installed and signed in. Returns { status:\"ok\", data:{ repo, path, created, tab, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path) or the binding was refused. Pass `stop: true` with `repo` and `path` to remove a folder an earlier clone_repo call created; a folder that was already there is never removed, and the reply is { status:\"ok\", data:{ removed } }. An unknown team returns { status:\"unauthorizedTeam\" }."
+        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }."
     )]
     async fn clone_repo(
         &self,
@@ -9871,25 +9881,35 @@ impl CodesenseHandler {
         let refuse = |message: String| {
             envelope_json(&tool_envelope::ToolEnvelope::<serde_json::Value>::Validation { message })
         };
-        // Validation comes first: nothing below runs for a refused input.
-        let parent = clone_repo::parent_of(&params.path);
-        if params.stop == Some(true) {
-            // The folder holds the clone by now, so a Stop checks the text rules only.
-            return match clone_repo::validate_text(&params.repo, parent, &params.path) {
-                Ok(path) => envelope_json(&tool_envelope::ToolEnvelope::Ok(
-                    clone_repo::records().stop(&path),
-                )),
-                Err(refusal) => refuse(refusal.to_string()),
-            };
-        }
-        let valid = match clone_repo::validate_clone(&params.repo, parent, &params.path) {
-            Ok(valid) => valid,
-            Err(refusal) => return refuse(refusal.to_string()),
+        let Some(user_home) = clone_repo::home_dir() else {
+            return refuse("clone_repo needs a home folder, and none was found".to_string());
         };
-        let (Some(org), Some(team), Some(workspace_id)) =
-            (&params.org, &params.team, &params.workspace_id)
-        else {
-            return refuse("clone_repo needs org, team and workspaceId".to_string());
+        // Validation comes first: nothing below runs for a refused input.
+        let (valid, org, team, workspace_id) = match clone_repo::plan(&params, &user_home) {
+            Err(message) => return refuse(message),
+            Ok(clone_repo::Plan::Stop(path)) => {
+                // Stop the clone before removing its folder, so git isn't still writing.
+                if let Some(tab) = clone_repo::records().tab_of(&path) {
+                    self.close_tab_by_handle(&tab).await?;
+                }
+                let mut stopped = clone_repo::records().stop(&path);
+                // A killed git may still be letting go of the folder; a failed removal
+                // stays on record, so try it again briefly.
+                for _ in 0..4 {
+                    if stopped.reason != Some("remove_failed") {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    stopped = clone_repo::records().stop(&path);
+                }
+                return envelope_json(&tool_envelope::ToolEnvelope::Ok(stopped));
+            }
+            Ok(clone_repo::Plan::Clone {
+                valid,
+                org,
+                team,
+                workspace_id,
+            }) => (valid, org, team, workspace_id),
         };
         let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
             .await
@@ -9904,61 +9924,88 @@ impl CodesenseHandler {
         };
         // The repo must be one the team tracks, so a clone is never made that
         // can't be bound.
-        if let Err(error) = setup_tools::tracked_repo(&home, user_id, org, team, &params.repo).await
+        if let Err(error) =
+            setup_tools::tracked_repo(&home, user_id, &org, &team, &params.repo).await
         {
             return match setup_tools::refusal::<serde_json::Value>(error) {
                 Ok(envelope) => envelope_json(&envelope),
                 Err(message) => Err(ErrorData::internal_error(message, None)),
             };
         }
-        let gh = self
+        // The git CodeSense already resolves for everything else; no `gh`.
+        let git = self
             .app_handle
             .try_state::<DependencyManager>()
-            .and_then(|deps| DependencyManager::status(&deps).gh.path);
-        let Some(gh) = gh else {
-            return refuse(
-                "gh is not installed or was not found; install it and sign in first".to_string(),
-            );
+            .and_then(|deps| DependencyManager::status(&deps).git.path);
+        let Some(git) = git else {
+            return refuse("git is not installed or was not found; install it first".to_string());
         };
         let tab = self
             .open_tab_in_workspace(
                 OpenTerminalTabParams {
-                    workspace_id: workspace_id.clone(),
+                    workspace_id,
                     headed: Some(true),
                     name: Some(format!("clone {}", params.repo)),
                 },
-                Some(clone_repo::clone_argv(&gh, &valid)),
+                Some(clone_repo::clone_argv(&git, &valid)),
             )
             .await?;
-        // Only a folder this call is creating is ours to remove on Stop.
+        let handle = tab
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        // Only a folder this call is creating is ours to remove on Stop, and Stop
+        // closes this tab first.
         if valid.creates {
-            clone_repo::records().note_created(&valid.path);
+            clone_repo::records().note_created(&valid.path, handle.as_deref());
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        // Wait for the checkout, but not past git exiting, and well inside the
+        // shortest tool timeout a runtime applies.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(clone_repo::CLONE_WAIT_SECS);
+        let mut git_exited = false;
         while !clone_repo::finished(&valid.path) && std::time::Instant::now() < deadline {
+            if let Some(handle) = &handle {
+                if self.tab_has_exited(handle).await {
+                    git_exited = true;
+                    break;
+                }
+            }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
+        let done = clone_repo::finished(&valid.path);
         let mut started = clone_repo::CloneStarted {
             repo: params.repo.clone(),
             path: params.path.clone(),
             created: valid.creates,
             tab,
+            git_exited: git_exited && !done,
             attached: false,
             source: None,
             note: None,
         };
-        if !clone_repo::finished(&valid.path) {
-            started.note = Some(
-                "the clone has not finished; read the tab, then call attach_source_repo_path"
-                    .to_string(),
-            );
+        if !done {
+            if started.git_exited {
+                // git removes the folder it made when a clone fails; with nothing left,
+                // there is nothing for Stop to remove.
+                if std::fs::symlink_metadata(&valid.path).is_err() {
+                    clone_repo::records().forget(&valid.path);
+                }
+                started.note =
+                    Some("git exited before the clone finished; read the tab for why".to_string());
+            } else {
+                started.note = Some(format!(
+                    "the clone has not finished after {} seconds; read the tab, then call attach_source_repo_path",
+                    clone_repo::CLONE_WAIT_SECS
+                ));
+            }
             return envelope_json(&tool_envelope::ToolEnvelope::Ok(started));
         }
         let attached = setup_tools::attach_source_repo_path(
             &env,
             setup_tools::AttachSourceRepoPathParams {
-                org: org.clone(),
-                team: team.clone(),
+                org,
+                team,
                 repo: params.repo.clone(),
                 path: params.path.clone(),
             },
@@ -9967,6 +10014,8 @@ impl CodesenseHandler {
         .map_err(|e| ErrorData::internal_error(e, None))?;
         match attached {
             tool_envelope::ToolEnvelope::Ok(source) => {
+                // Bound: the folder is the team's clone now, never Stop's to remove.
+                clone_repo::records().forget(&valid.path);
                 started.attached = true;
                 started.source = Some(source);
             }
@@ -9974,6 +10023,19 @@ impl CodesenseHandler {
             _ => started.note = Some("the clone could not be bound".to_string()),
         }
         envelope_json(&tool_envelope::ToolEnvelope::Ok(started))
+    }
+
+    /// Whether the local tab a handle names has exited. A tab that can't be read
+    /// counts as still running, so the wait falls back to its deadline.
+    async fn tab_has_exited(&self, handle: &str) -> bool {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
+        let live = super::terminal_tabs::LiveTabs::read_local(&self.app_handle).await;
+        let session = self
+            .app_handle
+            .try_state::<DashboardLaunchState>()
+            .and_then(|state| state.resolve(handle));
+        super::terminal_tabs::by_handle(&live.tabs, handle, session.as_deref())
+            .is_some_and(|tab| tab.exited)
     }
 
     #[tool(
