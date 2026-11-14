@@ -5,11 +5,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import {
   formatCardLine,
   parseCardLine,
 } from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
-import { SETUP_VERBS, checkConsent, defaultActVerbs, turnsOf } from "./setup-consent-check.mjs";
+import {
+  SETUP_VERBS,
+  WRITES_AFTER_HANDBACK,
+  checkConsent,
+  defaultActVerbs,
+  turnsOf,
+} from "./setup-consent-check.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(HERE, "fixtures/consent", `${name}.json`);
@@ -284,7 +291,12 @@ test("the hand-back's role is read as the server reads it: one role: prefix is s
       team: { org: "codesense/docs", team: "getting-started" },
       text: "Setup done: ok",
     });
-  for (const role of ["role:codesense-foreman", " role:codesense-foreman ", "codesense-foreman"])
+  for (const role of [
+    "role:codesense-foreman",
+    " role:codesense-foreman ",
+    "role: codesense-foreman",
+    "codesense-foreman",
+  ])
     assert.deepEqual(checkConsent(session([send(role)])).errors, [], role);
   for (const role of ["role:other", "role:role:codesense-foreman", "role:", undefined])
     assert.equal(checkConsent(session([send(role)])).errors.length, 1, String(role));
@@ -297,7 +309,14 @@ test("after the hand-back or signal_done nothing acts, but reads may follow", ()
     text: "Setup done: ok",
   });
   const done = call(`${P}signal_done`, { outcome: "success" });
-  for (const name of ["open_workspace", "records_create", "records_set_fields", "create_team"]) {
+  for (const name of [
+    "open_workspace",
+    "records_create",
+    "records_set_fields",
+    "records_write",
+    "records_delete",
+    "create_team",
+  ]) {
     assert.equal(
       checkConsent(session([hand], [call(`${P}${name}`)])).errors[0],
       `turn 1: ${name} came after the hand-back at turn 0`,
@@ -310,6 +329,41 @@ test("after the hand-back or signal_done nothing acts, but reads may follow", ()
   assert.deepEqual(
     checkConsent(session([hand], [call(`${P}read_messages`)], [call(`${P}records_read`)], [done]))
       .errors,
+    [],
+  );
+});
+
+// The guide's tools that may follow the hand-back. Every other tool it has must be a setup
+// verb or a write the check refuses after the hand-back, so a new acting tool can't slip by.
+const NOT_ACTING = [
+  "who_am_i",
+  "read_messages",
+  "codesense_overview",
+  "describe_setup",
+  "query_context",
+  "read_content_file",
+  "list_source_repos",
+  "records_list",
+  "probe_environment",
+  "validate_story",
+  "read_epic_repos",
+  "reply",
+  "send_message",
+  "send_role_message",
+  "signal_progress",
+  "signal_done",
+];
+
+test("every guide tool is a read, a message, a setup verb or a write refused after the hand-back", () => {
+  const agentFile = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../codesense-docs/packs/codesense-guide/agents/guide-codex/agent.yaml",
+  );
+  const tools = parse(readFileSync(agentFile, "utf8")).mcp.bridge_tools;
+  assert.ok(tools.length > 0);
+  const known = new Set([...NOT_ACTING, ...SETUP_VERBS, ...WRITES_AFTER_HANDBACK]);
+  assert.deepEqual(
+    tools.filter((tool) => !known.has(tool)),
     [],
   );
 });

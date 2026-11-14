@@ -44,7 +44,7 @@ export const HANDBACK = Object.freeze({
 });
 
 // What may not follow the hand-back or `signal_done`: the setup verbs and these other writes.
-const WRITES_AFTER_HANDBACK = [
+export const WRITES_AFTER_HANDBACK = [
   "records_create",
   "records_set_fields",
   "records_write",
