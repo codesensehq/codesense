@@ -209,7 +209,7 @@ fn part_facts(manifest: &PackManifest, facts: &mut RiskFacts) {
 /// The facts for the pack at `root`. `files` are its regular files, relative with `/`;
 /// a file over `max_file` bytes is not read.
 pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: u64) -> RiskFacts {
-    let mut facts = RiskFacts::default();
+    let mut facts: RiskFacts = Default::default();
     let steps: Vec<_> = manifest
         .setup_steps
         .iter()

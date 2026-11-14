@@ -112,7 +112,7 @@ impl PackReport {
             warnings: Vec::new(),
             pack: None,
             parts: Vec::new(),
-            risk: RiskFacts::default(),
+            risk: Default::default(),
         }
     }
 
