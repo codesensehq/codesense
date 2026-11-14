@@ -173,72 +173,51 @@ const PRIVATE_KEY = /path|dir|folder|home|user|account|token|secret|password|cre
 const PRIVATE_VALUE =
   /^~|^\/|\/(?:Users|home)\/|\{\{[^}]*(?:path|user|account|token|secret)[^}]*\}\}/i;
 
-// Text a shell reads as more than a word: a pattern that matches any of these can't be part of
-// a typed command.
-const SHELL_TEXT = [
-  " ",
-  "\t",
-  "\n",
-  ";",
-  "&",
-  "|",
-  "$",
-  "`",
-  "(",
-  ")",
-  "<",
-  ">",
-  "\\",
-  '"',
-  "'",
-  "*",
-  "?",
-  "~",
-  "!",
-  "#",
-  "%",
-  "{",
-  "}",
-  "[",
-  "]",
-  "=",
-  ":",
-  "^",
-  ",",
-];
+// One piece of a pattern a typed command may take: a character class whose members are
+// letters, digits and `._/-`, or one such character, with an optional quantifier. Anything
+// else (a wildcard, a group, an alternation, a negated class, a space, a symbol a shell reads)
+// is more than a word, so the rule is on the pattern's shape and not on what it happens to match.
+const CLASS_MEMBER = "(?:[A-Za-z0-9]-[A-Za-z0-9]|[A-Za-z0-9._/-])";
+const WORD_ATOM = `(?:\\[${CLASS_MEMBER}+\\]|\\\\\\.|[A-Za-z0-9_/-])(?:[+*?]|\\{\\d+(?:,\\d*)?\\})?`;
+const WORD_PATTERN = new RegExp(`^\\^?(?:${WORD_ATOM})+\\$?$`);
 
 /** Whether an input pattern can match text with a shell metacharacter in it. */
 export function unsafeInput(pattern) {
-  let re;
   try {
-    re = new RegExp(pattern);
+    new RegExp(pattern);
   } catch {
     return true;
   }
-  const bases = ["a", "A", "0", "a/b", "a.b", "a-b", "a_b", "/a", "/", "."];
-  return SHELL_TEXT.some((c) =>
-    bases.some((b) => [`${b}${c}`, `${c}${b}`, `${b}${c}${b}`, c].some((text) => re.test(text))),
-  );
+  return !WORD_PATTERN.test(pattern);
 }
 
 /**
- * Whether `command` is the act's `cmd`: the same text, with each `{{input}}` replaced by one
- * value its pattern matches. `inputs` gives each name's pattern; a command with none is exact.
+ * The value each `{{input}}` took in `command`, if it is the act's `cmd`: the same text, with
+ * each input replaced by one value its pattern matches. `inputs` gives each name's pattern; a
+ * command with none is exact. Gives `{name: value}`, or `undefined` when the command is not it.
  */
-export function commandMatches(cmd, command, inputs) {
-  if (typeof command !== "string") return false;
-  if (!inputs) return command === cmd;
+export function commandInputs(cmd, command, inputs) {
+  if (typeof command !== "string") return undefined;
+  if (!inputs) return command === cmd ? {} : undefined;
   const escape = (text) => text.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
   const parts = cmd.split(/\{\{\s*([^}\s]+)\s*\}\}/);
+  const names = [];
   const body = parts
-    .map((part, i) =>
-      i % 2 === 0
-        ? escape(part)
-        : `(?:${(inputs[part] ?? "^$").replace(/^\^/, "").replace(/\$$/, "")})`,
-    )
+    .map((part, i) => {
+      if (i % 2 === 0) return escape(part);
+      names.push(part);
+      const pattern = (inputs[part] ?? "^$").replace(/^\^/, "").replace(/\$$/, "");
+      return `(?<g${names.length - 1}>${pattern})`;
+    })
     .join("");
-  return new RegExp(`^${body}$`).test(command);
+  const found = new RegExp(`^${body}$`).exec(command);
+  if (!found) return undefined;
+  return Object.fromEntries(names.map((name, i) => [name, found.groups[`g${i}`]]));
 }
+
+/** Whether `command` is the act's `cmd`, with each `{{input}}` filled by a value it matches. */
+export const commandMatches = (cmd, command, inputs) =>
+  commandInputs(cmd, command, inputs) !== undefined;
 
 /** Every `{{a.b}}` template in a value, as its dotted name. */
 function templates(value) {
@@ -559,7 +538,12 @@ export function actAllowances(dir) {
     }
     const acts = step?.act ?? [];
     const own = (act) => {
-      if (act.verb) return [{ verb: act.verb.tool, uses: act.repeat ?? 1 }];
+      if (act.verb) {
+        // A literal `content` is fixed by the step file, so the write must carry exactly it.
+        const content = act.verb.args?.content;
+        const fixed = typeof content === "string" && templates(content).length === 0;
+        return [{ verb: act.verb.tool, uses: act.repeat ?? 1, ...(fixed ? { content } : {}) }];
+      }
       if (act.run) {
         // A command that takes inputs is matched against each input's own pattern.
         const names = [...new Set(templates(act.run.cmd))];

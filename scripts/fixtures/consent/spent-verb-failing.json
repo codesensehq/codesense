@@ -21,7 +21,7 @@
             "native_id": "toolu_1",
             "is_error": false,
             "input": "{}",
-            "result": "{\"orgs\": []}"
+            "result": "{\"data\":{\"orgs\":[{\"slug\":\"codesense/docs\",\"orgRoot\":\"orgs/codesense-docs\",\"teams\":[{\"name\":\"getting-started\",\"archived\":false,\"sourceRepos\":[]}]},{\"slug\":\"acme/context\",\"orgRoot\":\"orgs/acme-context\",\"teams\":[{\"name\":\"web\",\"archived\":false,\"sourceRepos\":[{\"slug\":\"acme/web\"}]}]}]}}"
           }
         ]
       },
@@ -55,6 +55,13 @@
         "index": 4,
         "role": "assistant",
         "tool_calls": [
+          {
+            "name": "mcp__codesense__open_terminal_tab",
+            "native_id": "toolu_open",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"handle\":\"t1\"}"
+          },
           {
             "name": "mcp__codesense__run_in_terminal_tab",
             "native_id": "toolu_4",

@@ -21,7 +21,7 @@
             "native_id": "toolu_1",
             "is_error": false,
             "input": "{}",
-            "result": "{\"orgs\": []}"
+            "result": "{\"data\":{\"orgs\":[{\"slug\":\"codesense/docs\",\"orgRoot\":\"orgs/codesense-docs\",\"teams\":[{\"name\":\"getting-started\",\"archived\":false,\"sourceRepos\":[]}]},{\"slug\":\"acme/context\",\"orgRoot\":\"orgs/acme-context\",\"teams\":[{\"name\":\"web\",\"archived\":false,\"sourceRepos\":[{\"slug\":\"acme/web\"}]}]}]}}"
           }
         ]
       },

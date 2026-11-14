@@ -24,7 +24,7 @@ test("no step requires gh: none runs it, probes it, names it as a step or needs 
   const index = readFileSync(join(STEPS, "index.yml"), "utf8");
   assert.doesNotMatch(index, /\bgh[-_]/);
   for (const { id, text } of all()) {
-    assert.doesNotMatch(text, /\bgh (?:auth|repo|api|pr|issue|--)/, `${id} runs gh`);
+    assert.doesNotMatch(text, /\bgh (?:auth(?! setup-git)|repo|api|pr|issue|--)/, `${id} runs gh`);
     assert.doesNotMatch(text, /\bgh_(?:auth|version)|gh-(?:installed|auth)|cli\.github\.com/, id);
     assert.doesNotMatch(text, /probe_environment/, `${id} probes the environment for gh`);
     const s = parse(text);
@@ -84,6 +84,27 @@ test("git-access reads one repo with a fixed command, then writes the note: no w
   assert.match(CMD, /GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- /);
   assert.equal(unsafeInput(s.inputs.repo.pattern), false);
   assert.deepEqual(stepRuleErrors(s, "git-access.yml"), []);
+});
+
+test("git-access says what its one read checks: git's own access, not the method picked", () => {
+  const s = step("git-access");
+  assert.match(s.summary, /git's own access \(what the clone uses\)/);
+  assert.match(s.summary, /not the MCP server, the token tool or SSH keys/);
+  assert.match(s.ask.text, /git's own access \(what the clone uses\)/);
+  assert.match(s.ask.text, /not the MCP server, the token tool or SSH keys/);
+  // The card shows the repo the read names (frame E: "I read acme/web once").
+  assert.match(s.ask.text, /I read \{\{probe\.repos\.repo\}\} once/);
+  const saves = s.act.filter((a) => a.id.startsWith("save-"));
+  assert.equal(saves.length, 4);
+  for (const { id, verb } of saves) {
+    assert.match(verb.args.content, /git's own access/i, id);
+    assert.match(verb.args.content, /what the clone uses/, id);
+  }
+  const note = (id) => s.act.find((a) => a.id === id).verb.args.content;
+  assert.match(note("save-gh-cli"), /counts gh only once `gh auth setup-git` has run/);
+  assert.match(note("save-mcp-server"), /not the MCP server/);
+  assert.match(note("save-token-tool"), /not the token tool/);
+  assert.match(note("save-credentials"), /SSH keys are not checked/);
 });
 
 test("git-access is done by the file it wrote, not by the run", () => {
@@ -198,7 +219,21 @@ test("a run command may take an input only if a shell could not read it as more 
   assert.ok(stepRuleErrors(cwd, "x").some((e) => e.includes("builds its command from {{repo}}")));
   for (const pattern of ["^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", "^[a-z0-9][a-z0-9-]{0,38}$"])
     assert.equal(unsafeInput(pattern), false, pattern);
-  for (const pattern of ["^.+$", "^[^\\n]+$", "^[a-z ]+$", "^[a-z;]+$", "^[a-z$()]+$", "(?"])
+  for (const pattern of [
+    "^.+$",
+    "^[^\\n]+$",
+    "^[a-z ]+$",
+    "^[a-z;]+$",
+    "^[a-z$()]+$",
+    "(?",
+    // Each needs context around its metacharacter, so a probe of short strings misses it.
+    "^[a-z/]+[;][a-z]{2,}$",
+    "^[a-z]+ [a-z]{2,}$",
+    "^x;reboot$",
+    "^[a-z]+\\$\\([a-z]{2,}\\)$",
+    "^a|b c$",
+    "^a.b$",
+  ])
     assert.equal(unsafeInput(pattern), true, pattern);
 });
 
