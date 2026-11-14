@@ -2,21 +2,17 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
- * Real-browser guards for a long inbox (the inbox keeps the newest 500 messages):
- *
- *  - The Mailspool opens at its newest line, draws only a window of the 500, and follows new
- *    mail while the reader is at the bottom.
- *  - A reader who scrolled up stays put — the line they are reading keeps its place even as the
- *    oldest line is trimmed at the cap — and is offered "Jump to latest".
- *  - The Threads conversation keeps a scrolled-up reader in place the same way. The desktop app
- *    is WebKit, which has no CSS scroll anchoring, so this is worth running there too.
+ * Real-browser guards for a long chat (the inbox keeps the newest 500 messages): the agent's
+ * overlay conversation opens at its newest message, keeps a scrolled-up reader in place as the
+ * oldest is trimmed at the cap, and offers "Jump to latest". The desktop app is WebKit, which
+ * has no CSS scroll anchoring, so this is worth running there too.
  *
  * The mock backend has no session inbox, so `list_session_inbox` is answered here with a
  * generated conversation, and the inbox-changed event is fired by hand.
  */
 
 const AGENT_TAB = "sess-login-lead";
-const PEER = "sess-login-repro";
+const PEER = "human";
 
 declare global {
   interface Window {
@@ -38,10 +34,10 @@ async function boot(page: Page) {
           messages.push({
             id,
             team: { org: "acme", team: "widgets" },
-            from: mine ? handle : peer,
-            fromName: mine ? "lead" : "repro",
-            to: mine ? peer : handle,
-            toName: mine ? "repro" : "lead",
+            from: mine ? peer : handle,
+            fromName: mine ? "You" : "lead",
+            to: mine ? handle : peer,
+            toName: mine ? "lead" : "You",
             toRole: null,
             // Mixed lengths, so rows and bubbles differ in height.
             text: `line ${id}: ${"lorem ipsum dolor sit amet ".repeat((id % 4) * 3 + 1)}`,
@@ -89,9 +85,9 @@ async function boot(page: Page) {
   await page.goto("/?agents=team");
   await page.getByRole("button", { name: "Full screen" }).click();
   await page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`).click();
-  const rail = page.locator('[data-testid="inbox-rail"]').first();
-  await expect(rail).toBeVisible();
-  return rail;
+  const chat = page.locator('[data-testid="chat-overlay"]').first();
+  await expect(chat).toBeVisible();
+  return chat;
 }
 
 /** New mail lands: `add` newer messages, the oldest `trim` dropped (the 500 cap). */
@@ -134,59 +130,21 @@ async function topItem(scroller: Locator, selector: string, attr: string) {
   );
 }
 
-test.describe("inbox on a long log", () => {
-  test("Mailspool: opens at the newest of 500 lines, windowed, and follows new mail", async ({
-    page,
-  }) => {
-    const rail = await boot(page);
-    await rail.getByRole("button", { name: "Mailspool" }).click();
-    const log = rail.getByTestId("ibx-log");
-    await expect(log.locator('[data-log="acme/widgets#500"]')).toBeVisible();
-    await expect.poll(() => distanceFromEnd(log)).toBeLessThanOrEqual(1);
-    expect(await log.locator(".ibx-lrow").count()).toBeLessThan(80);
-    await land(page, 1, 1);
-    await expect(log.locator('[data-log="acme/widgets#501"]')).toBeVisible();
-    await expect.poll(() => distanceFromEnd(log)).toBeLessThanOrEqual(1);
-    await expect(rail.getByRole("button", { name: /Jump to latest/ })).toHaveCount(0);
-  });
-
-  test("Mailspool: a scrolled-up reader stays put as the oldest line is trimmed", async ({
-    page,
-  }) => {
-    const rail = await boot(page);
-    await rail.getByRole("button", { name: "Mailspool" }).click();
-    const log = rail.getByTestId("ibx-log");
-    await expect(log.locator('[data-log="acme/widgets#500"]')).toBeVisible();
-    await log.evaluate((el) => (el.scrollTop = el.scrollHeight / 2));
-    await page.waitForTimeout(300);
-    const before = await topItem(log, "[data-log]", "data-log");
-    await land(page, 2, 2);
-    const jump = rail.getByRole("button", { name: /Jump to latest/ });
-    await expect(jump).toBeVisible();
-    await page.waitForTimeout(300);
-    expectSameTop(await topItem(log, "[data-log]", "data-log"), before);
-    await jump.click();
-    await expect(log.locator('[data-log="acme/widgets#502"]')).toBeVisible();
-    await expect.poll(() => distanceFromEnd(log)).toBeLessThanOrEqual(1);
-    await expect(jump).toHaveCount(0);
-  });
-
-  test("Threads: keeps a scrolled-up reader in place and animates Jump to latest with reduced motion respected", async ({
+test.describe("agent chat on a long log", () => {
+  test("keeps a scrolled-up reader in place and animates Jump to latest with reduced motion respected", async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
-    const rail = await boot(page);
-    // A narrow rail lists conversations first: open the one with repro.
-    await rail.locator(`[data-thread="${PEER}"]`).click();
-    const msgs = rail.getByTestId("ibx-msgs");
+    const chat = await boot(page);
+    const msgs = chat.getByTestId("ibx-msgs");
     await expect(msgs.locator('[data-mid="acme/widgets#500"]')).toBeVisible();
     await expect.poll(() => distanceFromEnd(msgs)).toBeLessThanOrEqual(1);
     await msgs.evaluate((el) => (el.scrollTop = el.scrollHeight / 2));
     await page.waitForTimeout(300);
     const before = await topItem(msgs, "[data-mid]", "data-mid");
-    // #501 is the reader's own, #502 is repro's; #1 and #2 are trimmed.
+    // #501 is the reader's own, #502 is the agent's; #1 and #2 are trimmed.
     await land(page, 2, 2);
-    const jump = rail.getByRole("button", { name: /Jump to latest/ });
+    const jump = chat.getByRole("button", { name: /Jump to latest/ });
     await expect(jump).toBeVisible();
     await expect(msgs.locator('[data-mid="acme/widgets#2"]')).toHaveCount(0);
     expectSameTop(await topItem(msgs, "[data-mid]", "data-mid"), before);

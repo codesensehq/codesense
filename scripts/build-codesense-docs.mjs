@@ -23,6 +23,7 @@
 // snapshot in that checkout).
 
 import { applyMetadata } from "./generate-docs-metadata.mjs";
+import { LAUNCH_RS } from "./lib/pinned-pages.mjs";
 
 import { lintPaneExamples } from "./lint-pane-examples.mjs";
 
@@ -1177,6 +1178,10 @@ export function buildInputs() {
     fileURLToPath(import.meta.url),
     join(ROOT, "scripts/lint-pane-examples.mjs"),
     join(ROOT, "scripts/generate-docs-metadata.mjs"),
+    // The metadata step leaves the pages `PAGES` pins byte-exact, so the archive follows that table.
+    join(ROOT, "scripts/lib/pinned-pages.mjs"),
+    join(ROOT, "scripts/lib/rust.mjs"),
+    join(ROOT, LAUNCH_RS),
     join(ROOT, "scripts/lib/builtin-panes.mjs"),
     join(ROOT, "scripts/lib/build-output.mjs"),
     join(ROOT, "scripts/generate-builtin-pane-examples.mjs"),

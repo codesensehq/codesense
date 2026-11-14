@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 107 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 112 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -1150,8 +1150,164 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
+
+## VerbMethods: pin
+
+```ts
+pin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      preview?: {
+        chart?: {
+          kind: "segments";
+          label: string;
+          segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+          [key: string]: unknown;
+        } | {
+          kind: "progress";
+          label: string;
+          percent: number;
+          [key: string]: unknown;
+        } | {
+          kind: "stack";
+          label: string;
+          parts: Array<{
+            label: string;
+            value: number;
+            [key: string]: unknown;
+          }>;
+          [key: string]: unknown;
+        };
+        lines?: string[];
+        shortName?: string;
+        status?: "on-track" | "running" | "needs-you" | "not-updating";
+        unit?: string;
+        value?: string;
+      };
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
+## VerbMethods: pins
+
+```ts
+pins(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:read:team
+
+Class: read; default grant: inbox:read:team; MCP twin: Agents read their pins in the result of the pin tool; pages read any thread of their team.
 
 ## VerbMethods: postMessage
 
@@ -1591,6 +1747,70 @@ Conditional grants (override the default when their conditions match):
 - bound collection scope=team → records:write:team
 - bound collection scope=story → records:write:team
 
+## VerbMethods: reorderPins
+
+```ts
+reorderPins(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thread's pins; an agent places a pin with the pin tool's position.
+
 ## VerbMethods: replyAsHuman
 
 ```ts
@@ -1973,6 +2193,16 @@ read · repo:read · MCP twin describe_setup
 
 Class: read; default grant: repo:read; MCP twin: describe_setup.
 
+## VerbMethods: setupState
+
+```ts
+setupState(args?: Record<string, unknown>): Promise<unknown>;
+```
+
+read · machines:read · MCP twin describe_setup
+
+Class: read; default grant: machines:read; MCP twin: describe_setup.
+
 ## VerbMethods: showMenu
 
 ```ts
@@ -2116,6 +2346,7 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
 
@@ -2138,6 +2369,70 @@ metadata · inbox:write
 
 Class: metadata; default grant: inbox:write; MCP twin: Host operation bound to the rendered dashboard; no identical MCP binding.
 
+## VerbMethods: unpin
+
+```ts
+unpin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
 ## VerbMethods: unsubscribe
 
 ```ts
@@ -2158,6 +2453,7 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
 
@@ -2326,6 +2622,14 @@ compareNavNames(a: string, b: string): number;
 
 The nav's name order (numeric, case-insensitive); a sort comparator.
 
+## Kit: kit.runtimes
+
+```ts
+runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;
+```
+
+The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not "no CLI", and call again.
+
 ## Kit: kit.createEditor
 
 ```ts
@@ -2394,6 +2698,14 @@ virtualList?: <Row extends HubRow = HubRow>(
 
 `/kit/v1/virtual-list.js`, when the page loads it.
 Rows keep their node by id and layoutKey; update patches reused rows in place.
+
+## Kit: kit.chat
+
+```ts
+chat?: KitChat;
+```
+
+`/kit/v1/chat.js`, when the page loads it (after kit.js): the one chat.
 
 ## Kit: kit.[helper: string]
 

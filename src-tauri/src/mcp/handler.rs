@@ -6735,6 +6735,23 @@ impl CodesenseHandler {
         super::caller_tools::react(&host, caller, params).await
     }
 
+    #[tool(
+        description = "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}."
+    )]
+    async fn pin(
+        &self,
+        Parameters(params): Parameters<PinParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use crate::commands::agent_inbox::AppInboxHost;
+        let host = AppInboxHost {
+            app: self.app_handle.clone(),
+        };
+        let connection = self.connection_session();
+        let explicit = params.session_id.clone();
+        let caller = self.inbox_caller(explicit.as_deref(), connection.as_deref())?;
+        super::caller_tools::pin(&host, caller, params).await
+    }
+
     // Full description: `feedback_tool::DESCRIPTION`, set in `served_tool_router`.
     #[tool(
         description = "Send beta feedback (a bug, an idea or a question about CodeSense) to the CodeSense team, as the person does from Help → Send beta feedback. Beta builds only."
@@ -12480,6 +12497,28 @@ pub struct ReactParams {
     pub session_id: Option<String>,
 }
 
+/// Pin a message into the caller's own thread, or unpin it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct PinParams {
+    /// The message to pin, from `send_message`, `reply` or `read_messages`.
+    #[serde(alias = "messageId")]
+    pub message_id: i64,
+    /// Where it goes among the pins: 0 is first; omitted or past the end, it goes last.
+    #[serde(default)]
+    pub position: Option<u32>,
+    /// `true` unpins it.
+    #[serde(default)]
+    pub remove: Option<bool>,
+    /// What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.
+    /// On a message already pinned it replaces that pin's preview.
+    #[serde(default)]
+    pub preview: Option<crate::weft::pins::PinPreview>,
+    /// Omit to pin as this connection's verified tab. If supplied, it must name that
+    /// same tab. An unbound connection is refused.
+    #[serde(default, alias = "sessionId")]
+    pub session_id: Option<String>,
+}
+
 /// The `(org, team)` the role mailbox lives in. The viewer-visible
 /// team identity, mirroring `InboxTeam`.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -17242,6 +17281,7 @@ pub(crate) mod tests {
         "read_messages",
         "reply",
         "react",
+        "pin",
         "who_am_i",
         // Beta feedback from an agent, through the form's path (beta builds only).
         "feedback_send",

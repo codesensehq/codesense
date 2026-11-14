@@ -38,6 +38,7 @@ import { extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { builtInPaneFiles } from "./lib/builtin-panes.mjs";
+import { DOCS_ROOT, pinnedPages } from "./lib/pinned-pages.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 export const SURFACE_DIR = "scripts/api-surface";
@@ -662,8 +663,13 @@ export function scanFile(path, surface, text = readFileSync(path, "utf8")) {
   );
 }
 
+// Pages the app hashes (`PAGES` in foreman_launch.rs) are left out: only the running app's own
+// bundled copy matches its hash, so a copy from another version gets no launch grant and never runs
+// against an app that lacks a member it reads.
+export const PINNED_PAGES = new Set([...pinnedPages()].map((path) => `${DOCS_ROOT}/${path}`));
+
 function walk(path, out) {
-  if (SKIPPED.test(path)) return;
+  if (SKIPPED.test(path) || PINNED_PAGES.has(relative(ROOT, path))) return;
   const st = statSync(path);
   if (st.isDirectory()) for (const name of readdirSync(path).sort()) walk(join(path, name), out);
   else if (SCANNED.has(extname(path).toLowerCase())) out.push(path);

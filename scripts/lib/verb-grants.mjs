@@ -25,7 +25,7 @@ export function conditionalVerbGrants(app, verbs) {
     const condition = source.slice(start, open);
     const body = source.slice(open + 1, end - 1);
     const names = stringLiterals(
-      condition.match(/matches!\(self\.name\.as_str\(\),([\s\S]*?)\)/)?.[1] ?? "",
+      condition.match(/matches!\((?:self\.name\.as_str\(\)|&\*self\.name),([\s\S]*?)\)/)?.[1] ?? "",
     );
     const prefix = condition.match(/self\.name\.starts_with\("([^"]+)"\)/)?.[1];
     const topic = condition.match(/args\["topic"\]\s*==\s*"([^"]+)"/)?.[1];

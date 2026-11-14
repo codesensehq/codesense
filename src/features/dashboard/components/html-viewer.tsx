@@ -1160,7 +1160,7 @@ export function HtmlViewer({
         visibleRef.current,
         false,
         undefined,
-        { badge: pane?.badge, owner: pane?.panelId },
+        { badge: pane?.badge, owner: pane?.panelId, grants: frameRecord.effectiveGrant },
       );
       hubFrameRef.current = subscription;
       return subscription;
@@ -1233,10 +1233,14 @@ export function HtmlViewer({
           const viewKey = await paneViewKey(record);
           const hubFrame = hubFrameRef.current;
           if (!hubFrame) throw new Error("Frame hub unavailable during rebind");
-          hubFrame.rekey(viewKey, () => {
-            onFrameViewKeyRef.current?.(viewKey);
-            postToFrame(endpoint(), { type: "codesense:rebind", token: record.token });
-          });
+          hubFrame.rekey(
+            viewKey,
+            () => {
+              onFrameViewKeyRef.current?.(viewKey);
+              postToFrame(endpoint(), { type: "codesense:rebind", token: record.token });
+            },
+            record.effectiveGrant,
+          );
         } catch (error) {
           // Only a failed grant rebind leaves the old token valid. Once it changes, held
           // calls must stay held unless the attached host key has advanced too.
