@@ -3,7 +3,11 @@
 # the steps that must be done first and may only name an entry above it. A step file's own
 # `id`, `title` and `needs` must match its entry. The pack build checks all of it.
 #
-# The core steps (context repo, team, product, source repos, gh, clone, first story) are
-# added here as their step files land.
+# The core steps still to come (gh, clone, first story) are added here as their step files
+# land.
 step_format: 1
-steps: []
+steps:
+  - { id: context-repo, title: Create your context repo }
+  - { id: team, title: Name your team, needs: [context-repo] }
+  - { id: product, title: Name your product, needs: [team] }
+  - { id: source-repos, title: Add your source repos, needs: [team] }

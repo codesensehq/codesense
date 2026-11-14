@@ -1,0 +1,49 @@
+step_format: 1
+id: team
+title: Name your team
+summary: >-
+  A team groups the repos, products and stories you work on. The team step also gives it the
+  setup log, so each finished step is recorded in your team and a new session can resume.
+needs: [context-repo]
+probe:
+  - id: teams
+    check: { tool: describe_setup, exclude_org: codesense/docs }
+    map: { user_team: done, no_user_team: missing, unreadable: unknown }
+ask:
+  text: >-
+    **Name your team.** Pick a short lowercase name, like the group you ship with. I'll create
+    it in your context repo and add the setup log to it. If that context repo has a remote,
+    these shared files go back as a pull request for you to review, not straight to the remote.
+  options:
+    - { label: Create it, act: create-team }
+    - { label: Not now, act: none }
+  free_text: true
+inputs:
+  team: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", label: "Your team, a lowercase name", shareable: true }
+act:
+  - id: create-team
+    consent: local-write
+    what: create your team and add the setup log's schema
+    where: your context repo
+    why: so repos, products and stories are filed under it, and setup is recorded there
+    verb:
+      tool: create_team
+      args: { org: "{{probe.teams.org}}", name: "{{team}}" }
+    then: [write-ledger-schema]
+  - id: write-ledger-schema
+    consent: local-write
+    what: add the setup log's schema to your team
+    where: your team's content folder in the context repo
+    why: so each finished step is recorded, and a new session resumes from facts
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.teams.team_content_dir}}/schema/setup-ledger.yaml"
+        content_from: guide/setup/ledger/setup-ledger.yaml
+        onCollision: fail
+verify: { probe: teams, expect: done }
+record:
+  scope: team
+  fields: { created: "team {{team}}" }
+  secret: never
+undo: Archive the team from its settings; its folder and history stay in your context repo.

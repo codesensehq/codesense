@@ -1,0 +1,55 @@
+step_format: 1
+id: product
+title: Name your product
+summary: >-
+  Until CodeSense has products of its own, a product is one epic in your team that lists its
+  repos, plus a row in the setup log. The step file switches to the product tool when it ships.
+needs: [team]
+probe:
+  - id: product
+    check: { tool: records_list, collection: setup-ledger, step: product }
+    map: { recorded: done, none: missing, unreadable: unknown }
+ask:
+  text: >-
+    **What's the product called?** I'll create one epic with that name in your team, list the
+    repos you told me about on it, and note it in the setup log. If your context repo has a
+    remote, the new files go back as a pull request for you to review.
+  options:
+    - { label: Create it, act: create-epic }
+    - { label: Not now, act: none }
+  free_text: true
+inputs:
+  product: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", label: "Product name, a lowercase name", shareable: true }
+  repos:
+    pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:, ?[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)*$"
+    label: Its repos as owner/name, separated by commas
+    shareable: true
+act:
+  - id: create-epic
+    consent: local-write
+    what: create the product's epic and list its repos on it
+    where: your team's content folder in the context repo
+    why: so stories can be planned under the product and name the repos they touch
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.product.team_content_dir}}/{{product}}/README.md"
+        content: "---\ntype: epic\ntitle: {{product}}\nstatus: in-progress\n---\n# {{product}}\n"
+        onCollision: fail
+    then: [set-epic-repos]
+  - id: set-epic-repos
+    consent: local-write
+    what: list the product's repos on its epic
+    where: the epic's README in your team
+    why: so a workspace opened on the epic assembles those repos
+    verb:
+      tool: set_epic_repos
+      args:
+        epicFilePath: "{{probe.product.team_content_dir}}/{{product}}/README.md"
+        repos: "{{repos}}"
+verify: { probe: product, expect: done }
+record:
+  scope: team
+  fields: { created: "product {{product}}, one epic" }
+  secret: never
+undo: Delete the epic's folder from your team's content and its row from the setup log.
