@@ -1,0 +1,43 @@
+id: guide-codex
+name: CodeSense setup
+description: Sets up CodeSense with you. It checks this Mac, asks what you work on and does the setup one card at a time.
+created_by: codesense
+runtime: codex
+launch: foreground
+context:
+  - { path: guide/PROMPT.md, dest: AGENTS.md }
+  - { path: .agents/skills/codesense-setup }
+permissions:
+  codex:
+    # A read-only sandbox: no file writes. The bridge list below is what it can call.
+    approval_policy: never
+    sandbox_mode: read-only
+mcp:
+  bridge_tools:
+    - who_am_i
+    - read_messages
+    - codesense_overview
+    - describe_setup
+    - query_context
+    - read_content_file
+    - list_source_repos
+    - records_list
+    - probe_environment
+    - reply
+    - send_message
+    - signal_progress
+    - signal_done
+    - create_local_organization
+    - attach_context_repository
+    - create_team
+    - add_source_repo
+    - attach_source_repo_path
+    - run_in_terminal_tab
+    - records_create
+    - records_set_fields
+    - create_content_file
+    - validate_story
+    - open_workspace
+    - set_epic_repos
+    - read_epic_repos
+revision: 1

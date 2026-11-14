@@ -1,0 +1,59 @@
+pack_format: 1
+id: codesense-guide
+name: CodeSense setup
+version: 0.1.0
+publisher: codesense
+summary: The setup agent that opens on first launch and does the setup with you, one consent card at a time.
+license: MIT
+requires:
+  clis:
+    - { name: claude, optional: true }
+    - { name: codex, optional: true }
+    - { name: opencode, optional: true }
+parts:
+  - { id: guide, kind: preset, includes: [ guide-claude, guide-codex, guide-opencode, guide-content, codesense-setup ], default: true }
+  - { id: guide-claude, kind: agent, file: agents/guide-claude/agent.yaml, needs: [ guide-content, codesense-setup ] }
+  - { id: guide-codex, kind: agent, file: agents/guide-codex/agent.yaml, needs: [ guide-content, codesense-setup ] }
+  - { id: guide-opencode, kind: agent, file: agents/guide-opencode/agent.yaml, needs: [ guide-content, codesense-setup ] }
+  - { id: guide-content, kind: content, title: Guide, paths: [ "content/guide/**" ] }
+  - id: codesense-setup
+    kind: skill
+    source: commands/codesense-setup.md
+    targets: [ claude, codex, opencode ]
+files:
+  - path: .agents/skills/codesense-setup/SKILL.md
+    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    exec: false
+  - path: .claude/skills/codesense-setup/SKILL.md
+    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    exec: false
+  - path: .opencode/command/codesense-setup.md
+    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    exec: false
+  - path: CHANGELOG.md
+    sha256: 1614f9071daad5e4ad06d57852c6f8fada52966e9b37834344252edac00549b7
+    exec: false
+  - path: LICENSE
+    sha256: d0d1bba570c135a2a51273d7261df49c4ce5d63332a304d03626c5836cbbec4f
+    exec: false
+  - path: agents/guide-claude/agent.yaml
+    sha256: 7005b56ef9f16c77f5ed4f5d5b663eeaa6bedfd3559a42879e8d64009f1b77a8
+    exec: false
+  - path: agents/guide-codex/agent.yaml
+    sha256: 7a3a453690194f2e92e777795d88255bd2510b879601fd4b770c3919e690fdd3
+    exec: false
+  - path: agents/guide-opencode/agent.yaml
+    sha256: a1a7dcceb362250486a7af4b6198f652a6bd953bd8bb2c1057d60417f5d029bf
+    exec: false
+  - path: commands/codesense-setup.md
+    sha256: 4e44bbb798e6360aac87d4daeea470de8c4a5b2e544f720765858c7a62b67b84
+    exec: false
+  - path: content/guide/PROMPT.md
+    sha256: 1473df30e726dbeea0020707d0dd5cfd1f81178510a17d2fa482a6a119de5f1f
+    exec: false
+  - path: content/guide/handoff.md
+    sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
+    exec: false
+  - path: docs/README.md
+    sha256: 41022d3bc60420eaddd3c18e1d547a5f0a420046ad0c63ca688090c9543e55f6
+    exec: false
