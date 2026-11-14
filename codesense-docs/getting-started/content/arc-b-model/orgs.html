@@ -207,10 +207,16 @@
             context repos and where each one is.</p>
           <p><code>probe_environment</code> is a read-only look at this Mac before setup:
             which agent CLIs, <code>git</code> and <code>gh</code> are installed, whether
-            <code>gh</code> is signed in (its account and scopes), whether an absolute
-            folder (<code>gitRepoPath</code>) is a git repository, and whether named
-            environment variables (<code>envNames</code>) are set. A variable comes back as
-            set or not set, never with its value, and no token is ever returned.</p>
+            <code>gh</code> is signed in to github.com (its account and scopes), whether an
+            absolute folder (<code>gitRepoPath</code>) is a git repository, and whether named
+            environment variables (<code>envNames</code>) are set in your login shell, the
+            one agent CLIs start from. The shell runs a fixed script that prints only 0 or 1
+            per name, so a variable comes back as set, not set, or <code>null</code> when the
+            shell could not be read, never with its value. No token is ever returned. A
+            folder under <code>~/Documents</code>, <code>~/Desktop</code>,
+            <code>~/Downloads</code> or <code>/Volumes</code> is refused unless it is inside
+            a folder you already attached as a source repo, so the check never raises a
+            macOS privacy prompt.</p>
           <p style="color: var(--cs-muted-fg); margin-top: 8px">
             Live schema in
             <a href="../mcp-explorer.html#tool/list_orgs_teams">mcp-explorer</a>.

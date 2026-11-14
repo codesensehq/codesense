@@ -843,6 +843,16 @@ impl DependencyManager {
         }
     }
 
+    /// Mark `gh` found at `path` with `version`, as a resolution would.
+    pub(crate) fn set_gh_for_test(&self, path: &str, version: &str) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.gh = GhEntry {
+            path: Some(PathBuf::from(path)),
+            version: Some(version.to_string()),
+            resolving: false,
+        };
+    }
+
     /// [`Self::re_resolve_stale`] against the PATH value `login_path` instead of a
     /// login-shell probe.
     pub(crate) fn re_resolve_stale_for_test(
@@ -1293,9 +1303,61 @@ pub fn resolve_binary_via_login_shell(name: &str, timeout: Duration) -> Option<P
 /// value). `script` MUST be caller-controlled — the charset check for
 /// interpolated user input lives in each caller, not here.
 fn run_login_shell_capture(script: &str, timeout: Duration) -> Option<String> {
-    let mut command = Command::new(login_probe_shell());
+    run_shell_capture(&login_probe_shell(), script, timeout)
+}
+
+/// [`run_login_shell_capture`] with the shell named, so tests can pass a fake one.
+fn run_shell_capture(shell: &str, script: &str, timeout: Duration) -> Option<String> {
+    let mut command = Command::new(shell);
     command.args(["-lic", script]);
     capture_stdout_within(command, timeout)
+}
+
+/// Brackets the env-set probe's answer, like [`PATH_SENTINEL_BEGIN`]/[`PATH_SENTINEL_END`].
+const ENV_SENTINEL_BEGIN: &str = "CS_ENV_BEGIN>>";
+const ENV_SENTINEL_END: &str = "<<CS_ENV_END";
+
+/// A shell variable name: a letter or `_`, then letters, digits and `_`.
+fn is_shell_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && !name.contains(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+}
+
+/// The fixed env-set probe for `names`: for each, `1` when the shell exports it with a
+/// non-empty value, else `0`, between the sentinels. A value is only expanded inside a
+/// test or sent to /dev/null; the script never prints it. `None` for an invalid name.
+fn login_env_set_script(names: &[&str]) -> Option<String> {
+    if names.iter().any(|name| !is_shell_name(name)) {
+        return None;
+    }
+    // Like the PATH probe, the sentinels exist only once printf joins them.
+    let tests: String = names
+        .iter()
+        .map(|name| {
+            format!(
+                " {{ [ -n \"${{{name}:-}}\" ] && printenv {name} >/dev/null 2>&1; }} && printf 1 || printf 0;"
+            )
+        })
+        .collect();
+    Some(format!(
+        "printf '%sBEGIN>>' 'CS_ENV_';{tests} printf '<<%sEND' 'CS_ENV_'"
+    ))
+}
+
+/// Which of `names` the user's login shell (the one agent CLIs start from) exports with a
+/// non-empty value, in order. Only `0`/`1` per name comes back from the shell, never a
+/// value. `None` when a name is invalid, or the shell fails, times out or answers in
+/// another shape. Blocking: spawns `$SHELL -lic`, bounded by `timeout`.
+pub fn login_shell_env_set(names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    env_set_in_shell(&login_probe_shell(), names, timeout)
+}
+
+fn env_set_in_shell(shell: &str, names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    let script = login_env_set_script(names)?;
+    let raw = run_shell_capture(shell, &script, timeout)?;
+    let bits = extract_sentinel_value(&raw, ENV_SENTINEL_BEGIN, ENV_SENTINEL_END)?;
+    (bits.len() == names.len() && !bits.contains(|c: char| c != '0' && c != '1'))
+        .then(|| bits.chars().map(|c| c == '1').collect())
 }
 
 /// Run `command` and return its stdout, the whole capture bounded by
@@ -2357,6 +2419,81 @@ mod tests {
         let started = Instant::now();
         assert_eq!(capture_stdout_within(command, Duration::from_secs(1)), None);
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// A stand-in login shell: it ignores `-lic`, sets the variables an rc file would, prints
+    /// rc noise that includes a value, then runs the probe script with `/bin/sh`.
+    #[cfg(unix)]
+    fn fake_login_shell(dir: &Path, secret: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-zsh");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"rc noise {secret}\"\nexport SECRET_ONE='{secret}'\nexport EMPTY_ONE=''\nNOT_EXPORTED=x\nexec /bin/sh -c \"$2\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_reads_the_login_shell_and_returns_bools_only() {
+        let dir = fresh_test_dir("env_set_shell");
+        // Built at run time so no token-shaped literal sits in the source.
+        let secret = ["ghp", "_", &"x".repeat(36)].concat();
+        let shell = fake_login_shell(&dir, &secret);
+        let names = [
+            "SECRET_ONE",
+            "EMPTY_ONE",
+            "NOT_EXPORTED",
+            "NOT_THERE_AT_ALL",
+        ];
+        assert_eq!(
+            env_set_in_shell(shell.to_str().unwrap(), &names, Duration::from_secs(5)),
+            Some(vec![true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn env_set_script_never_prints_a_value_and_refuses_a_bad_name() {
+        let script = login_env_set_script(&["GH_TOKEN", "_X1"]).unwrap();
+        assert!(!script.contains(ENV_SENTINEL_BEGIN) && !script.contains(ENV_SENTINEL_END));
+        assert!(script.contains("printenv GH_TOKEN >/dev/null 2>&1"));
+        assert!(!script.contains("echo"));
+        for bad in ["", "1A", "A B", "A;B", "A$(x)", "A}", "a\nb"] {
+            assert_eq!(login_env_set_script(&["OK", bad]), None, "{bad:?}");
+            assert_eq!(
+                env_set_in_shell("/bin/sh", &[bad], Duration::from_secs(1)),
+                None
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_is_none_when_the_shell_hangs_or_answers_oddly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("env_set_odd");
+        let hang = dir.join("hang-zsh");
+        std::fs::write(&hang, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        assert_eq!(
+            env_set_in_shell(hang.to_str().unwrap(), &["A"], Duration::from_millis(300)),
+            None
+        );
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        let odd = dir.join("odd-zsh");
+        std::fs::write(&odd, "#!/bin/sh\nprintf 'CS_ENV_BEGIN>>1x<<CS_ENV_END'\n").unwrap();
+        std::fs::set_permissions(&odd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            env_set_in_shell(odd.to_str().unwrap(), &["A", "B"], Duration::from_secs(5)),
+            None
+        );
     }
 
     #[test]

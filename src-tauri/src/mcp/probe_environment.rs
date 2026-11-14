@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: MIT
 //! `probe_environment`: a read-only look at this Mac for the setup guide.
 //!
-//! It answers which agent CLIs, git and `gh` are installed, whether `gh` is signed in
-//! (account and scopes), whether a folder is a git repository, and whether named
-//! environment variables are set. It never returns a secret: an environment variable is
-//! reported as a bool, `gh auth status` is run without `--show-token` and only its account
-//! and scope lines are read, and the `gh` token file is never opened.
+//! It answers which agent CLIs, git and `gh` are installed, whether `gh` is signed in to
+//! github.com (account and scopes), whether a folder is a git repository, and whether
+//! named environment variables are set in the user's login shell. It never returns a
+//! secret: the login shell runs a fixed script that prints only `0` or `1` per variable,
+//! `gh auth status` is run without `--show-token` and only its account and scope lines are
+//! read, and the `gh` token file is never opened.
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Component, Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rmcp::schemars::JsonSchema;
@@ -22,26 +24,38 @@ use crate::commands::deps::{DependencyManager, DependencyStatus};
 /// How many environment variable names one call may ask about.
 pub const MAX_ENV_NAMES: usize = 32;
 const MAX_ENV_NAME_LEN: usize = 128;
-const GH_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest `gitRepoPath` accepted, in bytes.
+const MAX_REPO_PATH_LEN: usize = 1024;
+/// The limit for each child the probe runs (`gh auth status`, the login shell).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How much of each `gh` output stream is kept; the rest is read and dropped.
+const MAX_OUTPUT: usize = 64 * 1024;
+/// Home folders macOS guards with a privacy prompt; `/Volumes` (removable and network
+/// drives) is guarded too. A stat inside one can raise the prompt against CodeSense.
+const PRIVACY_HOME_DIRS: [&str; 3] = ["Documents", "Desktop", "Downloads"];
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeEnvironmentParams {
-    /// An absolute folder path to test for being a git repository (it holds `.git`).
+    /// An absolute folder path to test for being a git repository (it holds `.git`). At
+    /// most 1024 bytes, with no `..`; a folder under ~/Documents, ~/Desktop, ~/Downloads or
+    /// /Volumes is refused unless it is inside a folder already attached as a source repo.
     #[serde(default)]
     pub git_repo_path: Option<String>,
-    /// Environment variable names to test (at most 32). Each is reported as set or not; a
-    /// value is never returned.
+    /// Environment variable names to test in the login shell (at most 32). Each is
+    /// reported as set or not; a value is never read back.
     #[serde(default)]
     pub env_names: Vec<String>,
 }
 
-/// Run `gh auth status` and read it into `{signedIn, account, scopes}`; used by the tool.
+/// Run `gh auth status --hostname github.com` and read it into
+/// `{signed_in, account, scopes}`; used by the tool.
 pub fn probe_gh_auth(gh: Option<&str>, timeout: Duration) -> Value {
     let Some(gh) = gh else {
         return json!({"signed_in": false, "account": null, "scopes": [], "reason": "gh_missing"});
     };
-    match run_with_timeout(Path::new(gh), &["auth", "status"], timeout) {
+    let args = ["auth", "status", "--hostname", "github.com"];
+    match run_with_timeout(Path::new(gh), &args, timeout) {
         Some((success, output)) => parse_gh_auth(success, &output),
         None => json!({"signed_in": false, "account": null, "scopes": [], "reason": "gh_failed"}),
     }
@@ -68,8 +82,10 @@ pub fn parse_gh_auth(success: bool, output: &str) -> Value {
             // A host heading such as `github.com` starts a new block.
             on_github = line == "github.com";
         }
-        if on_github && line.contains("Token scopes:") && scopes.is_empty() {
-            scopes = quoted_scopes(line);
+        if on_github && scopes.is_empty() {
+            if let Some(list) = line.split_once("Token scopes:").map(|(_, list)| list) {
+                scopes = token_scopes(list);
+            }
         }
     }
     let signed_in = success && !failed && account.is_some();
@@ -98,53 +114,86 @@ fn account_in(line: &str) -> Option<String> {
     .then(|| name.to_string())
 }
 
-fn quoted_scopes(line: &str) -> Vec<String> {
-    line.split('\'')
-        .skip(1)
-        .step_by(2)
-        .filter(|s| {
-            !s.is_empty()
-                && s.len() <= 64
-                && s.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-' | '.'))
+/// The scopes in the list after `Token scopes:`, quoted (`'repo', 'read:org'`) or bare
+/// (older gh: `repo, read:org`). A GitHub scope name is lower-case letters, `:` and `_`,
+/// so anything else, a token included, is dropped.
+fn token_scopes(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|item| item.trim().trim_matches('\''))
+        .filter(|scope| {
+            !scope.is_empty()
+                && scope.len() <= 64
+                && *scope != "none"
+                && scope
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || matches!(c, ':' | '_'))
         })
         .map(str::to_string)
         .collect()
 }
 
-/// Spawn `path args` with no input and a hard time limit. `None` when it cannot start or
-/// does not finish; otherwise its success and its stdout and stderr together.
+/// Read up to [`MAX_OUTPUT`] bytes of `stream` on its own thread, then keep reading and
+/// dropping the rest, so a child never blocks on a full pipe.
+fn drain(mut stream: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut kept: Vec<u8> = Default::default();
+        let mut chunk = [0u8; 8192];
+        while let Ok(n @ 1..) = stream.read(&mut chunk) {
+            let room = MAX_OUTPUT.saturating_sub(kept.len()).min(n);
+            kept.extend_from_slice(&chunk[..room]);
+        }
+        let _ = sender.send(kept);
+    });
+    receiver
+}
+
+/// Stop `child` and everything it started: it leads its own process group, so a wrapper
+/// `gh` (a version-manager shim) or a helper it spawned goes too. Always reaps the child.
+fn kill_tree(child: &mut Child) {
+    // The child is not reaped yet, so its pid is still its own group's id.
+    crate::commands::dashboard_launch::kill_process_group(Child::id(child));
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Spawn `path args` with no input and a hard time limit, in its own process group, with
+/// stdout and stderr drained on their own threads. `None` when it cannot start or does
+/// not finish in time; otherwise its success and its stdout and stderr together.
 fn run_with_timeout(path: &Path, args: &[&str], timeout: Duration) -> Option<(bool, String)> {
-    let mut child = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let start = Instant::now();
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                kill_tree(&mut child);
                 return None;
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => return None,
         }
     };
+    // A helper the child left running may still hold a pipe: wait no longer than the limit.
     let mut text: String = Default::default();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.by_ref().take(64 * 1024).read_to_string(&mut text);
-    }
-    if let Some(mut err) = child.stderr.take() {
+    for receiver in [stdout, stderr].into_iter().flatten() {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if let Ok(bytes) = receiver.recv_timeout(wait.max(Duration::from_millis(50))) {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+        }
         text.push('\n');
-        let _ = err.by_ref().take(64 * 1024).read_to_string(&mut text);
     }
     Some((status.success(), text))
 }
@@ -156,14 +205,66 @@ fn valid_env_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Assemble the report from facts already gathered. `env_is_set` answers for one
-/// variable name and returns only whether it is set to a non-empty value.
-pub fn build_report(
-    status: &DependencyStatus,
+/// Whether `path` is `root` or inside it, comparing names without case (APFS ignores it).
+fn is_within(path: &Path, root: &Path) -> bool {
+    let mut parts = path.components();
+    !root.components().any(|want| {
+        !parts.next().is_some_and(|have| {
+            have.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&want.as_os_str().to_string_lossy())
+        })
+    })
+}
+
+/// Whether `path` is in a folder macOS guards with a privacy prompt, and not inside a
+/// folder the user already attached (which they picked, so its prompt is already settled).
+fn is_privacy_guarded(path: &Path, home: Option<&Path>, attached: &[PathBuf]) -> bool {
+    let guarded = is_within(path, Path::new("/Volumes"))
+        || home.is_some_and(|home| {
+            PRIVACY_HOME_DIRS
+                .iter()
+                .any(|dir| is_within(path, &home.join(dir)))
+        });
+    guarded && !attached.iter().any(|folder| is_within(path, folder))
+}
+
+/// Check `gitRepoPath` before anything touches the disk: at most [`MAX_REPO_PATH_LEN`]
+/// bytes, absolute, no `..`, and not in a privacy-guarded folder (see
+/// [`is_privacy_guarded`]). Returns the path with `.` and repeated `/` removed.
+fn checked_repo_path(
+    raw: &str,
+    home: Option<&Path>,
+    attached: &[PathBuf],
+) -> Result<PathBuf, String> {
+    if raw.len() > MAX_REPO_PATH_LEN {
+        return Err(format!("gitRepoPath: at most {MAX_REPO_PATH_LEN} bytes"));
+    }
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err("gitRepoPath: must be an absolute path".to_string());
+    }
+    if path.components().any(|part| part == Component::ParentDir) {
+        return Err("gitRepoPath: must not contain `..`".to_string());
+    }
+    let path: PathBuf = path.components().collect();
+    if is_privacy_guarded(&path, home, attached) {
+        return Err(PRIVACY_REFUSAL.to_string());
+    }
+    Ok(path)
+}
+
+const PRIVACY_REFUSAL: &str = "gitRepoPath: CodeSense does not look inside ~/Documents, \
+     ~/Desktop, ~/Downloads or /Volumes unless the folder is inside one already attached as \
+     a source repo";
+
+/// Check the arguments before anything runs: the variable names, and `gitRepoPath`
+/// (see [`checked_repo_path`]), which is returned.
+pub fn check_params(
     params: &ProbeEnvironmentParams,
-    gh_auth: Value,
-    env_is_set: impl Fn(&str) -> bool,
-) -> Result<Value, String> {
+    home: Option<&Path>,
+    attached: &[PathBuf],
+) -> Result<Option<PathBuf>, String> {
     if params.env_names.len() > MAX_ENV_NAMES {
         return Err(format!("envNames: at most {MAX_ENV_NAMES} names"));
     }
@@ -172,6 +273,48 @@ pub fn build_report(
             "envNames: {bad:?} is not a variable name (letters, digits and _ only)"
         ));
     }
+    params
+        .git_repo_path
+        .as_deref()
+        .map(|raw| checked_repo_path(raw, home, attached))
+        .transpose()
+}
+
+/// `git_repo` for a checked path. The path is resolved (symlinks followed) and checked
+/// again, so a link into a guarded folder is refused too.
+fn git_repo_report(
+    raw: &str,
+    path: &Path,
+    home: Option<&Path>,
+    attached: &[PathBuf],
+) -> Result<Value, String> {
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return Ok(json!({"path": raw, "exists": false, "is_repo": false}));
+    };
+    if is_privacy_guarded(&real, home, attached) {
+        return Err(PRIVACY_REFUSAL.to_string());
+    }
+    let exists = real.is_dir();
+    Ok(json!({
+        "path": raw,
+        "exists": exists,
+        // `.git` is a folder in a clone and a file in a linked worktree.
+        "is_repo": exists && real.join(".git").exists(),
+    }))
+}
+
+/// Assemble the report from facts already gathered. `env_is_set` answers for one
+/// variable name: whether the login shell exports it with a non-empty value, or `None`
+/// when the shell could not be read. `home` and `attached` scope `gitRepoPath`.
+pub fn build_report(
+    status: &DependencyStatus,
+    params: &ProbeEnvironmentParams,
+    home: Option<&Path>,
+    attached: &[PathBuf],
+    gh_auth: Value,
+    env_is_set: impl Fn(&str) -> Option<bool>,
+) -> Result<Value, String> {
+    let repo_path = check_params(params, home, attached)?;
     let clis: BTreeMap<&str, Value> = status
         .agents
         .iter()
@@ -192,21 +335,11 @@ pub fn build_report(
         "gh_version": status.gh.version,
         "gh_auth": gh_auth,
     });
-    if let Some(path) = &params.git_repo_path {
-        let folder = Path::new(path);
-        if !folder.is_absolute() {
-            return Err("gitRepoPath: must be an absolute path".to_string());
-        }
-        let exists = folder.is_dir();
-        report["git_repo"] = json!({
-            "path": path,
-            "exists": exists,
-            // `.git` is a folder in a clone and a file in a linked worktree.
-            "is_repo": exists && folder.join(".git").exists(),
-        });
+    if let (Some(raw), Some(path)) = (&params.git_repo_path, repo_path) {
+        report["git_repo"] = git_repo_report(raw, &path, home, attached)?;
     }
     if !params.env_names.is_empty() {
-        let set: BTreeMap<&str, bool> = params
+        let set: BTreeMap<&str, Option<bool>> = params
             .env_names
             .iter()
             .map(|name| (name.as_str(), env_is_set(name)))
@@ -216,22 +349,74 @@ pub fn build_report(
     Ok(report)
 }
 
-/// The tool: status from the dependency manager, `gh auth status` and the folder and
-/// variable checks, all off the async runtime.
+/// The dependency status, with `gh` re-resolved first when it is not found: the guide
+/// may have just installed it. `re_resolve_gh` is [`DependencyManager::re_resolve_gh`]
+/// outside tests. Blocking.
+fn status_with_fresh_gh(
+    deps: &DependencyManager,
+    re_resolve_gh: impl FnOnce(&DependencyManager),
+) -> DependencyStatus {
+    let status = DependencyManager::status(deps);
+    if status.gh.available {
+        return status;
+    }
+    re_resolve_gh(deps);
+    DependencyManager::status(deps)
+}
+
+/// The folders attached as source repos on this Mac, by any local profile.
+fn attached_folders() -> Vec<PathBuf> {
+    crate::commands::paths::codesense_home_dir()
+        .map(|home| crate::attribution::prefs::all_attached_checkouts(&home))
+        .unwrap_or_default()
+}
+
+/// The tool: the arguments are checked first, then, off the async runtime, the
+/// dependency status (gh re-resolved when missing), `gh auth status` and the login-shell
+/// variable check run side by side, each under [`PROBE_TIMEOUT`].
 pub async fn probe_environment_request(
     app: tauri::AppHandle,
     params: ProbeEnvironmentParams,
 ) -> Result<Value, String> {
     use tauri::Manager;
-    let status = app
-        .try_state::<DependencyManager>()
-        .ok_or_else(|| "the dependency manager is not available".to_string())?
-        .status();
+    let home = dirs::home_dir();
+    let attached = if params.git_repo_path.is_some() {
+        attached_folders()
+    } else {
+        Default::default()
+    };
+    check_params(&params, home.as_deref(), &attached)?;
     crate::commands::await_blocking("mcp.probe_environment", move || {
-        let gh_auth = probe_gh_auth(status.gh.path.as_deref(), GH_AUTH_TIMEOUT);
-        build_report(&status, &params, gh_auth, |name| {
-            std::env::var_os(name).is_some_and(|value| !value.is_empty())
-        })
+        let deps: &DependencyManager = app
+            .try_state::<DependencyManager>()
+            .ok_or_else(|| "the dependency manager is not available".to_string())?
+            .inner();
+        let status = status_with_fresh_gh(deps, DependencyManager::re_resolve_gh);
+        let names: Vec<&str> = params.env_names.iter().map(String::as_str).collect();
+        let (gh_auth, env_set) = std::thread::scope(|scope| {
+            let env_set = (!names.is_empty()).then(|| {
+                scope.spawn(|| crate::commands::deps::login_shell_env_set(&names, PROBE_TIMEOUT))
+            });
+            let gh_auth = probe_gh_auth(status.gh.path.as_deref(), PROBE_TIMEOUT);
+            (
+                gh_auth,
+                env_set.and_then(|handle| handle.join().ok()).flatten(),
+            )
+        });
+        // Each name with the shell's answer; empty when the shell could not be read.
+        let answers: BTreeMap<&str, bool> = names
+            .iter()
+            .copied()
+            .zip(env_set.into_iter().flatten())
+            .collect();
+        build_report(
+            &status,
+            &params,
+            home.as_deref(),
+            &attached,
+            gh_auth,
+            |name| answers.get(name).copied(),
+        )
     })
     .await
 }
@@ -258,8 +443,18 @@ mod tests {
             available: true,
             path: Some("/opt/homebrew/bin/gh".to_string()),
             version: Some("2.50.0".to_string()),
+            resolving: false,
         };
         status
+    }
+
+    /// `build_report` with no home folder, nothing attached and an env lookup.
+    fn report(
+        params: &ProbeEnvironmentParams,
+        gh_auth: Value,
+        env_is_set: impl Fn(&str) -> Option<bool>,
+    ) -> Result<Value, String> {
+        build_report(&status(), params, None, &[], gh_auth, env_is_set)
     }
 
     fn signed_in_output() -> String {
@@ -271,11 +466,10 @@ mod tests {
 
     #[test]
     fn reports_clis_git_and_the_gh_version_without_paths() {
-        let report = build_report(
-            &status(),
+        let report = report(
             &ProbeEnvironmentParams::default(),
             json!({"signed_in": false}),
-            |_| false,
+            |_| Some(false),
         )
         .unwrap();
         assert_eq!(report["clis"]["claude"]["available"], true);
@@ -305,6 +499,7 @@ mod tests {
         let auth = parse_gh_auth(true, out);
         assert_eq!(auth["signed_in"], true);
         assert_eq!(auth["account"], "octocat");
+        assert_eq!(auth["scopes"], json!(["gist", "repo"]));
     }
 
     #[test]
@@ -342,8 +537,27 @@ mod tests {
             "a token-shaped account is refused"
         );
         assert!(!auth.to_string().contains(&token));
-        let scopes = quoted_scopes(&format!("- Token scopes: '{token}extra words', 'repo'"));
+        let scopes = token_scopes(&format!(" '{token}extra words', 'repo'"));
         assert_eq!(scopes, vec!["repo".to_string()]);
+    }
+
+    #[test]
+    fn a_bare_token_in_the_scopes_of_a_valid_account_is_dropped() {
+        let token = token();
+        for out in [
+            format!("github.com\n  ✓ Logged in to github.com account octocat (keyring)\n  - Token scopes: '{token}', 'repo'\n"),
+            format!("github.com\n  ✓ Logged in to github.com as octocat (oauth_token)\n  ✓ Token scopes: {token}, repo\n"),
+        ] {
+            let auth = parse_gh_auth(true, &out);
+            assert_eq!(auth["signed_in"], true);
+            assert_eq!(auth["scopes"], json!(["repo"]));
+            assert!(!auth.to_string().contains(&token));
+        }
+        // Scope names are lower-case letters, `:` and `_` only.
+        assert_eq!(
+            token_scopes(" 'Repo', 'admin:org', 'x1', 'workflow', 'none'"),
+            vec!["admin:org".to_string(), "workflow".to_string()]
+        );
     }
 
     #[test]
@@ -356,8 +570,8 @@ mod tests {
             env_names: vec!["GH_TOKEN".into(), "EMPTY_ONE".into(), "NOT_THERE".into()],
         };
         let gh_auth = parse_gh_auth(true, &signed_in_output());
-        let report = build_report(&status(), &params, gh_auth, |name| {
-            env.get(name).is_some_and(|v| !v.is_empty())
+        let report = report(&params, gh_auth, |name| {
+            Some(env.get(name).is_some_and(|v| !v.is_empty()))
         })
         .unwrap();
         assert_eq!(
@@ -371,6 +585,16 @@ mod tests {
     }
 
     #[test]
+    fn env_set_is_null_when_the_login_shell_could_not_be_read() {
+        let params = ProbeEnvironmentParams {
+            git_repo_path: None,
+            env_names: vec!["GH_TOKEN".into()],
+        };
+        let report = report(&params, json!({}), |_| None).unwrap();
+        assert_eq!(report["env_set"], json!({"GH_TOKEN": null}));
+    }
+
+    #[test]
     fn env_names_are_checked() {
         let long = "A".repeat(129);
         for bad in ["", "1ABC", "A B", "A=B", "A$(x)", "a\nb", long.as_str()] {
@@ -379,7 +603,7 @@ mod tests {
                 env_names: vec![bad.to_string()],
             };
             assert!(
-                build_report(&status(), &params, json!({}), |_| false).is_err(),
+                report(&params, json!({}), |_| Some(false)).is_err(),
                 "{bad:?}"
             );
         }
@@ -387,7 +611,7 @@ mod tests {
             git_repo_path: None,
             env_names: (0..=MAX_ENV_NAMES).map(|i| format!("V{i}")).collect(),
         };
-        assert!(build_report(&status(), &many, json!({}), |_| false).is_err());
+        assert!(report(&many, json!({}), |_| Some(false)).is_err());
     }
 
     #[test]
@@ -405,7 +629,7 @@ mod tests {
                 git_repo_path: Some(p.display().to_string()),
                 env_names: vec![],
             };
-            build_report(&status(), &params, json!({}), |_| false).unwrap()["git_repo"].clone()
+            report(&params, json!({}), |_| Some(false)).unwrap()["git_repo"].clone()
         };
         assert_eq!(probe(&repo)["is_repo"], true);
         assert_eq!(probe(&linked)["is_repo"], true);
@@ -420,7 +644,102 @@ mod tests {
             git_repo_path: Some("relative/repo".into()),
             env_names: vec![],
         };
-        assert!(build_report(&status(), &relative, json!({}), |_| false).is_err());
+        assert!(report(&relative, json!({}), |_| Some(false)).is_err());
+    }
+
+    #[test]
+    fn git_repo_path_is_capped_and_refuses_parent_steps() {
+        let probe = |path: String| ProbeEnvironmentParams {
+            git_repo_path: Some(path),
+            env_names: vec![],
+        };
+        let long = format!("/{}", "a".repeat(MAX_REPO_PATH_LEN));
+        assert!(report(&probe(long), json!({}), |_| None).is_err());
+        assert!(report(&probe("/tmp/../etc".into()), json!({}), |_| None).is_err());
+        let ok = report(
+            &probe("/nonexistent-probe-dir/./x".into()),
+            json!({}),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(ok["git_repo"]["exists"], false);
+    }
+
+    #[test]
+    fn privacy_guarded_folders_are_refused_unless_attached() {
+        let home = Path::new("/home/user");
+        let attached = [home.join("Documents/code/app")];
+        let check = |raw: &str| checked_repo_path(raw, Some(home), &attached);
+        for refused in [
+            "/home/user/Documents",
+            "/home/user/Documents/other",
+            "/home/user/documents/other",
+            "/home/user/Desktop/x",
+            "/home/user/Downloads/x",
+            "/Volumes/USB/repo",
+            "/Volumes",
+        ] {
+            let error = check(refused).unwrap_err();
+            assert!(error.contains("does not look inside"), "{refused}: {error}");
+        }
+        for allowed in [
+            "/home/user/Documents/code/app",
+            "/home/user/Documents/code/app/sub",
+            "/home/user/src/app",
+            "/home/user/DocumentsArchive",
+            "/tmp/x",
+        ] {
+            assert!(check(allowed).is_ok(), "{allowed}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_a_guarded_folder_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        let guarded = home.join("Documents").join("repo");
+        std::fs::create_dir_all(guarded.join(".git")).unwrap();
+        let link = home.join("link");
+        std::os::unix::fs::symlink(&guarded, &link).unwrap();
+        let params = ProbeEnvironmentParams {
+            git_repo_path: Some(link.display().to_string()),
+            env_names: vec![],
+        };
+        let refused = build_report(
+            &status(),
+            &params,
+            Some(home.as_path()),
+            &[],
+            json!({}),
+            |_| None,
+        );
+        assert!(refused.is_err());
+        let attached = [guarded.clone()];
+        let allowed = build_report(
+            &status(),
+            &params,
+            Some(home.as_path()),
+            &attached,
+            json!({}),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(allowed["git_repo"]["is_repo"], true);
+    }
+
+    #[test]
+    fn a_missing_gh_is_resolved_again_before_the_probe() {
+        let deps = DependencyManager::cached_for_test(&[("claude", Some("2.1.150"))]);
+        let status = status_with_fresh_gh(&deps, |deps| {
+            deps.set_gh_for_test("/opt/homebrew/bin/gh", "2.60.0")
+        });
+        assert!(status.gh.available);
+        assert_eq!(status.gh.version.as_deref(), Some("2.60.0"));
+
+        // A gh that is already found is not resolved again.
+        let again = status_with_fresh_gh(&deps, |_| panic!("re-resolved a found gh"));
+        assert_eq!(again.gh.version.as_deref(), Some("2.60.0"));
     }
 
     #[cfg(unix)]
@@ -440,7 +759,7 @@ mod tests {
         let gh = fake_gh(
             dir.path(),
             &format!(
-                "[ \"$1 $2 $#\" = \"auth status 2\" ] || exit 9\necho 'github.com'\necho '  ✓ Logged in to github.com account octocat (keyring)'\necho '  - Token: {oauth}'\necho \"  - Token scopes: 'repo'\" >&2"
+                "[ \"$*\" = \"auth status --hostname github.com\" ] || exit 9\necho 'github.com'\necho '  ✓ Logged in to github.com account octocat (keyring)'\necho '  - Token: {oauth}'\necho \"  - Token scopes: 'repo'\" >&2"
             ),
         );
         let auth = probe_gh_auth(gh.to_str(), Duration::from_secs(5));
@@ -460,6 +779,46 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(10));
         assert_eq!(auth["signed_in"], false);
         assert_eq!(auth["reason"], "gh_failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_gh_with_more_output_than_a_pipe_holds_still_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = fake_gh(
+            dir.path(),
+            "head -c 300000 /dev/zero | tr '\\0' x\necho\necho '  ✓ Logged in to github.com account octocat (keyring)' >&2\nhead -c 300000 /dev/zero | tr '\\0' y >&2",
+        );
+        let auth = probe_gh_auth(gh.to_str(), Duration::from_secs(5));
+        assert_eq!(auth["signed_in"], true, "{auth}");
+        assert_eq!(auth["account"], "octocat");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_gh_that_hangs_is_stopped_with_what_it_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let gh = fake_gh(
+            dir.path(),
+            &format!("sleep 30 &\necho $! > '{}'\nsleep 30", pid_file.display()),
+        );
+        let auth = probe_gh_auth(gh.to_str(), Duration::from_millis(500));
+        assert_eq!(auth["reason"], "gh_failed");
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only asks whether the process still exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the helper gh started outlived it"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]
