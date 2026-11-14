@@ -44,7 +44,10 @@ describe("openCodesenseSetup", () => {
 
   it("a resume carries the #resume route so a fresh launch says resume", () => {
     openCodesenseSetup({ resume: true });
-    expect(useViewerStore.getState().fileHashRequests[KEY]).toEqual({ path: SETUP, hash: "#resume" });
+    expect(useViewerStore.getState().fileHashRequests[KEY]).toEqual({
+      path: SETUP,
+      hash: "#resume",
+    });
   });
 
   it("a landing keeps a full-screen CLI on; a person's open leaves it", () => {

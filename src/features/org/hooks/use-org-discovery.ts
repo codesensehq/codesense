@@ -5,12 +5,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { discoverLocalOrgs } from "@/shared/api/org";
-import { ensureCodesenseDocs, ensureSampleRepo, type CodesenseDocsResult } from "@/tauri/commands";
+import { ensureCodesenseDocs, ensureSampleRepo } from "@/tauri/commands";
 import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
-import {
-  afterPersistedSelectionRestored,
-  openCodesenseSetup,
-} from "../lib/codesense-docs-landing";
+import { afterPersistedSelectionRestored, openCodesenseSetup } from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -87,9 +84,8 @@ export function useOrgDiscovery() {
         logger.info("boot", "org discovery: start");
         // SW-OC-16: every install has the CodeSense docs context repo. Place and connect
         // it before discovery so it is always one of the context repos found.
-        let docs: CodesenseDocsResult | null = null;
         try {
-          docs = await promiseWithTimeout(ensureCodesenseDocs(), DOCS_PLACEMENT_TIMEOUT_MS, () => {
+          await promiseWithTimeout(ensureCodesenseDocs(), DOCS_PLACEMENT_TIMEOUT_MS, () => {
             logger.warn("boot", "org discovery: CodeSense docs placement watchdog fired");
             return null;
           });

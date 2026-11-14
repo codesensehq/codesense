@@ -5,6 +5,7 @@ import {
   Bot,
   ChevronsUpDown,
   Keyboard,
+  MessageSquare,
   LayoutDashboard,
   Monitor,
   NotebookPen,
@@ -51,6 +52,7 @@ import {
   useMissingContextRepos,
 } from "@/features/org/components/missing-context-repos";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
+import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { useRoutinesStore, watchRoutineCounts } from "@/features/routines/stores/routines-store";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
@@ -448,6 +450,18 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
         </MenuLeadIcon>
         <span>Private</span>
         <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">Only you see it</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-testid="identity-menu-setup"
+        onClick={go(() => openCodesenseSetup({ resume: true }))}
+        className={MENU_ITEM}
+      >
+        <MenuLeadIcon>
+          <MessageSquare size={15} strokeWidth={1.75} />
+        </MenuLeadIcon>
+        <span>Set up CodeSense</span>
       </button>
       <button
         type="button"

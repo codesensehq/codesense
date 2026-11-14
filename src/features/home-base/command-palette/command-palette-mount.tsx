@@ -50,6 +50,7 @@ import { openManageTeams } from "@/features/shell/manage-teams-virtual-tab";
 import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
+import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
@@ -321,6 +322,7 @@ export function CommandPaletteMount() {
       openShortcuts: () => openAppSettings("shortcuts"),
       openRoutines: () => openRoutines(),
       openAgents: () => openAgents(),
+      openSetup: () => openCodesenseSetup({ resume: true }),
       openScratchSpace: () => openScratchSpace(),
       addMachine: () => openMachinesPanel({ mode: "add" }),
     };
