@@ -404,14 +404,20 @@ pub(crate) fn session_list_rows_with_tabs(
             };
             let subagents = tab.as_ref().map_or(0, |tab| tab.subagents);
             let (name, machine, machine_id, workspace_handle, workspace, tab_agent) = match tab {
-                Some(tab) => (
-                    tab.name,
-                    Some(tab.machine),
-                    tab.machine_id,
-                    tab.workspace_handle,
-                    tab.workspace,
-                    tab.agent,
-                ),
+                Some(tab) => {
+                    // A tab's tag names the agent only on a remote machine, where the launch
+                    // registry is not this host's; here a session without a launch revision
+                    // (one started by hand in a tagged tab) has no saved agent.
+                    let remote = tab.machine != super::terminal_tabs::THIS_MAC;
+                    (
+                        tab.name,
+                        Some(tab.machine),
+                        tab.machine_id,
+                        tab.workspace_handle,
+                        tab.workspace,
+                        tab.agent.filter(|_| remote),
+                    )
+                }
                 None => (None, None, None, None, None, None),
             };
             SessionListRow {
@@ -625,6 +631,34 @@ mod tests {
             Some("acme/api/backend/barb")
         );
         assert_eq!(agent_of(None), None);
+    }
+
+    #[test]
+    fn a_hand_started_session_on_this_mac_has_no_agent_from_its_tab_tag() {
+        let state = crate::commands::dashboard_launch::DashboardLaunchState::new(1);
+        state
+            .begin_with_provenance("SW-1#barb", None, Default::default())
+            .unwrap();
+        state.bind("SW-1#barb", "sess-1", Some("mcp")).unwrap();
+        let row = crate::commands::dashboard_launch::session_row(state.snapshot().remove(0), true);
+        let tab = TabView {
+            name: None,
+            machine_id: None,
+            workspace_handle: None,
+            machine: crate::mcp::terminal_tabs::THIS_MAC.into(),
+            workspace: None,
+            session: Some("sess-1".into()),
+            alive: Some(true),
+            activity: Some(SessionState::Idle),
+            activity_failed: false,
+            subagents: 0,
+            agent: Some("acme/api/backend/barb".into()),
+        };
+        // The tab was tagged by a saved-agent launch, but this session recorded no launch
+        // revision: only a remote tab's tag may name its agent.
+        let listed =
+            session_list_rows_with_tabs(vec![row], |_| None, None, |_| Some(tab.clone())).remove(0);
+        assert_eq!(listed.agent, None);
     }
 
     #[test]
