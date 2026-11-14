@@ -9,10 +9,11 @@
 //! read, and the `gh` token file is never opened.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use rmcp::schemars::JsonSchema;
@@ -30,16 +31,31 @@ const MAX_REPO_PATH_LEN: usize = 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How much of each `gh` output stream is kept; the rest is read and dropped.
 const MAX_OUTPUT: usize = 64 * 1024;
-/// Home folders macOS guards with a privacy prompt; `/Volumes` (removable and network
-/// drives) is guarded too. A stat inside one can raise the prompt against CodeSense.
-const PRIVACY_HOME_DIRS: [&str; 3] = ["Documents", "Desktop", "Downloads"];
+/// Home folders macOS guards with a privacy prompt, the File Provider and iCloud Drive
+/// roots included; `/Volumes` (removable and network drives) is guarded too. A stat inside
+/// one can raise the prompt against CodeSense.
+const PRIVACY_HOME_DIRS: [&str; 5] = [
+    "Documents",
+    "Desktop",
+    "Downloads",
+    "Library/CloudStorage",
+    "Library/Mobile Documents",
+];
+/// The data volume's firmlink root: `/System/Volumes/Data/Users/...` is `/Users/...`.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
+/// The most links followed while resolving `gitRepoPath`, the kernel's own limit.
+const MAX_LINK_HOPS: usize = 40;
+/// How long an answer from `gh auth status` or the login shell is reused for the same
+/// question, so repeated calls don't each start a child.
+const ANSWER_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeEnvironmentParams {
     /// An absolute folder path to test for being a git repository (it holds `.git`). At
-    /// most 1024 bytes, with no `..`; a folder under ~/Documents, ~/Desktop, ~/Downloads or
-    /// /Volumes is refused unless it is inside a folder already attached as a source repo.
+    /// most 1024 bytes, with no `..`; a folder under ~/Documents, ~/Desktop, ~/Downloads,
+    /// the cloud storage folders in ~/Library or /Volumes is refused unless it is inside a
+    /// folder already attached as a source repo.
     #[serde(default)]
     pub git_repo_path: Option<String>,
     /// Environment variable names to test in the login shell (at most 32). Each is
@@ -217,9 +233,21 @@ fn is_within(path: &Path, root: &Path) -> bool {
     })
 }
 
+/// `path` with a leading `/System/Volumes/Data` read as `/`, the path that firmlink names.
+fn without_data_volume(path: &Path) -> PathBuf {
+    if is_within(path, Path::new(DATA_VOLUME)) {
+        let skipped = Path::new(DATA_VOLUME).components().count();
+        Path::new("/").join(path.components().skip(skipped).collect::<PathBuf>())
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Whether `path` is in a folder macOS guards with a privacy prompt, and not inside a
 /// folder the user already attached (which they picked, so its prompt is already settled).
 fn is_privacy_guarded(path: &Path, home: Option<&Path>, attached: &[PathBuf]) -> bool {
+    let path = without_data_volume(path);
+    let path = path.as_path();
     let guarded = is_within(path, Path::new("/Volumes"))
         || home.is_some_and(|home| {
             PRIVACY_HOME_DIRS
@@ -231,7 +259,8 @@ fn is_privacy_guarded(path: &Path, home: Option<&Path>, attached: &[PathBuf]) ->
 
 /// Check `gitRepoPath` before anything touches the disk: at most [`MAX_REPO_PATH_LEN`]
 /// bytes, absolute, no `..`, and not in a privacy-guarded folder (see
-/// [`is_privacy_guarded`]). Returns the path with `.` and repeated `/` removed.
+/// [`is_privacy_guarded`]). Returns the path with `.` and repeated `/` removed, and the
+/// data volume's firmlink spelling read as the path it names.
 fn checked_repo_path(
     raw: &str,
     home: Option<&Path>,
@@ -247,7 +276,7 @@ fn checked_repo_path(
     if path.components().any(|part| part == Component::ParentDir) {
         return Err("gitRepoPath: must not contain `..`".to_string());
     }
-    let path: PathBuf = path.components().collect();
+    let path = without_data_volume(&path.components().collect::<PathBuf>());
     if is_privacy_guarded(&path, home, attached) {
         return Err(PRIVACY_REFUSAL.to_string());
     }
@@ -255,8 +284,79 @@ fn checked_repo_path(
 }
 
 const PRIVACY_REFUSAL: &str = "gitRepoPath: CodeSense does not look inside ~/Documents, \
-     ~/Desktop, ~/Downloads or /Volumes unless the folder is inside one already attached as \
-     a source repo";
+     ~/Desktop, ~/Downloads, the cloud storage folders in ~/Library or /Volumes unless the \
+     folder is inside one already attached as a source repo";
+
+/// One step left to resolve: a name, or `..` from a link target.
+enum Step {
+    Name(OsString),
+    Up,
+}
+
+/// Queue `path`'s components so the first comes off the end next.
+fn push_steps(steps: &mut Vec<Step>, path: &Path) {
+    for part in path.components().rev() {
+        match part {
+            Component::Normal(name) => steps.push(Step::Name(name.to_os_string())),
+            Component::ParentDir => steps.push(Step::Up),
+            Component::RootDir | Component::CurDir | Component::Prefix(_) => {}
+        }
+    }
+}
+
+/// Resolve `path` one component at a time without following anything unchecked: each
+/// path is checked before it is looked at, and a link is read with `read_link` and its
+/// target walked the same way. A step may pass through a guarded folder only on the way to
+/// an attached folder inside it; the result must not be guarded. `Ok(None)` when a
+/// component is missing or the links loop.
+fn resolve_checked(
+    path: &Path,
+    home: Option<&Path>,
+    attached: &[PathBuf],
+) -> Result<Option<PathBuf>, String> {
+    let mut steps: Vec<Step> = Default::default();
+    push_steps(&mut steps, path);
+    let mut resolved = PathBuf::from("/");
+    let mut hops = 0;
+    while let Some(step) = steps.pop() {
+        let name = match step {
+            Step::Up => {
+                resolved.pop();
+                continue;
+            }
+            Step::Name(name) => name,
+        };
+        let candidate = resolved.join(name);
+        let on_the_way = attached
+            .iter()
+            .any(|folder| is_within(folder, &without_data_volume(&candidate)));
+        if !on_the_way && is_privacy_guarded(&candidate, home, attached) {
+            return Err(PRIVACY_REFUSAL.to_string());
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
+            return Ok(None);
+        };
+        if !meta.file_type().is_symlink() {
+            resolved = candidate;
+            continue;
+        }
+        hops += 1;
+        let Ok(target) = std::fs::read_link(&candidate) else {
+            return Ok(None);
+        };
+        if hops > MAX_LINK_HOPS {
+            return Ok(None);
+        }
+        if target.is_absolute() {
+            resolved = PathBuf::from("/");
+        }
+        push_steps(&mut steps, &target);
+    }
+    if is_privacy_guarded(&resolved, home, attached) {
+        return Err(PRIVACY_REFUSAL.to_string());
+    }
+    Ok(Some(resolved))
+}
 
 /// Check the arguments before anything runs: the variable names, and `gitRepoPath`
 /// (see [`checked_repo_path`]), which is returned.
@@ -280,26 +380,24 @@ pub fn check_params(
         .transpose()
 }
 
-/// `git_repo` for a checked path. The path is resolved (symlinks followed) and checked
-/// again, so a link into a guarded folder is refused too.
+/// `git_repo` for a checked path, resolved by [`resolve_checked`] so a link into a guarded
+/// folder is refused before anything in that folder is looked at.
 fn git_repo_report(
     raw: &str,
     path: &Path,
     home: Option<&Path>,
     attached: &[PathBuf],
 ) -> Result<Value, String> {
-    let Ok(real) = std::fs::canonicalize(path) else {
+    let Some(real) = resolve_checked(path, home, attached)? else {
         return Ok(json!({"path": raw, "exists": false, "is_repo": false}));
     };
-    if is_privacy_guarded(&real, home, attached) {
-        return Err(PRIVACY_REFUSAL.to_string());
-    }
     let exists = real.is_dir();
     Ok(json!({
         "path": raw,
         "exists": exists,
-        // `.git` is a folder in a clone and a file in a linked worktree.
-        "is_repo": exists && real.join(".git").exists(),
+        // `.git` is a folder in a clone and a file in a linked worktree; a link there is
+        // counted without being followed.
+        "is_repo": exists && std::fs::symlink_metadata(real.join(".git")).is_ok(),
     }))
 }
 
@@ -364,6 +462,34 @@ fn status_with_fresh_gh(
     DependencyManager::status(deps)
 }
 
+/// The answer for `key` from `answers` when one is younger than `ttl`, else `run`'s, kept
+/// for the next caller. The lock is held while `run` runs, so concurrent callers wait for
+/// one answer rather than each starting a child.
+fn recent_or_run<K: PartialEq, V: Clone>(
+    answers: &Mutex<Vec<(K, Instant, V)>>,
+    ttl: Duration,
+    key: K,
+    run: impl FnOnce() -> V,
+) -> V {
+    let mut answers = answers.lock().unwrap_or_else(|e| e.into_inner());
+    answers.retain(|(_, at, _)| at.elapsed() < ttl);
+    if let Some((_, _, answer)) = answers.iter().find(|(asked, _, _)| *asked == key) {
+        return answer.clone();
+    }
+    let answer = run();
+    answers.push((key, Instant::now(), answer.clone()));
+    answer
+}
+
+/// Recent `gh auth status` answers, by the `gh` path asked.
+static GH_AUTH_ANSWERS: LazyLock<Mutex<Vec<(Option<String>, Instant, Value)>>> =
+    LazyLock::new(Default::default);
+/// The login shell's answer: one bool per name asked, `None` when it could not be read.
+type EnvAnswer = Option<Vec<bool>>;
+/// Recent login-shell answers, by the variable names asked.
+static ENV_SET_ANSWERS: LazyLock<Mutex<Vec<(Vec<String>, Instant, EnvAnswer)>>> =
+    LazyLock::new(Default::default);
+
 /// The folders attached as source repos on this Mac, by any local profile.
 fn attached_folders() -> Vec<PathBuf> {
     crate::commands::paths::codesense_home_dir()
@@ -373,7 +499,8 @@ fn attached_folders() -> Vec<PathBuf> {
 
 /// The tool: the arguments are checked first, then, off the async runtime, the
 /// dependency status (gh re-resolved when missing), `gh auth status` and the login-shell
-/// variable check run side by side, each under [`PROBE_TIMEOUT`].
+/// variable check run side by side, each under [`PROBE_TIMEOUT`]. An answer to the same
+/// question within [`ANSWER_TTL`] is reused.
 pub async fn probe_environment_request(
     app: tauri::AppHandle,
     params: ProbeEnvironmentParams,
@@ -395,9 +522,17 @@ pub async fn probe_environment_request(
         let names: Vec<&str> = params.env_names.iter().map(String::as_str).collect();
         let (gh_auth, env_set) = std::thread::scope(|scope| {
             let env_set = (!names.is_empty()).then(|| {
-                scope.spawn(|| crate::commands::deps::login_shell_env_set(&names, PROBE_TIMEOUT))
+                scope.spawn(|| {
+                    let key = params.env_names.clone();
+                    recent_or_run(&*ENV_SET_ANSWERS, ANSWER_TTL, key, || {
+                        crate::commands::deps::login_shell_env_set(&names, PROBE_TIMEOUT)
+                    })
+                })
             });
-            let gh_auth = probe_gh_auth(status.gh.path.as_deref(), PROBE_TIMEOUT);
+            let gh_path = status.gh.path.clone();
+            let gh_auth = recent_or_run(&*GH_AUTH_ANSWERS, ANSWER_TTL, gh_path, || {
+                probe_gh_auth(status.gh.path.as_deref(), PROBE_TIMEOUT)
+            });
             (
                 gh_auth,
                 env_set.and_then(|handle| handle.join().ok()).flatten(),
@@ -678,6 +813,11 @@ mod tests {
             "/home/user/Downloads/x",
             "/Volumes/USB/repo",
             "/Volumes",
+            "/home/user/Library/CloudStorage/Drive-user/repo",
+            "/home/user/Library/Mobile Documents/com~apple~CloudDocs/repo",
+            "/System/Volumes/Data/home/user/Documents/other",
+            "/system/volumes/data/home/user/Desktop",
+            "/System/Volumes/Data/Volumes/USB/repo",
         ] {
             let error = check(refused).unwrap_err();
             assert!(error.contains("does not look inside"), "{refused}: {error}");
@@ -687,10 +827,108 @@ mod tests {
             "/home/user/Documents/code/app/sub",
             "/home/user/src/app",
             "/home/user/DocumentsArchive",
+            "/home/user/Library/Caches/x",
             "/tmp/x",
         ] {
             assert!(check(allowed).is_ok(), "{allowed}");
         }
+        // The data volume's firmlink spelling is read as the path it names.
+        assert_eq!(
+            check("/System/Volumes/Data/home/user/src/app"),
+            Ok(PathBuf::from("/home/user/src/app"))
+        );
+        assert!(check("/System/Volumes/Data/home/user/Documents/code/app").is_ok());
+    }
+
+    /// Each link is read and its target checked before anything at that target is looked
+    /// at, so a link into a guarded folder is refused even where the target is missing (a
+    /// lookup there would have answered "missing" after touching the folder).
+    #[cfg(unix)]
+    #[test]
+    fn every_link_hop_is_checked_before_it_is_followed() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(home.join("Documents")).unwrap();
+        std::fs::create_dir_all(home.join("code")).unwrap();
+        std::fs::create_dir_all(home.join("real/app/.git")).unwrap();
+        // Absolute, relative and two-hop links into the guarded folder, at missing targets.
+        symlink(home.join("Documents/missing/deeper"), home.join("code/abs")).unwrap();
+        symlink("../Documents/missing", home.join("code/rel")).unwrap();
+        symlink(home.join("code/abs"), home.join("code/hop")).unwrap();
+        symlink(home.join("code/rel/x"), home.join("code/through")).unwrap();
+        // A link outside any guarded folder is followed as before.
+        symlink("../real/app", home.join("code/app")).unwrap();
+        symlink(home.join("code/loop"), home.join("code/loop")).unwrap();
+        let probe = |path: PathBuf| {
+            let params = ProbeEnvironmentParams {
+                git_repo_path: Some(path.display().to_string()),
+                env_names: vec![],
+            };
+            build_report(
+                &status(),
+                &params,
+                Some(home.as_path()),
+                &[],
+                json!({}),
+                |_| None,
+            )
+        };
+        for link in ["abs", "rel", "hop", "through"] {
+            let error = probe(home.join("code").join(link)).unwrap_err();
+            assert!(error.contains("does not look inside"), "{link}: {error}");
+        }
+        let app = probe(home.join("code/app")).unwrap();
+        assert_eq!(app["git_repo"]["is_repo"], true);
+        assert_eq!(
+            probe(home.join("code/loop")).unwrap()["git_repo"]["exists"],
+            false
+        );
+    }
+
+    /// A `.git` link is counted as present without being followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_git_link_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = home.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(home.join("Documents/secret/.git"), repo.join(".git")).unwrap();
+        let params = ProbeEnvironmentParams {
+            git_repo_path: Some(repo.display().to_string()),
+            env_names: vec![],
+        };
+        let report = build_report(
+            &status(),
+            &params,
+            Some(home.as_path()),
+            &[],
+            json!({}),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(report["git_repo"]["is_repo"], true);
+    }
+
+    #[test]
+    fn a_recent_answer_is_reused_and_one_run_serves_concurrent_callers() {
+        let answers: Mutex<Vec<(&str, Instant, u32)>> = Default::default();
+        let runs = std::sync::atomic::AtomicU32::new(0);
+        let run = || {
+            std::thread::sleep(Duration::from_millis(100));
+            runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+        };
+        let ttl = Duration::from_secs(60);
+        let (a, b) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| recent_or_run(&answers, ttl, "k", run));
+            let b = scope.spawn(|| recent_or_run(&answers, ttl, "k", run));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_eq!((a, b), (1, 1));
+        assert_eq!(recent_or_run(&answers, ttl, "other", run), 2);
+        assert_eq!(recent_or_run(&answers, Duration::ZERO, "k", run), 3);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[cfg(unix)]
