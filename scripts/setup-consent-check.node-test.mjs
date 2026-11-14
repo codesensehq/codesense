@@ -271,9 +271,47 @@ test("each rule on send_role_message has its own failing fixture", () => {
     "handback-twice-failing": `turn 12: ${bad} a second hand-back (the first was at turn 11)`,
     "handback-after-done-failing": `turn 12: ${bad} sent after signal_done`,
     "handback-before-act-failing": "turn 11: add_source_repo came after the hand-back at turn 10",
+    "handback-write-after-failing": "turn 12: records_create came after the hand-back at turn 11",
   };
   for (const [name, error] of Object.entries(cases))
     assert.deepEqual(checkConsent(load(name)).errors, [error], name);
+});
+
+test("the hand-back's role is read as the server reads it: one role: prefix is stripped", () => {
+  const send = (role) =>
+    call(`${P}send_role_message`, {
+      role,
+      team: { org: "codesense/docs", team: "getting-started" },
+      text: "Setup done: ok",
+    });
+  for (const role of ["role:codesense-foreman", " role:codesense-foreman ", "codesense-foreman"])
+    assert.deepEqual(checkConsent(session([send(role)])).errors, [], role);
+  for (const role of ["role:other", "role:role:codesense-foreman", "role:", undefined])
+    assert.equal(checkConsent(session([send(role)])).errors.length, 1, String(role));
+});
+
+test("after the hand-back or signal_done nothing acts, but reads may follow", () => {
+  const hand = call(`${P}send_role_message`, {
+    role: "codesense-foreman",
+    team: { org: "codesense/docs", team: "getting-started" },
+    text: "Setup done: ok",
+  });
+  const done = call(`${P}signal_done`, { outcome: "success" });
+  for (const name of ["open_workspace", "records_create", "records_set_fields", "create_team"]) {
+    assert.equal(
+      checkConsent(session([hand], [call(`${P}${name}`)])).errors[0],
+      `turn 1: ${name} came after the hand-back at turn 0`,
+    );
+    assert.match(
+      checkConsent(session([done], [call(`${P}${name}`)])).errors[0],
+      /came after signal_done/,
+    );
+  }
+  assert.deepEqual(
+    checkConsent(session([hand], [call(`${P}read_messages`)], [call(`${P}records_read`)], [done]))
+      .errors,
+    [],
+  );
 });
 
 test("a send_role_message with no hand-back shape fails, under every tool name form", () => {
@@ -355,6 +393,7 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "handback-twice-failing",
     "handback-after-done-failing",
     "handback-before-act-failing",
+    "handback-write-after-failing",
   ]) {
     const text = readFileSync(fixture(name), "utf8");
     assert.ok(!/\/(?:Users|home)\/(?!user\b)/.test(text), name);

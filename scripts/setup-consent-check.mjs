@@ -25,7 +25,8 @@
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
 // already allowed.
 // `send_role_message` is bound too: it is allowed only as the Foreman hand-back (`HANDBACK`),
-// once, after the last setup act and before `signal_done`.
+// once, after the last setup act and before `signal_done`. Nothing that acts (a setup verb, a
+// ledger write, `open_workspace`) may follow the hand-back or `signal_done`; reads may.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,10 +43,28 @@ export const HANDBACK = Object.freeze({
   prefix: "Setup done:",
 });
 
+// What may not follow the hand-back or `signal_done`: the setup verbs and these other writes.
+const WRITES_AFTER_HANDBACK = [
+  "records_create",
+  "records_set_fields",
+  "records_write",
+  "records_delete",
+  "open_workspace",
+];
+
+// The server's `role_name` strips one leading `role:` and trims, so both spellings name one queue.
+const roleName = (role) =>
+  typeof role === "string"
+    ? role
+        .trim()
+        .replace(/^role:/, "")
+        .trim()
+    : role;
+
 /** The reasons a `send_role_message` is not the Foreman hand-back. */
 function handbackFaults(input) {
   const faults = [];
-  if (input.role !== HANDBACK.role)
+  if (roleName(input.role) !== HANDBACK.role)
     faults.push(`role is ${JSON.stringify(input.role)}, not ${HANDBACK.role}`);
   if (input.team?.org !== HANDBACK.org || input.team?.team !== HANDBACK.team)
     faults.push(`team is not ${HANDBACK.org} / ${HANDBACK.team}`);
@@ -193,11 +212,13 @@ export function checkConsent(
         handback ??= index;
       } else if (name === "signal_done") {
         done = true;
-      } else if (setupVerbs.includes(name)) {
-        calls += 1;
+      } else if (setupVerbs.includes(name) || WRITES_AFTER_HANDBACK.includes(name)) {
+        const setup = setupVerbs.includes(name);
+        if (setup) calls += 1;
         if (handback !== undefined)
           errors.push(`turn ${index}: ${name} came after the hand-back at turn ${handback}`);
-        if (!allowed.includes(name))
+        else if (done) errors.push(`turn ${index}: ${name} came after signal_done`);
+        if (setup && !allowed.includes(name))
           errors.push(`turn ${index}: ${name} was called with no consent click for it: ${why}`);
       }
     }
