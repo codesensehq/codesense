@@ -75,6 +75,8 @@ pub mod role_state;
 // tier-2 windows paused. Pure classifier + guard over the existing seams — no new
 // store/verb/command.
 pub mod postures;
+// The pin list of an agent thread (saved agent + story), shared by its overlay and full view.
+pub mod pins;
 pub mod preflight;
 pub mod queue;
 pub mod reactions;

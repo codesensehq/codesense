@@ -1279,6 +1279,8 @@ pub fn run() {
             commands::agent_inbox::list_inbox_messages,
             commands::agent_inbox::reply_as_human,
             commands::agent_inbox::react_as_human,
+            commands::agent_inbox::pins::agent_pins,
+            commands::agent_inbox::pins::agent_pins_prepare_view,
             commands::agent_inbox::inbox_reply_recipient,
             commands::agent_inbox::mark_inbox_message_read,
             commands::agent_inbox::mark_inbox_messages_read,

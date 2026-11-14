@@ -408,9 +408,24 @@ export function agentTeamSessions(search: string): AgentSessionRow[] {
   return [
     ...agentTeamRows(params.get("manager") !== "none"),
     ...(isAgentTeamsWorld(search) ? secondTeamRows() : []),
+    // `headless=1` adds a headless run: it has no tab, so it must offer no chat.
+    ...(params.get("headless") === "1" ? [headlessRow()] : []),
   ].map((r) =>
     ended && (r.handle === ended || r.handle.endsWith(`#${ended}`)) ? { ...r, alive: false } : r,
   );
+}
+
+/** A headless run in the login lead's workspace: running, but with no tab to hold a chat. */
+export const HEADLESS_HANDLE = "BUG-142#nightly";
+
+function headlessRow(): AgentSessionRow {
+  return row(HEADLESS_HANDLE, "sess-login-headless", 5, {
+    displayName: "Nightly sweep",
+    kind: "headless",
+    agentRevision: "builtin/claude@13",
+    launchedBy: "BUG-142#lead",
+    story: "BUG-142",
+  });
 }
 
 function agentTeamRows(withManager: boolean): AgentSessionRow[] {
@@ -862,6 +877,54 @@ export function agentTeamInboxHandlers(
     }));
   return {
     agent_read_sessions: () => sessionRows(),
+    // The login lead's thread has pinned its status message as a live preview, and a test
+    // run that stopped answering; every other thread has none.
+    agent_pins: (args: Record<string, unknown>) => {
+      const team = (args.team ?? {}) as { org?: string; team?: string };
+      const lead = args.agentId === "builtin/claude" && args.storyId === "BUG-142";
+      return {
+        status: "pins",
+        org: team.org ?? "",
+        team: team.team ?? "",
+        agentId: String(args.agentId ?? ""),
+        storyId: String(args.storyId ?? ""),
+        pins: lead
+          ? [
+              {
+                messageId: 4,
+                position: 0,
+                pinnedBy: "BUG-142#lead",
+                pinnedAtMs: at(8),
+                preview: {
+                  shortName: "Review",
+                  value: "0H 0M 0L",
+                  status: "on-track",
+                  chart: {
+                    kind: "segments",
+                    segments: ["on-track", "on-track"],
+                    label: "2 rounds",
+                  },
+                  lines: ["R2 clean", "Merge card next"],
+                },
+                previewAtMs: at(8),
+              },
+              {
+                messageId: 9,
+                position: 1,
+                pinnedBy: "BUG-142#lead",
+                pinnedAtMs: at(30),
+                preview: {
+                  shortName: "Tests",
+                  value: "48",
+                  unit: "passed",
+                  status: "not-updating",
+                },
+                previewAtMs: at(30),
+              },
+            ]
+          : [],
+      };
+    },
     get_human_status: () => humanStatus,
     set_human_status: (args: Record<string, unknown>) => {
       // The real command's enum refuses anything else at deserialization.
@@ -894,7 +957,8 @@ export function agentTeamInboxHandlers(
     },
     // One session's conversation: everything it sent or received, and its role queue's mail.
     list_session_inbox: (args: Record<string, unknown>) => {
-      const handle = String(args.handle ?? "");
+      // A handle or a tab session id, as the real read takes either.
+      const handle = addressOf(String(args.handle ?? ""));
       const role = sessions.find((s) => s.handle === handle)?.role ?? null;
       const roles = role && ROLE_INBOXES.has(role) ? [role] : [];
       return {
