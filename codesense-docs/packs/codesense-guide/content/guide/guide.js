@@ -242,6 +242,11 @@
     Boolean(row) && row.state !== 'exited' && row.effectiveStatus !== 'crashed' && row.needsYouKind !== 'startup';
   const newest = (rows) =>
     [...rows].sort((a, b) => (b.startedAtMs || b.createdAtMs || 0) - (a.startedAtMs || a.createdAtMs || 0))[0] || null;
+  // The guide's own face: its newest session's avatar, which the roster keeps after the session exits.
+  const guideFace = () => {
+    const row = newest(S.reads ? S.reads.latestSessions().filter(isGuide) : []);
+    return { name: COPY.lead, face: (row && row.avatar) || null };
+  };
   const guideTarget = () => ({
     rows: (sessions) => (Array.isArray(sessions) ? sessions : []).filter(isGuide),
     pick: (rows) => newest(rows.filter(joinable)),
@@ -615,6 +620,7 @@
       },
       headerSlot: { slot: $('ctl'), render: paintHeader },
       cards: { consent: true },
+      faces: guideFace,
       next: { edit: true },
       activity: true,
       copy: COPY,
