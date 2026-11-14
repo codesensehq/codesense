@@ -303,6 +303,7 @@ export const META = {
   notes_search: { arc: "L", write: false },
   notes_write: { arc: "L", write: true },
   probe_environment: { arc: "L", write: false },
+  pack_validate: { arc: "L", write: false },
   read_epic_repos: { arc: "L", write: false },
   rename_team: { arc: "L", write: true },
   save_source_repo_attachment: { arc: "L", write: true },

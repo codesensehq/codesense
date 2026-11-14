@@ -60,7 +60,7 @@ import type { SelectTabOptions } from "./terminal-tab-bar";
 import { TileNeedsYouSlot } from "./tile-needs-you-slot";
 import { TerminalGridCaption } from "./terminal-grid-caption";
 import { StoryHud } from "./story-hud";
-import { InboxSplit, useInboxTabCleanup } from "@/features/inbox/components/inbox-split";
+import { InboxSplit } from "@/features/inbox/components/inbox-split";
 import { SourceDiffOverlay } from "./source-diff-overlay";
 import { WorktreeEditorSurface } from "./source-editor-inset";
 import { foregroundTilesFor, isSplitActive, epicForegroundTiles } from "../lib/foreground-tiles";
@@ -847,10 +847,6 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
   const focusTile = useFocusTile(teamKey, ws.id);
   const tileKey = focusTileKey(teamKey, ws.id);
   const focusIndicator = useTileFocusIndicator(tileKey);
-
-  // Each tab's inbox docks inside its own pane (see `renderPane`); the tile only
-  // forgets a closed tab's remembered inbox width and lens.
-  useInboxTabCleanup(tabs);
 
   // A press on the chrome selects the tile; one that isn't on a control also
   // moves keyboard focus into the tile's terminal, so the focus line (which

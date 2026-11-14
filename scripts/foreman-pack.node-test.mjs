@@ -60,10 +60,15 @@ const FORBIDDEN = [
 ];
 const mcp = (name) => `mcp__codesense__${name}`;
 
-// The same estimate the budget uses elsewhere: four bytes a token.
-const tokens = (s) => Math.ceil(Buffer.byteLength(s) / 4);
+// Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
+// system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
+// 2.69 bytes a token. Four bytes a token undercounted by a third.
+const BYTES_PER_TOKEN = 2.65;
+const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
+// 2k until the setup rules (offer, resume, hand-back) went in; flagged in that PR.
+const ROOT_CAP = 2200;
 
-test("the root prompt is the spec, under 1.5k tokens, passed as the agent's system prompt", () => {
+test("the root prompt is the spec, under 2.2k tokens, passed as the agent's system prompt", () => {
   const at = agent.args.indexOf("--append-system-prompt");
   assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(
@@ -71,7 +76,7 @@ test("the root prompt is the spec, under 1.5k tokens, passed as the agent's syst
     spec,
     "copy foreman.md into agent.yaml's --append-system-prompt",
   );
-  assert.ok(tokens(spec) <= 1500, `${tokens(spec)} tokens`);
+  assert.ok(tokens(spec) <= ROOT_CAP, `${tokens(spec)} tokens`);
   // A startup file would be the team's own CLAUDE.md, never this pack's.
   assert.ok(!agent.startup?.length, "no startup file");
   assert.ok(!existsSync(new URL("agents/foreman-claude/CLAUDE.md", pack)));
@@ -147,9 +152,10 @@ test("edits are denied in the home worktree and allowed in a foreman-* worktree,
   }
 });
 
-// Claude's Bash rules: `prefix:*` is a literal prefix (its other `*` stays literal);
-// otherwise any `*` matches any run of characters, spaces included, and one trailing ` *`
-// may match nothing; otherwise the rule is exact.
+// Claude's Bash rules, as a live `claude -p` probe (Claude Code 2.1.296, dontAsk, 2026-11-13)
+// showed them: `prefix:*` is a literal prefix (its other `*` stays literal); otherwise any `*`
+// matches any run of characters, spaces included, but a trailing ` *` needs one more word;
+// otherwise the rule is exact.
 function bashMatches(rule, command) {
   const m = /^Bash\((.*)\)$/.exec(rule);
   if (!m) return false;
@@ -159,14 +165,66 @@ function bashMatches(rule, command) {
   if (prefix) return cmd === prefix[1] || cmd.startsWith(`${prefix[1]} `);
   if (!body.includes("*")) return cmd === body;
   const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  const optionalTail = body.endsWith(" *");
-  const core = optionalTail ? body.slice(0, -2) : body;
-  const re = core.split("*").map(escape).join(".*") + (optionalTail ? "( .*)?" : "");
+  const re = body.split("*").map(escape).join(".*");
   return new RegExp(`^${re}$`, "s").test(cmd);
 }
-const runs = (command) =>
-  allow.some((rule) => bashMatches(rule, command)) &&
-  !deny.some((rule) => bashMatches(rule, command));
+
+// Claude splits a command on unquoted `&&`, `||`, `;`, `|` and `&` and checks each part on
+// its own. A substitution or redirection is never allowed by a rule. A `cd` runs only into a
+// working directory: home, or one the saved agent adds with `--add-dir` (relative to home).
+const HOME = "/work/acme/home";
+const workDirs = () => {
+  const dirs = [HOME];
+  agent.args.forEach(
+    (a, i) => a === "--add-dir" && dirs.push(path.resolve(HOME, agent.args[i + 1])),
+  );
+  return dirs;
+};
+function parts(command) {
+  const out = [""];
+  let quote = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const c = command[i];
+    // A backslash keeps the next character, outside quotes and inside double quotes.
+    if (c === "\\" && quote !== "'") {
+      out[out.length - 1] += c + (command[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (quote === '"' && (c === "`" || (c === "$" && command[i + 1] === "("))) return null;
+      out[out.length - 1] += c;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "`" || c === ">" || c === "<" || (c === "$" && command[i + 1] === "("))
+      return null;
+    else if (c === ";" || c === "|" || c === "&" || c === "\n") {
+      if (command[i + 1] === c) i += 1;
+      out.push("");
+      continue;
+    }
+    out[out.length - 1] += c;
+  }
+  return quote ? null : out.map((p) => p.trim());
+}
+const partRuns = (part) => {
+  const cd = /^cd (\S+)$/.exec(part);
+  // A quoted, `~`, `$` or `-` path is not resolved here, so it is not a working directory.
+  if (cd && /["'~$`\\]|^-$/.test(cd[1])) return false;
+  if (cd) {
+    const to = path.resolve(HOME, cd[1]);
+    return workDirs().some((d) => to === d || to.startsWith(`${d}/`));
+  }
+  return (
+    allow.some((rule) => bashMatches(rule, part)) && !deny.some((rule) => bashMatches(rule, part))
+  );
+};
+const runs = (command) => {
+  const list = parts(command);
+  return list !== null && list.every((p) => p && partRuns(p));
+};
 
 test("no Bash rule ends in :*, which Claude reads as a literal prefix", () => {
   for (const rule of [...allow, ...deny].filter((r) => r.startsWith("Bash("))) {
@@ -182,6 +240,7 @@ test("git and gh run only in the home update, foreman-* worktrees and foreman/* 
     "git fetch origin",
     "git merge --ff-only origin/main",
     "git worktree list",
+    "git remote",
     `git worktree add -b ${branch} ${wt} origin/main`,
     "git worktree add -b foreman/a.b-1f2e ../foreman-a.b-1f2e main",
     `git -C ${wt} status`,
@@ -223,6 +282,9 @@ test("git and gh run only in the home update, foreman-* worktrees and foreman/* 
     `git -C ${wt} commit -s -F ${wt}.msg --author=x`,
     `git -C ${wt} commit -s -m "x"`,
     // Home, other worktrees, fetch and merge forms.
+    "git remote add evil git@example.test:x/y.git",
+    "git remote set-url origin /tmp/x",
+    "git remote -v",
     "git merge --ff-only foreman/x",
     "git merge --ff-only main",
     "git fetch --upload-pack=/tmp/x origin",
@@ -285,7 +347,7 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
     "120k context",
     "You never relaunch yourself",
     "You set no timers",
-    "I don't set timers; I can create a routine for you to approve in its dashboard.",
+    "I don't set timers.",
     "never launch a story lead or a specialist",
     "never answer a needs-you card for the person",
     "no lead for that sprint is live on any machine",
@@ -295,7 +357,7 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
   }
 });
 
-test("pack.yml lists the agent and leaves the spec hash to the pack build", () => {
+test("pack.yml lists the agent and leaves the spec hash null", () => {
   const manifest = parse(text("pack.yml"));
   assert.equal(manifest.id, "codesense-foreman");
   assert.deepEqual(
@@ -303,4 +365,249 @@ test("pack.yml lists the agent and leaves the spec hash to the pack build", () =
     ["foreman-claude"],
   );
   assert.equal(manifest.spec_hash["foreman-claude"], null);
+});
+
+// ---- the behaviours -----------------------------------------------------------
+
+test("a reminder gets the no-timers answer and no offer of a routine the Foreman can't create", () => {
+  assert.ok(!/create a routine/i.test(spec), "no routine offer while routine_create is denied");
+  assert.ok(deny.includes(mcp("routine_create")));
+});
+
+test("the spec says what the Foreman may run, and to stop when a command is refused", () => {
+  for (const phrase of [
+    "You may run only these forms",
+    "anything else is refused",
+    "say so and stop",
+    "never look for a spelling that passes",
+    "`git remote`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  assert.ok(
+    !spec.includes("These exact forms"),
+    "the envelope is described as it is, not as exact",
+  );
+  assert.ok(allow.includes("Bash(git remote)"));
+});
+
+test("stories: confirm in one card, then a foreman-* worktree and a PR, or the no-remote exception", () => {
+  for (const phrase of [
+    "Make a story for",
+    "docs team",
+    "stories live in a team",
+    "offer setup",
+    "Create · Change · Not now",
+    "`git remote`",
+    "`git worktree list`",
+    "`story-create`",
+    "`stories/next-id.sh`",
+    "`get_story_format`",
+    "`validate_story`",
+    "`sprint: backlog`",
+    "`planning`",
+    "gh pr create",
+    "With no remote",
+    "one command to merge",
+    "never touch the canonical clone",
+    "Home gets no commit",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+});
+
+test("setup: offer once, launch the guide on a yes, resume, and take it back with a Set up: line", () => {
+  for (const phrase of [
+    "Set me up",
+    "list_orgs_teams",
+    "list_source_repos",
+    "offer setup once",
+    "Set up now · Not now",
+    "`setup-ledger`",
+    'agent:"guide-claude"',
+    'initial_prompt:"/codesense-setup"',
+    'mode:"visible-unfocused"',
+    "`/codesense-setup resume`",
+    "`Setup done:`",
+    "`claim_role_messages`",
+    "`ack_role_message`",
+    "`Set up:`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  // The Foreman makes no setup call itself; it hands over.
+  assert.ok(spec.includes("make no setup call"), "it only hands over");
+});
+
+test("setup: the offer guard, the Not now ledger write, the reuse search and the stopped read", () => {
+  const setup = spec.split("## Setup")[1].split("\n## ")[0];
+  for (const phrase of [
+    // The guard: an unanswered offer card in the inbox, or a skipped ledger row.
+    "unless `inbox_list` holds an unanswered one",
+    "`records_list`",
+    "`step: foreman-offer, state: skipped`",
+    // Not now is the one ledger write.
+    "Not now writes that row (`records_create`)",
+    // Reuse: a live guide any Foreman launched (this one or one before a relaunch), before any launch.
+    "Reuse a live `guide-*` session any `foreman-*` session launched (`list_sessions`), else `open_workspace",
+    // Resume: only a started, unfinished setup, with the thread's latest Guide handoff.
+    "started, not done: `/codesense-setup resume` plus the latest `Guide handoff:` text",
+    // Stopped: no hand-back, so the next wake reads the ledger and offers Resume.
+    "Setup ended with none: at your next wake read the ledger, say where it stopped and offer Resume",
+  ]) {
+    assert.ok(setup.includes(phrase), `the setup rules say: ${phrase}`);
+  }
+  assert.ok(
+    setup.indexOf("Reuse a live") < setup.indexOf("open_workspace"),
+    "reuse is looked for before the launch",
+  );
+});
+
+test("sprint leads: look for a live one on any machine, then launch the team's sprint agent from its config", () => {
+  for (const phrase of [
+    "Start sprint <n>",
+    "`list_sessions`",
+    "Sprint <n>",
+    "launched_by:<your handle>",
+    'target:"team-workspace"',
+    'role:"sprint-lead"',
+    "/sprint-lead <n>",
+    "`story-view.yml`",
+    "`agent_list`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  // The agent comes from the team's config, never from a name written into the spec.
+  assert.ok(!/sprint-(manager|lead-claude)/.test(spec), "no sprint agent is named in the spec");
+});
+
+test("status: at most 8 lines from three named reads, no story files", () => {
+  for (const phrase of [
+    "What's going on",
+    "8 lines",
+    "`codesense_overview`",
+    "`list_sessions`",
+    '`inbox_list {kind:"needs-you", limit:50}`',
+    "what waits on the person",
+    "what runs",
+    "what failed",
+    "Read no story files",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+});
+
+test("waiting: the chat surface's open needs-you cards only, and its view as a dependency", () => {
+  for (const phrase of [
+    "What's waiting on me",
+    "needs-you rule",
+    "open cards only",
+    `inbox_list {kind:"needs-you", limit:50}`,
+    "story id",
+    "The person answers on the page",
+    "needs-you view",
+    "never a copy",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  // A copy of the rule would be the Foreman filtering the list itself.
+  assert.ok(
+    !/answered|resolved|dismissed/i.test(spec.split("## Waiting")[1]?.split("\n## ")[0] ?? ""),
+    "the rule decides open, not the spec",
+  );
+});
+
+test("the handoff names the worktrees, children, cards and last request in at most 12 lines", () => {
+  const handoff = spec.split("## Handoff")[1].split("\n## ")[0];
+  for (const phrase of [
+    "`Foreman handoff:`",
+    "12 lines",
+    "`foreman-*` worktrees",
+    "unanswered cards",
+    "live children",
+    "handles",
+    "last request",
+    "`signal_done`",
+  ]) {
+    assert.ok(handoff.includes(phrase), `the handoff says: ${phrase}`);
+  }
+});
+
+test("a team's story-create scripts run inside a foreman-* worktree", () => {
+  const wt = "../foreman-dark-mode-ab12";
+  // The parent is a working directory, so `cd` into a sibling worktree runs.
+  const at = agent.args.indexOf("--add-dir");
+  assert.ok(at >= 0 && agent.args[at + 1] === "..", "the saved agent adds home's parent");
+  // What the skill invokes: the id script, then the story script, in the worktree.
+  for (const command of [
+    `cd ${wt} && sh stories/next-id.sh`,
+    `cd ${wt} && sh stories/next-id.sh ACME`,
+    `cd ${wt} && sh stories/new-story.sh ACME-7 "Add dark mode to the settings page"`,
+    `cd ${wt} && sh stories/new-story.sh ACME-7 "Search & filter <beta>"`,
+  ]) {
+    assert.ok(runs(command), `runs: ${command}`);
+  }
+  for (const command of [
+    // Outside the working directories, another interpreter or another place.
+    `cd /tmp && sh stories/next-id.sh ACME`,
+    `cd ${wt} && sh /tmp/x.sh`,
+    `cd ${wt} && bash stories/new-story.sh ACME-7`,
+    `cd ${wt} && sh scripts/x.sh`,
+    `cd ${wt} && sh stories/x.sh2`,
+    // Anything chained, piped, redirected or substituted needs its own rule.
+    `cd ${wt} && sh stories/next-id.sh ACME; rm -rf ../base`,
+    `cd ${wt} && sh stories/next-id.sh ACME && curl example.test`,
+    `cd ${wt} && sh stories/next-id.sh ACME | sh`,
+    `cd ${wt} && sh stories/next-id.sh ACME > ../base/CLAUDE.md`,
+    `cd ${wt} && sh stories/next-id.sh $(cat ../base/x)`,
+    `cd ${wt} && sh stories/next-id.sh "$(cat ../base/x)"`,
+    `cd ${wt} && sh stories/next-id.sh \`id\``,
+  ]) {
+    assert.ok(!runs(command), `refused: ${command}`);
+  }
+  assert.ok(
+    spec.includes("cd ../<wt> && sh stories/<script>.sh <args>"),
+    "the spec names the form",
+  );
+});
+
+test("the spec's worktree, sprint-lead, story-script and handoff forms read literally", () => {
+  for (const phrase of [
+    "`../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
+    "launched by you for sprint <n>",
+    "Commit and push what the skill didn't",
+    "`reply` once with `Foreman handoff:`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  assert.ok(!spec.includes("`../foreman-<slug>"), "<wt> is a name, not a path");
+});
+
+test("the command splitter treats newlines, escapes, open quotes and unresolved cd paths as Claude would", () => {
+  const wt = "../foreman-dark-mode-ab12";
+  for (const command of [
+    `cd ${wt} && sh stories/next-id.sh ACME\nrm -rf ~`,
+    `cd ${wt} && sh stories/new-story.sh \\"; rm -rf ~; echo \\"`,
+    `cd ${wt} && sh stories/new-story.sh "open`,
+    "cd ~ && sh stories/next-id.sh",
+    "cd $HOME && sh stories/next-id.sh",
+    'cd "/tmp" && sh stories/next-id.sh',
+  ]) {
+    assert.ok(!runs(command), `refused: ${JSON.stringify(command)}`);
+  }
+});
+
+test("the Foreman can list remote foreman branches before it names a new one", () => {
+  for (const command of [
+    "git ls-remote --heads origin",
+    "git ls-remote --heads origin foreman/dark-mode-*",
+  ]) {
+    assert.ok(runs(command), `runs: ${command}`);
+  }
+  assert.ok(spec.includes("`git ls-remote --heads origin`"), "the spec names the read");
+});
+
+test("the size estimate never undercounts the measured root prompt", () => {
+  // claude -p on Opus 5.5 (2026-11-13): 5,347 bytes of foreman.md were 1,986 tokens.
+  assert.ok(Math.ceil(5347 / BYTES_PER_TOKEN) >= 1986, `${BYTES_PER_TOKEN} bytes a token`);
 });

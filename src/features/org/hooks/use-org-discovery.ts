@@ -7,10 +7,8 @@ import { toast } from "sonner";
 import { discoverLocalOrgs } from "@/shared/api/org";
 import { ensureCodesenseDocs, ensureSampleRepo, type CodesenseDocsResult } from "@/tauri/commands";
 import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
-import {
-  afterPersistedSelectionRestored,
-  openCodesenseDocsReadme,
-} from "../lib/codesense-docs-landing";
+import { openStartLanding } from "@/features/foreman/open-foreman";
+import { afterPersistedSelectionRestored } from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -173,22 +171,23 @@ export function useOrgDiscovery() {
         const lastOpenedBeforeRefresh = previous.activeOrgSlug;
         setOrgs(loadedOrgs);
         // Later launches reopen the last opened context repo (and, through the per-repo
-        // memory, its last team). Only the very first launch, proven by a restored session
-        // with no last-opened repo, lands in the CodeSense docs with its README open.
+        // memory, its last team); the very first launch, proven by a restored session with
+        // no last-opened repo, picks the CodeSense docs. Then `openStartLanding` opens the
+        // Foreman or the README in the docs, once per app start.
         stopDeciding = afterPersistedSelectionRestored(() => {
           if (cancelled) return;
           // The last-opened repo, whether the restore landed before `setOrgs` (which drops
           // a selection that is no longer connected) or after it.
           const restored = useOrgStore.getState().activeOrgSlug ?? lastOpenedBeforeRefresh;
-          const launch = pickLaunchOrg({
+          const launchSlug = pickLaunchOrg({
             orgs: loadedOrgs,
             activeOrgSlug: restored,
             newlyConnected: newlyAttached?.slug,
           });
-          if (launch.slug && launch.slug !== useOrgStore.getState().activeOrgSlug) {
-            setActiveOrg(launch.slug);
+          if (launchSlug && launchSlug !== useOrgStore.getState().activeOrgSlug) {
+            setActiveOrg(launchSlug);
           }
-          if (launch.firstLaunch && docs) openCodesenseDocsReadme(docs.readme_path);
+          if (docs) openStartLanding(docs.readme_path);
         });
       } catch (error) {
         reportTransient(error);

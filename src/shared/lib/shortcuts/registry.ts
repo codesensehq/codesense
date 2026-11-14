@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
-  closeAgentInboxRail,
+  closeAgentInboxRailToTerminal,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
@@ -168,17 +168,17 @@ function resolvePaneNav(
 }
 
 /**
- * Close a tab's docked inbox. When focus is inside it (⌘I pressed in the composer), it goes
- * to that tab's terminal first, rather than falling to the page body as the rail unmounts.
+ * Close a tab's chat overlay. When focus is inside it (⌘I pressed in the composer), it goes
+ * to that tab's terminal first, rather than falling to the page body as the overlay unmounts.
  */
 function closeInboxRailKeepingFocus(sessionId: string): void {
   const active = typeof document === "undefined" ? null : document.activeElement;
-  const rail = active?.closest<HTMLElement>('[data-testid="inbox-rail"]');
-  if (rail && rail.dataset.sessionId === sessionId) {
-    const pane = rail.closest("[data-pane-id], [data-pane-active]");
-    pane?.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus();
-  }
-  closeAgentInboxRail(sessionId);
+  const overlay = active?.closest<HTMLElement>('[data-testid="chat-overlay"]');
+  const pane =
+    overlay && overlay.dataset.sessionId === sessionId
+      ? overlay.closest("[data-pane-id], [data-pane-active]")
+      : null;
+  closeAgentInboxRailToTerminal(sessionId, pane);
 }
 
 export interface ShortcutAction {

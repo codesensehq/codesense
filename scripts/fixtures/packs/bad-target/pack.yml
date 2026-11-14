@@ -1,0 +1,9 @@
+pack_format: 1
+id: bad-target
+name: bad-target
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+license: MIT
+parts:
+  - { id: s, kind: skill, source: s.md, targets: [vim] }

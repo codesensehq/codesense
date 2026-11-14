@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
+# Not now is recorded in the private setup-ledger and nothing launches.
+id: setup-not-now
+kind: setup
+fixture:
+  story_team: docs
+input:
+  turns:
+    - "hi"
+    - "Not now"
+# Script: the cards, the launch, the ledger and the hand-back calls. Never the wording.
+expected:
+  offer_cards: 1
+  ledger_write: true
+  launches: 0
+  forbidden_tools:
+    - create_team
+    - delete_team
+    - archive_team
+    - add_source_repo
+    - remove_source_repo
+    - attach_source_repo_path
+    - attach_context_repository
+    - detach_context_repository
+    - create_local_organization
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: accepts-not-now
+    ask: "The reply to Not now accepts it and does not launch or push setup."
+grader: script

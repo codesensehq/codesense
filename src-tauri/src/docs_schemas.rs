@@ -14,6 +14,8 @@ const SOURCES: &[&str] = &[
     "src-tauri/src/routines/model.rs",
     "src-tauri/src/context_query/model.rs",
     "src-tauri/src/queue_roles.rs",
+    "src-tauri/src/packs/manifest.rs",
+    "src-tauri/src/packs/lock.rs",
     "src-tauri/src/session_usage/spend_caps.rs",
     "src-tauri/src/docs_schemas.rs",
 ];
@@ -109,7 +111,9 @@ fn export_model_schemas() {
         "schemas": {
             "agent-yaml": schema::<crate::agents::model::Agent>(),
             "routine-yml": schema::<crate::routines::model::RoutineDef>(),
-            "role-yaml": schema::<crate::queue_roles::RoleConfig>()
+            "role-yaml": schema::<crate::queue_roles::RoleConfig>(),
+            "pack-yml": schema::<crate::packs::manifest::PackManifest>(),
+            "packs-lock-yml": schema::<crate::packs::lock::PacksLock>()
         }
     });
     let rendered = format!("{}\n", serde_json::to_string_pretty(&fixture).unwrap());
