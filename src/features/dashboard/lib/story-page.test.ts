@@ -6,6 +6,7 @@ import {
   STORY_TYPES,
   storyPageHash,
   storyPagePath,
+  storyTypeOfHtml,
   storyTypeOfMarkdown,
   teamStoryPage,
 } from "./story-page";
@@ -55,5 +56,19 @@ describe("the team's story page", () => {
     expect(storyPageHash("/ctx/acme/web/content/stories/a b.md")).toBe(
       "#story=%2Fctx%2Facme%2Fweb%2Fcontent%2Fstories%2Fa%20b.md",
     );
+  });
+});
+
+describe("storyTypeOfHtml", () => {
+  it("reads the cs:type meta of a story shell", () => {
+    expect(storyTypeOfHtml('<html><head><meta name="cs:type" content="story"></head></html>')).toBe(
+      "story",
+    );
+    expect(storyTypeOfHtml("<meta content='bug' name='cs:type'>")).toBe("bug");
+  });
+
+  it("is null for any other page", () => {
+    expect(storyTypeOfHtml('<meta name="cs:type" content="dashboard">')).toBeNull();
+    expect(storyTypeOfHtml("<h1>Hi</h1>")).toBeNull();
   });
 });

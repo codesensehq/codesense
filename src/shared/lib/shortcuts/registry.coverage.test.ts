@@ -24,7 +24,14 @@ describe("SHORTCUT_ACTIONS", () => {
     expect(binding.keystroke).toBe("CmdOrCtrl+Alt+I");
   });
 
-  it("contains exactly 73 configurable actions", () => {
+  it("View → Dashboard is a team action with no default chord", () => {
+    const action = SHORTCUT_ACTIONS.find((a) => a.id === "viewer.open-story-dashboard")!;
+    expect(action.menuPath).toEqual(["View", "Dashboard"]);
+    expect(action.defaultKeystroke).toBe("");
+    expect(action.scope).toBe("team");
+  });
+
+  it("contains exactly 74 configurable actions", () => {
     // SW-EW-33: 17 − 1 (viewer.toggle-workspace-panel) + 9 (viewer.jump-workspace-1..9)
     // + 1 (viewer.flip-last-workspace) + 1 (viewer.hard-close-workspace)
     // − 1 (nav.switch-workspace retired) + 1 (nav.open-workspace)
@@ -67,7 +74,8 @@ describe("SHORTCUT_ACTIONS", () => {
     // + 1 (viewer.toggle-inbox-rollup — ⌘⇧I, the right-pane Inbox).
     // SV-3: + 2 (nav.context-back / nav.context-forward — ⌘[ / ⌘] over teams and workspaces).
     // SV-PLG-13: + 1 (nav.quick-open — ⌘P file quick-open, so dashboards conflict with it).
-    expect(SHORTCUT_ACTIONS).toHaveLength(73);
+    // View → Dashboard: + 1 (viewer.open-story-dashboard — the focused story's dashboard, unbound).
+    expect(SHORTCUT_ACTIONS).toHaveLength(74);
   });
 
   it("includes viewer.focus-tile-question — Jump to What Needs You (Cmd+Shift+J, team-scoped, conflict-free)", () => {
@@ -425,6 +433,8 @@ describe("SHORTCUT_ACTIONS", () => {
   it("no two actions share a default keystroke", () => {
     const seen = new Map<string, string>();
     for (const action of SHORTCUT_ACTIONS) {
+      // An action with no default chord (a menu-only item) shares nothing.
+      if (action.defaultKeystroke === "") continue;
       const prev = seen.get(action.defaultKeystroke);
       expect(prev, `${action.id} conflicts with ${prev ?? ""}`).toBeUndefined();
       seen.set(action.defaultKeystroke, action.id);
