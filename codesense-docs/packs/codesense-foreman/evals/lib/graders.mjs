@@ -303,27 +303,6 @@ const graders = {
       const labels = JSON.stringify(c.args.options ?? []);
       if (!/Set up now/.test(labels) || !/Not now/.test(labels)) out.push("the offer card's options are not Set up now and Not now");
     }
-    if (mine.length !== e.launches) return [...out, `launched ${mine.length} sessions, expected ${e.launches}`];
-    const [l] = mine;
-    out.push(...launchForm(s, l, e, `guide-${s.config.runtime}`));
-    if (l.mode !== e.mode) out.push(`launched with mode ${l.mode}, expected ${e.mode}`);
-    if (promptOf(l).trim().split(/\s+/)[0] !== e.command) out.push(`the launched session's prompt does not invoke ${e.command}`);
-    return out;
-  },
-
-  // The setup hand-off against the fixture's scripted guide: structure only (cards, the launch, the
-  // ledger, the claim and ack). That a reply starts `Set up:` or names the step is the rubric's.
-  setup(s, e) {
-    const out = forbidden(s, e.forbidden_tools);
-    const mine = launches(s);
-    for (const t of s.turns) if (!repliesIn(s, t.index).length) out.push(`no reply in turn ${t.index}`);
-    // Cards the Foreman raised: a send of kind needs-you.
-    const cards = foremanCalls(s).filter((c) => SENDS.includes(c.tool) && c.args.kind === "needs-you");
-    if (cards.length !== e.offer_cards) out.push(`${cards.length} needs-you cards raised, expected ${e.offer_cards}`);
-    for (const c of cards) {
-      const labels = JSON.stringify(c.args.options ?? []);
-      if (!/Set up now/.test(labels) || !/Not now/.test(labels)) out.push("the offer card's options are not Set up now and Not now");
-    }
     const ledgerWrites = foremanCalls(s, "records_create").filter((c) => c.args.collection === "setup-ledger");
     if (e.ledger_write) {
       const [w] = ledgerWrites;
@@ -331,14 +310,18 @@ const graders = {
       else if (w.args.fields?.step !== "foreman-offer" || w.args.fields?.state !== "skipped") out.push("the ledger row is not step foreman-offer, state skipped");
     } else if (ledgerWrites.length) out.push("wrote the setup-ledger when nothing was declined");
     if (mine.length !== e.launches) return [...out, `launched ${mine.length} sessions, expected ${e.launches}`];
-    for (const l of mine) {
+    const looked = (n) => foremanCalls(s, "list_sessions").some((c) => c.seq < n);
+    if (e.reuses && !looked(Infinity)) out.push("did not look in list_sessions for a live setup session");
+    const launchCalls = foremanCalls(s, "open_workspace");
+    mine.forEach((l, i) => {
+      if (!looked(launchCalls[i]?.seq ?? 0)) out.push("launched without looking in list_sessions for a live setup session");
       out.push(...launchForm(s, l, { target: "team-workspace" }, `guide-${s.config.runtime}`));
       if (l.mode !== "visible-unfocused") out.push(`launched with mode ${l.mode}, expected visible-unfocused`);
       const words = promptOf(l).trim().split(/\s+/);
       const resume = words[1] === "resume";
       const want = e.prompt.split(" ");
       if (words[0] !== want[0] || resume !== (want[1] === "resume")) out.push(`the launch prompt is not ${e.prompt}`);
-    }
+    });
     if (e.guide_first_step && s.guideCards[0]?.step !== e.guide_first_step)
       out.push(`the guide's first card was ${s.guideCards[0]?.step ?? "none"}, expected ${e.guide_first_step}`);
     if (e.hand_back === "claimed") {
@@ -350,6 +333,12 @@ const graders = {
       else if (!claim) out.push("did not claim the hand-back from the role queue");
       else if (!ack) out.push("claimed the hand-back and never acked it");
       else if (s.replies.filter((r) => r.seq > ack.seq).length !== 1) out.push("expected exactly one reply after the hand-back");
+    }
+    if (e.hand_back === "stopped") {
+      const last = s.turns.at(-1)?.index;
+      const read = foremanCalls(s, "records_list").some((c) => c.args.collection === "setup-ledger" && c.turn === last);
+      if (!read) out.push("did not read the setup-ledger when asked how setup is going");
+      if (repliesIn(s, last).length !== 1) out.push(`${repliesIn(s, last).length} replies in the last turn, expected 1`);
     }
     return out;
   },

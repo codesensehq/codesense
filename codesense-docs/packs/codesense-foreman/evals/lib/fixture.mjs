@@ -64,6 +64,19 @@ export const SETUP_STEPS = ["team", "source-repos", "gh"];
 export const HANDBACK_PREFIX = "Setup done:";
 export const HANDBACK_ROLE = "codesense-foreman";
 const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, gh signed in`;
+// A card the Foreman raised and the person has not answered: the offer guard reads it.
+const OFFER_CARD = {
+  id: 4200,
+  story: "setup",
+  kind: "needs-you",
+  from: "foreman",
+  question: "Set up CodeSense now?",
+  options: [
+    { key: "a", label: "Set up now" },
+    { key: "b", label: "Not now" },
+  ],
+  recommended: "a",
+};
 const copyCards = (mixed = false) => JSON.parse(JSON.stringify(mixed ? [ANSWERED_CARD, ...CARDS] : CARDS));
 
 // Dropped from the sandbox env: anything that could reach a real account, and every inherited
@@ -155,10 +168,11 @@ Run both from the story's worktree:
 //   inbox: "mixed": the needs-you list also holds an answered card.
 //   pre_sessions: rows already live before the Foreman starts (real list_sessions fields).
 //   rename_launched: sessions the Foreman launched show a new display name.
+//   offer_card: "pending": an unanswered setup offer card is already in the inbox.
 //   ledger: rows already in the private setup-ledger ({step, state}).
-//   guide: "complete": the scripted guide stub runs when the Foreman launches a guide-* session
-//     with a /codesense-setup prompt.
-const KEYS = ["ledger", "guide", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+//   guide: "complete" or {stop_after: n}: the scripted guide stub runs when the Foreman launches a
+//     guide-* session with a /codesense-setup prompt; it stops after n steps and sends nothing.
+const KEYS = ["offer_card", "ledger", "guide", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -207,7 +221,9 @@ export async function createFixture(options = {}) {
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);
   if (!Array.isArray(options.pre_sessions ?? [])) throw new Error("pre_sessions must be a list");
   if (!Array.isArray(options.ledger ?? [])) throw new Error("ledger must be a list");
-  if (![undefined, "complete"].includes(options.guide)) throw new Error("guide must be complete");
+  if (![undefined, "pending"].includes(options.offer_card)) throw new Error(`unknown offer_card ${options.offer_card}`);
+  const g = options.guide;
+  if (g !== undefined && g !== "complete" && !(Number.isInteger(g?.stop_after) && g.stop_after >= 0)) throw new Error("guide must be complete or {stop_after: n}");
   const opts = {
     failFirstPr: options.fail_first_pr === true,
     storyTeam: options.story_team ?? "generic",
@@ -217,6 +233,7 @@ export async function createFixture(options = {}) {
     mixedInbox: options.inbox === "mixed",
     preSessions: options.pre_sessions ?? [],
     renameLaunched: options.rename_launched === true,
+    offerCard: options.offer_card === "pending",
     ledger: options.ledger ?? [],
     guide: options.guide,
   };
@@ -362,10 +379,13 @@ function build(root, opts) {
     const done = (step) => ledger.some((r) => r.step === step && r.state === "done");
     const todo = SETUP_STEPS.filter((step) => !(resume && done(step)));
     guideCards.push({ session: session.id, step: todo[0] ?? null });
-    for (const step of todo) {
+    const stopAfter = opts.guide === "complete" ? Infinity : opts.guide.stop_after;
+    const doing = todo.slice(0, stopAfter);
+    for (const step of doing) {
       nextCall(session.id, "records_create", { collection: "setup-ledger", fields: { step, state: "done" } });
       ledger.push({ step, state: "done" });
     }
+    if (doing.length < todo.length) return;
     // Launched by another session, the setup skill hands back before it ends.
     const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, text: HANDBACK_TEXT });
     roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, from: session.id, kind: "setup-done", claimed: false });
@@ -409,7 +429,7 @@ function build(root, opts) {
             launchedBy: s.launched_by === "foreman" ? CONFIG.self : (s.launched_by ?? null),
           })),
         };
-      if (tool === "inbox_list") return { cards: copyCards(opts.mixedInbox) };
+      if (tool === "inbox_list") return { cards: [...copyCards(opts.mixedInbox), ...(opts.offerCard ? [{ ...OFFER_CARD }] : [])] };
       if (tool === "records_list" && record.args.collection === "setup-ledger") return { records: ledger.map((r) => ({ ...r })) };
       if (tool === "records_create" && record.args.collection === "setup-ledger") {
         ledger.push({ ...record.args.fields });

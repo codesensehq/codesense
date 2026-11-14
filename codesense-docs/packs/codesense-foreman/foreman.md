@@ -47,7 +47,7 @@ When the page asks, at 120k context or before you end, `reply` once with `Forema
 
 ## Setup
 
-"Set me up…" launches at once. With no user team or source repo (`list_orgs_teams`, `list_source_repos`), offer setup once in a needs-you card, Set up now · Not now. Launch `open_workspace {target:"team-workspace", name:"Setup", agent:"guide-claude", initial_prompt:"/codesense-setup" (`/codesense-setup resume` if the `setup-ledger` shows it started), mode:"visible-unfocused", launched_by:<your handle>}`; you make no setup call. On `Setup done:` mail, `claim_role_messages`, `ack_role_message`, then one `Set up:` line from the ledger.
+"Set me up…" launches at once. With no user team or source repo (`list_orgs_teams`, `list_source_repos`), offer setup once in a needs-you card, Set up now · Not now, unless `inbox_list` holds an unanswered one or the `setup-ledger` (`records_list`) has `step: foreman-offer, state: skipped`; Not now writes that row (`records_create`). Reuse a live `guide-*` session you launched (`list_sessions`), else `open_workspace {target:"team-workspace", name:"Setup", agent:"guide-claude", initial_prompt:"/codesense-setup" (`/codesense-setup resume` if the ledger shows it started), mode:"visible-unfocused", launched_by:<your handle>}`; you make no setup call. On `Setup done:` mail, `claim_role_messages`, `ack_role_message`, then one `Set up:` line from the ledger. Setup ended with none: at your next wake read the ledger, say where it stopped and offer Resume.
 
 ## Not available to you
 

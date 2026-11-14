@@ -82,6 +82,102 @@ test("setup-offer: one card, never two, never a launch", async () => {
   );
 });
 
+test("setup-offer-pending and -skipped: an unanswered card or a skipped ledger row means no new card", async () => {
+  for (const id of ["setup-offer-pending", "setup-offer-skipped"])
+    await red(
+      id,
+      ({ fx, turns }) => (fx.human(turns[0]), fx.tool(F, "reply", card())),
+      /1 needs-you cards raised, expected 0/,
+    );
+});
+
+test("setup-not-now: records exactly one skipped foreman-offer row, and launches nothing", async () => {
+  const offer = (fx, turns) => (
+    fx.human(turns[0]),
+    fx.tool(F, "reply", card()),
+    fx.human(turns[1])
+  );
+  await red(
+    "setup-not-now",
+    ({ fx, turns }) => (offer(fx, turns), fx.say("ok")),
+    /0 setup-ledger writes, expected 1/,
+  );
+  const write = (fields) => (fx) =>
+    fx.tool(F, "records_create", { collection: "setup-ledger", fields });
+  await red(
+    "setup-not-now",
+    ({ fx, turns }) => (
+      offer(fx, turns),
+      write({ step: "foreman-offer", state: "done" })(fx),
+      fx.say("ok")
+    ),
+    /not step foreman-offer, state skipped/,
+  );
+  await red(
+    "setup-not-now",
+    ({ fx, turns }) => {
+      offer(fx, turns);
+      write({ step: "foreman-offer", state: "skipped" })(fx);
+      write({ step: "foreman-offer", state: "skipped" })(fx);
+      fx.say("ok");
+    },
+    /2 setup-ledger writes/,
+  );
+});
+
+test("setup-reuse: a live guide this Foreman launched is reused", async () => {
+  await red(
+    "setup-reuse",
+    ({ fx, turns }) => (
+      fx.human(turns[0]),
+      fx.tool(F, "list_sessions"),
+      fx.tool(F, "open_workspace", LAUNCH),
+      fx.say("Starting.")
+    ),
+    /launched 1 sessions, expected 0/,
+  );
+  await red(
+    "setup-reuse",
+    ({ fx, turns }) => (fx.human(turns[0]), fx.say("Already running.")),
+    /did not look in list_sessions/,
+  );
+});
+
+test("setup-stopped: the ledger is read in the asking turn, and one reply comes", async () => {
+  const first = (fx, turns) => (
+    fx.human(turns[0]),
+    fx.tool(F, "list_sessions"),
+    fx.tool(F, "open_workspace", LAUNCH),
+    fx.say("Starting."),
+    fx.human(turns[1])
+  );
+  await red(
+    "setup-stopped",
+    ({ fx, turns }) => (first(fx, turns), fx.say("Going fine.")),
+    /did not read the setup-ledger/,
+  );
+  await red(
+    "setup-stopped",
+    ({ fx, turns }) => (
+      first(fx, turns),
+      fx.tool(F, "records_list", { collection: "setup-ledger" }),
+      fx.say("a"),
+      fx.say("b")
+    ),
+    /2 replies in the last turn/,
+  );
+  // A stopped guide sends no hand-back.
+  const fx = await fixtureFor(caseOf("setup-stopped"));
+  try {
+    fx.human("x");
+    fx.tool(F, "open_workspace", LAUNCH);
+    assert.deepEqual(fx.state().roleMessages, []);
+    assert.deepEqual(fx.state().ledger, [{ step: "team", state: "done" }]);
+  } finally {
+    fx.teardown();
+  }
+});
+
 test("launch form: the guide, the visible-unfocused mode, the Foreman's own handle and a /codesense-setup prompt", async () => {
   const run =
     (launch) =>
@@ -179,10 +275,15 @@ test("setup-handback: claim, ack, then exactly one reply", async () => {
 });
 
 test("a broken setup fixture is refused", async () => {
-  for (const bad of [{ ledger: "x" }, { guide: "nope" }]) {
+  for (const bad of [
+    { offer_card: "x" },
+    { ledger: "x" },
+    { guide: "nope" },
+    { guide: { stop_after: -1 } },
+  ]) {
     await assert.rejects(
       async () => (await fixtureFor({ fixture: bad })).teardown(),
-      /ledger|guide/,
+      /offer_card|ledger|guide/,
     );
   }
 });

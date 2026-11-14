@@ -107,7 +107,19 @@ const good = {
     for (const turn of turns) {
       fx.human(turn);
       const ledger = fx.tool(F, "records_list", { collection: "setup-ledger" }).records;
-      if (/set me up|resume setup/i.test(turn)) {
+      const skipped = ledger.some((r) => r.step === "foreman-offer" && r.state === "skipped");
+      if (/^not now$/i.test(turn)) {
+        fx.tool(F, "records_create", { collection: "setup-ledger", fields: { step: "foreman-offer", state: "skipped" } });
+        fx.say("No problem. Ask me when you want to set up.");
+      } else if (/how is setup going/i.test(turn)) {
+        const next = SETUP_STEPS.find((step) => !ledger.some((r) => r.step === step && r.state === "done"));
+        fx.say(`Setup stopped at ${next}. Resume?`);
+      } else if (/set me up|resume setup/i.test(turn)) {
+        const live = fx.tool(F, "list_sessions").sessions.some((x) => /^guide-/.test(x.agent ?? "") && x.launchedBy === CONFIG.self);
+        if (live) {
+          fx.say("A setup session is already running; open its tab to carry on.");
+          continue;
+        }
         const started = ledger.some((r) => r.step !== "foreman-offer");
         const complete = SETUP_STEPS.every((step) => ledger.some((r) => r.step === step && r.state === "done"));
         fx.tool(F, "open_workspace", {
@@ -127,9 +139,10 @@ const good = {
           fx.say(`Set up: ${done.join(", ")}.`);
         }
       } else {
+        const pending = fx.tool(F, "inbox_list", { kind: "needs-you", limit: 50 }).cards.some((c) => c.story === "setup" && !c.state);
         const orgs = fx.tool(F, "list_orgs_teams");
         const repos = fx.tool(F, "list_source_repos").repos;
-        if (orgs.length > 1 && repos.length) fx.say("Hi. What can I do for you?");
+        if (pending || skipped || (orgs.length > 1 && repos.length)) fx.say("Hi. What can I do for you?");
         else
           fx.tool(F, "reply", {
             kind: "needs-you",

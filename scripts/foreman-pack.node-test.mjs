@@ -439,6 +439,28 @@ test("setup: offer once, launch the guide on a yes, resume, and take it back wit
   assert.ok(spec.includes("make no setup call"), "it only hands over");
 });
 
+test("setup: the offer guard, the Not now ledger write, the reuse search and the stopped read", () => {
+  const setup = spec.split("## Setup")[1].split("\n## ")[0];
+  for (const phrase of [
+    // The guard: an unanswered offer card in the inbox, or a skipped ledger row.
+    "unless `inbox_list` holds an unanswered one",
+    "`records_list`",
+    "`step: foreman-offer, state: skipped`",
+    // Not now is the one ledger write.
+    "Not now writes that row (`records_create`)",
+    // Reuse: a live guide this Foreman launched, found in list_sessions, before any launch.
+    "Reuse a live `guide-*` session you launched (`list_sessions`), else `open_workspace",
+    // Stopped: no hand-back, so the next wake reads the ledger and offers Resume.
+    "Setup ended with none: at your next wake read the ledger, say where it stopped and offer Resume",
+  ]) {
+    assert.ok(setup.includes(phrase), `the setup rules say: ${phrase}`);
+  }
+  assert.ok(
+    setup.indexOf("Reuse a live") < setup.indexOf("open_workspace"),
+    "reuse is looked for before the launch",
+  );
+});
+
 test("sprint leads: look for a live one on any machine, then launch the team's sprint agent from its config", () => {
   for (const phrase of [
     "Start sprint <n>",
