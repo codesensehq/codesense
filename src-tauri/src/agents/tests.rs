@@ -1850,7 +1850,7 @@ fn every_agent_yaml_in_the_codesense_docs_is_a_valid_agent() {
                 .into_owned()
         })
         .collect();
-    for expected in ["docs-helper", "codesense-setup", "machine-setup", "manager"] {
+    for expected in ["docs-helper", "machine-setup", "manager"] {
         assert!(
             names.iter().any(|n| n == expected),
             "{expected} missing: {names:?}"

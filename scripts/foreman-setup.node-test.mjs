@@ -321,14 +321,11 @@ test("a broken setup fixture is refused", async () => {
 
 test("the setup skill's hand-back block and the guide stub agree", () => {
   const skill = readFileSync(
-    new URL(
-      "../codesense-docs/getting-started/content/examples/skills/codesense-setup/SKILL.md",
-      import.meta.url,
-    ),
+    new URL("../codesense-docs/packs/codesense-guide/commands/codesense-setup.md", import.meta.url),
     "utf8",
   );
   const block = /<!-- foreman-handback -->([\s\S]*?)<!-- \/foreman-handback -->/.exec(skill)?.[1];
-  assert.ok(block, "SKILL.md has a foreman-handback block");
+  assert.ok(block, "the pack skill has a foreman-handback block");
   assert.ok(block.includes(`\`${HANDBACK_PREFIX}\``), "the block names the Setup done: prefix");
   assert.ok(block.includes(`role:${HANDBACK_ROLE}`), "the block names the queue");
   assert.match(block, /launched by another session/);

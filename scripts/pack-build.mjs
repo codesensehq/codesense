@@ -8,6 +8,9 @@
 //   4. for a pack that asks for the shared chat (`requires.kit.chat`), check its page
 //      source mounts `kit.chat` and builds no chat of its own.
 // A pack with no skill part and no `files` is a legacy pack: schema-checked, never rewritten.
+//   5. for a pack the docs bundle carries (`DOCS_BUNDLED`), map its agents, `content/` and
+//      built skill copies into `codesense-docs/getting-started/`, and fail on drift there too,
+//      and on a file left under the pack's own folders there that the pack no longer has.
 //
 //   node scripts/pack-build.mjs            write the copies and `files`
 //   node scripts/pack-build.mjs --check    change nothing; exit 1 on any drift or error
@@ -38,6 +41,10 @@ import { parse, parseDocument } from "yaml";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKS_ROOT = join(ROOT, "codesense-docs/packs");
+export const DOCS_ROOT = join(ROOT, "codesense-docs");
+// Packs whose files the docs bundle ships live: a team agent under `config/agents/`, the
+// content and the built skill copies under `content/`. The Foreman is not one of them.
+export const DOCS_BUNDLED = ["codesense-guide"];
 export const SCHEMA_PATH = join(
   ROOT,
   "codesense-docs/getting-started/content/generated/schemas/pack-yml.schema.json",
@@ -352,6 +359,132 @@ export function buildPack(dir, { check = false, force = false } = {}) {
   return { errors, written };
 }
 
+/** `**` crosses folders, `*` and `?` stay inside one; everything else is literal. */
+function globRegex(glob) {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*" && glob[i + 1] === "*") {
+      out += ".*";
+      i++;
+      if (glob[i + 1] === "/") i++;
+    } else if (c === "*") out += "[^/]*";
+    else if (c === "?") out += "[^/]";
+    else out += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/**
+ * Where the docs bundle carries this pack's files: `{from}` in the pack, `{to}` under
+ * `codesense-docs/`. Agents go to the team's `config/agents/<id>/`; `content/**` parts and
+ * the built skill copies go to the team's `content/`.
+ */
+export function docsMapping(dir, manifest) {
+  const pairs = new Map();
+  const add = (from, to) => pairs.set(to, { from, to });
+  const { files } = listPackFiles(dir);
+  for (const part of manifest.parts ?? []) {
+    if (part.kind === "agent") {
+      const id = part.file.split("/").at(-2);
+      add(part.file, `getting-started/config/agents/${id}/agent.yaml`);
+    } else if (part.kind === "content") {
+      for (const glob of part.paths) {
+        const re = globRegex(glob);
+        for (const f of files)
+          if (re.test(f) && f.startsWith("content/"))
+            add(f, `getting-started/content/${f.slice("content/".length)}`);
+      }
+    }
+  }
+  for (const copy of skillCopies(manifest)) add(copy.path, `getting-started/content/${copy.path}`);
+  return [...pairs.values()].sort((a, b) => (a.to < b.to ? -1 : 1));
+}
+
+/**
+ * The folders and files under `codesense-docs/` that belong to this pack alone: each agent's
+ * `config/agents/<id>/`, each content glob's fixed folder (`content/guide/**` gives
+ * `getting-started/content/guide/`), and each built skill copy (its folder for a `SKILL.md`,
+ * else the file). A file under one of them that no mapping writes is an orphan.
+ */
+export function docsRoots(manifest) {
+  const roots = new Set();
+  for (const part of manifest.parts ?? []) {
+    if (part.kind === "agent")
+      roots.add(`getting-started/config/agents/${part.file.split("/").at(-2)}/`);
+    else if (part.kind === "content")
+      for (const glob of part.paths) {
+        const fixed = glob.split("/");
+        const wild = fixed.findIndex((s) => /[*?]/.test(s));
+        const folder = (wild < 0 ? fixed.slice(0, -1) : fixed.slice(0, wild)).join("/");
+        if (folder.startsWith("content/") && folder.length > "content/".length)
+          roots.add(`getting-started/content/${folder.slice("content/".length)}/`);
+      }
+  }
+  for (const copy of skillCopies(manifest))
+    roots.add(
+      basename(copy.path) === "SKILL.md"
+        ? `getting-started/content/${dirname(copy.path)}/`
+        : `getting-started/content/${copy.path}`,
+    );
+  return [...roots].sort();
+}
+
+/** Files under the pack's docs roots that no mapping writes, as paths under `docsRoot`. */
+function docsOrphans(manifest, mapped, docsRoot) {
+  const orphans = [];
+  const walk = (rel) => {
+    const stat = statOrNull(join(docsRoot, rel));
+    if (!stat) return;
+    if (stat.isDirectory())
+      for (const name of readdirSync(join(docsRoot, rel)).sort()) walk(`${rel}/${name}`);
+    else if (!mapped.has(rel)) orphans.push(rel);
+  };
+  for (const root of docsRoots(manifest)) walk(root.replace(/\/$/, ""));
+  return orphans;
+}
+
+/** Check or write the docs-bundle copies of one pack. `docsRoot` is the `codesense-docs` folder. */
+export function syncDocs(dir, manifest, { check = false, docsRoot = DOCS_ROOT } = {}) {
+  dir = resolve(dir);
+  const errors = [];
+  const written = [];
+  const pairs = docsMapping(dir, manifest);
+  for (const orphan of docsOrphans(manifest, new Set(pairs.map((p) => p.to)), docsRoot))
+    errors.push(`docs orphan: ${orphan} is not in the pack (remove it)`);
+  for (const { from, to } of pairs) {
+    const source = statOrNull(join(dir, from))?.isFile() ? readFileSync(join(dir, from)) : null;
+    if (!source) {
+      errors.push(`docs: ${from} is missing in the pack (build the pack first)`);
+      continue;
+    }
+    const target = join(docsRoot, to);
+    const link = symlinkOnPath(docsRoot, to);
+    if (link) {
+      errors.push(`docs: ${link}: symlinks are refused`);
+      continue;
+    }
+    const current = statOrNull(target)?.isFile() ? readFileSync(target) : null;
+    if (current && sha256(current) === sha256(source)) continue;
+    if (check) {
+      errors.push(
+        current
+          ? `docs drift: ${to} differs from ${from}`
+          : `docs drift: ${to} is missing (copy of ${from})`,
+      );
+      continue;
+    }
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      writeAtomic(target, source);
+      written.push(to);
+    } catch (e) {
+      errors.push(`docs: ${to}: cannot write: ${e.code ?? e.message.split("\n")[0]}`);
+    }
+  }
+  return { errors, written };
+}
+
 /** Pack folders under `root`: each direct child with a `pack.yml`. */
 export function packDirs(root) {
   if (!existsSync(root)) return [];
@@ -361,11 +494,19 @@ export function packDirs(root) {
     .sort();
 }
 
-export function run(dirs, { check, force = false }) {
+export function run(dirs, { check, force = false, docsRoot = DOCS_ROOT }) {
   let failed = false;
   for (const dir of dirs) {
     const name = relative(ROOT, dir) || dir;
     const { errors, written, legacy } = buildPack(dir, { check, force });
+    if (!errors.length && !legacy && DOCS_BUNDLED.includes(basename(dir))) {
+      const docs = syncDocs(dir, parse(readFileSync(join(dir, "pack.yml"), "utf8")), {
+        check,
+        docsRoot,
+      });
+      errors.push(...docs.errors);
+      written.push(...docs.written.map((w) => `codesense-docs/${w}`));
+    }
     if (legacy)
       console.log(`pack-build: ${name}: legacy pack (no skill parts, no files), schema ok`);
     for (const e of new Set(errors)) console.error(`pack-build: ${name}: ${e}`);
