@@ -428,7 +428,7 @@ jobs:
       - name: Download JUnit reports
         # This attempt's reports, one directory per artifact. A job whose tests never built uploaded
         # none, and a pattern that matches nothing downloads nothing.
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: rust-*-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/junit
