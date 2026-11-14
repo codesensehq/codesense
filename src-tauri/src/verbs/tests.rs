@@ -1046,6 +1046,12 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         subscribe.required_capability(&caller("team"), &json!({"topic":"pins"})),
         "inbox:read:team"
     );
+    // Paging asks the same grant, not the broad `sessions:read` a plain topic page takes.
+    let page = registry.get("page").unwrap();
+    assert_eq!(
+        page.required_capability(&caller("team"), &json!({"topic":"pins"})),
+        "inbox:read:team"
+    );
     assert_eq!(
         super::dispatcher::action_target(
             &caller("team"),

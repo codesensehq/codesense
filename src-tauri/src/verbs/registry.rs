@@ -226,7 +226,7 @@ impl VerbSpec {
                 .unwrap_or(crate::records::Scope::Private);
             return crate::records::binding::capability(scope, self.class == Class::Metadata);
         }
-        if matches!(&*self.name, "subscribe" | "unsubscribe") && args["topic"] == "pins" {
+        if matches!(&*self.name, "subscribe" | "unsubscribe" | "page") && args["topic"] == "pins" {
             return "inbox:read:team";
         }
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")

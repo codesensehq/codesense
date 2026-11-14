@@ -871,6 +871,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   page: async (args, ctx) => {
     const a = argObject(args, "page");
+    // A pins view is one short list, never paged; preparing it here would only register a view
+    // that no subscription ever releases.
+    if (a.topic === "pins") throw new Error("invalid: the pins topic has no pages");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
     return frame.page(String(a.topic), String(a.cursor), await subscriptionView(a, ctx));

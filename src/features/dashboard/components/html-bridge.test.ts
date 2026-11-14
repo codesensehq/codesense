@@ -2062,6 +2062,19 @@ describe("agents read model verbs", () => {
     expect(subscribe).toHaveBeenCalledWith("pins", undefined, { viewKey });
   });
 
+  it("a page on the pins topic prepares no view: pins has no pages to turn", async () => {
+    const page = vi.fn();
+    await expect(
+      runBridgeCommand(
+        "page",
+        { topic: "pins", cursor: "c", agentId: "acme/default/dev", storyId: "DEMO-1" },
+        { ...DOC, liveFrame: async () => ({ page }) as never },
+      ),
+    ).rejects.toThrow(/pins topic has no pages/);
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(page).not.toHaveBeenCalled();
+  });
+
   it("agents carries each definition's avatar for faces of ended sessions", async () => {
     mockAgentDefinitionsPrepare.mockResolvedValue({
       topic: "agentDefinitions",
