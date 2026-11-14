@@ -43,11 +43,12 @@ import {
   sourceDiffModeFor,
   type SourceDiffViewOption,
 } from "@/shared/stores/viewer-store";
-import { resolveFileDiffModes, type MarkdownDiffMode } from "@/shared/lib/file-diff-mode";
+import { resolveFileDiffModes, type FileDiffModes } from "@/shared/lib/file-diff-mode";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import {
   FileDiffModeSwitch,
   renderFileDiff,
+  rendersFromText,
   type FileDiffState,
 } from "@/shared/lib/render-file-diff";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
@@ -666,13 +667,13 @@ export function SourceDiffOverlay({
     // Identical sides (a mode-only change) render a sentence, not a diff.
     redline.before !== redline.after &&
     redlineError == null &&
-    readsAsCode(paneFile, markdownMode);
+    readsAsCode(paneFile, fileDiffModes);
   const resolved = redline != null || redlineError != null;
   const [lastWasCode, setLastWasCode] = useState(false);
   if (resolved && lastWasCode !== resolvedCodeDiff) setLastWasCode(resolvedCodeDiff);
   const paneIsCodeDiff = resolved
     ? resolvedCodeDiff
-    : lastWasCode && paneFile != null && readsAsCode(paneFile, markdownMode);
+    : lastWasCode && paneFile != null && readsAsCode(paneFile, fileDiffModes);
 
   // The "copied" tick clears itself.
   useEffect(() => {
@@ -1174,6 +1175,17 @@ export function SourceDiffOverlay({
                   <Divider />
                 </>
               )}
+              {paneFile != null && rendersFromText(paneFile) && !redline?.binary && (
+                <>
+                  <FileDiffModeSwitch
+                    kind="html"
+                    mode={fileDiffModes.html}
+                    onChange={(m) => setFileDiffMode("html", m)}
+                    testId={`source-diff-html-mode-${ws.id}`}
+                  />
+                  <Divider />
+                </>
+              )}
               {paneIsCodeDiff && (
                 <>
                   <div
@@ -1457,8 +1469,10 @@ function DiffCodeControls({
 
 /** Whether a file's diff is the code diff the code controls drive: any
  *  non-markdown file, and markdown shown as Source. */
-function readsAsCode(path: string, markdownMode: MarkdownDiffMode): boolean {
-  return getViewerFileType(path) !== "markdown" || markdownMode === "source";
+function readsAsCode(path: string, modes: FileDiffModes): boolean {
+  if (getViewerFileType(path) === "markdown") return modes.markdown === "source";
+  if (rendersFromText(path)) return modes.html === "source";
+  return true;
 }
 
 /**
@@ -1466,8 +1480,9 @@ function readsAsCode(path: string, markdownMode: MarkdownDiffMode): boolean {
  * `{ file, redline }` → render boundary that the master-detail layout drops into
  * its right column. Binary files and identical sides are this surface's own
  * states; everything else goes through the shared `renderFileDiff` (markdown in
- * the shared markdown mode, other files as a `CodeDiffReview` in this session's
- * code mode, split or inline per the `inline` toggle). Loading, error and the
+ * the shared markdown mode, HTML, SVG and Excalidraw rendered from their text or
+ * as source, other files as a `CodeDiffReview` in this session's code mode,
+ * split or inline per the `inline` toggle). Loading, error and the
  * large-diff gate render inside this pane, so a redline failure never blanks
  * the rail beside it.
  */
@@ -1672,6 +1687,14 @@ function CommitDetailPane({
                 testId={`commit-diff-markdown-mode-${ws.id}`}
               />
             )}
+            {selectedFile && rendersFromText(selectedFile) && !redline?.binary && (
+              <FileDiffModeSwitch
+                kind="html"
+                mode={fileDiffModes.html}
+                onChange={(m) => setFileDiffMode("html", m)}
+                testId={`commit-diff-html-mode-${ws.id}`}
+              />
+            )}
             {redline != null &&
               !redline.binary &&
               // A mode-only change renders a sentence and an error its message:
@@ -1679,7 +1702,7 @@ function CommitDetailPane({
               redline.before !== redline.after &&
               redlineError == null &&
               selectedFile &&
-              readsAsCode(selectedFile, markdownMode) && (
+              readsAsCode(selectedFile, fileDiffModes) && (
                 <DiffCodeControls
                   wsId={ws.id}
                   idPrefix="commit-diff"

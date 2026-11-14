@@ -24,10 +24,13 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
   const [error, setError] = useState("");
   const readerRef = useRef<ReturnType<typeof createIntentReader> | null>(null);
   const { modes, setMode } = useFileDiffModes();
-  // A link to lines of a markdown file opens it as source, where the lines are
-  // highlighted, without changing anyone's default; choosing a mode ends that.
+  // A link to lines of a markdown or HTML file opens it as source, where the
+  // lines are highlighted, without changing anyone's default; choosing a mode
+  // ends that.
   const [rangeAsSource, setRangeAsSource] = useState(!!params.range);
-  const tabModes = rangeAsSource ? { ...modes, markdown: "source" as const } : modes;
+  const tabModes = rangeAsSource
+    ? { ...modes, markdown: "source" as const, html: "source" as const }
+    : modes;
   const onModeChange: typeof setMode = (kind, mode) => {
     setRangeAsSource(false);
     setMode(kind, mode);

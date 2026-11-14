@@ -80,6 +80,19 @@ vi.mock("@/features/dashboard/components/excalidraw-viewer", () => ({
   ),
 }));
 
+vi.mock("./side-frame", () => ({
+  SideFrame: ({ html, title }: { html: string; title: string }) => (
+    <div data-testid="side-frame" data-title={title}>
+      {html}
+    </div>
+  ),
+  SideImage: ({ base64, alt }: { base64: string; alt: string }) => (
+    <div data-testid="side-image" data-alt={alt}>
+      {base64}
+    </div>
+  ),
+}));
+
 import { LARGE_DIFF_CHARS, renderFileDiff, type FileDiffArgs } from "./render-file-diff";
 import { DEFAULT_FILE_DIFF_MODES, type FileDiffModes } from "./file-diff-mode";
 import { getViewerFileType } from "./viewer-file-type";
@@ -167,6 +180,8 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(frames.map((f) => f.dataset.baseline)).toEqual(["yes", "no"]);
     // Neither pane draws the Snapshot band, so both pages start level.
     expect(frames.map((f) => f.dataset.snapshot)).toEqual(["false", "false"]);
+    // Files serves the page beside its linked files, so there is nothing to note.
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
   });
 
   it("Files: HTML shows the toggle at 899 px, After first", () => {
@@ -187,14 +202,95 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.queryByTestId("html")).toBeNull();
   });
 
-  it("off Files (no rendered source): HTML is the Source text diff and no rendered mode is offered", () => {
-    atWidth(1200);
+  it("off Files: HTML renders Before and After from their text side by side at 900 px", () => {
+    atWidth(900);
     render(renderFileDiff(args("/repo/page.html", {}, { onModeChange: vi.fn() })));
-    expect(screen.getByTestId("code-diff")).toBeInTheDocument();
+    const frames = screen.getAllByTestId("side-frame");
+    expect(frames.map((f) => [f.dataset.title, f.textContent])).toEqual([
+      ["Before", "old"],
+      ["After", "new"],
+    ]);
+    expect(screen.getByTestId("file-diff-side-by-side")).toBeInTheDocument();
+    expect(screen.queryByTestId("code-diff")).toBeNull();
+    // It renders alone, and says so once under the diff.
+    expect(screen.getByTestId("file-diff-rendered-alone")).toHaveTextContent(
+      "Rendered on its own: linked files such as stylesheets and images aren't loaded here.",
+    );
     expect(screen.queryByTestId("html")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
-    // It is a code diff there, so it offers the code modes.
-    expect(screen.getByRole("button", { name: "Structural" })).toBeInTheDocument();
+  });
+
+  it("off Files: HTML shows the Before | After toggle at 899 px, After first", () => {
+    atWidth(899);
+    render(renderFileDiff(args("/repo/page.html")));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual(["new"]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual(["old"]);
+  });
+
+  it("off Files: Source stays a mode away, as the text diff", () => {
+    atWidth(1200);
+    const onModeChange = vi.fn();
+    const { rerender } = render(renderFileDiff(args("/repo/page.html", {}, { onModeChange })));
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(onModeChange).toHaveBeenCalledWith("html", "source");
+    rerender(
+      renderFileDiff(args("/repo/page.html", { modes: { html: "source" } }, { onModeChange })),
+    );
+    expect(screen.getByTestId("code-diff")).toHaveTextContent("old→new");
+    expect(screen.queryByTestId("side-frame")).toBeNull();
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: an SVG renders through the sandboxed frame, never as an image", () => {
+    atWidth(1200);
+    render(renderFileDiff(args("/repo/icon.svg", { sides: { ...sides(), before: "<svg/>" } })));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual([
+      "<svg/>",
+      "new",
+    ]);
+    expect(screen.queryByTestId("side-image")).toBeNull();
+    expect(screen.getByTestId("file-diff-rendered-alone")).toBeInTheDocument();
+  });
+
+  it("off Files: Excalidraw's sides are read-only scenes from their text", () => {
+    atWidth(1200);
+    render(renderFileDiff(args("/repo/d.excalidraw")));
+    const canvases = screen.getAllByTestId("excalidraw");
+    expect(canvases.map((c) => c.dataset.scene)).toEqual(["old", "new"]);
+    expect(canvases.every((c) => c.dataset.readonly === "true")).toBe(true);
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: a raster image renders from the bytes the surface holds", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args("/repo/logo.png", {
+          sides: { before: "", after: "", status: "added", imageBytes: { after: "iVBO" } },
+          state: { kind: "binary" },
+        }),
+      ),
+    );
+    expect(screen.getAllByTestId("side-image").map((i) => i.textContent)).toEqual(["iVBO"]);
+    expect(screen.getByTestId("file-diff-one-side")).toHaveTextContent("After");
+  });
+
+  it("off Files: a raster image missing a side's bytes stays the binary affordance", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified", imageBytes: { after: "iVBO" } },
+            state: { kind: "binary" },
+          },
+          { binary: <p>binary here</p> },
+        ),
+      ),
+    );
+    expect(screen.getByText("binary here")).toBeInTheDocument();
+    expect(screen.queryByTestId("side-image")).toBeNull();
   });
 
   it("off Files: a binary image shows the binary affordance", () => {

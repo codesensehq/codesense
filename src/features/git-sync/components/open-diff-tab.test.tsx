@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   review: vi.fn(),
@@ -31,6 +31,7 @@ vi.mock("@/features/dashboard/components/html-bridge", () => ({
   HTML_BRIDGE_ALLOWLIST: { openWorkspace: mocks.workspace },
 }));
 import { LARGE_DIFF_CHARS } from "@/shared/lib/render-file-diff";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { OpenDiffTab } from "./open-diff-tab";
 const params = {
@@ -139,12 +140,51 @@ it("a changed markdown file is the shared redline, with Source a switch away", a
   expect(mocks.review).toHaveBeenCalled();
   expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
 });
-it("a changed HTML file is its source diff, with no rendered mode offered", async () => {
-  mocks.read.mockResolvedValue({ ...opened, files: [{ path: "page.html" }] });
+function atWidth(width: number) {
+  const ro = stubResizeObserver(width);
+  onTestFinished(() => ro.restore());
+}
+const htmlRead = {
+  ...opened,
+  redline: { before: "<p>old</p>", after: "<p>new</p>", binary: false, status: "modified" },
+  files: [{ path: "page.html" }],
+};
+const frameDocs = () =>
+  Array.from(document.querySelectorAll("iframe")).map((f) => [
+    f.title,
+    f.getAttribute("srcdoc")?.endsWith(f.title === "Before" ? "<p>old</p>" : "<p>new</p>"),
+  ]);
+it("a changed HTML file renders Before and After live side by side at 900 px", async () => {
+  atWidth(900);
+  mocks.read.mockResolvedValue(htmlRead);
   render(<OpenDiffTab filePath={tabFor("page.html")} />);
-  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(await screen.findByTestId("open-diff-side-by-side")).toBeVisible();
+  expect(frameDocs()).toEqual([
+    ["Before", true],
+    ["After", true],
+  ]);
+  expect(screen.getByTestId("open-diff-rendered-alone")).toBeVisible();
+  expect(mocks.review).not.toHaveBeenCalled();
   expect(screen.queryByTestId("html-viewer")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+});
+it("a changed HTML file shows one side at a time below 900 px, Source a switch away", async () => {
+  atWidth(899);
+  mocks.read.mockResolvedValue(htmlRead);
+  render(<OpenDiffTab filePath={tabFor("page.html")} />);
+  expect(await screen.findByTestId("open-diff-one-at-a-time")).toBeVisible();
+  expect(frameDocs()).toEqual([["After", true]]);
+  fireEvent.click(screen.getByRole("button", { name: "Before" }));
+  expect(frameDocs()).toEqual([["Before", true]]);
+  fireEvent.click(screen.getByRole("button", { name: "Source" }));
+  expect(mocks.review).toHaveBeenCalled();
+  expect(document.querySelector("iframe")).toBeNull();
+});
+it("a line range into an HTML file opens it as source, highlighted", async () => {
+  mocks.read.mockResolvedValue(htmlRead);
+  render(<OpenDiffTab filePath={tabFor("page.html", { start: 1, end: 1 })} />);
+  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(mocks.review.mock.calls.at(-1)?.[0]).toMatchObject({ afterRange: { start: 1, end: 1 } });
+  expect(document.querySelector("iframe")).toBeNull();
 });
 it("a changed .ts file is a code diff in the shared code mode, never a redline", async () => {
   useViewerStore.getState().setFileDiffMode("code", "structural");

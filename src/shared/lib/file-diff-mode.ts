@@ -2,7 +2,7 @@
 /**
  * The per-type diff modes every file-diff surface shares. Markdown
  * reads as a redline, rendered side by side, or as source; HTML, image and
- * Excalidraw render side by side (on Files) or show source; code picks the
+ * Excalidraw render side by side or show source; code picks the
  * `CodeDiffReview` mode. The narrow-pane Before | After toggle is a layout
  * fallback for `side-by-side`, never a stored mode.
  */
