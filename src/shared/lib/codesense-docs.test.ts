@@ -36,17 +36,17 @@ describe("the bundled CodeSense docs identity", () => {
 });
 
 describe("pickLaunchOrg — first launch vs later launches", () => {
-  it("very first launch (nothing persisted): the docs, with the README", () => {
+  it("very first launch (nothing persisted, no repo of the person's own): the docs, with the setup page", () => {
     expect(pickLaunchOrg({ orgs: [docs], activeOrgSlug: null })).toEqual({
       slug: CODESENSE_DOCS_SLUG,
       firstLaunch: true,
     });
   });
 
-  it("first launch even when other context repos are already connected: still the docs", () => {
+  it("not a first launch when the person already has a context repo: the docs, no setup page", () => {
     expect(pickLaunchOrg({ orgs: [acme, docs], activeOrgSlug: null })).toEqual({
       slug: CODESENSE_DOCS_SLUG,
-      firstLaunch: true,
+      firstLaunch: false,
     });
   });
 
@@ -57,7 +57,7 @@ describe("pickLaunchOrg — first launch vs later launches", () => {
     });
   });
 
-  it("the docs as the last opened one reopen without the first-launch README", () => {
+  it("the docs as the last opened one reopen without the first-launch setup page", () => {
     expect(pickLaunchOrg({ orgs: [docs, acme], activeOrgSlug: CODESENSE_DOCS_SLUG })).toEqual({
       slug: CODESENSE_DOCS_SLUG,
       firstLaunch: false,

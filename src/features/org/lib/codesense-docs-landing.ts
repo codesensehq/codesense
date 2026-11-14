@@ -3,7 +3,11 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
-import { CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
+import {
+  CODESENSE_DOCS_SETUP,
+  CODESENSE_DOCS_SLUG,
+  CODESENSE_DOCS_TEAM,
+} from "@/shared/lib/codesense-docs";
 
 /**
  * Runs `decide` once the org and viewer stores have restored the persisted session, so the
@@ -38,18 +42,28 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
- * The very first launch: open the CodeSense docs repo's "Getting started" team with its
- * README as the active tab. No modal, no welcome screen.
+ * The CodeSense setup page, opened as a tab in the docs team. First launch lands here
+ * (not a user's open, so full-screen CLI stays on); the identity menu row and the palette
+ * item reopen it. The page owns the agent: an open tab is simply focused (its live agent
+ * is reused), and a tab with none launches `/codesense-setup`, which reads the setup
+ * ledger and carries on at the first step not done. `resume` adds the `#resume` route,
+ * so a fresh launch says `resume` instead of treating the open as a first one.
+ * False when the docs repo is not connected.
  */
-export function openCodesenseDocsReadme(readmePath: string): void {
+export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
+  const docs = useOrgStore.getState().orgs.find((org) => org.slug === CODESENSE_DOCS_SLUG);
+  if (!docs) return false;
   const org = useOrgStore.getState();
   if (org.activeOrgSlug !== CODESENSE_DOCS_SLUG || org.activeTeamName !== CODESENSE_DOCS_TEAM) {
     org.setActiveTeamIn(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
   }
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
-  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return;
+  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return false;
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-  const viewer = useViewerStore.getState();
-  // A landing, not the user's open: full-screen CLI stays on.
-  viewer.openFile(teamKey, "", readmePath, { keepLayout: true });
+  const path = `${docs.org_root.replace(/[/\\]+$/, "")}/${CODESENSE_DOCS_SETUP}`;
+  useViewerStore.getState().openFile(teamKey, "", path, {
+    ...(options.landing ? { keepLayout: true } : {}),
+    ...(options.resume ? { hash: "#resume" } : {}),
+  });
+  return true;
 }

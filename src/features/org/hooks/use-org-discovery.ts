@@ -9,7 +9,7 @@ import { ensureCodesenseDocs, ensureSampleRepo, type CodesenseDocsResult } from 
 import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
 import {
   afterPersistedSelectionRestored,
-  openCodesenseDocsReadme,
+  openCodesenseSetup,
 } from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -174,7 +174,8 @@ export function useOrgDiscovery() {
         setOrgs(loadedOrgs);
         // Later launches reopen the last opened context repo (and, through the per-repo
         // memory, its last team). Only the very first launch, proven by a restored session
-        // with no last-opened repo, lands in the CodeSense docs with its README open.
+        // with no last-opened repo and none of the person's own, lands in the CodeSense docs with
+        // the setup page open (its README stays reachable from the tree).
         stopDeciding = afterPersistedSelectionRestored(() => {
           if (cancelled) return;
           // The last-opened repo, whether the restore landed before `setOrgs` (which drops
@@ -188,7 +189,7 @@ export function useOrgDiscovery() {
           if (launch.slug && launch.slug !== useOrgStore.getState().activeOrgSlug) {
             setActiveOrg(launch.slug);
           }
-          if (launch.firstLaunch && docs) openCodesenseDocsReadme(docs.readme_path);
+          if (launch.firstLaunch) openCodesenseSetup({ landing: true });
         });
       } catch (error) {
         reportTransient(error);
