@@ -1,0 +1,69 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_1",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"status\": \"ok\", \"data\": {\"orgs\": [{\"slug\": \"codesense/docs\", \"orgRoot\": \"/home/user/.codesense/orgs/codesense/docs\", \"teams\": [{\"name\": \"getting-started\", \"archived\": false, \"sourceRepos\": []}]}]}}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_2",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Name your team.** I'll create it in your context repo.\\n\\ncard: team \\u00b7 local-write \\u00b7 create-team=Create it | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 301}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_3",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 302, \"from\": \"human\", \"text\": \"Create it\", \"inReplyTo\": 301}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_4",
+            "is_error": false,
+            "input": "{\"org\": \"codesense/docs\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      }
+    ]
+  }
+}

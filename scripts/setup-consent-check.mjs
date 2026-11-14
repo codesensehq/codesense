@@ -19,9 +19,11 @@
 //     card's labels.
 //   * a setup verb: any call to a tool in `SETUP_VERBS`.
 // A click allows the clicked act's verbs only, up to the next card. A new card closes it, and
-// `none`, a `read` card or an answer that is no label allows nothing. Until step files map
-// acts to verbs (`actVerbs`), an act named after a verb (`create-team`) allows that verb and
-// a `run` act (`run`, `run-…`) allows `run_in_terminal_tab`. Ledger writes
+// `none`, a `read` card or an answer that is no label allows nothing. With step files
+// (`stepActVerbs`), a card that names a step or act they lack, or another consent class than
+// the act's, allows nothing either. Without them, an act named after a verb (`create-team`)
+// allows that verb and a `run` act (`run`, `run-…`) allows `run_in_terminal_tab`. No setup
+// call may name the docs' own org, `codesense/docs`, clicked or not. Ledger writes
 // (`records_create`) and reads are not setup verbs: they record or look at what a click
 // already allowed.
 import { readFileSync } from "node:fs";
@@ -31,6 +33,8 @@ import { parseCardLine } from "./lib/card-line.mjs";
 import { SETUP_VERBS, actAllowances } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
+
+const DOCS_ORG = "codesense/docs";
 
 const GUIDE_PACK = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -50,13 +54,23 @@ export function defaultActVerbs(act) {
 }
 
 /**
- * `actVerbs` from a pack's step files: `(act, step)` gives the verbs the click allows, each
- * `{verb, uses, cmd?}`, where `cmd` is the one command a `run` act may type. An act or step
- * the files don't hold falls back to `defaultActVerbs`, whose commands go unchecked.
+ * `actVerbs` from a pack's step files: `(act, step, consent)` gives the verbs the click
+ * allows, each `{verb, uses, cmd?}`, where `cmd` is the one command a `run` act may type. A
+ * card the files don't back allows nothing: for a step or act they lack, or a class that is
+ * not the act's own `consent`, it gives the reason as a string. Only a pack with no step
+ * files falls back to `defaultActVerbs`.
  */
 export function stepActVerbs(packDir) {
-  const allowances = actAllowances(packDir);
-  return (act, step) => allowances.get(`${step}/${act}`) ?? defaultActVerbs(act);
+  const { steps, allowances } = actAllowances(packDir);
+  if (steps.size === 0) return defaultActVerbs;
+  return (act, step, consent) => {
+    if (!steps.has(step)) return `the step files have no step ${step}`;
+    const found = allowances.get(`${step}/${act}`);
+    if (!found) return `step ${step} has no act ${act}`;
+    if (consent !== undefined && consent !== found.consent)
+      return `act ${act} in step ${step} is ${found.consent}, but the card says ${consent}`;
+    return found.verbs;
+  };
 }
 
 function json(text) {
@@ -167,7 +181,13 @@ export function checkConsent(
             why = `the card ${card.label} sent at turn ${card.turn} is a read card and allows no change`;
           } else {
             allowed = new Map();
-            for (const entry of actVerbs(chosen.act, card.line.step)) {
+            const verbs = actVerbs(chosen.act, card.line.step, card.line.consent);
+            if (typeof verbs === "string") {
+              why = `the click on ${card.label} sent at turn ${card.turn} allows nothing: ${verbs}`;
+              errors.push(`turn ${index}: ${why}`);
+              continue;
+            }
+            for (const entry of verbs) {
               const { verb, uses = 1, cmd } = typeof entry === "string" ? { verb: entry } : entry;
               const had = allowed.get(verb);
               allowed.set(verb, {
@@ -187,7 +207,14 @@ export function checkConsent(
       } else if (setupVerbs.includes(name)) {
         calls += 1;
         const entry = allowed.get(name);
-        if (!entry) {
+        if (
+          String(input.org ?? "")
+            .trim()
+            .toLowerCase() === DOCS_ORG
+        ) {
+          // The docs are the guide's own context; no click makes them the place a setup writes.
+          errors.push(`turn ${index}: ${name} names org ${DOCS_ORG}, which setup never writes to`);
+        } else if (!entry) {
           errors.push(`turn ${index}: ${name} was called with no consent click for it: ${why}`);
         } else if (name === "run_in_terminal_tab" && input.key && !input.command) {
           // A bare key is no command. Ctrl-C stops the run the click started; it spends nothing.
@@ -233,9 +260,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(`setup-consent-check: cannot read ${path}: ${String(e.message).split("\n")[0]}`);
     process.exit(2);
   }
-  const { errors, cards, calls, clicks } = checkConsent(exported, {
-    actVerbs: stepActVerbs(resolve(packDir)),
-  });
+  const actVerbs = stepActVerbs(resolve(packDir));
+  if (actVerbs === defaultActVerbs) {
+    console.error(`setup-consent-check: ${packDir} has no setup/steps/index.yml to check against`);
+    process.exit(2);
+  }
+  const { errors, cards, calls, clicks } = checkConsent(exported, { actVerbs });
   for (const e of errors) console.error(`setup-consent-check: ${e}`);
   if (errors.length) process.exit(1);
   console.log(`setup-consent-check: ok (${calls} setup calls, ${cards} cards, ${clicks} clicks)`);

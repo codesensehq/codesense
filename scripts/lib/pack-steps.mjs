@@ -259,10 +259,11 @@ export function stepErrors(dir) {
 
 /**
  * What each act of a pack's steps allows after its click, from the step files alone:
- * `"<step>/<act>"` to the verbs it may call, each with how many times, and for a `run` act
- * the one command it may type. An act allows its own verb (`repeat` times, default once)
- * and the verbs of the acts it `then`-runs. A step file that doesn't read is left out; the
- * pack build reports it.
+ * `steps`, the ids the index lists, and `allowances`, `"<step>/<act>"` to the act's consent
+ * class and the verbs it may call, each with how many times, and for a `run` act the one
+ * command it may type. An act allows its own verb (`repeat` times, default once) and the
+ * verbs of the acts it `then`-runs. A step file that doesn't read is left out; the pack
+ * build reports it.
  */
 export function actAllowances(dir) {
   const allowances = new Map();
@@ -271,7 +272,7 @@ export function actAllowances(dir) {
   try {
     entries = parse(readFileSync(join(stepsDir, "index.yml"), "utf8")).steps ?? [];
   } catch {
-    return allowances;
+    return { steps: new Set(), allowances };
   }
   for (const { id } of entries) {
     let step;
@@ -289,8 +290,8 @@ export function actAllowances(dir) {
     for (const act of acts) {
       const verbs = [...own(act)];
       for (const next of act.then ?? []) verbs.push(...own(acts.find((a) => a.id === next) ?? {}));
-      allowances.set(`${id}/${act.id}`, verbs);
+      allowances.set(`${id}/${act.id}`, { consent: act.consent, verbs });
     }
   }
-  return allowances;
+  return { steps: new Set(entries.map((e) => e.id)), allowances };
 }
