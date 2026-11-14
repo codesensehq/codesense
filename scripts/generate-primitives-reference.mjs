@@ -385,7 +385,7 @@ const INVOKE_META = {
   },
   sessionRecord: {
     description:
-      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb)`.",
+      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, chain, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; when a saved agent handed the story off from earlier sessions, `tokens`, `costUsd`, `durationMs` and `files` sum that chain, and `chain` lists its session ids, oldest first (one id when there is no handoff); `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb, sessionIds)`.",
     examples: [
       {
         args: { handle: "agent-1" },
