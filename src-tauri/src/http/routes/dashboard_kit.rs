@@ -182,29 +182,12 @@ fn revalidated(content_type: &'static str, body: &'static str) -> Response {
 
 /// Revalidated rather than immutable: authors reference it by its plain path.
 async fn serve_dts() -> Response {
-    (
-        [
-            (
-                header::CONTENT_TYPE,
-                "application/typescript; charset=utf-8",
-            ),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        CODESENSE_DTS,
-    )
-        .into_response()
+    revalidated("application/typescript; charset=utf-8", CODESENSE_DTS)
 }
 
 /// The picker's emoji list; revalidated so a newer Unicode set reaches a running frame.
 async fn serve_emoji() -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        EMOJI_JSON,
-    )
-        .into_response()
+    revalidated("application/json; charset=utf-8", EMOJI_JSON)
 }
 
 async fn serve_css() -> Response {
