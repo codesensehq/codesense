@@ -519,12 +519,39 @@
     return { read, seen, settled, failedNow, staleAt };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/mount-ids.js
+  function idsOf(n) {
+    const tail = n > 1 ? `-${n}` : "";
+    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}` };
+  }
+  var claims = /* @__PURE__ */ new WeakMap();
+  function mountIds(doc, el) {
+    const held = claims.get(doc) || /* @__PURE__ */ new Map();
+    claims.set(doc, held);
+    for (let n = 1; ; n++) {
+      const ids = idsOf(n), other = held.get(n), used = doc.getElementById(ids.region);
+      if (other && other !== el || used && !el.contains(used)) continue;
+      held.set(n, el);
+      return { ids, release() {
+        if (held.get(n) === el) held.delete(n);
+      } };
+    }
+  }
+  var CHAT_CSS_HREF = "/kit/v1/chat.css";
+  function linkChatStyles(doc) {
+    if (!doc.head || doc.head.querySelector("link[data-codesense-chat]")) return;
+    const link = doc.createElement("link");
+    link.rel = "stylesheet";
+    link.href = CHAT_CSS_HREF;
+    link.setAttribute("data-codesense-chat", "");
+    doc.head.append(link);
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/composer.js
-  var COMPOSER_IDS = { region: "sv-composer", input: "sv-composer-input", send: "sv-send", hint: "sv-composer-hint" };
-  function createComposer({ onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
-    const input = h("textarea", { id: COMPOSER_IDS.input, rows, "aria-label": label, "aria-describedby": COMPOSER_IDS.hint, spellcheck: "true" });
-    const send = h("button", { id: COMPOSER_IDS.send, type: "button", class: "btn primary" }, sendLabel);
-    const region = h("div", { id: COMPOSER_IDS.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: COMPOSER_IDS.hint }, hint));
+  function createComposer({ ids = idsOf(1), onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
+    const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
+    const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
+    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: ids.hint }, hint));
     const submit = () => {
       const text = input.value.trim();
       if (!text || input.disabled) return;
@@ -696,7 +723,9 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true }) {
+    const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
+    if (styles) linkChatStyles(win.document);
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
@@ -728,8 +757,8 @@
     };
     const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
     const pin = pinToBottom(log, { win });
-    const status = h("div", { class: "status-slot", id: "sv-status", tabindex: "-1" });
-    const composer = createComposer({ onSend: (text) => {
+    const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
+    const composer = createComposer({ ids, onSend: (text) => {
       awaitBase = leadCount();
       fails.clear();
       launch.send(text);
@@ -760,7 +789,7 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
-    el.replaceChildren(h("div", { class: variant ? `chatcol ${variant}` : "chatcol", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
+    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -804,17 +833,17 @@
         return row;
       } });
       if ((state2 === "starting" || state2 === "slow") && launch.stuck) {
-        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, copy.row.needsTerminal), termButton("sv-term-stuck")) });
+        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, copy.row.needsTerminal), termButton(ids.term("stuck"))) });
       } else if (state2 === "starting" || state2 === "slow") {
         out.push({ id: "starting", sig: "s", make: () => h("div", { class: "sys", "data-row": "starting" }, face("starting", `${copy.lead} · ${copy.header.starting}`), h("span", {}, copy.row.starting)) });
-        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, copy.row.slow), termButton("sv-term-slow")) });
+        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, copy.row.slow), termButton(ids.term("slow"))) });
       } else if (state2 === "failed") {
         const failure = launch.failure;
         out.push({ id: "failed", sig: ["f", failure.kind, failure.code, failureText(failure, copy), on].join("|"), make: () => alertRow(
           "failed",
           failureText(failure, copy),
           failure.code,
-          failure.kind === "timeout" || failure.kind === "exited" ? termButton("sv-term-failed") : null,
+          failure.kind === "timeout" || failure.kind === "exited" ? termButton(ids.term("failed")) : null,
           h("button", { type: "button", class: "btn sm", "data-retry": "1", onclick: () => {
             refocus = true;
             launch.retry();
@@ -1089,6 +1118,7 @@
       unmount() {
         offs.forEach((off) => off && off());
         pin.release();
+        mountSlot.release();
         launch.dispose();
         win.removeEventListener("beforeunload", onUnload);
         el.replaceChildren();

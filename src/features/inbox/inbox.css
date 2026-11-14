@@ -874,6 +874,12 @@
   align-items: center;
   flex-wrap: wrap;
 }
+.ibx-mark {
+  font-size: 10.5px;
+}
+.ibx-mark[data-mark="queued"] {
+  font-style: italic;
+}
 .ibx-m .bub {
   padding: 8px 11px;
   border-radius: 12px;

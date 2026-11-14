@@ -26,6 +26,7 @@ import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
+import {linkChatStyles,mountIds}from './mount-ids.js';
 import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
@@ -66,7 +67,9 @@ const storyTarget=(storyId,leadRole)=>({
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null}){
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true}){
+ const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
+ if(styles)linkChatStyles(win.document);
  const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
  const cardState=new Map(),drafts=new Map();
@@ -90,8 +93,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
  const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
  const pin=pinToBottom(log,{win});
- const status=h('div',{class:'status-slot',id:'sv-status',tabindex:'-1'});
- const composer=createComposer({onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
+ const status=h('div',{class:'status-slot',id:ids.status,tabindex:'-1'});
+ const composer=createComposer({ids,onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
  const sendChip=text=>{awaitBase=leadCount();fails.clear();launch.send(text);};
  // Chips: the page's own (chips) and, with next, the ones in the lead's newest Next line. A chip's pencil (edit) puts its text in the composer instead of sending it.
@@ -103,7 +106,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
- el.replaceChildren(h('div',{class:variant?`chatcol ${variant}`:'chatcol','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
+ el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
@@ -126,13 +129,13 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const state=launch.state,p=presence(),on=Boolean(terminalTarget()),out=[...readRows()];
   for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'');row.setAttribute('data-fail',what);return row;}});
   if((state==='starting'||state==='slow')&&launch.stuck){
-   out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},copy.row.needsTerminal),termButton('sv-term-stuck'))});
+   out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},copy.row.needsTerminal),termButton(ids.term('stuck')))});
   }else if(state==='starting'||state==='slow'){
    out.push({id:'starting',sig:'s',make:()=>h('div',{class:'sys','data-row':'starting'},face('starting',`${copy.lead} · ${copy.header.starting}`),h('span',{},copy.row.starting))});
-   if(state==='slow')out.push({id:'slow',sig:'slow|'+on,make:()=>h('div',{class:'sys warn','data-row':'slow'},h('span',{},copy.row.slow),termButton('sv-term-slow'))});
+   if(state==='slow')out.push({id:'slow',sig:'slow|'+on,make:()=>h('div',{class:'sys warn','data-row':'slow'},h('span',{},copy.row.slow),termButton(ids.term('slow')))});
   }else if(state==='failed'){
    const failure=launch.failure;
-   out.push({id:'failed',sig:['f',failure.kind,failure.code,failureText(failure,copy),on].join('|'),make:()=>alertRow('failed',failureText(failure,copy),failure.code,failure.kind==='timeout'||failure.kind==='exited'?termButton('sv-term-failed'):null,
+   out.push({id:'failed',sig:['f',failure.kind,failure.code,failureText(failure,copy),on].join('|'),make:()=>alertRow('failed',failureText(failure,copy),failure.code,failure.kind==='timeout'||failure.kind==='exited'?termButton(ids.term('failed')):null,
     h('button',{type:'button',class:'btn sm','data-retry':'1',onclick:()=>{refocus=true;launch.retry();status.focus();}},copy.row.retry))});
   }else{
    const sf=launch.sendFailure;
@@ -324,7 +327,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const roster=reads.sessions();
  if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());});
  return {
-  unmount(){offs.forEach(off=>off&&off());pin.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
+  unmount(){offs.forEach(off=>off&&off());pin.release();mountSlot.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
