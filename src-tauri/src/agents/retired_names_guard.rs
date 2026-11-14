@@ -121,8 +121,14 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
                 "set_pack_enabled",
                 // The avatar list's default face pack.
                 "default_pack",
+                // The read-only validator for the pack folder format (`pack.yml`).
+                "pack_validate",
+                "PackValidateParams",
+                "pack_validate_request",
             ],
         ),
+        // Classifies the same tool's identity needs.
+        ("src-tauri/src/mcp/identity_guard.rs", &["pack_validate"]),
         // The avatar list's default face pack, on the wire and in its mock.
         ("src/tauri/commands.ts", &["default_pack"]),
         ("src/app/mock/handlers/agents.ts", &["default_pack"]),

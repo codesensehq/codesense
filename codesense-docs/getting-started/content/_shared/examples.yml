@@ -82,6 +82,14 @@
       "calls": [{"tool": "prepare_remote_workspace", "arguments": {"machineId": "<machineId from list_machines>", "teamKey": "acme:engineering", "workspaceId": "<workspace id>", "sourceRepo": {"owner": "acme", "repo": "app"}, "requestId": "6f1c2e0a-8f55-4a3e-9d57-0b6a1b0f6c11", "baseRef": "main", "branch": "feature/example", "repoPath": "/home/dev/repos/app", "worktreePath": "/home/dev/worktrees/app-example"}}]
     },
     {
+      "id": "packs",
+      "title": "Pack validation",
+      "tools": ["pack_validate"],
+      "docs": "arc-e-agents/packs.html",
+      "searchTerms": ["pack", "packs", "validate", "manifest"],
+      "calls": [{"tool": "pack_validate", "arguments": {"path": "packs/my-pack"}}]
+    },
+    {
       "id": "stories",
       "title": "Stories and planning",
       "tools": ["get_story_format", "validate_story", "list_source_repos", "read_epic_repos", "set_epic_repos"],
