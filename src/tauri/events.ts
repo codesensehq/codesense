@@ -421,6 +421,12 @@ export interface OpenWorkspaceRevealPayload {
  *  (`src-tauri/src/commands/agent_inbox.rs`). */
 export const AGENT_INBOX_CHANGED_EVENT = "agent-inbox-changed" as const;
 
+/** An agent thread's pin list changed. Payload `{org, team, agentId, storyId}`: the team
+ *  whose store holds the list and the thread (saved agent + story, `""` for none). Must
+ *  match the Rust `AGENT_PINS_CHANGED_EVENT` literal
+ *  (`src-tauri/src/commands/agent_inbox/pins.rs`). */
+export const AGENT_PINS_CHANGED_EVENT = "agent-pins-changed" as const;
+
 /** Role registrations or queues, or the human's status changed; live pages re-read. No
  *  payload. Must match the Rust `AGENT_STATE_CHANGED_EVENT` literal
  *  (`src-tauri/src/commands/agent_read_model.rs`). */

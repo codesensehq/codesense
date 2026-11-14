@@ -36,7 +36,7 @@ import {
   type PaneRowPlace,
   type PaneRowSemantics,
 } from "@/features/viewer/lib/agents-pane-rows";
-import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { useAgentChatEligible } from "@/features/viewer/lib/agent-inbox-actions";
 import {
   stepSlot,
   teamWorkspaceOrder,
@@ -2986,7 +2986,7 @@ const AgentListRow = memo(function AgentListRow({
   onTogglePin,
 }: AgentListRowProps): React.JSX.Element {
   const { row, story } = node;
-  const inboxEligible = useRunningAgent(row.sessionId ?? "");
+  const inboxEligible = useAgentChatEligible(row);
   const { rowTeam, offlineMachine, hidden, pinned } = facts;
   const arrivedLate = useArrivedLate(facts.settled);
   const question = useManagedSessionStore((s) =>
