@@ -442,7 +442,9 @@ declare namespace CodesenseSdk {
   }
   /** The page's live reads: the roster, the inbox, activity and a session's usage. */
   interface ChatReads {
-    on(event: "sessions" | "inbox" | "activity", listener: () => void): () => void;
+    on(event: "sessions" | "inbox" | "activity" | "delivery", listener: () => void): () => void;
+    /** A sent message's own `messageDelivery` row, where the page subscribes to that topic: its Queued and Delivered marks follow it (the chat listens for a `delivery` event). Without it the marks follow the lead's roster row. */
+    delivery?(messageId: string | number): { state: "queued" | "delivered"; deliveredAtMs?: number | null } | null;
     sessions(): Promise<unknown>;
     latestSessions(): Array<Record<string, unknown>>;
     usage(args: { sessionId: string }): Promise<unknown>;
@@ -497,6 +499,8 @@ declare namespace CodesenseSdk {
     busyAtSend: boolean;
     lead: ChatLeadRow | null | undefined;
     newestLeadAt?: number;
+    /** The message's own `messageDelivery` row, when the host pushes the topic: it decides then. */
+    delivery?: { state: "queued" | "delivered"; deliveredAtMs?: number | null } | null;
   }
   /** Who the chat talks to: rows of the roster, what its thread reads, and where a message goes while it is away. */
   interface ChatTarget {
