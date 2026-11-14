@@ -2,9 +2,15 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const h = vi.hoisted(() => ({ readFile: vi.fn(), remoteRead: vi.fn(), review: vi.fn() }));
+const h = vi.hoisted(() => ({
+  readFile: vi.fn(),
+  readImageFile: vi.fn(),
+  remoteRead: vi.fn(),
+  review: vi.fn(),
+}));
 vi.mock("@/tauri/commands", () => ({
   readFile: h.readFile,
+  readImageFile: h.readImageFile,
   sourceRemoteFileRead: h.remoteRead,
 }));
 vi.mock("@/shared/components/code-editor/CodeDiffReview", () => ({
@@ -184,7 +190,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     atWidth(1000);
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:remote-side");
     onTestFinished(() => createObjectURL.mockRestore());
-    h.readFile.mockRejectedValue(new Error("No such file or directory"));
+    h.readImageFile.mockRejectedValue(new Error("not found: /team/art/logo.png"));
     h.remoteRead.mockResolvedValue({ base64: btoa("\x89PNG"), truncated: false });
     render(
       <TeamEditDiffDialog
@@ -200,14 +206,64 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     );
   });
 
-  it("an image changed on both sides stays the binary note: the team's copy has no bytes here", async () => {
+  function blobUrls() {
+    const created: string[] = [];
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created.push(`blob:${created.length}`);
+      return created.at(-1)!;
+    });
+    onTestFinished(() => createObjectURL.mockRestore());
+  }
+  const alts = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
+
+  it("an image changed here and on a machine draws both versions from their bytes", async () => {
     atWidth(1000);
-    h.readFile.mockResolvedValue("\u0089PNG\u0000");
+    blobUrls();
+    h.readImageFile.mockResolvedValue({ base64: btoa("\x89PNG team"), tooLarge: false });
     h.remoteRead.mockResolvedValue({ base64: btoa("\x89PNG"), truncated: false });
     render(
       <TeamEditDiffDialog
         workspace={remoteWorkspace}
         file={edit("art/logo.png")}
+        onClose={() => {}}
+      />,
+    );
+    await screen.findByTestId("team-edit-diff-side-by-side");
+    expect(alts()).toEqual(["Team's version", "Workspace B’s version"]);
+    expect(h.readImageFile).toHaveBeenCalledWith("/team/art/logo.png");
+    expect(h.readFile).not.toHaveBeenCalled();
+  });
+
+  it("an image changed on This Mac reads both copies' bytes, never as text", async () => {
+    atWidth(1000);
+    blobUrls();
+    h.readImageFile.mockImplementation((p: string) =>
+      Promise.resolve({ base64: btoa(p), tooLarge: false }),
+    );
+    render(
+      <TeamEditDiffDialog workspace={workspace} file={edit("art/logo.png")} onClose={() => {}} />,
+    );
+    await screen.findByTestId("team-edit-diff-side-by-side");
+    expect(alts()).toEqual(["Team's version", "Workspace A’s version"]);
+    expect(h.readImageFile.mock.calls.map(([p]) => p).sort()).toEqual([
+      "/team/art/logo.png",
+      "/wt/ws/art/logo.png",
+    ]);
+    expect(h.readFile).not.toHaveBeenCalled();
+  });
+
+  it("an image past the size cap stays the binary note, and a missing copy is a side that isn't there", async () => {
+    atWidth(1000);
+    blobUrls();
+    h.readImageFile.mockImplementation((p: string) =>
+      p.startsWith("/team/")
+        ? Promise.reject(new Error("not found: /team/art/logo.png"))
+        : Promise.resolve({ base64: null, tooLarge: true }),
+    );
+    render(
+      <TeamEditDiffDialog
+        workspace={workspace}
+        file={edit("art/logo.png", "new")}
         onClose={() => {}}
       />,
     );

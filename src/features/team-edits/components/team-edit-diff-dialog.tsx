@@ -12,14 +12,15 @@ import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
 import {
   renderFileDiff,
-  rendersFromText,
   rendersInline,
   type FileDiffSides,
   type FileDiffState,
 } from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import {
   readFile,
+  readImageFile,
   sourceRemoteFileRead,
   type TeamFileEdit,
   type TeamFileEditsWorkspace,
@@ -58,16 +59,26 @@ function decodeBase64(base64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** A copy on This Mac: a raster image as its bytes (past the size cap it is a binary
+ *  side), anything else as text. */
+function readThisMacSide(path: string): Promise<Side> {
+  if (!isRasterImage(path)) return readSide(() => readFile(path));
+  return readSide(async () => {
+    const { base64, tooLarge } = await readImageFile(path);
+    return tooLarge || base64 == null ? { binary: true } : { bytes: base64 };
+  });
+}
+
 /** The workspace's copy of `file`: on This Mac, or read on its machine. */
 function readWorkspaceSide(ws: TeamFileEditsWorkspace, file: TeamFileEdit): Promise<Side> {
   if (file.kind === "removed") return Promise.resolve({ missing: true });
   if (ws.target.kind === "local") {
     const root = ws.target.codeRepoPath.replace(/\/+$/, "");
-    return readSide(() => readFile(`${root}/${file.path}`));
+    return readThisMacSide(`${root}/${file.path}`);
   }
   const { machineId, workspaceHandle } = ws.target;
   const read = () => sourceRemoteFileRead(machineId, workspaceHandle, file.path);
-  if (getViewerFileType(file.path) === "image" && !rendersFromText(file.path))
+  if (isRasterImage(file.path))
     return readSide(async () => {
       const { base64, truncated } = await read();
       return truncated ? { binary: true } : { bytes: base64 };
@@ -149,7 +160,7 @@ export function TeamEditDiffDialog({
     if (!file) return;
     // A new file remounts the dialog (its `key`), so both sides start unread.
     let cancelled = false;
-    void readSide(() => readFile(file.teamPath)).then((s) => !cancelled && setTeam(s));
+    void readThisMacSide(file.teamPath).then((s) => !cancelled && setTeam(s));
     void readWorkspaceSide(workspace, file).then((s) => !cancelled && setMine(s));
     return () => {
       cancelled = true;

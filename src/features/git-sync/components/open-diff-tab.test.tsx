@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -7,10 +7,14 @@ const mocks = vi.hoisted(() => ({
   workspace: vi.fn(),
   team: vi.fn(),
   management: vi.fn(),
+  images: vi.fn(),
 }));
 vi.mock("@/shared/lib/open-file-in-team", () => ({ openFileInTeam: mocks.team }));
 vi.mock("@/shared/lib/open-management-tab", () => ({ openManagementTab: mocks.management }));
-vi.mock("../lib/source-redline-source", () => ({ readOpenDiff: mocks.read }));
+vi.mock("../lib/source-redline-source", () => ({
+  readOpenDiff: mocks.read,
+  readOpenDiffImages: mocks.images,
+}));
 vi.mock("@/shared/components/code-editor/CodeDiffReview", () => ({
   CodeDiffReview: (props: unknown) => {
     mocks.review(props);
@@ -210,6 +214,69 @@ it("a binary file keeps its note", async () => {
   render(<OpenDiffTab filePath={path} />);
   expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
   expect(mocks.review).not.toHaveBeenCalled();
+  expect(mocks.images).not.toHaveBeenCalled();
+});
+function openPng(images: unknown, width = 900) {
+  atWidth(width);
+  const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  URL.createObjectURL = vi.fn(() => "blob:side");
+  URL.revokeObjectURL = vi.fn();
+  onTestFinished(() => {
+    URL.createObjectURL = blob.create;
+    URL.revokeObjectURL = blob.revoke;
+  });
+  mocks.read.mockResolvedValue({
+    ...opened,
+    files: [{ path: "art/logo.png" }],
+    redline: { before: "", after: "", binary: true, status: "modified" },
+  });
+  mocks.images.mockResolvedValue(images);
+  render(<OpenDiffTab filePath={tabFor("art/logo.png")} />);
+}
+const pngImages = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
+it("a changed PNG reads its sides at the same revision and renders Before and After at 900 px", async () => {
+  openPng({
+    status: "opened",
+    resolvedRev: "abcdef1",
+    images: { before: "QQ==", after: "Qg==", tooLarge: false },
+  });
+  expect(await screen.findByTestId("open-diff-side-by-side")).toBeVisible();
+  expect(pngImages()).toEqual(["Before", "After"]);
+  expect(mocks.images).toHaveBeenCalledWith(
+    expect.objectContaining({ repo: "acme/app", rev: "abcdef1", path: "art/logo.png" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Source" }));
+  expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
+  expect(pngImages()).toEqual([]);
+});
+it("a changed PNG shows one side at a time below 900 px", async () => {
+  openPng(
+    {
+      status: "opened",
+      resolvedRev: "abcdef1",
+      images: { before: "QQ==", after: "Qg==", tooLarge: false },
+    },
+    899,
+  );
+  expect(await screen.findByTestId("open-diff-one-at-a-time")).toBeVisible();
+  expect(pngImages()).toEqual(["After"]);
+});
+it("a PNG past the size cap, or one the read refuses, keeps the binary note", async () => {
+  for (const images of [
+    {
+      status: "opened",
+      resolvedRev: "abcdef1",
+      images: { before: null, after: null, tooLarge: true },
+    },
+    { status: "refused", reason: "no" },
+  ]) {
+    openPng(images);
+    await waitFor(() => expect(mocks.images).toHaveBeenCalled());
+    expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
+    expect(pngImages()).toEqual([]);
+    cleanup();
+    mocks.images.mockClear();
+  }
 });
 it("a line range into a markdown file opens it as source, highlighted, without changing the default", async () => {
   mocks.read.mockResolvedValue({ ...opened, files: [{ path: "doc.md" }] });
