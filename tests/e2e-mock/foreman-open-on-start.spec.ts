@@ -39,15 +39,17 @@ for (const scenario of ["noOrg", "onboarded"]) {
     await expect
       .poll(async () => (await openPaths(page)).filter((p) => p.endsWith(FOREMAN_PAGE)).length)
       .toBe(1);
+    // The docs team is the one on screen, with the Foreman as its active tab.
     const state = await page.evaluate(() => {
       const viewer = window.__stores!.useViewerStore.getState();
-      const org = window.__stores!.useOrgStore.getState();
+      const { activeOrgSlug, activeTeamName } = window.__stores!.useOrgStore.getState();
       return {
-        active: Object.values(viewer.activeTab),
-        org: org.activeOrgSlug,
+        team: activeTeamName,
+        activeTab: viewer.activeTab[`${activeOrgSlug}:${activeTeamName}`] ?? null,
       };
     });
-    expect(state.active.some((p) => p?.endsWith(FOREMAN_PAGE))).toBe(true);
+    expect(state.team).toBe("getting-started");
+    expect(state.activeTab?.endsWith(FOREMAN_PAGE)).toBe(true);
     expect((await openPaths(page)).some((p) => p.includes("guide/index.html"))).toBe(false);
   });
 }

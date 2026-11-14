@@ -29,24 +29,18 @@ export function isCodesenseDocs(slug: string | null | undefined): boolean {
  * - The persisted last-opened repo when it is still connected (every later launch).
  * - A newly connected one, when a connect/create just happened.
  * - Otherwise (the very first launch, or the last-opened repo is gone) the CodeSense
- *   docs, so there is never a dead end; `firstLaunch` asks the caller to open its README.
+ *   docs, so there is never a dead end.
  */
 export function pickLaunchOrg(input: {
   orgs: readonly Pick<Org, "slug">[];
   activeOrgSlug: string | null;
   newlyConnected?: string | null;
-}): { slug: string | null; firstLaunch: boolean } {
+}): string | null {
   const { orgs, activeOrgSlug, newlyConnected } = input;
-  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) {
-    return { slug: newlyConnected, firstLaunch: false };
-  }
-  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) {
-    return { slug: activeOrgSlug, firstLaunch: false };
-  }
-  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) {
-    return { slug: CODESENSE_DOCS_SLUG, firstLaunch: activeOrgSlug === null };
-  }
-  return { slug: orgs[0]?.slug ?? null, firstLaunch: false };
+  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) return newlyConnected;
+  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) return activeOrgSlug;
+  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) return CODESENSE_DOCS_SLUG;
+  return orgs[0]?.slug ?? null;
 }
 
 /**

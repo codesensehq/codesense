@@ -4,7 +4,7 @@
  * team. App start, the identity menu and the palette all come through here, so there is
  * never more than one (a tab opens by its path, and an open one is focused).
  */
-import { openCodesenseDocsReadme } from "@/features/org/lib/codesense-docs-landing";
+import { openCodesenseDocsLanding } from "@/features/org/lib/codesense-docs-landing";
 import {
   CODESENSE_DOCS_FOREMAN_PAGE,
   CODESENSE_DOCS_SLUG,
@@ -13,7 +13,6 @@ import {
 } from "@/shared/lib/codesense-docs";
 import { logger } from "@/shared/lib/logger";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
-import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
@@ -36,24 +35,6 @@ export function openForeman(): void {
   }
 }
 
-/** The start-up open: a landing, not the user's own open, so full-screen CLI stays on and
- *  the tabs restored from the last session stay open behind it. */
-function openForemanAtStart(): void {
-  const path = foremanPagePath();
-  if (!path) return;
-  const org = useOrgStore.getState();
-  if (org.activeOrgSlug !== CODESENSE_DOCS_SLUG || org.activeTeamName !== CODESENSE_DOCS_TEAM) {
-    org.setActiveTeamIn(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-  }
-  const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
-  if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM) return;
-  useViewerStore
-    .getState()
-    .openFile(buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM), "", path, {
-      keepLayout: true,
-    });
-}
-
 let startLandingDone = false;
 
 /** Test seam: forget that this app start has already landed. */
@@ -66,12 +47,14 @@ export function resetStartLanding(): void {
  * refresh (a repo attached) must not pull the user back to it.
  */
 export function openStartLanding(readmePath: string): void {
-  if (startLandingDone) return;
+  // Both landings open in the docs team: wait for a discovery that has loaded it.
+  const foremanPath = foremanPagePath();
+  if (startLandingDone || !foremanPath) return;
   startLandingDone = true;
   const landing = pickStartLanding({
     orgs: useOrgStore.getState().orgs,
     openForemanOnStart: useViewerStore.getState().settings.openForemanOnStart,
   });
-  if (landing === "foreman") openForemanAtStart();
-  else if (landing === "readme") openCodesenseDocsReadme(readmePath);
+  if (landing === "foreman") openCodesenseDocsLanding(foremanPath);
+  else if (landing === "readme") openCodesenseDocsLanding(readmePath);
 }

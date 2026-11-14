@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
 import { logger } from "@/shared/lib/logger";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { ROLE_READ_DEBOUNCE_MS } from "@/features/viewer/hooks/use-role-holdings";
 import { agentReadRoles, type InboxTeam, type RoleQueue } from "@/tauri/commands";
 import { AGENT_STATE_CHANGED_EVENT } from "@/tauri/events";
 
@@ -56,11 +57,18 @@ export function useForemanMailWaiting(enabled: boolean): boolean {
       if (!cancelled && mine === latest) setWaiting(answers.some(Boolean));
     };
     void read();
-    const timer = setInterval(() => void read(), POLL_MS);
-    const unlisten = listen(AGENT_STATE_CHANGED_EVENT, () => void read());
+    // A burst of state changes is one re-read.
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    const later = () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => void read(), ROLE_READ_DEBOUNCE_MS);
+    };
+    const timer = setInterval(later, POLL_MS);
+    const unlisten = listen(AGENT_STATE_CHANGED_EVENT, later);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      clearTimeout(pending);
       void unlisten.then((u) => u()).catch(() => {});
     };
   }, [enabled, teamsId]);

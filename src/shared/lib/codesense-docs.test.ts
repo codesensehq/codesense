@@ -37,32 +37,24 @@ describe("the bundled CodeSense docs identity", () => {
 });
 
 describe("pickLaunchOrg — first launch vs later launches", () => {
-  it("very first launch (nothing persisted): the docs, with the README", () => {
-    expect(pickLaunchOrg({ orgs: [docs], activeOrgSlug: null })).toEqual({
-      slug: CODESENSE_DOCS_SLUG,
-      firstLaunch: true,
-    });
+  it("very first launch (nothing persisted): the docs", () => {
+    expect(pickLaunchOrg({ orgs: [docs], activeOrgSlug: null })).toBe(CODESENSE_DOCS_SLUG);
   });
 
   it("first launch even when other context repos are already connected: still the docs", () => {
-    expect(pickLaunchOrg({ orgs: [acme, docs], activeOrgSlug: null })).toEqual({
-      slug: CODESENSE_DOCS_SLUG,
-      firstLaunch: true,
-    });
+    expect(pickLaunchOrg({ orgs: [acme, docs], activeOrgSlug: null })).toBe(CODESENSE_DOCS_SLUG);
   });
 
   it("later launches reopen the last opened context repo", () => {
-    expect(pickLaunchOrg({ orgs: [docs, acme, beta], activeOrgSlug: "local/beta" })).toEqual({
-      slug: "local/beta",
-      firstLaunch: false,
-    });
+    expect(pickLaunchOrg({ orgs: [docs, acme, beta], activeOrgSlug: "local/beta" })).toBe(
+      "local/beta",
+    );
   });
 
-  it("the docs as the last opened one reopen without the first-launch README", () => {
-    expect(pickLaunchOrg({ orgs: [docs, acme], activeOrgSlug: CODESENSE_DOCS_SLUG })).toEqual({
-      slug: CODESENSE_DOCS_SLUG,
-      firstLaunch: false,
-    });
+  it("the docs as the last opened one reopen", () => {
+    expect(pickLaunchOrg({ orgs: [docs, acme], activeOrgSlug: CODESENSE_DOCS_SLUG })).toBe(
+      CODESENSE_DOCS_SLUG,
+    );
   });
 
   it("a just-connected context repo wins over the persisted one", () => {
@@ -72,25 +64,18 @@ describe("pickLaunchOrg — first launch vs later launches", () => {
         activeOrgSlug: "local/acme",
         newlyConnected: "local/beta",
       }),
-    ).toEqual({ slug: "local/beta", firstLaunch: false });
+    ).toBe("local/beta");
   });
 
   it("a last-opened repo that is gone falls back to the docs (never a dead end)", () => {
-    expect(pickLaunchOrg({ orgs: [docs, acme], activeOrgSlug: "local/gone" })).toEqual({
-      slug: CODESENSE_DOCS_SLUG,
-      firstLaunch: false,
-    });
+    expect(pickLaunchOrg({ orgs: [docs, acme], activeOrgSlug: "local/gone" })).toBe(
+      CODESENSE_DOCS_SLUG,
+    );
   });
 
   it("without the docs (placement failed) falls back to the first one, or none", () => {
-    expect(pickLaunchOrg({ orgs: [acme], activeOrgSlug: null })).toEqual({
-      slug: "local/acme",
-      firstLaunch: false,
-    });
-    expect(pickLaunchOrg({ orgs: [], activeOrgSlug: null })).toEqual({
-      slug: null,
-      firstLaunch: false,
-    });
+    expect(pickLaunchOrg({ orgs: [acme], activeOrgSlug: null })).toBe("local/acme");
+    expect(pickLaunchOrg({ orgs: [], activeOrgSlug: null })).toBe(null);
   });
 });
 

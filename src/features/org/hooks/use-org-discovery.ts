@@ -171,21 +171,21 @@ export function useOrgDiscovery() {
         const lastOpenedBeforeRefresh = previous.activeOrgSlug;
         setOrgs(loadedOrgs);
         // Later launches reopen the last opened context repo (and, through the per-repo
-        // memory, its last team). Only the very first launch, proven by a restored session
-        // with no last-opened repo, lands in the CodeSense docs. What opens there, the
-        // Foreman or the README, is `openStartLanding`'s call, once per app start.
+        // memory, its last team); the very first launch, proven by a restored session with
+        // no last-opened repo, picks the CodeSense docs. Then `openStartLanding` opens the
+        // Foreman or the README in the docs, once per app start.
         stopDeciding = afterPersistedSelectionRestored(() => {
           if (cancelled) return;
           // The last-opened repo, whether the restore landed before `setOrgs` (which drops
           // a selection that is no longer connected) or after it.
           const restored = useOrgStore.getState().activeOrgSlug ?? lastOpenedBeforeRefresh;
-          const launch = pickLaunchOrg({
+          const launchSlug = pickLaunchOrg({
             orgs: loadedOrgs,
             activeOrgSlug: restored,
             newlyConnected: newlyAttached?.slug,
           });
-          if (launch.slug && launch.slug !== useOrgStore.getState().activeOrgSlug) {
-            setActiveOrg(launch.slug);
+          if (launchSlug && launchSlug !== useOrgStore.getState().activeOrgSlug) {
+            setActiveOrg(launchSlug);
           }
           if (docs) openStartLanding(docs.readme_path);
         });

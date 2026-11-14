@@ -103,10 +103,13 @@ describe("start-up routing", () => {
     expect(paths(DOCS_TEAM_KEY)).toEqual([]);
   });
 
-  it("does nothing until the docs repo is connected", () => {
+  it("does nothing until the docs repo is connected, then lands once it is", () => {
     connect([acme], "local/acme", "core");
     openStartLanding(README);
     expect(Object.values(useViewerStore.getState().openTabs).flat()).toEqual([]);
+    connect([docsOrg, acme], "local/acme", "core");
+    openStartLanding(README);
+    expect(paths(DOCS_TEAM_KEY)).toEqual([FOREMAN]);
   });
 });
 
