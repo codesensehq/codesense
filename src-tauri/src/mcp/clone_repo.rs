@@ -214,7 +214,9 @@ fn check_path_text(path: &str) -> Result<(), CloneRefusal> {
 
 /// The folder a clone at `path` would sit in: `path` minus its last segment.
 pub(crate) fn parent_of(path: &str) -> &Path {
-    Path::new(path).parent().unwrap_or(Path::new("/"))
+    std::path::Path::new(path)
+        .parent()
+        .unwrap_or(std::path::Path::new("/"))
 }
 
 /// The rules that need no filesystem: the repo and path text, containment, and the
@@ -226,7 +228,7 @@ pub(crate) fn validate_text(
 ) -> Result<PathBuf, CloneRefusal> {
     let name = check_repo(repo)?;
     check_path_text(path)?;
-    let target = Path::new(path);
+    let target = std::path::Path::new(path);
     let Ok(rest) = target.strip_prefix(parent) else {
         return Err(CloneRefusal::Containment);
     };
@@ -340,14 +342,14 @@ impl CloneRecords {
 
 /// The process-wide record of created folders.
 pub(crate) fn records() -> &'static CloneRecords {
-    static RECORDS: OnceLock<CloneRecords> = OnceLock::new();
+    static RECORDS: OnceLock<CloneRecords> = std::sync::OnceLock::new();
     RECORDS.get_or_init(|| CloneRecords {
-        created: Mutex::new(vec![]),
+        created: std::sync::Mutex::new(vec![]),
     })
 }
 
 /// Whether the clone at `path` has finished: git writes the index when its checkout
 /// ends. A repository with no commits never gets one, which reads as "still running".
 pub(crate) fn finished(path: &Path) -> bool {
-    Path::is_file(&path.join(".git").join("index"))
+    std::path::Path::is_file(&path.join(".git").join("index"))
 }
