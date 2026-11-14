@@ -50,6 +50,20 @@ function schemas() {
   return validators;
 }
 
+// The verbs the guide uses to change something, by their bare names. Each waits for a click
+// (`scripts/setup-consent-check.mjs`), so none belongs on a `read` act.
+export const SETUP_VERBS = [
+  "create_local_organization",
+  "attach_context_repository",
+  "create_team",
+  "add_source_repo",
+  "attach_source_repo_path",
+  "run_in_terminal_tab",
+  "create_content_file",
+  "set_epic_repos",
+  "clone_repo",
+];
+
 // A team ledger row is shared through git. These key names and value shapes are the ones
 // that would carry a path, a username or a secret into it.
 const PRIVATE_KEY = /path|dir|folder|home|user|account|token|secret|password|credential|key/i;
@@ -81,9 +95,15 @@ export function stepRuleErrors(step, where) {
   ])
     if (new Set(list).size !== list.length) errors.push(`${where}: duplicate ${what} id`);
 
-  for (const act of acts)
+  for (const act of acts) {
     if (act.consent === "external-write")
       errors.push(`${where}: act ${act.id} is external-write, which setup refuses`);
+    // A read act needs no click, so it may neither run a command nor call a setup verb.
+    if (act.consent === "read" && act.run)
+      errors.push(`${where}: act ${act.id} is read but runs a command`);
+    if (act.consent === "read" && SETUP_VERBS.includes(act.verb?.tool))
+      errors.push(`${where}: act ${act.id} is read but calls ${act.verb.tool}, a setup verb`);
+  }
 
   const options = step.ask?.options ?? [];
   for (const option of options)
@@ -108,13 +128,13 @@ export function stepRuleErrors(step, where) {
     }
   }
   for (const act of acts) {
-    // The one place user text becomes a command is the engine's `clone_repo`; a step's own
-    // command is fixed, so it may read a probe result and nothing the person typed.
-    for (const name of templates(act.run))
-      if (name.split(".")[0] !== "probe")
-        errors.push(
-          `${where}: act ${act.id} builds a command from ${name}; a run command is fixed`,
-        );
+    // The one place outside text becomes a command is the engine's `clone_repo`. A step's
+    // own command and its folder are fixed: not even a probe result (a git remote, a branch
+    // name, an account name) goes into them, since those can hold shell syntax.
+    for (const name of templates({ cmd: act.run?.cmd, cwd: act.run?.cwd }))
+      errors.push(
+        `${where}: act ${act.id} builds its command from {{${name}}}; a run command and its folder are fixed`,
+      );
     for (const name of templates({ verb: act.verb, open_url: act.open_url })) {
       const root = name.split(".")[0];
       if (root !== "probe" && !inputs.includes(root))
@@ -182,7 +202,10 @@ export function stepErrors(dir) {
     seen.add(entry.id);
   }
 
-  const files = readdirSync(stepsDir).filter((f) => f.endsWith(".yml") && f !== "index.yml");
+  const listed = readdirSync(stepsDir);
+  for (const file of listed.filter((f) => f.endsWith(".yaml")))
+    errors.push(`setup/steps/${file}: a step file ends in .yml; this one is never read`);
+  const files = listed.filter((f) => f.endsWith(".yml") && f !== "index.yml");
   for (const file of files)
     if (!entries.some((e) => `${e.id}.yml` === file))
       errors.push(`setup/steps/${file}: not listed in index.yml`);

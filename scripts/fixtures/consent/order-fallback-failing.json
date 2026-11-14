@@ -18,7 +18,7 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__describe_setup",
-            "native_id": "toolu_1",
+            "native_id": "toolu_35",
             "is_error": false,
             "input": "{}",
             "result": "{\"orgs\": []}"
@@ -31,10 +31,10 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__send_message",
-            "native_id": "toolu_2",
+            "native_id": "toolu_36",
             "is_error": false,
-            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create your team folder?**\\n\\nteam \\u00b7 create \\u00b7 local-write\"}",
-            "result": "{\"status\": \"sent\"}"
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create the web team?**\\n\\ncard: team \\u00b7 local-write \\u00b7 create-team=Create web | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 101}"
           }
         ]
       },
@@ -44,10 +44,10 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__read_messages",
-            "native_id": "toolu_3",
+            "native_id": "toolu_37",
             "is_error": false,
             "input": "{}",
-            "result": "{\"messages\": [{\"from\": \"human\", \"text\": \"Do it\"}]}"
+            "result": "{\"messages\": [{\"messageId\": 100, \"text\": \"Create web\", \"from\": \"human\"}]}"
           }
         ]
       },
@@ -57,7 +57,7 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__create_team",
-            "native_id": "toolu_4",
+            "native_id": "toolu_38",
             "is_error": false,
             "input": "{\"org\": \"acme\", \"name\": \"web\"}",
             "result": "{\"status\": \"ok\"}"
@@ -70,10 +70,10 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__send_message",
-            "native_id": "toolu_5",
+            "native_id": "toolu_39",
             "is_error": false,
-            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Add acme/web?**\"}",
-            "result": "{\"status\": \"sent\"}"
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Add acme/web?**\\n\\ncard: source-repos \\u00b7 local-write \\u00b7 add-source-repo=Add acme/web | none=Skip\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 103}"
           }
         ]
       },
@@ -83,7 +83,7 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__add_source_repo",
-            "native_id": "toolu_6",
+            "native_id": "toolu_40",
             "is_error": false,
             "input": "{\"org\": \"acme\", \"team\": \"web\", \"url\": \"https://github.com/acme/web\"}",
             "result": "{\"status\": \"ok\"}"
@@ -96,14 +96,13 @@
         "tool_calls": [
           {
             "name": "mcp__codesense__read_messages",
-            "native_id": "toolu_7",
+            "native_id": "toolu_41",
             "is_error": false,
             "input": "{}",
-            "result": "{\"messages\": [{\"from\": \"human\", \"text\": \"Do it\"}]}"
+            "result": "{\"messages\": [{\"messageId\": 104, \"text\": \"Add acme/web\", \"from\": \"human\"}]}"
           }
         ]
       }
-    ],
-    "turnCount": 8
+    ]
   }
 }

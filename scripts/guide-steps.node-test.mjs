@@ -299,7 +299,7 @@ test("the card, the acts and the probes agree", () => {
   has(check([twice]), "duplicate act id");
 });
 
-test("a command is fixed: it may read a probe result and nothing the person typed", () => {
+test("a command and its folder are fixed: no template at all, not even a probe result", () => {
   const step = teamStep();
   step.act = [
     {
@@ -311,10 +311,33 @@ test("a command is fixed: it may read a probe result and nothing the person type
       run: { cmd: "git init {{team}}", in: "terminal_tab" },
     },
   ];
-  has(check([step]), "builds a command from team; a run command is fixed");
-  const ok = ghAuth();
-  ok.act[0].run.cmd = "echo {{probe.status.account}}";
-  assert.deepEqual(check([ghInstalled(), ok]), []);
+  has(
+    check([step]),
+    "act create builds its command from {{team}}; a run command and its folder are fixed",
+  );
+  const probed = ghAuth();
+  probed.act[0].run.cmd = "echo {{probe.status.account}}";
+  has(check([ghInstalled(), probed]), "builds its command from {{probe.status.account}}");
+  const folder = ghAuth();
+  folder.act[0].run.cwd = "{{probe.repo.path}}";
+  has(check([ghInstalled(), folder]), "builds its command from {{probe.repo.path}}");
+  assert.deepEqual(check([ghInstalled(), ghAuth()]), []);
+});
+
+test("a read act neither runs a command nor calls a setup verb", () => {
+  const runs = ghAuth();
+  runs.act[0].consent = "read";
+  has(check([ghInstalled(), runs]), `act ${runs.act[0].id} is read but runs a command`);
+  const verb = teamStep();
+  verb.act[0].consent = "read";
+  has(check([verb]), `act ${verb.act[0].id} is read but calls create_team, a setup verb`);
+});
+
+test("a .yaml step file is reported, not skipped", () => {
+  has(
+    check([ghInstalled()], { extra: { "team.yaml": "id: team\n" } }),
+    "setup/steps/team.yaml: a step file ends in .yml; this one is never read",
+  );
 });
 
 test("a template must be an input or a probe result; an input pattern must compile and be anchored", () => {
