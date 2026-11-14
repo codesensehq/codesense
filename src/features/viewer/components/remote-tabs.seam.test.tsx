@@ -1149,12 +1149,12 @@ describe("a tab's agent inbox lives in that tab", () => {
       openAgentInboxRail("local-1");
       openAgentInboxRail("remote-shell-1");
     });
-    const panes = await screen.findAllByTestId("inbox-rail");
+    const panes = await screen.findAllByTestId("chat-overlay");
     expect(panes).toHaveLength(2);
     const local = screen.getByTestId("terminal-grid-cell-local-1");
     const remote = screen.getByTestId("terminal-grid-cell-remote-shell-1");
-    const inLocal = within(local).getByTestId("inbox-rail");
-    const inRemote = within(remote).getByTestId("inbox-rail");
+    const inLocal = within(local).getByTestId("chat-overlay");
+    const inRemote = within(remote).getByTestId("chat-overlay");
     expect(inLocal.getAttribute("data-session-id")).toBe("local-1");
     expect(inRemote.getAttribute("data-session-id")).toBe("remote-shell-1");
     // Each pane sits under its own cell's caption, never over it.
@@ -1171,8 +1171,8 @@ describe("a tab's agent inbox lives in that tab", () => {
 
     // Closing one leaves the other where it is.
     act(() => closeAgentInboxRail("local-1"));
-    expect(within(local).queryByTestId("inbox-rail")).toBeNull();
-    expect(within(remote).getByTestId("inbox-rail")).toBeTruthy();
+    expect(within(local).queryByTestId("chat-overlay")).toBeNull();
+    expect(within(remote).getByTestId("chat-overlay")).toBeTruthy();
     act(() => closeAgentInboxRail("remote-shell-1"));
   });
 
@@ -1183,7 +1183,7 @@ describe("a tab's agent inbox lives in that tab", () => {
       liveInboxAgent("remote-shell-1", "codex");
       openAgentInboxRail("remote-shell-1");
     });
-    const pane = await screen.findByTestId("inbox-rail");
+    const pane = await screen.findByTestId("chat-overlay");
     const body = pane.closest<HTMLElement>("[data-pane-active]")!;
     expect(body).not.toBeNull();
     expect(within(body).getByTestId("terminal-grid-caption-remote-shell-1")).toBeTruthy();

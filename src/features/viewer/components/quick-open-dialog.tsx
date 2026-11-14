@@ -2,6 +2,7 @@
 import { selectedIndexById } from "@/shared/lib/picker-selection";
 import { useState, useEffect, useRef, useCallback, useId, type ComponentType } from "react";
 import { Search } from "lucide-react";
+import { StatusMark } from "@/shared/components/status-mark";
 import { fuzzyScore } from "@/shared/lib/fuzzy-match";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
 
@@ -36,6 +37,8 @@ export interface QuickPickerItem {
   icon?: ComponentType<{ size?: number; className?: string }>;
   /** The row's current chord, already formatted for display. */
   chord?: string;
+  /** Something waits behind this row: a dot before the chord, and the sublabel says so. */
+  waiting?: boolean;
 }
 
 interface QuickOpenDialogProps {
@@ -298,6 +301,14 @@ export function QuickOpenDialog({
                       {item.sublabel}
                     </span>
                   </span>
+                  {item.waiting && (
+                    <StatusMark
+                      data-testid="palette-row-waiting"
+                      mark="question"
+                      size="sm"
+                      className="flex-shrink-0"
+                    />
+                  )}
                   {item.chord && (
                     <kbd
                       className={`flex-shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] ${

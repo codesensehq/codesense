@@ -16,6 +16,7 @@ import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rai
 import { useMcpActions } from "@/shared/hooks/use-mcp-actions";
 import { installTerminalLayoutHarness, seedTerminalTabs } from "@/test/terminal-layout-harness";
 import type { AgentSessionRow } from "@/tauri/commands";
+import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 import { frameFixture } from "../../../../tests/support/fixtures/frame";
 
 const h = vi.hoisted(() => ({
@@ -372,4 +373,27 @@ it("keeps frame focus when gotoAgent replaces an open run with preserveFocus", a
     frame.remove();
     terminal.remove();
   }
+});
+
+it.each(AGENT_RUNTIMES)(
+  "openAgentInbox opens the chat for a running %s agent the same way",
+  async (runtime) => {
+    seedTerminalTabs(team, "b", ["sid"]);
+    useAgentStateStore.setState({ processAgentBySession: { sid: runtime } });
+    await expect(bridge.openAgentInbox({ handle: "lead" })).resolves.toEqual({ opened: true });
+    expect(useAgentInboxRailStore.getState().bySession.sid).toBeDefined();
+  },
+);
+
+it("openAgentInbox refuses a headless run with its typed unavailable error and opens nothing", async () => {
+  useAgentListProjectionStore.setState({
+    sessions: [{ ...row, kind: "headless" }],
+  });
+  useAgentStateStore.setState({
+    bySession: { sid: { t1: null, t2: null, state: "working", agent: "claude" } },
+  });
+  const opened = bridge.openAgentInbox({ handle: "lead" });
+  await expect(opened).rejects.toThrow(/^unavailable: /);
+  await expect(opened).rejects.toThrow("unavailable: agent is not running");
+  expect(useAgentInboxRailStore.getState().bySession).toEqual({});
 });

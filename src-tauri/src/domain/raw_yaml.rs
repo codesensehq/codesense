@@ -180,6 +180,11 @@ pub struct RawTeamEntry {
     /// keeps teams without one byte-stable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landing_page: Option<String>,
+    /// The team's agent page: the page an agent's "Full view" opens, relative to the team's
+    /// content root (`{org_root}/{team}/content`). Absent ⇒ the team has none and its agents show
+    /// no Full view. `skip_serializing_if` keeps teams without one byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_page: Option<String>,
 }
 
 /// serde `skip_serializing_if` predicate: omit `archived` from the emitted
@@ -565,6 +570,20 @@ impl RawTeamEntry {
                 log::warn!(
                     target: "domain::raw_yaml",
                     "ignoring landing_page {page:?} of team {}: it must be a path inside the team's content",
+                    team.name
+                );
+                None
+            }
+            None => None,
+        };
+        // The same rule for the agent page: a path that would leave the team's content is dropped,
+        // never a reason to refuse the team.
+        team.agent_page = match self.agent_page.map(|p| p.trim().to_string()) {
+            Some(page) if is_content_relative(&page) => Some(page),
+            Some(page) => {
+                log::warn!(
+                    target: "domain::raw_yaml",
+                    "ignoring agent_page {page:?} of team {}: it must be a path inside the team's content",
                     team.name
                 );
                 None
@@ -1330,6 +1349,7 @@ teams:
             archived: false,
             parent_team: None,
             landing_page: None,
+            agent_page: None,
         };
         assert_eq!(
             raw.into_domain(),
@@ -1347,11 +1367,49 @@ teams:
             archived: false,
             parent_team: None,
             landing_page: None,
+            agent_page: None,
         };
         assert_eq!(
             raw.into_domain(),
             Err(DomainError::InvalidTeamName("Backend".into()))
         );
+    }
+
+    // ---------- agent_page: the page an agent's Full view opens ----------
+
+    #[test]
+    fn agent_page_loads_onto_the_domain_team_and_round_trips() {
+        let raw: RawTeamsYml = serde_yaml::from_str(
+            "teams:\n  - name: web\n    source_repos: []\n    agent_page: pages/agent.html\n  - name: docs\n    source_repos: []\n",
+        )
+        .unwrap();
+        assert_eq!(raw.teams[0].agent_page.as_deref(), Some("pages/agent.html"));
+        assert_eq!(raw.teams[1].agent_page, None);
+        let team = raw.teams[0].clone().into_domain().unwrap();
+        assert_eq!(team.agent_page.as_deref(), Some("pages/agent.html"));
+        assert_eq!(raw.teams[1].clone().into_domain().unwrap().agent_page, None);
+        // Absent stays out of the YAML (byte-stable), present is written back.
+        let bare = serde_yaml::to_string(&raw.teams[1]).unwrap();
+        assert!(!bare.contains("agent_page"), "{bare}");
+        let back = serde_yaml::to_string(&raw.teams[0]).unwrap();
+        assert!(back.contains("agent_page: pages/agent.html"), "{back}");
+    }
+
+    #[test]
+    fn agent_page_outside_the_team_content_is_dropped_not_fatal() {
+        for bad in [
+            "/abs/agent.html",
+            "../agent.html",
+            "pages/../../agent.html",
+            ".hidden/agent.html",
+        ] {
+            let raw: RawTeamsYml = serde_yaml::from_str(&format!(
+                "teams:\n  - name: web\n    source_repos: []\n    agent_page: {bad}\n"
+            ))
+            .unwrap();
+            let team = raw.teams[0].clone().into_domain().unwrap();
+            assert_eq!(team.agent_page, None, "{bad:?} should be dropped");
+        }
     }
 
     // ---------- landing_page: a team's home page ----------
@@ -1494,6 +1552,7 @@ teams:
                 archived: false,
                 parent_team: None,
                 landing_page: None,
+                agent_page: None,
             }],
         };
         let out = serde_yaml::to_string(&raw).unwrap();
@@ -1572,6 +1631,7 @@ teams:
                 archived: false,
                 parent_team: None,
                 landing_page: None,
+                agent_page: None,
             }],
         };
         let yaml_str = serde_yaml::to_string(&raw).unwrap();
@@ -1591,6 +1651,7 @@ teams:
                 archived: false,
                 parent_team: Some("platform".into()),
                 landing_page: None,
+                agent_page: None,
             }],
         };
         let yaml_str = serde_yaml::to_string(&raw).unwrap();
@@ -1609,6 +1670,7 @@ teams:
             archived: false,
             parent_team: Some("Bad Name".into()),
             landing_page: None,
+            agent_page: None,
         };
         let err = raw.into_domain().unwrap_err();
         assert_eq!(err, DomainError::InvalidParentTeam("Bad Name".into()));
@@ -1626,6 +1688,7 @@ teams:
             archived: false,
             parent_team: Some("ghost".into()),
             landing_page: None,
+            agent_page: None,
         };
         let team = raw.into_domain().unwrap();
         assert_eq!(team.parent_team, Some("ghost".to_string()));
@@ -1642,6 +1705,7 @@ teams:
             archived: false,
             parent_team: None,
             landing_page: None,
+            agent_page: None,
         };
         let team = raw.into_domain().unwrap();
         assert_eq!(team.source_repos.len(), 1);
@@ -1750,6 +1814,7 @@ teams:
                     archived: false,
                     parent_team: None,
                     landing_page: None,
+                    agent_page: None,
                 }],
             }),
         };

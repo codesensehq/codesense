@@ -12,7 +12,7 @@
     {
       "id": "local-setup",
       "title": "Local organizations and setup",
-      "tools": ["create_local_organization", "attach_context_repository", "list_context_attachments", "detach_context_repository", "commit_registry_edit_local", "save_source_repo_attachment", "describe_setup", "list_orgs_teams", "set_active_team"],
+      "tools": ["create_local_organization", "attach_context_repository", "list_context_attachments", "detach_context_repository", "commit_registry_edit_local", "save_source_repo_attachment", "describe_setup", "probe_environment", "list_orgs_teams", "set_active_team"],
       "docs": "arc-b-model/orgs.html",
       "searchTerms": ["local", "organizations", "setup"],
       "calls": [{"tool": "list_orgs_teams", "arguments": {}}]

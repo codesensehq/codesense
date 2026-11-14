@@ -718,6 +718,7 @@ time.sleep(30)
             "send_message",
             "reply",
             "react",
+            "pin",
             "signal_done",
             "read_messages",
             "inbox_post",
@@ -733,6 +734,7 @@ time.sleep(30)
                 "send_message",
                 "reply",
                 "react",
+                "pin",
                 "signal_done",
                 "read_messages",
             ]
