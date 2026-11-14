@@ -57,3 +57,12 @@ files:
   - path: docs/README.md
     sha256: 41022d3bc60420eaddd3c18e1d547a5f0a420046ad0c63ca688090c9543e55f6
     exec: false
+  - path: setup/ledger/setup-ledger.yaml
+    sha256: 64e8d67d2dfcbf127787fe10e9145e8d0af29fc071ed531b8ec0f1335d557e5c
+    exec: false
+  - path: setup/step.schema.json
+    sha256: 94357231037c7eeee981b8e8cb570be9c133318698a49b5ad862b43cef556ca9
+    exec: false
+  - path: setup/steps/index.yml
+    sha256: 6b039c8d2bd218cc83d310a5f606160b88d7f6eed928703604b4f41c98a96574
+    exec: false

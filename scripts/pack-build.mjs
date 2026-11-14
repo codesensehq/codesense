@@ -9,7 +9,8 @@
 //      source mounts `kit.chat` and builds no chat of its own.
 // A pack with no skill part and no `files` is a legacy pack: schema-checked, never rewritten.
 //   5. for a pack the docs bundle carries (`DOCS_BUNDLED`), map its agents, `content/` and
-//      built skill copies into `codesense-docs/getting-started/`, and fail on drift there too.
+//      built skill copies, step files and ledger schema into `codesense-docs/getting-started/`,
+//      and fail on drift there too.
 //
 //   node scripts/pack-build.mjs            write the copies and `files`
 //   node scripts/pack-build.mjs --check    change nothing; exit 1 on any drift or error
@@ -37,6 +38,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { parse, parseDocument } from "yaml";
+import { stepErrors } from "./lib/pack-steps.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKS_ROOT = join(ROOT, "codesense-docs/packs");
@@ -337,6 +339,7 @@ export function buildPack(dir, { check = false, force = false } = {}) {
     if (!errors.length) errors.push("files: order differs; run the pack build");
   }
   errors.push(...chatCodeErrors(dir, manifest, present));
+  errors.push(...stepErrors(dir));
   if (errors.length || check) return { errors, written };
 
   const write = (path, bytes) => {
@@ -396,6 +399,9 @@ export function docsMapping(dir, manifest) {
       }
     }
   }
+  // The step index, the step files and the ledger schema the guide agent reads at run time.
+  for (const f of files)
+    if (/^setup\/(?:steps|ledger)\//.test(f)) add(f, `getting-started/content/guide/${f}`);
   for (const copy of skillCopies(manifest)) add(copy.path, `getting-started/content/${copy.path}`);
   return [...pairs.values()].sort((a, b) => (a.to < b.to ? -1 : 1));
 }

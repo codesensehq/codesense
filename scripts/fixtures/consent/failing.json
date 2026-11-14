@@ -1,0 +1,122 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_1",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"orgs\": []}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_local_organization",
+            "native_id": "toolu_2",
+            "is_error": false,
+            "input": "{\"name\": \"acme\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_101",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create your team folder?**\\n\\nteam \\u00b7 create \\u00b7 local-write\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 101}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_4",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_102",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 102, \"from\": \"human\", \"text\": \"Do it\", \"inReplyTo\": 101}]}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_team",
+            "native_id": "toolu_6",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"name\": \"web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 7,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_103",
+            "is_error": false,
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Create your team folder?**\\n\\nsource-repos \\u00b7 add \\u00b7 local-write\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 103}"
+          }
+        ]
+      },
+      {
+        "index": 8,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__add_source_repo",
+            "native_id": "toolu_8",
+            "is_error": false,
+            "input": "{\"org\": \"acme\", \"team\": \"web\", \"url\": \"https://github.com/acme/web\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      }
+    ],
+    "turnCount": 9
+  }
+}
