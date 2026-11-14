@@ -666,6 +666,19 @@ fn every_segment_of_a_glob_is_held_to_the_path_rules() {
             "path_traversal",
         ),
         ("\"content/handbook/**\"", "\"**/.git/**\"", "path_git"),
+        // A wildcard spelling of `.git` is the same folder to a matcher.
+        ("\"content/handbook/**\"", "\"content/.g?t/**\"", "path_git"),
+        (
+            "\"content/handbook/**\"",
+            "\"content/.[g]it/**\"",
+            "path_git",
+        ),
+        ("\"content/handbook/**\"", "\"content/.gi*/**\"", "path_git"),
+        (
+            "\"content/handbook/**\"",
+            "\"content/{.Git,x}/**\"",
+            "path_git",
+        ),
         (
             "\"content/handbook/**\"",
             "\"{../../etc,content}/*\"",
@@ -900,4 +913,135 @@ fn risk_facts_cover_every_agent_part_config_and_setup_step() {
         .network_fetches
         .iter()
         .any(|f| f.source == "https://github.com/example/tool" && f.version == "1.2.3"));
+}
+
+// A permission an agent sets in its own keys, not in `args`: no single string shows it.
+fn agent_risk(extra_agents: &[(&str, &str)]) -> Vec<String> {
+    let (_guard, pack) = scratch("risky-more");
+    for (name, body) in extra_agents {
+        let dir = pack.join(format!("agents/{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agent.yaml"), body).unwrap();
+    }
+    validate_dir(&pack)
+        .risk
+        .skip_permission_agents
+        .iter()
+        .map(|s| s.agent.clone())
+        .filter(|a| !a.starts_with("agents/one/") && !a.starts_with("agents/two/"))
+        .collect()
+}
+
+#[test]
+fn permission_keys_that_skip_checks_are_risk_facts_without_any_flag() {
+    let flagged = agent_risk(&[
+        (
+            "codex",
+            "id: c\nname: C\nruntime: codex\npermissions:\n  codex:\n    sandbox_mode: danger-full-access\n    approval_policy: never\n",
+        ),
+        (
+            "opencode",
+            "id: o\nname: O\nruntime: opencode\npermissions:\n  opencode:\n    permission:\n      \"*\": allow\n",
+        ),
+        (
+            "hermes",
+            "id: h\nname: H\nruntime: hermes\npermissions:\n  hermes:\n    approval: yolo\n",
+        ),
+        (
+            "calm",
+            "id: k\nname: K\nruntime: codex\npermissions:\n  codex:\n    sandbox_mode: workspace-write\n    approval_policy: on-request\n",
+        ),
+    ]);
+    assert_eq!(
+        flagged,
+        [
+            "agents/codex/agent.yaml",
+            "agents/hermes/agent.yaml",
+            "agents/opencode/agent.yaml"
+        ]
+    );
+}
+
+#[test]
+fn an_agent_part_that_does_not_parse_as_an_agent_is_refused() {
+    let (_guard, pack) = scratch("risky-more");
+    // No `id`: the app can't read it as an agent, so its permissions can't be derived.
+    std::fs::write(
+        pack.join("agents/one/claude.yaml"),
+        "name: One\nruntime: claude\npermissions:\n  claude:\n    default_mode: bypassPermissions\n",
+    )
+    .unwrap();
+    let report = validate_dir(&pack);
+    assert!(
+        refused(&report, "agent_invalid", "agents/one/claude.yaml"),
+        "{:?}",
+        codes(&report)
+    );
+    assert!(
+        !report
+            .errors
+            .iter()
+            .any(|e| e.code == "agent_invalid"
+                && e.path.as_deref() != Some("agents/one/claude.yaml")),
+        "{:?}",
+        codes(&report)
+    );
+}
+
+#[test]
+fn a_newer_pack_is_named_before_the_typed_parse_can_trip_on_it() {
+    // A kind and an enum value this app has never heard of, next to the version gate.
+    let future = "parts:\n  - { id: future, kind: hologram }\n";
+    let report = edited("good", "pack_format: 1\n", "pack_format: 2\n");
+    assert!(has(&report, "unsupported_format"), "{:?}", codes(&report));
+    let report = edited("good", "parts:\n", future);
+    assert!(has(&report, "manifest_invalid"), "{:?}", codes(&report));
+    let (_guard, pack) = scratch("good");
+    write_manifest(&pack, |t| {
+        t.replacen("pack_format: 1\n", "pack_format: 2\n", 1)
+            .replacen("parts:\n", future, 1)
+    });
+    let report = validate_dir(&pack);
+    assert!(has(&report, "unsupported_format"), "{:?}", codes(&report));
+    assert!(!has(&report, "manifest_invalid"), "{:?}", codes(&report));
+    write_manifest(&pack, |t| {
+        t.replacen("pack_format: 2\n", "pack_format: 1\n", 1)
+            .replacen("requires:\n", "requires:\n  codesense: \">=99.0.0\"\n", 1)
+    });
+    let report = validate_dir(&pack);
+    assert!(
+        refused(&report, "requires_newer_codesense", "pack.yml"),
+        "{:?}",
+        codes(&report)
+    );
+    assert!(!has(&report, "manifest_invalid"), "{:?}", codes(&report));
+}
+
+#[test]
+fn a_key_that_is_not_a_string_cannot_switch_off_the_unknown_key_check() {
+    let raw: serde_yaml::Value = serde_yaml::from_str("? [a]\n: x\nid: y\n").unwrap();
+    assert_eq!(super::validate::unknown_manifest_keys(&raw), None);
+    let raw: serde_yaml::Value = serde_yaml::from_str("id: y\nbogus: 1\n").unwrap();
+    assert_eq!(
+        super::validate::unknown_manifest_keys(&raw),
+        Some(vec!["bogus".to_string()])
+    );
+}
+
+#[test]
+fn a_pack_over_the_cap_is_not_read_again_for_risk() {
+    let (_guard, pack) = scratch("risky-more");
+    let limits = Limits {
+        max_pack: 1,
+        ..Default::default()
+    };
+    let report = validate_dir_with(&pack, limits);
+    assert!(has(&report, "pack_too_large"), "{:?}", codes(&report));
+    // Facts that need a file's content are skipped; those from names and modes remain.
+    assert!(report.risk.skip_permission_agents.is_empty());
+    assert!(!report
+        .risk
+        .scripts
+        .contains(&"content/bin/tool".to_string()));
+    assert!(!report.risk.setup_steps.is_empty());
 }

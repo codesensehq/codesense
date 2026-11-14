@@ -312,6 +312,26 @@ fn expand_braces(glob: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
+// A glob segment with a literal part that a matcher would take for `.git` (`.g?t`, `.[g]it`,
+// `.gi*`). A segment of only `*`s is the usual wildcard and stays; whatever matches a pack's
+// paths against a fetched tree must still skip `.git` itself.
+fn git_wildcard_rule(part: &str) -> Option<(&'static str, String)> {
+    if part.chars().all(|c| c == '*') {
+        return None;
+    }
+    let matcher = globset::GlobBuilder::new(part)
+        .case_insensitive(true)
+        .build()
+        .ok()?
+        .compile_matcher();
+    matcher.is_match(".git").then(|| {
+        (
+            "path_git",
+            "a glob segment that could match `.git` is refused".into(),
+        )
+    })
+}
+
 /// The first rule a glob in `pack.yml` breaks: every segment of every spelling is held to
 /// the path rules, and with `rooted` its literal folders sit under a declared root.
 pub fn glob_rule(glob: &str, rooted: bool) -> Option<(&'static str, String)> {
@@ -346,7 +366,7 @@ pub fn glob_rule(glob: &str, rooted: bool) -> Option<(&'static str, String)> {
             return Some(("path_absolute", "absolute paths are refused".into()));
         }
         for part in spelled.split('/') {
-            if let Some(rule) = component_rule(part) {
+            if let Some(rule) = component_rule(part).or_else(|| git_wildcard_rule(part)) {
                 return Some(rule);
             }
         }
@@ -368,6 +388,13 @@ pub fn glob_rule(glob: &str, rooted: bool) -> Option<(&'static str, String)> {
 
 fn is_hex(text: &str, len: usize) -> bool {
     text.len() == len && text.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+// What `check_files` read: each file's sha256, and its bytes for the risk derivation.
+#[derive(Default)]
+struct FileReads {
+    hashes: BTreeMap<String, String>,
+    bytes: BTreeMap<String, Vec<u8>>,
 }
 
 struct DiskFile {
@@ -614,6 +641,57 @@ fn unknown_keys(
     }
 }
 
+// The unknown keys of a parsed `pack.yml`; `None` when a mapping key is not a string, which
+// JSON can't hold, so the check can't run and the file is refused rather than passed.
+pub(super) fn unknown_manifest_keys(raw: &serde_yaml::Value) -> Option<Vec<String>> {
+    let json = serde_json::to_value(raw).ok()?;
+    let mut unknown: Vec<String> = Default::default();
+    unknown_keys(&MANIFEST_SCHEMA, &json, "", &mut unknown);
+    Some(unknown)
+}
+
+// `pack_format` and `requires.codesense`, read from the raw document. `false` when this app
+// can't read the pack: it is refused by name, not as a parse error on a field it doesn't know.
+fn check_version_gates(raw: &serde_yaml::Value, report: &mut PackReport) -> bool {
+    let format = raw.get("pack_format").and_then(|f| f.as_u64());
+    if format.is_some_and(|f| f != u64::from(PACK_FORMAT)) {
+        report.error(PackIssue::at(
+            "unsupported_format",
+            "pack.yml",
+            format!(
+                "pack_format {} is not supported (expected {PACK_FORMAT})",
+                format.unwrap_or_default()
+            ),
+        ));
+        return false;
+    }
+    let range = raw
+        .get("requires")
+        .and_then(|r| r.get("codesense"))
+        .and_then(|c| c.as_str());
+    let Some(range) = range else {
+        return true;
+    };
+    let app = env!("CARGO_PKG_VERSION");
+    match version_satisfies(range, app) {
+        None => report.error(PackIssue::at(
+            "requires_invalid",
+            "pack.yml",
+            format!("requires.codesense {range:?} is not a version range of full x.y.z versions"),
+        )),
+        Some(false) => {
+            report.error(PackIssue::at(
+                "requires_newer_codesense",
+                "pack.yml",
+                format!("this pack needs CodeSense {range}; this is {app}"),
+            ));
+            return false;
+        }
+        Some(true) => {}
+    }
+    true
+}
+
 pub fn validate_dir(root: &Path) -> PackReport {
     validate_dir_with(root, Limits::default())
 }
@@ -634,6 +712,10 @@ pub fn validate_dir_with(root: &Path, limits: Limits) -> PackReport {
             return report.finish();
         }
     };
+    // A newer pack is named before the typed parse, which would only say it can't read it.
+    if !check_version_gates(&raw, &mut report) {
+        return report.finish();
+    }
     if raw.get("risk").is_some() {
         report.warnings.push(PackIssue::at(
             "risk_claim_ignored",
@@ -641,16 +723,20 @@ pub fn validate_dir_with(root: &Path, limits: Limits) -> PackReport {
             "a pack's own risk claim is ignored; risk facts are derived from its files",
         ));
     }
-    if let Ok(json) = serde_json::to_value(&raw) {
-        let mut unknown: Vec<String> = Default::default();
-        unknown_keys(&MANIFEST_SCHEMA, &json, "", &mut unknown);
-        for key in unknown {
-            report.error(PackIssue::at(
-                "unknown_key",
-                "pack.yml",
-                format!("{key}: not a pack.yml field"),
-            ));
-        }
+    let Some(unknown) = unknown_manifest_keys(&raw) else {
+        report.error(PackIssue::at(
+            "manifest_invalid",
+            "pack.yml",
+            "a mapping key is not a string",
+        ));
+        return report.finish();
+    };
+    for key in unknown {
+        report.error(PackIssue::at(
+            "unknown_key",
+            "pack.yml",
+            format!("{key}: not a pack.yml field"),
+        ));
     }
     let manifest: PackManifest = match serde_yaml::from_value(raw) {
         Ok(manifest) => manifest,
@@ -666,9 +752,9 @@ pub fn validate_dir_with(root: &Path, limits: Limits) -> PackReport {
 
     check_identity(&manifest, &mut report);
     let disk = scan_disk(root, limits, &mut report);
-    let hashes = check_files(root, &manifest, &disk, limits, &mut report);
+    let reads = check_files(root, &manifest, &disk, limits, &mut report);
     check_parts(&manifest, &mut report);
-    check_part_files(&manifest, &disk, &hashes, &mut report);
+    check_part_files(&manifest, &disk, &reads.hashes, &mut report);
 
     report.pack = Some(PackSummary {
         id: manifest.id.clone(),
@@ -687,7 +773,15 @@ pub fn validate_dir_with(root: &Path, limits: Limits) -> PackReport {
         })
         .collect();
     let paths: Vec<String> = disk.iter().map(|f| f.path.clone()).collect();
-    report.risk = risk::derive(root, &manifest, &paths, limits.max_file);
+    let (facts, invalid_agents) = risk::derive(root, &manifest, &paths, reads.bytes);
+    report.risk = facts;
+    for path in invalid_agents {
+        report.error(PackIssue::at(
+            "agent_invalid",
+            path,
+            "does not parse as an agent definition, so its permissions can't be checked",
+        ));
+    }
     report.finish()
 }
 
@@ -728,16 +822,6 @@ pub fn version_satisfies(range: &str, version: &str) -> Option<bool> {
 }
 
 fn check_identity(manifest: &PackManifest, report: &mut PackReport) {
-    if manifest.pack_format != PACK_FORMAT {
-        report.error(PackIssue::at(
-            "unsupported_format",
-            "pack.yml",
-            format!(
-                "pack_format {} is not supported (expected {PACK_FORMAT})",
-                manifest.pack_format
-            ),
-        ));
-    }
     if !NAME.is_match(&manifest.id) {
         report.error(PackIssue::at("invalid_id", "pack.yml", "id is [a-z0-9-]"));
     }
@@ -748,39 +832,18 @@ fn check_identity(manifest: &PackManifest, report: &mut PackReport) {
             format!("version {} is not semver", manifest.version),
         ));
     }
-    let wanted = manifest
-        .requires
-        .as_ref()
-        .and_then(|r| r.codesense.as_deref());
-    if let Some(range) = wanted {
-        let app = env!("CARGO_PKG_VERSION");
-        match version_satisfies(range, app) {
-            None => report.error(PackIssue::at(
-                "requires_invalid",
-                "pack.yml",
-                format!(
-                    "requires.codesense {range:?} is not a version range of full x.y.z versions"
-                ),
-            )),
-            Some(false) => report.error(PackIssue::at(
-                "requires_newer_codesense",
-                "pack.yml",
-                format!("this pack needs CodeSense {range}; this is {app}"),
-            )),
-            Some(true) => {}
-        }
-    }
 }
 
 // `files` against the disk: every file listed, hashed, in a declared root, and the caps.
-// Returns each regular file's sha256, read once.
+// Returns each regular file's sha256 and bytes, read once; nothing is read for a pack over
+// the cap, which is refused anyway.
 fn check_files(
     root: &Path,
     manifest: &PackManifest,
     disk: &[DiskFile],
     limits: Limits,
     report: &mut PackReport,
-) -> BTreeMap<String, String> {
+) -> FileReads {
     let mut total = 0u64;
     for file in disk {
         total += file.size;
@@ -808,7 +871,7 @@ fn check_files(
 
     // Each regular file under the caps is read once, with no symlink followed.
     let own_license = manifest.license.to_ascii_lowercase();
-    let mut hashes: BTreeMap<String, String> = Default::default();
+    let mut reads: FileReads = Default::default();
     for file in disk {
         if over_pack || file.size > limits.max_file || path_rule(&file.path).is_some() {
             continue;
@@ -821,7 +884,9 @@ fn check_files(
                 {
                     report.error(third_party_issue(&file.path));
                 }
-                hashes.insert(file.path.clone(), format!("{:x}", Sha256::digest(bytes)));
+                let hash = format!("{:x}", Sha256::digest(&bytes));
+                reads.hashes.insert(file.path.clone(), hash);
+                reads.bytes.insert(file.path.clone(), bytes);
             }
             Err(why) => report.error(PackIssue::at("file_unreadable", &file.path, why)),
         }
@@ -856,7 +921,7 @@ fn check_files(
             ));
             continue;
         };
-        if let Some(actual) = hashes.get(path) {
+        if let Some(actual) = reads.hashes.get(path) {
             if *actual != entry.sha256 {
                 report.error(PackIssue::at(
                     "hash_mismatch",
@@ -907,7 +972,7 @@ fn check_files(
             report.error(third_party_issue(path));
         }
     }
-    hashes
+    reads
 }
 
 fn third_party_issue(path: &str) -> PackIssue {

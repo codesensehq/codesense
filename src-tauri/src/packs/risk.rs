@@ -4,7 +4,7 @@
 //! servers, routines, setup steps (an upstream command the person's agent runs) and every
 //! network fetch an external part implies. A `risk:` key in `pack.yml` is not read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use globset::Glob;
@@ -112,9 +112,10 @@ fn skips_permissions(arg: &str) -> bool {
         .any(|a| crate::agents::adapter::is_escalating_flag(a) || SKIP_MARKERS.contains(&a))
 }
 
-fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) {
+// `false` when the file doesn't parse as an `Agent`: its permission keys can't be read.
+fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) -> bool {
     let Ok(agent) = serde_yaml::from_slice::<serde_yaml::Value>(bytes) else {
-        return;
+        return false;
     };
     let mut strings: Vec<String> = Default::default();
     for key in ["args", "permissions"] {
@@ -131,8 +132,10 @@ fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) {
     }
     // The app's own reading of the agent: a runtime's flag pairs and permission keys
     // (Codex `-s danger-full-access -a never`) that no single string shows.
-    let escalating = serde_yaml::from_slice::<crate::agents::model::Agent>(bytes)
-        .is_ok_and(|agent| crate::agents::model::Agent::is_escalating(&agent));
+    let typed = serde_yaml::from_slice::<crate::agents::model::Agent>(bytes);
+    let escalating = typed
+        .as_ref()
+        .is_ok_and(crate::agents::model::Agent::is_escalating);
     if escalating && facts.skip_permission_agents.len() == before {
         facts.skip_permission_agents.push(SkipPermissionFact {
             agent: rel.to_string(),
@@ -149,6 +152,7 @@ fn agent_facts(rel: &str, bytes: &[u8], facts: &mut RiskFacts) {
             });
         }
     }
+    typed.is_ok()
 }
 
 // Keys whose value is a command the CLI runs on its own.
@@ -258,9 +262,16 @@ fn part_facts(manifest: &PackManifest, facts: &mut RiskFacts) {
     }
 }
 
-/// The facts for the pack at `root`. `files` are its regular files, relative with `/`;
-/// a file over `max_file` bytes is not read, and nothing is read through a symlink.
-pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: u64) -> RiskFacts {
+/// The facts for the pack at `root`, and the agent parts' files that don't parse as an
+/// `Agent`. `files` are its regular files, relative with `/`; `contents` holds the bytes the
+/// validator already read (none for a file it skipped), so nothing is read here.
+pub fn derive(
+    root: &Path,
+    manifest: &PackManifest,
+    files: &[String],
+    mut contents: BTreeMap<String, Vec<u8>>,
+) -> (RiskFacts, Vec<String>) {
+    let mut invalid_agents: Vec<String> = Default::default();
     let mut facts: RiskFacts = Default::default();
     let steps: Vec<_> = manifest
         .setup_steps
@@ -287,7 +298,9 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
         }
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let slashed = format!("/{rel}");
-        let bytes = super::validate::read_regular(&path, max_file).unwrap_or_default();
+        let bytes = contents.remove(rel);
+        let read = bytes.is_some();
+        let bytes = bytes.unwrap_or_default();
         if is_executable(&meta) {
             facts.executables.push(rel.clone());
         }
@@ -308,8 +321,12 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
                 );
             }
         }
-        if name == "agent.yaml" || agents.contains(rel.as_str()) {
-            agent_facts(rel, &bytes, &mut facts);
+        if (name == "agent.yaml" || agents.contains(rel.as_str()))
+            && !agent_facts(rel, &bytes, &mut facts)
+            && read
+            && agents.contains(rel.as_str())
+        {
+            invalid_agents.push(rel.clone());
         }
         config_facts(rel, name, &bytes, &mut facts);
         if slashed.contains("/routines/") && (name == "routine.yml" || name == "routine.yaml") {
@@ -346,5 +363,5 @@ pub fn derive(root: &Path, manifest: &PackManifest, files: &[String], max_file: 
     facts.cli_hooks.dedup();
     facts.skip_permission_agents.dedup();
     facts.mcp_servers.dedup();
-    facts
+    (facts, invalid_agents)
 }
