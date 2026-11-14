@@ -34,7 +34,7 @@ describe("sideFrameDoc", () => {
     expect(sidePrelude("n1")).toContain(`addEventListener("pagehide"`);
     expect(sidePrelude("n1")).toContain(JSON.stringify(`${SIDE_LEFT_MESSAGE}n1`));
     // document.open() would erase the listener: it is locked before the side runs.
-    expect(sidePrelude("n1")).toContain(`lock("open",refuse)`);
+    expect(sidePrelude("n1")).toContain(`for(const name of ["open","write","writeln"])`);
     expect(sidePrelude("n1")).toContain("configurable:false");
   });
 
