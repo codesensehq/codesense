@@ -30,6 +30,12 @@ fn refused(home: &Path, repo: &str, path: &str) -> CloneRefusal {
     validate_clone(repo, path, home).unwrap_err()
 }
 
+/// Record a folder as a clone call does: reserve it, then fill in its tab.
+fn note_created(records: &CloneRecords, path: &Path, tab: Option<&str>) {
+    assert!(records.reserve(path, true));
+    records.set_tab(path, tab);
+}
+
 fn kept(reason: &'static str) -> CloneStopped {
     CloneStopped {
         removed: false,
@@ -75,8 +81,11 @@ fn the_argv_is_git_clone_of_the_fixed_host_with_no_gh() {
     let path = path_in(&home, "api");
     let valid = validate_clone("acme/api", &path, &home).unwrap();
     assert_eq!(
-        clone_argv("/usr/bin/git", &valid),
+        clone_argv("/usr/bin/git", &valid).unwrap(),
         [
+            "/usr/bin/env",
+            "GIT_TERMINAL_PROMPT=0",
+            "GCM_INTERACTIVE=never",
             "/usr/bin/git",
             "clone",
             "--",
@@ -84,6 +93,32 @@ fn the_argv_is_git_clone_of_the_fixed_host_with_no_gh() {
             path.as_str()
         ]
     );
+}
+
+#[test]
+fn the_clone_never_stops_at_a_credential_prompt() {
+    let (_dir, home) = home();
+    let valid = validate_clone("acme/api", &path_in(&home, "api"), &home).unwrap();
+    let argv = clone_argv("/usr/bin/git", &valid).unwrap();
+    // env sets both before git runs: git's own prompt and Git Credential Manager's.
+    assert_eq!(argv[0], "/usr/bin/env");
+    let git_at = argv.iter().position(|arg| arg == "/usr/bin/git").unwrap();
+    let env = &argv[1..git_at];
+    assert!(
+        env.contains(&"GIT_TERMINAL_PROMPT=0".to_string()),
+        "{argv:?}"
+    );
+    assert!(
+        env.contains(&"GCM_INTERACTIVE=never".to_string()),
+        "{argv:?}"
+    );
+}
+
+#[test]
+fn a_git_path_env_would_read_as_a_variable_is_refused() {
+    let (_dir, home) = home();
+    let valid = validate_clone("acme/api", &path_in(&home, "api"), &home).unwrap();
+    assert_eq!(clone_argv("/opt/a=b/git", &valid), None);
 }
 
 #[test]
@@ -303,6 +338,8 @@ fn a_refusal_names_its_rule() {
     assert!(message.contains("symlink"), "{message}");
     let message = CloneRefusal::PathHidden.to_string();
     assert!(message.contains("path_hidden"), "{message}");
+    let message = CloneRefusal::Busy.to_string();
+    assert!(message.contains("busy"), "{message}");
 }
 
 #[test]
@@ -317,7 +354,7 @@ fn stop_removes_only_a_folder_the_verb_created() {
     std::fs::create_dir(&created).unwrap();
     std::fs::write(created.join("README.md"), "x").unwrap();
     let records = CloneRecords::default();
-    records.note_created(&created, Some("tab-1"));
+    note_created(&records, &created, Some("tab-1"));
     assert!(records.is_recorded(&created));
     assert_eq!(records.tab_of(&created).as_deref(), Some("tab-1"));
 
@@ -362,7 +399,7 @@ fn stop_never_follows_a_recorded_path_that_became_a_symlink() {
     #[cfg(not(unix))]
     std::fs::create_dir(&swapped).unwrap();
     let records = CloneRecords::default();
-    records.note_created(&swapped, None);
+    note_created(&records, &swapped, None);
 
     #[cfg(unix)]
     assert_eq!(records.stop(&swapped), kept("not_a_folder"));
@@ -377,7 +414,7 @@ fn stop_forgets_the_record_and_a_second_stop_removes_nothing() {
     let created = home.join("api");
     std::fs::create_dir(&created).unwrap();
     let records = CloneRecords::default();
-    records.note_created(&created, None);
+    note_created(&records, &created, None);
     assert!(records.stop(&created).removed);
 
     // Someone else creates the folder again: it is not ours to remove.
@@ -394,7 +431,7 @@ fn stop_never_removes_a_finished_checkout_and_forgets_it() {
     std::fs::write(created.join(".git").join("index"), "x").unwrap();
     std::fs::write(created.join("work.txt"), "uncommitted").unwrap();
     let records = CloneRecords::default();
-    records.note_created(&created, None);
+    note_created(&records, &created, None);
 
     assert_eq!(records.stop(&created), kept("finished"));
     assert!(created.join("work.txt").exists());
@@ -413,7 +450,7 @@ fn a_failed_removal_keeps_the_record_so_stop_can_be_retried() {
     // A folder whose entries can't be unlinked makes the removal fail.
     std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o555)).unwrap();
     let records = CloneRecords::default();
-    records.note_created(&created, Some("tab-1"));
+    note_created(&records, &created, Some("tab-1"));
 
     let first = records.stop(&created);
     std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -436,7 +473,7 @@ fn a_bound_or_never_made_clone_is_forgotten_and_stop_leaves_it() {
     let bound = home.join("api");
     std::fs::create_dir(&bound).unwrap();
     let records = CloneRecords::default();
-    records.note_created(&bound, Some("tab-1"));
+    note_created(&records, &bound, Some("tab-1"));
     // The clone was bound: the record ends, so no later Stop can remove it.
     records.forget(&bound);
     assert_eq!(records.stop(&bound), kept("not_recorded"));
@@ -445,14 +482,79 @@ fn a_bound_or_never_made_clone_is_forgotten_and_stop_leaves_it() {
 }
 
 #[test]
-fn a_second_record_for_a_folder_replaces_the_first() {
+fn a_second_clone_into_a_reserved_folder_is_refused() {
     let (_dir, home) = home();
     let path = home.join("api");
     let records = CloneRecords::default();
-    records.note_created(&path, Some("tab-1"));
-    records.note_created(&path, Some("tab-2"));
-    assert_eq!(records.tab_of(&path).as_deref(), Some("tab-2"));
+    assert!(records.reserve(&path, true));
+    // Both calls found the folder absent; only the first may open a tab.
+    assert!(!records.reserve(&path, true));
+    records.set_tab(&path, Some("tab-1"));
+    assert_eq!(records.tab_of(&path).as_deref(), Some("tab-1"));
+    // A clone into the folder once git has made it (empty) is refused too.
+    assert!(!records.reserve(&path, false));
     records.forget(&path);
+    assert!(!records.is_recorded(&path));
+    assert!(records.reserve(&path, true));
+}
+
+#[test]
+fn a_clone_into_a_folder_that_was_already_there_records_nothing() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = CloneRecords::default();
+    assert!(records.reserve(&path, false));
+    assert!(!records.is_recorded(&path));
+    assert!(records.reserve(&path, false));
+}
+
+#[test]
+fn racing_clones_into_one_folder_reserve_it_once() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = std::sync::Arc::new(CloneRecords::default());
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let won: usize = (0..8)
+        .map(|_| {
+            let (records, barrier, path) = (records.clone(), barrier.clone(), path.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                records.reserve(&path, true)
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|thread| usize::from(thread.join().unwrap()))
+        .sum();
+    assert_eq!(won, 1);
+}
+
+#[test]
+fn a_stale_record_is_cleared_only_for_its_own_tab() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = CloneRecords::default();
+    note_created(&records, &path, Some("tab-1"));
+    // Another call replaced the record meanwhile: tab-1's staleness doesn't touch it.
+    records.forget(&path);
+    note_created(&records, &path, Some("tab-2"));
+    records.forget_tab(&path, "tab-1");
+    assert_eq!(records.tab_of(&path).as_deref(), Some("tab-2"));
+    records.forget_tab(&path, "tab-2");
+    assert!(!records.is_recorded(&path));
+}
+
+#[test]
+fn a_reservation_carries_no_tab_until_the_tab_opens() {
+    let (_dir, home) = home();
+    let path = home.join("api");
+    let records = CloneRecords::default();
+    assert!(records.reserve(&path, true));
+    assert!(records.is_recorded(&path));
+    assert_eq!(records.tab_of(&path), None);
+    // A tab for a folder no longer on record (stopped meanwhile) records nothing.
+    records.forget(&path);
+    records.set_tab(&path, Some("tab-1"));
     assert!(!records.is_recorded(&path));
 }
 
@@ -460,7 +562,7 @@ fn a_second_record_for_a_folder_replaces_the_first() {
 fn the_process_wide_record_is_shared() {
     let (_dir, home) = home();
     let path = home.join("shared");
-    records().note_created(&path, None);
+    note_created(records(), &path, None);
     assert!(records().is_recorded(&path));
     assert_eq!(records().stop(&path), kept("not_a_folder"));
     assert!(!records().is_recorded(&path));
@@ -498,7 +600,7 @@ fn stop_refuses_a_parent_that_became_a_symlink() {
     std::fs::create_dir_all(elsewhere.join("api")).unwrap();
     std::fs::write(elsewhere.join("api").join("keep.txt"), "x").unwrap();
     let path = path_in(&code, "api");
-    records().note_created(Path::new(&path), None);
+    note_created(records(), Path::new(&path), None);
     // After the clone, the parent is swapped for a symlink to another folder.
     std::fs::remove_dir(&code).unwrap();
     std::os::unix::fs::symlink(&elsewhere, &code).unwrap();

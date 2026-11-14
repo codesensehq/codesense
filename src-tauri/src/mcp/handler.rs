@@ -9871,7 +9871,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }."
+        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. git never prompts for a credential (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`): with none it can use, the clone ends at once with `gitExited` and the tab says why. A second clone into a folder whose clone is still on record is refused (rule `busy`). The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }."
     )]
     async fn clone_repo(
         &self,
@@ -9940,24 +9940,48 @@ impl CodesenseHandler {
         let Some(git) = git else {
             return refuse("git is not installed or was not found; install it first".to_string());
         };
-        let tab = self
+        let Some(argv) = clone_repo::clone_argv(&git, &valid) else {
+            return refuse("git's path contains `=`, which can't be run here".to_string());
+        };
+        // A record whose git has exited and left no folder is stale: forget it, but
+        // only while it still names that tab.
+        if let Some(stale) = clone_repo::records().tab_of(&valid.path) {
+            if self.tab_has_exited(&stale).await && std::fs::symlink_metadata(&valid.path).is_err()
+            {
+                clone_repo::records().forget_tab(&valid.path, &stale);
+            }
+        }
+        // Claim the folder before the tab opens: a second clone into it is refused
+        // while this one is on record. Only a folder this call creates is recorded,
+        // so only it is Stop's to remove, and Stop closes this tab first.
+        if !clone_repo::records().reserve(&valid.path, valid.creates) {
+            return refuse(clone_repo::CloneRefusal::Busy.to_string());
+        }
+        let tab = match self
             .open_tab_in_workspace(
                 OpenTerminalTabParams {
                     workspace_id,
                     headed: Some(true),
                     name: Some(format!("clone {}", params.repo)),
                 },
-                Some(clone_repo::clone_argv(&git, &valid)),
+                Some(argv),
             )
-            .await?;
+            .await
+        {
+            Ok(tab) => tab,
+            Err(error) => {
+                if valid.creates {
+                    clone_repo::records().forget(&valid.path);
+                }
+                return Err(error);
+            }
+        };
         let handle = tab
             .get("handle")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
-        // Only a folder this call is creating is ours to remove on Stop, and Stop
-        // closes this tab first.
         if valid.creates {
-            clone_repo::records().note_created(&valid.path, handle.as_deref());
+            clone_repo::records().set_tab(&valid.path, handle.as_deref());
         }
         // Wait for the checkout, but not past git exiting, and well inside the
         // shortest tool timeout a runtime applies.

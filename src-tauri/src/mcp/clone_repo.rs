@@ -6,7 +6,10 @@
 //! in [`super::handler`] calls it first, and only a [`ValidClone`] reaches the
 //! terminal tab, which runs `git clone -- https://github.com/<repo>.git <path>` as an
 //! argument vector (the tab's first process, no shell, nothing interpolated). Setup
-//! needs no `gh`: git signs in to the host however the person has set it up.
+//! needs no `gh`: git signs in to the host however the person has set it up. git
+//! never prompts for a credential: `/usr/bin/env` turns terminal prompts off for git
+//! and Git Credential Manager, so a missing credential ends the clone (`gitExited`)
+//! instead of leaving a prompt in a tab agents can read and type into.
 //!
 //! `path` is the clone's own folder and its parent is derived from it, so the bound
 //! on where a clone may land is the home rule: `path` sits under the profile's home
@@ -17,7 +20,9 @@
 //! A directory the verb creates is recorded in [`CloneRecords`] with the tab that
 //! clones into it; `stop` closes that tab, then removes only a recorded folder whose
 //! clone hasn't finished. A folder that was already there (empty) is never recorded,
-//! so Stop leaves it alone, and the record ends when the clone is bound.
+//! so Stop leaves it alone, and the record ends when the clone is bound. The record
+//! is reserved before the tab opens, so a second clone into the same folder is
+//! refused (`busy`) while the first is on record.
 //!
 //! Accepted residual: between validation and the clone, a local writer could swap
 //! the parent for a symlink or create the target first. Closing that needs a clone
@@ -32,6 +37,11 @@ use serde::{Deserialize, Serialize};
 
 /// The host every clone comes from, fixed for now.
 pub(crate) const CLONE_HOST: &str = "https://github.com";
+/// The tab's first process: it sets [`CLONE_ENV`], then runs git.
+pub(crate) const ENV_PROGRAM: &str = "/usr/bin/env";
+/// Fixed, never from input: git and Git Credential Manager don't prompt, so a clone
+/// with no credential exits ("terminal prompts disabled") instead of waiting.
+pub(crate) const CLONE_ENV: [&str; 2] = ["GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never"];
 /// How long a call waits for the clone before it replies, kept well under the
 /// shortest MCP tool timeout a runtime applies (60 s).
 pub(crate) const CLONE_WAIT_SECS: u64 = 25;
@@ -131,6 +141,7 @@ pub(crate) enum CloneRefusal {
     ParentNotDirectory,
     ParentSymlink,
     TargetNotEmpty,
+    Busy,
 }
 
 impl CloneRefusal {
@@ -152,6 +163,7 @@ impl CloneRefusal {
             Self::ParentNotDirectory => "parent_not_directory",
             Self::ParentSymlink => "parent_symlink",
             Self::TargetNotEmpty => "target_not_empty",
+            Self::Busy => "busy",
         }
     }
 
@@ -176,6 +188,9 @@ impl CloneRefusal {
             Self::ParentNotDirectory => "the parent must be a directory",
             Self::ParentSymlink => "the parent folder's path must not contain a symlink",
             Self::TargetNotEmpty => "the target must be absent or an empty directory",
+            Self::Busy => {
+                "another clone into this folder is still on record; stop it with `stop: true`, or wait for it"
+            }
         }
     }
 }
@@ -399,18 +414,28 @@ pub(crate) fn plan(params: &CloneRepoParams, home: &Path) -> Result<Plan, String
     })
 }
 
-/// The argument vector the tab runs: `git clone -- <url> <path>`. The URL is built
-/// from the fixed host and the checked `owner/name`; `--` ends git's options, and
-/// neither operand could start with `-` anyway (the URL starts with the host, the
-/// path with `/`).
-pub(crate) fn clone_argv(git: &str, valid: &ValidClone) -> Vec<String> {
-    vec![
-        git.to_string(),
-        "clone".to_string(),
-        "--".to_string(),
-        format!("{CLONE_HOST}/{}.git", valid.repo),
-        valid.path.to_string_lossy().into_owned(),
-    ]
+/// The argument vector the tab runs: `env <CLONE_ENV> git clone -- <url> <path>`.
+/// The URL is built from the fixed host and the checked `owner/name`; `--` ends git's
+/// options, and neither operand could start with `-` anyway (the URL starts with the
+/// host, the path with `/`). `None` when git's path holds `=`, which env would read
+/// as a variable rather than the program.
+pub(crate) fn clone_argv(git: &str, valid: &ValidClone) -> Option<Vec<String>> {
+    if str::contains(git, '=') {
+        return None;
+    }
+    let mut argv = vec![ENV_PROGRAM.to_string()];
+    Vec::extend(&mut argv, CLONE_ENV.map(String::from));
+    Vec::extend(
+        &mut argv,
+        [
+            git.to_string(),
+            "clone".to_string(),
+            "--".to_string(),
+            format!("{CLONE_HOST}/{}.git", valid.repo),
+            valid.path.to_string_lossy().into_owned(),
+        ],
+    );
+    Some(argv)
 }
 
 /// A folder `clone_repo` created, and the tab cloning into it.
@@ -431,18 +456,35 @@ impl CloneRecords {
         Mutex::lock(&self.created).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Record a folder this call is creating, with the handle of the tab cloning into
-    /// it. A second record for the same folder replaces the first.
-    pub(crate) fn note_created(&self, path: &Path, tab: Option<&str>) {
+    /// Claim `path` for a clone before its tab opens, checking and recording under the
+    /// one lock. `false` when a clone into it is already on record: two calls that both
+    /// found the folder absent can't both clone into it. A folder the call creates is
+    /// recorded (with no tab yet); one that was already there is only checked.
+    pub(crate) fn reserve(&self, path: &Path, creates: bool) -> bool {
         let mut created = self.entries();
-        Vec::retain(&mut created, |entry| entry.path != path);
-        Vec::push(
-            &mut created,
-            Created {
-                path: path.to_path_buf(),
-                tab: tab.map(str::to_string),
-            },
-        );
+        if <[Created]>::iter(&created).any(|entry| entry.path == path) {
+            return false;
+        }
+        if creates {
+            Vec::push(
+                &mut created,
+                Created {
+                    path: path.to_path_buf(),
+                    tab: None,
+                },
+            );
+        }
+        true
+    }
+
+    /// The tab cloning into a reserved folder. Nothing is recorded when the folder is
+    /// no longer on record (it was stopped meanwhile).
+    pub(crate) fn set_tab(&self, path: &Path, tab: Option<&str>) {
+        if let Some(entry) =
+            <[Created]>::iter_mut(&mut self.entries()).find(|entry| entry.path == path)
+        {
+            entry.tab = tab.map(str::to_string);
+        }
     }
 
     pub(crate) fn is_recorded(&self, path: &Path) -> bool {
@@ -459,6 +501,14 @@ impl CloneRecords {
     /// Forget a folder: its clone was bound, or it never came to exist.
     pub(crate) fn forget(&self, path: &Path) {
         Vec::retain(&mut self.entries(), |entry| entry.path != path);
+    }
+
+    /// Forget a folder's record only while it still names `tab`: a stale record whose
+    /// git has exited, which must not clear a newer clone's record.
+    pub(crate) fn forget_tab(&self, path: &Path, tab: &str) {
+        Vec::retain(&mut self.entries(), |entry| {
+            entry.path != path || entry.tab.as_deref() != Some(tab)
+        });
     }
 
     /// Remove `path` when this verb created it and its clone hasn't finished. The
