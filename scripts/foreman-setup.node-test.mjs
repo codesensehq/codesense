@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH } = await lib("fixture");
+const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS } =
+  await lib("fixture");
 const { loadExtraCases, grade } = await lib("graders");
 
 const extra = loadExtraCases();
@@ -244,6 +245,24 @@ test("setup-resume: a started ledger launches with resume, and the guide's first
     fx.tool(F, "open_workspace", { ...LAUNCH, initial_prompt: "/codesense-setup resume" });
     assert.equal(fx.state().guideCards[0].step, "team");
   });
+});
+
+test("git access is a capability: the ledger step is git-access and the hand-back names a method, not gh", async () => {
+  assert.deepEqual(SETUP_STEPS, ["team", "source-repos", "git-access"]);
+  const id = "setup-handback";
+  await withFixture(caseOf(id), async (fx) => {
+    launchWith()({ fx, turns: caseOf(id).input.turns });
+    const text = fx.tool(F, "claim_role_messages", { role: HANDBACK_ROLE }).deliveries[0].text;
+    assert.match(text, /git access via git credentials/);
+    assert.doesNotMatch(text, /\bgh\b/);
+  });
+  assert.doesNotMatch(
+    caseOf(id)
+      .rubric.map((r) => r.ask)
+      .join(" "),
+    /\bgh\b/,
+  );
+  assert.ok(caseOf("setup-rerun").fixture.ledger.some((r) => r.step === "git-access"));
 });
 
 test("setup-handback: claim, ack, then exactly one reply", async () => {

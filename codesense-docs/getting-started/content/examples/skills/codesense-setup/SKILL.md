@@ -115,7 +115,7 @@ and anything that is waiting on the user in the app, such as a workspace to atta
 ## 7. Hand back
 
 <!-- foreman-handback -->
-When launched by another session, send `Setup done:` and a one-line summary (team, repos, sign-ins) with
+When launched by another session, send `Setup done:` and a one-line summary (team, repos, the git-access method) with
 `send_role_message` to `role:codesense-foreman` before you call `signal_done`. If you were started by hand,
 skip this.
 <!-- /foreman-handback -->
