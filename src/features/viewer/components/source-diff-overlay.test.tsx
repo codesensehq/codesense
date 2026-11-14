@@ -115,7 +115,7 @@ vi.mock("../lib/use-source-diff", () => ({
 // it) and the commit-graph rail (a marker — the component is tested separately).
 vi.mock("../lib/use-worktree-watch", () => ({ useWorktreeWatch: vi.fn() }));
 
-const imageSidesMock = vi.fn((..._a: unknown[]): unknown => undefined);
+const imageSidesMock = vi.fn((..._a: unknown[]): unknown => ({}));
 vi.mock("../lib/use-source-image-sides", () => ({
   useSourceImageSides: (...a: unknown[]) => imageSidesMock(...a),
 }));
@@ -1023,7 +1023,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
   });
 
-  function openPng(bytes: unknown, width = 1200) {
+  function openPng(sides: unknown, width = 1200) {
     const ro = stubResizeObserver(width);
     const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
     URL.createObjectURL = vi.fn(() => "blob:side");
@@ -1034,7 +1034,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
       URL.revokeObjectURL = blob.revoke;
       imageSidesMock.mockReset();
     });
-    imageSidesMock.mockReturnValue(bytes);
+    imageSidesMock.mockReturnValue(sides);
     stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
     stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
@@ -1050,7 +1050,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
   const images = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
 
   it("a changed PNG draws its Before and After from their bytes, side by side at 900 px", () => {
-    openPng({ before: "QkVGT1JF", after: "QUZURVI=" });
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } });
     expect(imageSidesMock.mock.calls.map((call) => call.slice(0, 4))).toContainEqual([
       "/wt/story",
       null,
@@ -1060,25 +1060,58 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
     expect(images()).toEqual(["Before", "After"]);
     expect(screen.queryByTestId("source-diff-binary-placeholder")).not.toBeInTheDocument();
-    // Its Source mode is the binary note, chosen in the view options.
+    // Its Source mode is the one image line, chosen in the view options.
     const modes = screen.getByTestId("source-diff-html-mode-w1");
     fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
-    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
     expect(images()).toEqual([]);
   });
 
   it("a changed PNG shows one side at a time below 900 px", () => {
-    openPng({ before: "QkVGT1JF", after: "QUZURVI=" }, 899);
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } }, 899);
     expect(images()).toEqual(["After"]);
     fireEvent.click(screen.getByRole("button", { name: "Before" }));
     expect(images()).toEqual(["Before"]);
   });
 
-  it("a changed PNG with no bytes (a remote worktree, past the cap) keeps the binary placeholder", () => {
-    openPng(undefined);
-    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
-    expect(screen.queryByTestId("source-diff-html-mode-w1")).not.toBeInTheDocument();
+  it("a changed PNG that won't draw here (remote, past the cap) says why, with Side by side disabled", () => {
+    openPng({
+      imageState: { kind: "unavailable", reason: "Images in a remote worktree aren't drawn yet" },
+    });
+    const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", "Images in a remote worktree aren't drawn yet");
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Images in a remote worktree aren't drawn yet.",
+    );
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
     expect(images()).toEqual([]);
+  });
+
+  it("a changed PNG whose bytes are still being read says so, not Binary file", () => {
+    openPng({ imageState: { kind: "reading" } });
+    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
+  });
+
+  it("any other binary file keeps the binary placeholder", () => {
+    imageSidesMock.mockReturnValue({});
+    stubChangeset({ files: [...FILES, { path: "lib/blob.bin", status: "modified" }] });
+    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "lib/blob.bin" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
   });
 
   it("a PNG in a commit draws its sides from that commit", () => {
@@ -1092,7 +1125,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
       URL.revokeObjectURL = blob.revoke;
       imageSidesMock.mockReset();
     });
-    imageSidesMock.mockReturnValue({ before: "QkVGT1JF", after: "QUZURVI=" });
+    imageSidesMock.mockReturnValue({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } });
     commitChangesetMock.mockReturnValue({
       files: [{ path: "art/logo.png", status: "modified" }],
       loading: false,
