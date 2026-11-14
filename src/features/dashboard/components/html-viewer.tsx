@@ -58,6 +58,7 @@ import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
 import { useOrgStore } from "@/shared/stores/org-store";
 import {
+  BASELINE_SANDBOX,
   HTML_FRAME_ALLOW,
   buildBaselineViewerUrl,
   buildMessageViewerUrl,
@@ -115,7 +116,6 @@ function recordFocusOwner(element: HTMLElement): void {
 // opaque-origin, scripts-only sandbox and gets no bridge.
 const LIVE_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads";
-const BASELINE_SANDBOX = "allow-scripts";
 
 // SF-1: HtmlViewer accepts the shared viewer contract directly. `teamContentPath`
 // is the single root used for both `buildViewerUrl` (iframe URL) and
