@@ -24,8 +24,9 @@
 // the act's, allows nothing either. A click's verbs run in the order its act lists them (its
 // own, then its `then` acts'), so a write may not come before the switch that comes first. A
 // `set_active_team` must name a team the latest `describe_setup` lists (a non-archived one
-// outside the docs' org). The latest switch, or a `create_team` that activates, holds across
-// clicks until another; with none, a file may lie in any listed team. Every file written must
+// outside the docs' org), and an activating `create_team` an org it lists. The latest switch
+// holds across clicks until another; with none, a file may lie in any listed team. Once a
+// `describe_setup` follows the switch, a team it no longer lists holds nothing. Every file must
 // lie in `<orgRoot>/<team>/content/`, compared by path component, with no `..`. A command's
 // `repo` must be one the team tracks, and a write whose `content` the step file fixes must carry
 // exactly it. A `read_terminal_tab` must name, by `handle`, a tab an `open_terminal_tab` or
@@ -97,8 +98,9 @@ const nameOf = (t) => `${t.org}/${t.team}`;
 function inTeamContent(file, { orgRoot, team }) {
   const parts = file.split("/").filter(Boolean);
   if (parts.includes("..")) return false;
-  const root = typeof orgRoot === "string" ? orgRoot.split("/").filter(Boolean) : [];
-  const folder = [...root, team, "content"];
+  // A team with no known folder holds no file: an empty root would read from the repo's root.
+  if (typeof orgRoot !== "string" || orgRoot === "") return false;
+  const folder = [...orgRoot.split("/").filter(Boolean), team, "content"];
   return parts.length > folder.length && folder.every((part, i) => parts[i] === part);
 }
 
@@ -352,7 +354,11 @@ export function checkConsent(
         }
       } else if (name === "describe_setup") {
         const setup = listedSetup(raw.result);
-        if (setup) ({ teams: listed, roots } = setup);
+        if (setup) {
+          ({ teams: listed, roots } = setup);
+          // From here on the switch is read against this listing, with no fallback.
+          if (switched) switched.relisted = true;
+        }
       } else if (name === "read_terminal_tab") {
         if (typeof input.handle !== "string" || input.handle === "")
           errors.push(
@@ -426,17 +432,27 @@ export function checkConsent(
           } else if (name === "create_team" && input.activate === true) {
             const org = String(input.org ?? "").trim();
             const team = String(input.name ?? "").trim();
+            if (!roots.has(org))
+              errors.push(
+                `turn ${index}: create_team activates ${org}/${team}, but describe_setup listed no org ${org}`,
+              );
             switched = { org, team, seen: { org, team, repos: [] } };
           }
-          // The switch is the team's name; its folder and repos are the latest listing's.
-          const inForce = switched && {
-            ...switched.seen,
-            ...listed.find((t) => t.org === switched.org && t.team === switched.team),
-          };
+          // The switch is the team's name; its folder and repos are the latest listing's. Until a
+          // good listing follows the switch, the one it saw stands in; once one has, a team it
+          // leaves out (archived, dropped, its org gone) is no team to work in.
+          const current =
+            switched && listed.find((t) => t.org === switched.org && t.team === switched.team);
+          const gone = switched?.relisted && !current;
+          const inForce = switched && !gone && { ...switched.seen, ...current };
           if (inForce && inForce.orgRoot === undefined) inForce.orgRoot = roots.get(inForce.org);
-          const teams = inForce ? [inForce] : listed;
+          const teams = gone ? [] : inForce ? [inForce] : listed;
           const file = input[FILE_ARGS[name]];
-          if (typeof file === "string" && !teams.length)
+          if (typeof file === "string" && gone)
+            errors.push(
+              `turn ${index}: ${name} wrote ${file}, but the team it switched to, ${nameOf(switched)}, is no longer listed`,
+            );
+          else if (typeof file === "string" && !teams.length)
             errors.push(
               `turn ${index}: ${name} wrote ${file}, but no describe_setup listed a team to write in`,
             );
@@ -453,6 +469,10 @@ export function checkConsent(
             if (!typed)
               errors.push(
                 `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,
+              );
+            else if (typed.repo !== undefined && gone)
+              errors.push(
+                `turn ${index}: run_in_terminal_tab typed the repo ${typed.repo}, but the team it switched to, ${nameOf(switched)}, is no longer listed`,
               );
             else if (typed.repo !== undefined && !teams.some((t) => t.repos.includes(typed.repo)))
               errors.push(

@@ -1047,6 +1047,75 @@ test("create_team in an org that lists no team yet still has its folder", () => 
   );
 });
 
+test("a switched team that a later listing drops or archives is no longer in force", () => {
+  const archived = { ...teamOf("web", ["acme/web"]), archived: true };
+  const after = (listing) =>
+    checkConsent(
+      session(
+        [describe(teamOf("web", ["acme/web"]))],
+        [card(1, TEAMCARD)],
+        [click(2, 1, "Add the setup log")],
+        [switchTo("web")],
+        [ledger()],
+        [call(`${P}describe_setup`, {}, listing)],
+        [card(3, GIT)],
+        [click(4, 3, "Do it")],
+        [terminal(SIGN_IN)],
+        [save(GOOD)],
+      ),
+      GUIDE,
+    ).errors;
+  for (const listing of [setupOf(archived), setupOf(teamOf("sales"))]) {
+    const errors = after(listing);
+    assert.ok(
+      errors.some((e) => /typed the repo acme\/web.*no longer listed/.test(e)),
+      errors.join("\n"),
+    );
+    assert.ok(
+      errors.some((e) => /wrote .*git-access\.md.*no longer listed/.test(e)),
+      errors.join("\n"),
+    );
+  }
+  // Still listed, it stays in force.
+  assert.deepEqual(after(setupOf(teamOf("web", ["acme/web"]))), []);
+});
+
+test("an activating create_team must name a listed org, and a team with no folder holds no file", () => {
+  const elsewhere = call(
+    `${P}create_team`,
+    { org: "other/context", name: "web", activate: true },
+    { ok: true },
+  );
+  const errors = checkConsent(
+    session(
+      [describe()],
+      [card(1, TEAM)],
+      [click(2, 1, "Create web")],
+      [elsewhere],
+      [
+        call(
+          `${P}create_content_file`,
+          { path: "web/content/schema/setup-ledger.yaml", content: "x" },
+          { ok: true },
+        ),
+      ],
+    ),
+    GUIDE,
+  ).errors;
+  assert.ok(
+    errors.some((e) =>
+      /create_team activates other\/context\/web, but describe_setup listed no org other\/context/.test(
+        e,
+      ),
+    ),
+    errors.join("\n"),
+  );
+  assert.ok(
+    errors.some((e) => /wrote web\/content\/schema\/setup-ledger\.yaml, outside/.test(e)),
+    errors.join("\n"),
+  );
+});
+
 test("a describe_setup that gives no orgs leaves the last listing, and with none a write fails closed", () => {
   const docs = "orgs/codesense-docs/getting-started/content/tools/git-access.md";
   const reread = (result) =>
