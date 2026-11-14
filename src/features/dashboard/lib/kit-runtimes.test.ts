@@ -2,26 +2,40 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { mockDependencyStatus } from "@/app/mock/fixtures";
+import type { AgentBinaryStatus, DependencyStatus } from "@/tauri/commands";
 
 const KIT = readFileSync(
   join(process.cwd(), "src-tauri/src/http/routes/dashboard_kit/kit.js"),
   "utf8",
 );
 
-type Agent = { available: boolean; resolving?: boolean; version?: string | null };
+type Agent = Partial<AgentBinaryStatus> & { available: boolean };
 type Runtime = { id: string; version: string | null; autoPick: boolean };
 type Kit = {
-  runtimes(options?: { lastUsed?: string }): Promise<{ list: Runtime[]; pick: string | null }>;
+  runtimes(options?: {
+    lastUsed?: string;
+  }): Promise<{ list: Runtime[]; pick: string | null; resolving: boolean }>;
 };
 
-const status = (agents: Record<string, Agent>) => ({
-  git: { available: true, path: "/usr/bin/git", version: "2.50.0" },
-  agents: Object.fromEntries(
-    Object.entries(agents).map(([id, a]) => [
-      id,
-      { path: null, resolving: false, version: null, ...a },
-    ]),
-  ),
+const ABSENT: AgentBinaryStatus = {
+  available: false,
+  path: null,
+  resolving: false,
+  version: null,
+  source: null,
+  shadowed: [],
+  qualified: null,
+  supported: null,
+};
+
+/** The app's mock status with every registered CLI absent, then `agents` laid over it. */
+const status = (agents: Record<string, Agent>): DependencyStatus => ({
+  ...mockDependencyStatus,
+  agents: Object.fromEntries([
+    ...Object.keys(mockDependencyStatus.agents).map((id) => [id, ABSENT]),
+    ...Object.entries(agents).map(([id, a]) => [id, { ...ABSENT, ...a }]),
+  ]),
 });
 
 function load(dependencyStatus: unknown): Kit {
@@ -70,7 +84,7 @@ describe("kit.runtimes", () => {
     expect(pick).toBe("opencode");
   });
 
-  it("leaves out runtimes that are missing or still resolving", async () => {
+  it("leaves out runtimes that are missing or still resolving, and says some are resolving", async () => {
     const kit = load(
       status({
         claude: { available: false },
@@ -78,9 +92,26 @@ describe("kit.runtimes", () => {
         opencode: { available: true },
       }),
     );
-    const { list, pick } = await kit.runtimes();
+    const { list, pick, resolving } = await kit.runtimes();
     expect(list.map((r) => r.id)).toEqual(["opencode"]);
     expect(pick).toBe("opencode");
+    expect(resolving).toBe(true);
+  });
+
+  it("reports resolving rather than an empty result while the app still looks for the CLIs", async () => {
+    const kit = load(
+      status({
+        claude: { available: false, resolving: true },
+        codex: { available: false, resolving: true },
+      }),
+    );
+    expect(await kit.runtimes()).toEqual({ list: [], pick: null, resolving: true });
+  });
+
+  it("reads the app's mock status as is", async () => {
+    const { list, resolving } = await load(mockDependencyStatus).runtimes();
+    expect(list[0].id).toBe("claude");
+    expect(resolving).toBe(false);
   });
 
   it("never auto-picks Hermes, even when it was last used or is the only one", async () => {
@@ -95,10 +126,8 @@ describe("kit.runtimes", () => {
     expect(only.pick).toBeNull();
   });
 
-  it("returns an empty list with no CLI installed", async () => {
-    const { list, pick } = await load(status({})).runtimes();
-    expect(list).toEqual([]);
-    expect(pick).toBeNull();
+  it("returns an empty list with no CLI installed and none resolving", async () => {
+    expect(await load(status({})).runtimes()).toEqual({ list: [], pick: null, resolving: false });
   });
 
   it("ignores an unknown lastUsed", async () => {

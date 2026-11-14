@@ -3209,13 +3209,17 @@
   });
 
   /** The agent CLIs installed on this Mac, from the app's dependency status: the last used one first, then Claude,
-   *  Codex, OpenCode, then any other (Hermes last). `pick` is the one to start with; Hermes is never picked for a person. */
+   *  Codex, OpenCode, then any other (Hermes last). `pick` is the one to start with; Hermes is never picked for a person.
+   *  `resolving` is true while the app is still looking for a CLI (first launch), so a page waits instead of showing "none". */
   var RUNTIME_ORDER = ["claude", "codex", "opencode"];
   function runtimes(options) {
     return call("getDependencyStatus").then(function (status) {
       var agents = (status && status.agents) || {};
       var last = options && typeof options.lastUsed === "string" ? options.lastUsed : "";
       var ids = Object.keys(agents).filter(function (id) { return agents[id] && agents[id].available === true; });
+      var resolving = Object.keys(agents).some(function (id) {
+        return agents[id] && agents[id].available !== true && agents[id].resolving === true;
+      });
       function rank(id) {
         if (id === last) return -1;
         var i = RUNTIME_ORDER.indexOf(id);
@@ -3227,7 +3231,7 @@
         return { id: id, version: typeof a.version === "string" ? a.version : null, autoPick: id !== "hermes" };
       });
       var pick = list.filter(function (r) { return r.autoPick; })[0];
-      return { list: list, pick: pick ? pick.id : null };
+      return { list: list, pick: pick ? pick.id : null, resolving: resolving };
     });
   }
 

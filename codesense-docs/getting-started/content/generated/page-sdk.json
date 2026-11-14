@@ -527,8 +527,8 @@
     {
       "name": "kit.runtimes",
       "owner": "Kit",
-      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;",
-      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked.",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not \"no CLI\", and call again.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -6040,8 +6040,8 @@
     {
       "name": "kit.runtimes",
       "owner": "Kit",
-      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;",
-      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked.",
+      "signature": "runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;",
+      "description": "The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not \"no CLI\", and call again.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -13979,7 +13979,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "b24936956eaa2d243cd13224bff2b77b956b27429c69eef9136030d171cd97eb",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "d8451408352a9118bf0578633084474417696c75bfcceeeb9e76d694e1206c5a",
     "src-tauri/src/verbs/registry.generated.json": "9ca0e89edfa86d1ea1acbd68682224a82e2db8291e4097af0e0a1e867b00a035",
     "src-tauri/src/verbs/registry.rs": "cf974e31fcabf851da86c45ba5e8ee828d061fd3806e52bff19b12b8fe4107d6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",

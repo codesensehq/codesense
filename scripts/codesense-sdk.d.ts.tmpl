@@ -796,8 +796,8 @@ declare namespace CodesenseSdk {
     stageGroupOf(story: NavStory): string;
     /** The nav's name order (numeric, case-insensitive); a sort comparator. */
     compareNavNames(a: string, b: string): number;
-    /** The agent CLIs installed on this Mac (from `getDependencyStatus`): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. */
-    runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null }>;
+    /** The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not "no CLI", and call again. */
+    runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;
     /** The createEditor export of /kit/v1/editor.js (loaded separately as an ES module). */
     createEditor?: (element: HTMLElement, options?: KitEditorOptions) => KitEditor;
     readonly version: string;
