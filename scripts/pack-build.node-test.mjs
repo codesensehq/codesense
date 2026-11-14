@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -451,5 +452,39 @@ test("a FIFO, an oversized file and a .GIT folder are reported, never read", () 
     assert.match(all, /content\/big\.bin: over the 5 MB file cap/);
     assert.match(all, /content\/\.GIT: \.git is not part of a pack/);
     assert.notDeepEqual(buildPack(dir, { check: true }).errors, []);
+  });
+});
+
+test("a write that fails part-way is a named error and leaves no temporary file", () => {
+  scratch("good", (dir) => {
+    for (const rel of [".claude", ".agents", ".opencode"])
+      rmSync(join(dir, rel), { recursive: true });
+    // A directory where the last copy goes: the rename onto it fails after the first two.
+    mkdirSync(join(dir, ".opencode/command/hello.md"), { recursive: true });
+    const before = readFileSync(join(dir, "pack.yml"), "utf8");
+    const { errors, written } = buildPack(dir);
+    assert.equal(errors.length, 1, errors.join(" | "));
+    assert.match(errors[0], /^\.opencode\/command\/hello\.md: cannot write: /);
+    assert.deepEqual(written, [".claude/skills/hello/SKILL.md", ".agents/skills/hello/SKILL.md"]);
+    assert.equal(readFileSync(join(dir, "pack.yml"), "utf8"), before);
+    assert.deepEqual(
+      readdirSync(join(dir, ".opencode/command")).filter((n) => n.includes("pack-build")),
+      [],
+    );
+  });
+});
+
+test("a leftover temporary name from a crashed run is a named error, then the build recovers", () => {
+  scratch("good", (dir) => {
+    rmSync(join(dir, ".claude"), { recursive: true });
+    const folder = join(dir, ".claude/skills/hello");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, `.SKILL.md.pack-build-${process.pid}`), "stale");
+    const failed = buildPack(dir);
+    assert.match(failed.errors.join("|"), /\.claude\/skills\/hello\/SKILL\.md: cannot write: /);
+    assert.deepEqual(failed.written, []);
+    assert.deepEqual(readdirSync(folder), []);
+    assert.deepEqual(buildPack(dir).errors, []);
+    assert.deepEqual(buildPack(dir, { check: true }).errors, []);
   });
 });
