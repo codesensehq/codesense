@@ -85,7 +85,8 @@ mod memory_metrics;
 mod menu;
 mod models;
 mod operations;
-/// The pack format: `pack.yml` and `packs.lock.yml` models.
+/// The pack format: `pack.yml` and `packs.lock.yml` models, their validation and
+/// derived risk facts.
 pub mod packs;
 mod panes;
 #[cfg(feature = "bench-support")]

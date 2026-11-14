@@ -114,6 +114,7 @@ const NO_IDENTITY_TOOLS: &[&str] = &[
     "notes_read_at",
     "notes_search",
     "open_terminal_tab",
+    "pack_validate",
     "pane_list",
     "pane_open",
     "pane_write",

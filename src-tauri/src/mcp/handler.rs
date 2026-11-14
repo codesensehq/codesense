@@ -6258,6 +6258,23 @@ impl CodesenseHandler {
     }
 
     #[tool(
+        description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
+    )]
+    async fn pack_validate(
+        &self,
+        Parameters(params): Parameters<PackValidateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = pack_validate_request(
+            self.app_handle.clone(),
+            self.connection_session(),
+            self.remote_team().map(Into::into),
+            params.path,
+        )
+        .await?;
+        ok_json(report)
+    }
+
+    #[tool(
         description = "Set epic repos — add/remove the source repos an epic workspace assembles by rewriting the epic doc `repos:` frontmatter (the source of truth). Read-modify-write: pass the FULL desired list (not a delta); each entry is a canonical `owner/repo`, and duplicates/formatting are normalized. REJECTED if the target is not an epic doc. After the write, CodeSense re-assembles the epic's integration worktrees in the background (non-blocking — this call returns immediately). Inputs: `epicFilePath` (the epic main-doc path — pass your `$CODESENSE_EPIC_DOC_PATH`), `repos` (the full desired `owner/repo` list; an empty list clears it). Returns the re-read list."
     )]
     async fn set_epic_repos(
@@ -10500,6 +10517,35 @@ async fn read_epic_repos_request<R: tauri::Runtime>(
     })
     .await
     .map_err(|e| ErrorData::invalid_params(format!("read_epic_repos: {e}"), None))
+}
+
+/// Validate before reading, so a path outside the caller's context never reaches the checks.
+async fn pack_validate_request<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session: Option<String>,
+    remote: Option<commands::dashboard_launch::LaunchTeam>,
+    path: String,
+) -> Result<serde_json::Value, ErrorData> {
+    let scope =
+        crate::context_repo::caller_scope::for_session(&app, session.as_deref(), remote).await;
+    commands::await_blocking("mcp.pack_validate", move || {
+        let path = std::path::Path::new(&path);
+        if !path.is_absolute() {
+            return Err("path is the pack folder's absolute path".to_string());
+        }
+        scope.existing(path)?;
+        commands::files::validate_context_path_for(path, &app, &scope)?;
+        // The walk reads the folder's real path, so that is the one held to the scope.
+        let real = std::fs::canonicalize(path).map_err(|_| "not a folder".to_string())?;
+        scope.existing(&real)?;
+        commands::files::validate_context_path_for(&real, &app, &scope)?;
+        if !real.is_dir() {
+            return Err("not a folder".to_string());
+        }
+        serde_json::to_value(crate::packs::validate::validate_dir(&real)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ErrorData::invalid_params(format!("pack_validate: {e}"), None))
 }
 
 fn dispatch_rendered_document_request<R: tauri::Runtime>(
@@ -14783,6 +14829,14 @@ pub struct ReadEpicReposParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct PackValidateParams {
+    /// The pack folder's absolute path: the one holding `pack.yml`, inside a context repo
+    /// you can read.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SetEpicReposParams {
     /// The epic main-doc path — pass your `$CODESENSE_EPIC_DOC_PATH`.
     pub epic_file_path: String,
@@ -17156,6 +17210,8 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only pack folder validator.
+        "pack_validate",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
         // command (the session-less picker). The 7th verb
         // (`gs_snapshot`) is the in-memory snapshot primitive.

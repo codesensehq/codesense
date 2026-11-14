@@ -91,6 +91,11 @@ export const ALLOWLIST = [
     reason: "dashboard publish inventory of one dashboard's files",
   },
   {
+    path: "src/packs/validate.rs",
+    max: 1,
+    reason: "pack validation walks one pack folder on disk, not the footprint",
+  },
+  {
     path: "src/install/story_linker.rs",
     max: 1,
     reason: "story linker content scan for one dir; candidate to read the index",
