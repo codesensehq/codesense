@@ -13,7 +13,6 @@ import {
   useAgentInboxRailComposeHandled,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
-import { useSlotTarget } from "@/features/shell/slots/reveal-slot";
 import { StatusMark } from "@/shared/components/status-mark";
 import { useNow } from "@/shared/hooks/use-now";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
@@ -21,6 +20,7 @@ import { findShortcutAction } from "@/shared/lib/shortcuts/registry";
 import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { markInboxMessageRead, type AgentSessionRow } from "@/tauri/commands";
 
 import { goToSession } from "../actions";
@@ -29,6 +29,7 @@ import { useAgentPins } from "../hooks/use-agent-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useSessionInbox } from "../hooks/use-session-inbox";
+import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
 import { HUMAN, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
@@ -207,15 +208,10 @@ export function ChatOverlay({
   const pinShape = opened && tall ? "line" : layout.pins;
   const sheetInPlace = opened !== null && !tall;
 
-  const inboxTarget = useSlotTarget("right-pane", {
-    surface: "inbox",
-    intent: {
-      conversation: handle,
-      org: team?.org ?? home?.org ?? "",
-      team: team?.team ?? home?.team ?? "",
-      focusComposer: true,
-    },
-  });
+  // The team's own agent page (teams.yml `agent_page:`); a team without one has no Full view.
+  const agentPage = useOrgStore((state) =>
+    team ? teamAgentPage(state.orgs, team.org, team.team) : null,
+  );
   const keyHint = formatKeystrokeDisplay(
     findShortcutAction(CHAT_TERMINAL_SHORTCUT_ID)?.defaultKeystroke ?? "",
   );
@@ -304,7 +300,12 @@ export function ChatOverlay({
               toTerminal,
               keyHint ? `Terminal (${keyHint} brings the chat back)` : "Terminal",
             )}
-            {button("Full view", Maximize2, inboxTarget.activate)}
+            {agentPage &&
+              team &&
+              handle &&
+              button("Full view", Maximize2, () =>
+                openAgentFullView({ org: team.org, team: team.team, handle, page: agentPage }),
+              )}
           </div>
           {layout.head === "two-line" && statusWord && (
             <div className="ibx-ov-now">

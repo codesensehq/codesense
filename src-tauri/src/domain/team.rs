@@ -39,6 +39,11 @@ pub struct Team {
     /// the team's content.
     #[serde(default)]
     pub landing_page: Option<String>,
+    /// The team's agent page, opened from an agent's "Full view"; relative to its content root
+    /// (`teams.yml` `agent_page:`). `None` ⇒ the team has none and its agents show no Full view.
+    /// Set via `RawTeamEntry::into_domain`, which drops a path that would leave the team's content.
+    #[serde(default)]
+    pub agent_page: Option<String>,
 }
 
 impl Team {
@@ -68,6 +73,7 @@ impl Team {
             parent_team: None,
             is_personal: false,
             landing_page: None,
+            agent_page: None,
         })
     }
 
