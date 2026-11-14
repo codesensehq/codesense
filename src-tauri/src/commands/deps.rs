@@ -127,6 +127,9 @@ struct AgentEntry {
 struct DependencyManagerInner {
     git_path: Option<PathBuf>,
     git_version: Option<String>,
+    /// The user's `gh`, detected like git. Optional: only the setup guide reads it.
+    gh_path: Option<PathBuf>,
+    gh_version: Option<String>,
     /// SW-AN-44: resolved agent binaries keyed by descriptor basename (was a single
     /// `claude_path` + `claude_resolving`). Startup seeds+probes the bundled
     /// (default) basename exactly as before; additional basenames are filled by
@@ -160,6 +163,16 @@ pub struct GitStatus {
     pub version: Option<String>,
 }
 
+/// The GitHub CLI, reported like git. Whether it is signed in is not part of the status;
+/// the read-only `probe_environment` tool answers that.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhStatus {
+    pub available: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentBinaryStatus {
@@ -187,6 +200,7 @@ pub struct AgentBinaryStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DependencyStatus {
     pub git: GitStatus,
+    pub gh: GhStatus,
     /// SW-AN-44: per-agent status keyed by descriptor basename (was a single claude-named
     /// `claude` field). With only the built-in Claude descriptor installed, `agents["claude"]`
     /// is byte-identical to the old `.claude`. Serializes as a JSON object.
@@ -212,6 +226,7 @@ impl DependencyManager {
         }
 
         let (git_path, git_version) = Self::resolve_git();
+        let (gh_path, gh_version) = Self::resolve_gh();
         // SW-OB-12: the bundled agent is resolved ENTIRELY on a background thread
         // (see `spawn_agent_background_resolve`), so `.setup()` / first paint never
         // blocks on the login-shell `$PATH` probe or a `<agent> --version` spawn.
@@ -241,6 +256,8 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path,
                 git_version,
+                gh_path,
+                gh_version,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -260,6 +277,7 @@ impl DependencyManager {
     /// from the watcher (which would spawn a login shell on every bin write).
     pub fn re_resolve(&self) {
         self.re_resolve_git();
+        self.re_resolve_gh();
 
         // Re-resolve every known agent basename, always including the
         // bundled/default one even if the map was somehow emptied.
@@ -294,6 +312,14 @@ impl DependencyManager {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.git_path = git_path;
         inner.git_version = git_version;
+    }
+
+    /// Re-resolve the GitHub CLI only (cheap: a stat and `gh --version`).
+    pub fn re_resolve_gh(&self) {
+        let (gh_path, gh_version) = Self::resolve_gh();
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.gh_path = gh_path;
+        inner.gh_version = gh_version;
     }
 
     /// SW-OB-12 / SW-AN-44: resolve `basename` against an already-probed login-shell
@@ -631,6 +657,11 @@ impl DependencyManager {
                 path: inner.git_path.as_ref().map(|p| p.display().to_string()),
                 version: inner.git_version.clone(),
             },
+            gh: GhStatus {
+                available: inner.gh_path.is_some(),
+                path: inner.gh_path.as_ref().map(|p| p.display().to_string()),
+                version: inner.gh_version.clone(),
+            },
             agents: inner
                 .agents
                 .iter()
@@ -689,6 +720,18 @@ impl DependencyManager {
         )
     }
 
+    /// Resolve the user's `gh` the way [`Self::resolve_git`] resolves git. There is no
+    /// version floor: any `gh` that reports a version counts.
+    fn resolve_gh() -> (Option<PathBuf>, Option<String>) {
+        resolve_versioned_binary(
+            "gh",
+            known_gh_locations(),
+            GIT_PROBE_TIMEOUT,
+            parse_git_version,
+            |_| true,
+        )
+    }
+
     /// The version floor for a CLI `basename`: its built-in descriptor's `min_version`.
     /// An unknown basename admits
     /// any parseable version (the `(0, 0)` sentinel — never a bypass; a 2-part
@@ -724,6 +767,8 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents: BTreeMap::new(),
             }),
             stale_resolve: Mutex::new(()),
@@ -759,6 +804,8 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -1033,6 +1080,19 @@ fn known_git_locations() -> Vec<PathBuf> {
     ];
     if let Some(home) = dirs::home_dir() {
         locs.push(home.join(".local/bin/git")); // user-local
+    }
+    locs
+}
+
+/// Where `gh` is usually installed: Homebrew (both architectures), the official
+/// installer's `/usr/local/bin`, and user-local.
+fn known_gh_locations() -> Vec<PathBuf> {
+    let mut locs = vec![
+        PathBuf::from("/opt/homebrew/bin/gh"),
+        PathBuf::from("/usr/local/bin/gh"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        locs.push(home.join(".local/bin/gh"));
     }
     locs
 }
@@ -2299,6 +2359,34 @@ mod tests {
     }
 
     #[test]
+    fn extract_semver_token_reads_the_gh_version_line() {
+        assert_eq!(
+            extract_semver_token(
+                "gh version 2.50.0 (2024-05-01)\nhttps://github.com/cli/cli/releases/tag/v2.50.0\n"
+            ),
+            Some("2.50.0".to_string())
+        );
+    }
+
+    #[test]
+    fn status_reports_gh_beside_git_and_serializes_it_camel_case() {
+        let dm = DependencyManager::cached_for_test(&[("claude", Some("2.1.150"))]);
+        assert!(!dm.status().gh.available);
+        {
+            let mut inner = dm.inner.write().unwrap();
+            inner.gh_path = Some(PathBuf::from("/opt/homebrew/bin/gh"));
+            inner.gh_version = Some("2.50.0".to_string());
+        }
+        let status = dm.status();
+        assert!(status.gh.available);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["gh"]["available"], true);
+        assert_eq!(json["gh"]["path"], "/opt/homebrew/bin/gh");
+        assert_eq!(json["gh"]["version"], "2.50.0");
+        assert_eq!(json["git"]["available"], false);
+    }
+
+    #[test]
     fn status_says_whether_each_cli_version_is_qualified_and_what_range_is() {
         let dm = DependencyManager::cached_for_test(&[
             ("opencode", Some("2.1.4")),
@@ -2361,6 +2449,8 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2399,6 +2489,8 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2437,6 +2529,8 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2881,6 +2975,8 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh_path: None,
+                gh_version: None,
                 agents,
             }),
             stale_resolve: Mutex::new(()),

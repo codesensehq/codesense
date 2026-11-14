@@ -44,5 +44,6 @@ export function computeDepsReady(status: DependencyStatus, activeBasename: strin
  */
 export const UNAVAILABLE_DEP_STATUS: DependencyStatus = {
   git: { available: false, path: null, version: null },
+  gh: { available: false, path: null, version: null },
   agents: {},
 };
