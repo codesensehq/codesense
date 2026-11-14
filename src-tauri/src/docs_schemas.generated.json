@@ -501,6 +501,13 @@
           ],
           "type": "object"
         },
+        "Follow": {
+          "enum": [
+            "pinned",
+            "latest-compatible"
+          ],
+          "type": "string"
+        },
         "KitRequirement": {
           "additionalProperties": false,
           "properties": {
@@ -812,9 +819,13 @@
                   ]
                 },
                 "follow": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Follow"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "id": {
@@ -1024,7 +1035,8 @@
           "enum": [
             "claude",
             "codex",
-            "opencode"
+            "opencode",
+            "hermes"
           ],
           "type": "string"
         }
@@ -1144,6 +1156,23 @@
           ],
           "type": "string"
         },
+        "Follow": {
+          "enum": [
+            "pinned",
+            "latest-compatible"
+          ],
+          "type": "string"
+        },
+        "LicenseClass": {
+          "enum": [
+            "open-source",
+            "copyleft",
+            "no-license",
+            "unrecognized",
+            "blocked"
+          ],
+          "type": "string"
+        },
         "LockAgent": {
           "properties": {
             "id": {
@@ -1180,9 +1209,13 @@
               ]
             },
             "follow": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Follow"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "id": {
@@ -1241,8 +1274,19 @@
         "LockLicense": {
           "properties": {
             "class": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LicenseClass"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "confidence": {
+              "format": "double",
               "type": [
-                "string",
+                "number",
                 "null"
               ]
             },
@@ -1333,12 +1377,6 @@
           "properties": {
             "kind": {
               "$ref": "#/$defs/LockSourceKind"
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
             },
             "url": {
               "type": [
@@ -2361,8 +2399,8 @@
     "src-tauri/src/agents/model.rs": "e6bda3a39850fa241c4345dafffecbc8db2667ff8e3346dc91eead6d52887721",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
-    "src-tauri/src/packs/lock.rs": "cd51bd703684d6eee2bb3f67382d5acb39bf84af726cafaa4a0f44cd9c63a714",
-    "src-tauri/src/packs/manifest.rs": "3080119a1d0e02e071ee578cdaeee1c7e080ca0d4b21b699d4c617fab2ae6fd1",
+    "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",
+    "src-tauri/src/packs/manifest.rs": "cbefe924e32f030e301da71b9162d7d5bff7e98894d1782f7a43bd7a45b35a62",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
     "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
     "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"

@@ -7,6 +7,23 @@
       ],
       "type": "string"
     },
+    "Follow": {
+      "enum": [
+        "pinned",
+        "latest-compatible"
+      ],
+      "type": "string"
+    },
+    "LicenseClass": {
+      "enum": [
+        "open-source",
+        "copyleft",
+        "no-license",
+        "unrecognized",
+        "blocked"
+      ],
+      "type": "string"
+    },
     "LockAgent": {
       "properties": {
         "id": {
@@ -43,9 +60,13 @@
           ]
         },
         "follow": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Follow"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "id": {
@@ -104,8 +125,19 @@
     "LockLicense": {
       "properties": {
         "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LicenseClass"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "format": "double",
           "type": [
-            "string",
+            "number",
             "null"
           ]
         },
@@ -196,12 +228,6 @@
       "properties": {
         "kind": {
           "$ref": "#/$defs/LockSourceKind"
-        },
-        "path": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "url": {
           "type": [

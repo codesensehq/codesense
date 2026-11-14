@@ -1,4 +1,5 @@
-# A full example packs.lock.yml: one catalog pack with both kinds of external part.
+# A full example packs.lock.yml: one catalog pack with both kinds of external part. Schema-only:
+# `starter` stands for a part of the required starter pack.
 lock_format: 1
 packs:
   - id: codesense-team

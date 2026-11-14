@@ -37,13 +37,16 @@ pub struct PackManifest {
     // Written by the pack build: every bundled file with its hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
-    // Written by the pack build; a part not built yet is null.
+    // Per-part spec hashes, null for a part without one. The pack build doesn't write
+    // these; a later change fills them in.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub spec_hash: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct Requires {
+    // The CodeSense versions this pack needs (`>=0.2.0 <1.0.0`). An older app refuses the
+    // pack, so this is how a pack uses fields or values newer than its `pack_format`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codesense: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -106,13 +109,15 @@ pub enum SkillTarget {
     Claude,
     Codex,
     Opencode,
+    Hermes,
 }
 
 impl SkillTarget {
-    pub const ALL: [SkillTarget; 3] = [
+    pub const ALL: [SkillTarget; 4] = [
         SkillTarget::Claude,
         SkillTarget::Codex,
         SkillTarget::Opencode,
+        SkillTarget::Hermes,
     ];
 
     // Where the built copy of skill `name` lives, relative to the pack root.
@@ -121,6 +126,7 @@ impl SkillTarget {
             SkillTarget::Claude => format!(".claude/skills/{name}/SKILL.md"),
             SkillTarget::Codex => format!(".agents/skills/{name}/SKILL.md"),
             SkillTarget::Opencode => format!(".opencode/command/{name}.md"),
+            SkillTarget::Hermes => format!(".hermes/skills/{name}/SKILL.md"),
         }
     }
 }
@@ -132,6 +138,15 @@ pub enum ExternalMethod {
     Files,
     // The upstream's own installer, run by the user's agent after install.
     Setup,
+}
+
+// Which upstream version an external part tracks: the tested pin, or the newest within
+// `compatible` (opt-in per part).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Follow {
+    Pinned,
+    LatestCompatible,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -246,7 +261,7 @@ pub enum Part {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         compatible: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        follow: Option<String>,
+        follow: Option<Follow>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         setup: Option<ExternalSetup>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
