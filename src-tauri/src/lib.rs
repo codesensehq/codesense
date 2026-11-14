@@ -1329,6 +1329,7 @@ pub fn run() {
             commands::data_read_model::setup_state,
             commands::data_read_model::why_line,
             commands::data_read_model::open_diff_read,
+            commands::data_read_model::open_diff_image_read,
             commands::data_read_model::setup,
             commands::data_read_model::story_changes,
             commands::data_read_model::session_record,
@@ -1398,6 +1399,7 @@ pub fn run() {
             commands::tools::open_editor,
             commands::files::check_path_exists,
             commands::files::read_file,
+            commands::files::read_image_file,
             commands::file_surface::file_surface_call,
             live_hub::files::file_surface_prepare_view,
             live_hub::stories::nav_model_publish,
@@ -1457,6 +1459,7 @@ pub fn run() {
             commands::git_sync::source_commit_graph,
             commands::git_sync::source_commit_changeset,
             commands::git_sync::source_commit_file_redline,
+            commands::git_sync::source_image_sides,
             // SLW-WD-4: app-side bridge to WD-3's route/un-route verbs (the "→ context"
             // affordance in the source-diff overlay). Shares one orchestration with the
             // MCP `#[tool]`s.

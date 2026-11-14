@@ -51,6 +51,7 @@ pub mod frontmatter_fields;
 pub mod frontmatter_validation;
 pub mod git;
 pub mod git_sync;
+pub mod raster_bytes;
 pub mod host_connection;
 pub mod host_connection_manager;
 pub mod install;
@@ -1084,7 +1085,10 @@ pub use async_helpers::await_blocking;
 // +1 `data_read_model::setup_state` (the page's `setupState()`: orgs, teams and source repos). → 506.
 // +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 508.
 // +1 `data_read_model::session_record` (an agent's session record for a page). → 509.
-pub const EXPECTED_COMMAND_COUNT: usize = 509;
+// +3 the rendered diff's raster sides: `git_sync::source_image_sides` (the source diff),
+// `data_read_model::open_diff_image_read` (the open-diff tab) and `files::read_image_file`
+// (Unsaved team edits). → 512.
+pub const EXPECTED_COMMAND_COUNT: usize = 512;
 
 #[cfg(test)]
 mod tests {
