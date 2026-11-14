@@ -324,10 +324,13 @@
   }
   function hideLogin() {
     clearTimeout(S.loginTimer);
+    const shown = notices.has('login');
     notice('login', null);
+    if (shown && S.reads) S.reads.poke();
   }
   function showLogin() {
     if (notices.has('login')) return;
+    queueMicrotask(() => S.reads && S.reads.poke());
     const runtime = S.runtime;
     const command = LOGIN[runtime];
     const other = S.list.find((item) => item.id !== runtime && AGENT[item.id]);
@@ -449,7 +452,16 @@
       if (event.key === 'Escape') {
         close();
         button.focus();
+        return;
       }
+      // Arrow keys move through a menu's items and a segmented control's options.
+      const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+      if (!step) return;
+      const items = [...panel.querySelectorAll('[role=menuitem], [role=radio]:not([aria-disabled=true])')];
+      const at = items.indexOf(document.activeElement);
+      if (at < 0) return;
+      event.preventDefault();
+      items[(at + step + items.length) % items.length].focus();
     });
     return close;
   }
@@ -462,8 +474,14 @@
       return;
     }
     const model = modelFor(S.runtime);
-    const label = [NAME[S.runtime], model ? MODEL_NAME[model] : null, 'your login'].filter(Boolean).join(' · ');
-    const button = el('button', { type: 'button', class: 'rt', id: 'rt', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, el('span', {}, label), el('span', { class: 'chg' }, 'Change'));
+    const more = [model ? MODEL_NAME[model] : null, 'your login'].filter(Boolean).join(' · ');
+    const choices = S.list.filter((item) => AGENT[item.id]).length;
+    const button = el(
+      'button',
+      { type: 'button', class: 'rt', id: 'rt', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' },
+      el('span', {}, NAME[S.runtime], el('span', { class: 'rt-more' }, ` · ${more}`)),
+      el('span', { class: 'chg' }, choices > 1 ? 'Change' : 'Details'),
+    );
     const panel = el('div', { class: 'pop', role: 'dialog', 'aria-label': "Choose the setup agent's CLI", id: 'rt-pop', hidden: true });
     paintRuntimePanel(panel);
     wrap.replaceChildren(button, panel);
@@ -562,7 +580,16 @@
       target: guideTarget(),
       timers: { slowMs: 20000, failMs: 120000 },
       card: promptFor,
-      layout: { variant: 'page', logLabel: COPY.logLabel, composerLabel: COPY.composerLabel },
+      layout: {
+        variant: 'page',
+        logLabel: COPY.logLabel,
+        composerLabel: COPY.composerLabel,
+        // While the sign-in notice is up, the composer says why a message will wait.
+        composer: () =>
+          notices.has('login')
+            ? { placeholder: 'Sign in first, then message CodeSense setup', hint: 'Messages are held until the CLI is signed in.' }
+            : {},
+      },
       headerSlot: { slot: $('ctl'), render: paintHeader },
       cards: { consent: true },
       next: { edit: true },

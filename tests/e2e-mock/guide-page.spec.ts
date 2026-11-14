@@ -277,11 +277,33 @@ test("a CLI that never answers gets the sign-in notice with its own login comman
   const notice = page.locator('[data-notice="login"]');
   await expect(notice).toContainText("Claude may need you to sign in");
   await expect(notice.locator("code")).toHaveText("claude auth login");
+  // The composer says why a message will wait, until the notice is gone.
+  const composer = page.locator("#sv-composer-input");
+  await expect(composer).toHaveAttribute(
+    "placeholder",
+    "Sign in first, then message CodeSense setup",
+  );
   await notice.locator('[data-act="copy-login"]').click();
   await expect(page.getByText("Copied the sign-in command.")).toBeVisible();
   expect(await page.evaluate(() => window.__fake.copied)).toEqual(["claude auth login"]);
   await live([lead(2, "Hi. I'm CodeSense.")]);
   await expect(notice).toHaveCount(0);
+  await expect(composer).not.toHaveAttribute("placeholder", /Sign in first/);
+});
+
+test("a one-runtime page says Details, not Change, and the menu moves with the arrow keys", async ({
+  page,
+}) => {
+  const { live } = await open(page);
+  await live([lead(2, "Hi.")]);
+  await expect(page.locator("#rt .chg")).toHaveText("Details");
+  await page.getByRole("button", { name: "Setup menu" }).click();
+  await expect(page.getByRole("menuitem", { name: "What I've set up" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Copy setup summary" })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("menuitem", { name: "Clear conversation" })).toBeFocused();
 });
 
 test("a session stuck at its startup screen shows the sign-in notice at once", async ({ page }) => {
