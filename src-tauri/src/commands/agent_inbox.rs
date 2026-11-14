@@ -1021,14 +1021,6 @@ pub(crate) async fn note_to_session_with(
     }
 }
 
-/// `send_message`: the caller (by its self-reported session id) messages `to`. Mail to
-/// a session goes to its team; mail to the human goes to the sender's team. An optional
-/// `attach_file` records a managed-file reference for the human preview — stored
-/// verbatim as a logical path; `None` is a standalone message. `on_click` is the
-/// per-message action the human-inbox UI honours on row click. `reply_to` (a running
-/// session, `human` or `role:<id>`) is where replies to it go instead of the sender.
-/// `summary` is the sender's one-line list preview. (Tests only: the MCP tool sends
-/// through [`send_message_with_kind`].)
 /// The saved agent and story a launch's pin thread is keyed by. Only the registry's own
 /// record of the launch names the agent: a remote tab's tag, which `list_sessions` falls
 /// back to, is not what the session was launched from.
@@ -1039,6 +1031,14 @@ pub(crate) fn registry_thread(
     Some((agent.to_string(), row.meta.story.clone()))
 }
 
+/// `send_message`: the caller (by its self-reported session id) messages `to`. Mail to
+/// a session goes to its team; mail to the human goes to the sender's team. An optional
+/// `attach_file` records a managed-file reference for the human preview — stored
+/// verbatim as a logical path; `None` is a standalone message. `on_click` is the
+/// per-message action the human-inbox UI honours on row click. `reply_to` (a running
+/// session, `human` or `role:<id>`) is where replies to it go instead of the sender.
+/// `summary` is the sender's one-line list preview. (Tests only: the MCP tool sends
+/// through [`send_message_with_kind`].)
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_message<'a>(

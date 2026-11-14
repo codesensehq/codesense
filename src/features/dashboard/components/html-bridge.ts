@@ -229,7 +229,8 @@ async function subscriptionView(
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
     if (!prepare) {
-      // The host's view key for the thread: the saved agent is the id before `@`.
+      // The host's view key for the thread (`live_hub::pins::view_key` and
+      // `ThreadKey::new`): the saved agent is the id before `@`.
       const agent = agentId.split("@")[0].trim();
       return { viewKey: `pins:${team.org}/${team.team}:${agent}:${storyId?.trim() ?? ""}` };
     }
