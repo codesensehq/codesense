@@ -367,6 +367,14 @@ pub fn is_valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
 }
 
+/// 1-128 ASCII letters, digits or bytes of `punctuation`: a bridge tool or skill name.
+fn is_plain_name(name: &str, punctuation: &[u8]) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || punctuation.contains(&b))
+}
+
 /// The runtimes whose adapters enforce `mcp.bridge_tools`, by display label.
 pub(crate) fn bridge_tool_runtimes() -> String {
     AgentCli::join_names(
@@ -685,13 +693,7 @@ impl Agent {
             }
             let mut seen = BTreeSet::new();
             for name in tools {
-                if name.is_empty()
-                    || name.len() > 128
-                    || name.starts_with("mcp__")
-                    || !name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-                {
+                if !is_plain_name(name, b"_-") || name.starts_with("mcp__") {
                     return Err(ValidationError::InvalidBridgeTool(name.clone()));
                 }
                 if !seen.insert(name) {
@@ -702,12 +704,7 @@ impl Agent {
         if let Some(skills) = &self.skills {
             let mut seen = BTreeSet::new();
             for name in skills {
-                if name.is_empty()
-                    || name.len() > 128
-                    || !name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':'))
-                {
+                if !is_plain_name(name, b"_-:") {
                     return Err(ValidationError::InvalidSkill(name.clone()));
                 }
                 if !seen.insert(name) {
