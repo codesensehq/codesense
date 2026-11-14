@@ -5697,6 +5697,15 @@ export interface GitStatus {
   version: string | null;
 }
 
+/** The GitHub CLI, detected like git. Whether it is signed in is not part of this status.
+ *  `resolving` is true at startup until the background login-shell `$PATH` probe has run. */
+export interface GhStatus {
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  resolving: boolean;
+}
+
 export interface AgentBinaryStatus {
   available: boolean;
   path: string | null;
@@ -5726,6 +5735,7 @@ export interface ShadowedAgentInstall {
 
 export interface DependencyStatus {
   git: GitStatus;
+  gh: GhStatus;
   /**
    * Per-agent binary-detection status keyed by CLI basename (`claude`, `codex`).
    * (Distinct from the runtime `AgentStatus` union in `agent-status-config`.)
