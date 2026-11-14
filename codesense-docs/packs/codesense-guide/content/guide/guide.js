@@ -125,6 +125,7 @@
     list: [],
     runtime: null,
     done: false,
+    begun: false,
     chat: null,
     reads: null,
     loginTimer: null,
@@ -263,6 +264,8 @@
     try {
       const state = await cs.invoke('setupState');
       const orgs = Array.isArray(state && state.orgs) ? state.orgs : [];
+      // Any context repo beyond the docs means setup has begun: the next open is a resume.
+      S.begun = orgs.some((org) => org.slug !== DOCS.org);
       S.done = orgs.some(
         (org) =>
           org.slug !== DOCS.org &&
@@ -271,6 +274,7 @@
     } catch {
       // An unread state is treated as "still setting up": the stronger model.
       S.done = false;
+      S.begun = false;
     }
     if (S.done !== was) paintChip();
     return S.done;
@@ -280,8 +284,8 @@
   // ---- launch and the transport kit.chat sends through ----
   const promptFor = (text) => {
     const body = String(text || '').trim();
-    // The app's "Set up CodeSense" reopen opens this page at #resume.
-    const resumed = (S.chat && S.chat.thread().length > 0) || window.location.hash === '#resume';
+    // The app's "Set up CodeSense" reopen opens this page at #resume; a restored tab with setup progress resumes too.
+    const resumed = (S.chat && S.chat.thread().length > 0) || window.location.hash === '#resume' || S.begun;
     return [SKILL[S.runtime], body || (resumed ? 'resume' : '')].filter(Boolean).join(' ');
   };
   async function openGuide(prompt) {
@@ -652,6 +656,13 @@
     S.chat = null;
     S.reads = null;
   }
+  // Reopening an open tab only changes its fragment. With no agent live, that launches one that resumes.
+  window.addEventListener('hashchange', () => {
+    const chat = S.chat;
+    if (window.location.hash !== '#resume' || !chat) return;
+    const controls = chat.controls();
+    if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
+  });
   async function startChat() {
     const chat = mountChat();
     await chat.loaded();
