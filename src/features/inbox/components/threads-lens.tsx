@@ -29,6 +29,7 @@ import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
 import type { DeliveryMark } from "../lib/delivery-marks";
 import type { PersonPins } from "../hooks/use-person-pins";
+import { useThreadPins } from "../hooks/use-thread-pins";
 import { pinTitleOf } from "../lib/person-pins";
 import { PinButton, PinFoot, PinLive } from "./person-pin";
 
@@ -464,6 +465,7 @@ function ThreadPane({
       ? "you, the human"
       : [stateLabel(p.state), p.agent, machineLabel(p)].filter(Boolean).join(" · ");
   const self = selfOf(view);
+  const pins = useThreadPins(k, thread.messages, view);
   return (
     <>
       <div className="ibx-th-head">
@@ -510,6 +512,7 @@ function ThreadPane({
         thread={thread}
         request={request}
         defaultTo={defaultRecipient(k, self, held, thread.messages)}
+        pins={pins}
       />
     </>
   );
