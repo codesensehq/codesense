@@ -581,6 +581,7 @@ describe("kit.chat", () => {
 
   it("pinToBottom follows the newest message until the reader scrolls up, and reset follows again", () => {
     const log = document.createElement("div");
+    log.append(document.createElement("div"));
     Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
     Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
     const pin = kitOf().chat.pinToBottom(log, { settle: false });
@@ -592,6 +593,31 @@ describe("kit.chat", () => {
     expect(log.scrollTop).toBe(200);
     pin.reset();
     expect(log.scrollTop).toBe(1000);
+  });
+});
+
+describe("kit.pinToBottom on an empty log", () => {
+  it("does not read the log's layout until it has a message, then follows as before", () => {
+    const log = document.createElement("div");
+    const reads = { height: 0, top: [] as number[] };
+    Object.defineProperty(log, "scrollHeight", {
+      get: () => (reads.height++, 1000),
+      configurable: true,
+    });
+    Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
+    Object.defineProperty(log, "scrollTop", {
+      get: () => reads.top.at(-1) ?? 0,
+      set: (value: number) => reads.top.push(value),
+      configurable: true,
+    });
+    const pin = kitOf().chat.pinToBottom(log, { settle: false });
+    pin.onContentChanged();
+    pin.reset();
+    // An empty log has nothing to follow: no forced reflow, no scroll write.
+    expect(reads).toEqual({ height: 0, top: [] });
+    log.append(document.createElement("div"));
+    pin.onContentChanged();
+    expect(reads.top).toEqual([1000]);
   });
 });
 

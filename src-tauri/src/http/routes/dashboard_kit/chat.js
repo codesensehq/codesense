@@ -592,7 +592,7 @@
     let following = true, released = false;
     const near = () => log.scrollHeight - log.scrollTop - log.clientHeight < PIN_NEAR;
     const follow = () => {
-      if (following && !released) log.scrollTop = log.scrollHeight;
+      if (following && !released && log.firstChild) log.scrollTop = log.scrollHeight;
     };
     const onScroll = () => {
       following = near();

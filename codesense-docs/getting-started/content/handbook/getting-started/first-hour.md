@@ -19,7 +19,7 @@ install. Its **getting-started** team is open with its README. See
 
 This context repo is these docs, set up the way a team would set up its own:
 a routine you can open and run, and `examples/` with skills (such as
-`/routine`, `/agent` and `/codesense-setup`) and dashboards you can copy into
+`/routine` and `/agent`) and dashboards you can copy into
 your own team. Nothing in `examples/` is installed; the CodeSense MCP tools
 describe everything an agent needs on their own. It's read-only and has a book icon in the context repo menu at the
 top left. To update it, ask an agent to run the

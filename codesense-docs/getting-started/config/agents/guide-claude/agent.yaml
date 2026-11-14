@@ -1,0 +1,48 @@
+id: guide-claude
+name: CodeSense setup
+description: Sets up CodeSense with you. It checks this Mac, asks what you work on and does the setup one card at a time.
+created_by: codesense
+runtime: claude
+launch: foreground
+# The page passes the model when it launches (setup model while setup is incomplete, the cheaper one after).
+args:
+  # No shell, edit or web tool on this agent, whatever the allow list below says.
+  - --disallowedTools
+  - Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch
+env:
+  MAX_MCP_OUTPUT_TOKENS: "8000"
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
+permissions:
+  claude:
+    # Anything not allowed below is refused, not asked.
+    defaultMode: dontAsk
+    allow:
+      - Skill(codesense-setup)
+      - mcp__codesense__who_am_i
+      - mcp__codesense__read_messages
+      - mcp__codesense__codesense_overview
+      - mcp__codesense__describe_setup
+      - mcp__codesense__query_context
+      - mcp__codesense__read_content_file
+      - mcp__codesense__list_source_repos
+      - mcp__codesense__records_list
+      - mcp__codesense__probe_environment
+      - mcp__codesense__reply
+      - mcp__codesense__send_message
+      - mcp__codesense__send_role_message
+      - mcp__codesense__signal_progress
+      - mcp__codesense__signal_done
+      - mcp__codesense__create_local_organization
+      - mcp__codesense__attach_context_repository
+      - mcp__codesense__create_team
+      - mcp__codesense__add_source_repo
+      - mcp__codesense__attach_source_repo_path
+      - mcp__codesense__run_in_terminal_tab
+      - mcp__codesense__records_create
+      - mcp__codesense__records_set_fields
+      - mcp__codesense__create_content_file
+      - mcp__codesense__validate_story
+      - mcp__codesense__open_workspace
+      - mcp__codesense__set_epic_repos
+      - mcp__codesense__read_epic_repos
+revision: 1

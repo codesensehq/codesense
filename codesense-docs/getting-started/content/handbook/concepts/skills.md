@@ -43,9 +43,8 @@ content your team edits, reviews and shares through git like everything else.
 The CodeSense docs repo comes bundled with every install, and its
 `getting-started/content/examples/` folder holds copyable examples:
 
-- `skills/routine/`, `skills/agent/`, `skills/manage-team/` and
-  `skills/codesense-setup/`: skills that help an agent author routines,
-  agents, teams and your setup.
+- `skills/routine/`, `skills/agent/` and `skills/manage-team/`: skills that
+  help an agent author routines, agents and teams.
 - `skills/context-sync/`: brings team context into a worktree, or sends
   edits back after a preview.
 - `skills/setup-machine/` and `skills/add-machine-user/`: set up a remote

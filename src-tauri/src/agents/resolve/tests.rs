@@ -1218,3 +1218,6 @@ fn a_parent_without_sharing_warns_once_and_the_launch_goes_ahead() {
 
 #[path = "launch_cwd_tests.rs"]
 mod launch_cwd_tests;
+
+#[path = "guide_agent_tests.rs"]
+mod guide_agent_tests;
