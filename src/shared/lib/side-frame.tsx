@@ -147,8 +147,6 @@ export function isRasterImage(filePath: string): boolean {
   return Object.hasOwn(IMAGE_MIME, extensionOf(filePath) ?? "");
 }
 
-/** A raster image side from its base64 bytes. Never an SVG: that can carry
- *  script, so it goes through {@link SideFrame}. */
 /** A byte count as the caption shows it: B, KB or MB, one decimal past bytes. */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
