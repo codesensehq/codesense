@@ -867,12 +867,16 @@ html, body { margin: 0; height: 100%; }
   }
   // Reopening an open tab with no agent live launches one that resumes. The host reports a reopen two
   // ways: a fragment change, and a `codesense:navigate` message that also arrives when the fragment is
-  // already `#resume` (no `hashchange` then). A live or starting agent makes both a no-op.
+  // already `#resume` (no `hashchange` then). A live or starting agent makes both a no-op. The guard waits
+  // for the chat's first roster read: before it, no guide is known, so a live one would look absent.
   function resumeIfIdle() {
     const chat = S.chat;
     if (!chat) return;
-    const controls = chat.controls();
-    if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
+    chat.loaded().then(() => {
+      if (S.chat !== chat) return;
+      const controls = chat.controls();
+      if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
+    });
   }
   window.addEventListener('hashchange', () => {
     if (window.location.hash === '#resume') resumeIfIdle();

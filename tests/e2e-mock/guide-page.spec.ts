@@ -23,6 +23,7 @@ interface Fake {
   sessions(rows: Row[]): void;
   inbox(handle: string, rows: Row[]): void;
   setupDone(done: boolean): void;
+  subscribed(): boolean;
 }
 declare global {
   interface Window {
@@ -73,6 +74,8 @@ interface Options {
   hash?: string;
   /** A profile that has begun setup (a context repo of its own, no source repo yet). */
   begun?: boolean;
+  /** The app's first roster read does not answer until a case delivers rows with `sessions()`. */
+  holdRoster?: boolean;
 }
 
 /** Opens the page over the fake bridge; returns the helpers a case drives it with. */
@@ -85,7 +88,7 @@ async function open(page: Page, options: Options = {}) {
     return route.fulfill({ contentType: "text/html", body: PAGE });
   });
   await page.addInitScript(
-    ({ agents, setupDone: done, stop, markReadFails, begun }) => {
+    ({ agents, setupDone: done, stop, markReadFails, begun, holdRoster }) => {
       let setupDone = done;
       let readFails = markReadFails;
       const calls: Fake["calls"] = [];
@@ -151,7 +154,7 @@ async function open(page: Page, options: Options = {}) {
         },
         onSessions: (cb: (rows: Row[] | null, error?: unknown) => void) => {
           sessionListener = cb;
-          cb(latest);
+          if (!holdRoster) cb(latest);
           return () => {
             sessionListener = null;
           };
@@ -179,6 +182,7 @@ async function open(page: Page, options: Options = {}) {
         setupDone(value: boolean) {
           setupDone = value;
         },
+        subscribed: () => sessionListener !== null,
       };
     },
     {
@@ -187,6 +191,7 @@ async function open(page: Page, options: Options = {}) {
       stop: options.stop ?? "stopped",
       markReadFails: options.markReadFails ?? 0,
       begun: options.begun ?? false,
+      holdRoster: options.holdRoster ?? false,
     },
   );
   if (options.clock) await page.clock.install({ time: AT });
@@ -290,6 +295,19 @@ test("a second reopen at the same #resume fragment launches via the host's navig
   });
   await expect.poll(async () => (await calls("openWorkspace")).length).toBe(2);
   expect((await calls("openWorkspace"))[1].args.initialPrompt).toBe("/codesense-setup resume");
+});
+
+test("a navigate message before the first roster read launches nothing while a guide is live", async ({
+  page,
+}) => {
+  const { live, calls } = await open(page, { holdRoster: true });
+  await expect.poll(() => page.evaluate(() => window.__fake.subscribed())).toBe(true);
+  await page.evaluate(() => {
+    window.postMessage({ type: "codesense:navigate", hash: "#resume", nonce: 1, token: "t" }, "*");
+  });
+  await live([lead(2, "Hi. Still here.")]);
+  await page.waitForTimeout(400);
+  expect(await calls("openWorkspace")).toHaveLength(0);
 });
 
 test("a consent card shows its class and buttons, and a click replies to that card", async ({
