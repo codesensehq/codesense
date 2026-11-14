@@ -44,7 +44,6 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
-/**
  * A page of the docs repo as a tab of its "Getting started" team. Says why when it can't: the
  * docs repo is not connected, or its team can't be selected. `pathIn` names the page's path
  * from the docs repo root.
