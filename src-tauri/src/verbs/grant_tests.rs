@@ -426,7 +426,8 @@ fn a_team_workspace_open_needs_the_foreman_launch_grant_beside_launch() {
         FramePolicy::default(),
         None,
     );
-    let team_workspace = json!({"target":{"kind":"team-workspace","name":"foreman"}});
+    let team_workspace =
+        json!({"target":{"kind":"team-workspace","name":"foreman"},"agent":"foreman-claude"});
     let story = json!({"target":{"kind":"story","storyId":"S-1"}});
     // Every grantable capability, `launch` included, still refuses a team-workspace open.
     record.effective_grant = capabilities::full();
@@ -490,4 +491,50 @@ fn a_team_workspace_open_needs_the_foreman_launch_grant_beside_launch() {
             reason: "denied: grant".into()
         }
     );
+}
+
+#[test]
+fn a_foreman_page_launches_only_the_foreman_and_its_guide() {
+    let store = FrameStore::default();
+    let mut record = store.mint(
+        9321,
+        FrameGrant {
+            frame_id: String::new(),
+            principal: "human".into(),
+            dashboard: "foreman".into(),
+            slot: "right-pane".into(),
+            team: Some(crate::dashboard_stream::frame::FrameTeam {
+                org: "acme".into(),
+                team: "a".into(),
+            }),
+            scope: "team".into(),
+        },
+        "/ctx".into(),
+        "/ctx/foreman.html".into(),
+        "/ctx".into(),
+        FramePolicy::default(),
+        None,
+    );
+    record.effective_grant = vec!["launch".into(), foreman_launch::CAPABILITY.into()];
+    let open = |record: &crate::dashboard_stream::frame::FrameRecord, args: serde_json::Value| {
+        Dispatcher::default().dispatch_frame(record, "openWorkspace", args, &Policy::default(), 0)
+    };
+    let target = json!({"kind":"team-workspace","name":"foreman"});
+    for agent in ["foreman-claude", "guide-claude"] {
+        assert!(!matches!(
+            open(&record, json!({"target": target, "agent": agent})),
+            Decision::Deny { .. }
+        ));
+    }
+    let denied = Decision::Deny {
+        reason: "denied: grant".into(),
+    };
+    // Another agent, a differently spelled one, and no agent at all (the team's default) are refused.
+    for args in [
+        json!({"target": target, "agent": "dev-worker-claude"}),
+        json!({"target": target, "agent": "builtin/foreman-claude"}),
+        json!({"target": target}),
+    ] {
+        assert_eq!(open(&record, args), denied);
+    }
 }
