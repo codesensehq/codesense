@@ -23,7 +23,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", stale: (time) => `Couldn't refresh · ${time}` },
+    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", stale: (time) => `Couldn't refresh · ${time}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -625,7 +625,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], copy: words = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], activity = false, copy: words = null }) {
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
@@ -672,7 +672,8 @@
     const chipsBox = chips.length ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }, ...chips.map((chip) => h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
       if (!isDone) sendChip(chip.text);
     } }, chip.label))) : null;
-    el.replaceChildren(h("div", { class: "chatcol" }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
+    const variant = layout.variant === "page" ? "page" : null;
+    el.replaceChildren(h("div", { class: variant ? `chatcol ${variant}` : "chatcol", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -785,6 +786,12 @@
       if (item.mark !== "sent") return item.mark;
       return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()) });
     }
+    function activityItem() {
+      if (!activity) return null;
+      const here = state(), own2 = activity.text ? activity.text(here) : null, p = presence();
+      const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
+      return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
+    }
     function threadItems() {
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
       for (const row of thread) {
@@ -830,7 +837,7 @@
       const here = state();
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
-      const want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const act = activityItem(), want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
       pin.onContentChanged();
       if (refocusCard !== null) {
