@@ -689,6 +689,29 @@ describe("kit.chat suggestion chips from the Next line", () => {
     expect(chipsOf(s.el)).toEqual(["Bring in my issues", "What have you set up?", "Status?"]);
   });
 
+  it("with next off, static chips with the same label all show, as on main", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s, {
+      chips: [
+        { label: "Same", text: "one" },
+        { label: "Same", text: "two" },
+      ],
+    });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Same", "Same"]);
+  });
+
+  it("a lead message that is only a Next line shows no bubble, and its chips remain", async () => {
+    const s = setup(
+      [lead("idle")],
+      [reply(1, "Hello there."), reply(2, "Next: `Bring in my issues`")],
+    );
+    mountOn(s, { next: true });
+    await flush();
+    expect(bodies(s.el)).toEqual(["Hello there."]);
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues"]);
+  });
+
   describe("the edit pencil", () => {
     const pencil = (el: HTMLElement, label: string) =>
       el.querySelector<HTMLButtonElement>(`[data-chip-edit="${label}"]`);
@@ -734,6 +757,18 @@ describe("kit.chat suggestion chips from the Next line", () => {
     it("the pencil does nothing once the chat is done", async () => {
       const s = setup([lead("idle")], [reply(1, NEXT)]);
       mountOn(s, { next: { edit: true }, done: true });
+      await flush();
+      pencil(s.el, "Bring in my issues")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");
+    });
+
+    it("the pencil's own guard holds when the page keeps the composer enabled", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, {
+        next: { edit: true },
+        done: true,
+        layout: { composer: () => ({ disabled: false }) },
+      });
       await flush();
       pencil(s.el, "Bring in my issues")!.click();
       expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");

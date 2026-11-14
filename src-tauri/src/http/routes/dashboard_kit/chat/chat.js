@@ -174,7 +174,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  function paintChips(){
   if(!chipsBox)return;
-  const list=[...nextChips(),...chips],seen=new Set(),shown=list.filter(chip=>!seen.has(chip.label)&&seen.add(chip.label));
+  const seen=new Set(chips.map(chip=>chip.label)),shown=[...nextChips().filter(chip=>!seen.has(chip.label)&&seen.add(chip.label)),...chips];
   const sig=JSON.stringify(shown.map(chip=>[chip.label,chip.text,Boolean(chip.edit)]));
   if(sig!==chipSig.v){chipSig.v=sig;chipsBox.replaceChildren(...shown.map(chipNode));}
   chipsBox.hidden=!shown.length;
