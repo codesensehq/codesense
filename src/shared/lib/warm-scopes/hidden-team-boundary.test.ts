@@ -251,10 +251,6 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "the outside press closes this composer's own popup, and the suggestion id is derived from the instance's own list id; the Inbox is not a retained team view.",
   },
-  "src/features/inbox/components/inbox-splitter.tsx": {
-    count: 4,
-    reason: "pointer listeners installed only for the duration of the user's own splitter drag.",
-  },
   "src/features/inbox/hooks/use-document-visible.ts": {
     count: 1,
     reason: "visibilitychange subscription; page-level.",

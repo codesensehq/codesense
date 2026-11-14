@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "./lib/is-main.mjs";
+import { pinnedPages } from "./lib/pinned-pages.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const MANIFEST_PATH = join(
@@ -28,11 +29,17 @@ function matches(glob, path) {
   return new RegExp(`^${pattern}$`).test(path);
 }
 
+const PINNED = new Set(
+  [...pinnedPages()].map((path) => path.replace(/^getting-started\/content\//, "")),
+);
+
 function isMetadataPage(path) {
   return (
     /\.(html|md)$/i.test(path) &&
     // Golden runnable pane copies are executable source artifacts, kept byte-exact.
     !path.startsWith("examples/panes/") &&
+    // A page the app hashes (`PAGES` in foreman_launch.rs) would never hold its grant once edited.
+    !PINNED.has(path) &&
     !path.split("/").some((p) => ["_shared", "assets", "templates", "data"].includes(p))
   );
 }

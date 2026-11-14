@@ -533,3 +533,17 @@ describe("visible, deliberate quick-open selection", () => {
     expect(props.onSelect).toHaveBeenCalledWith(items[2].id);
   });
 });
+
+describe("QuickOpenDialog — a row with something waiting", () => {
+  it("shows a dot on that row only", () => {
+    renderDialog({
+      items: [
+        { id: "a", label: "Foreman", sublabel: "action", waiting: true },
+        { id: "b", label: "Private", sublabel: "action" },
+      ],
+    });
+    const rows = screen.getAllByRole("option");
+    expect(rows[0].querySelector('[data-testid="palette-row-waiting"]')).not.toBeNull();
+    expect(rows[1].querySelector('[data-testid="palette-row-waiting"]')).toBeNull();
+  });
+});

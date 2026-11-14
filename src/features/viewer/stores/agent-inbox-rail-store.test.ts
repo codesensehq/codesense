@@ -3,11 +3,9 @@ import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  cleanupAgentInboxRailTab,
   closeAgentInboxRail,
+  closeAgentInboxRailToTerminal,
   openAgentInboxRail,
-  setAgentInboxRailLens,
-  setAgentInboxRailWidth,
   useAgentInboxRailStore,
 } from "./agent-inbox-rail-store";
 
@@ -20,7 +18,7 @@ beforeEach(() => {
     exitBySession: {},
     processAgentBySession: { "sid-triage": "codex", "sid-a": "codex", "sid-b": "codex" },
   });
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
+  useAgentInboxRailStore.setState({ bySession: {} });
 });
 
 describe("agent inbox rail store", () => {
@@ -68,72 +66,24 @@ describe("agent inbox rail store", () => {
     expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
     expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({ composeRequest: 0 });
   });
-});
 
-describe("SW-IB1-B2 — widthByTab", () => {
-  const TAB = "tab-rust-build";
-  const TAB_B = "tab-triage";
-
-  it("returns undefined before any width is written", () => {
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB]).toBeUndefined();
+  it("closes the chat, then focuses the pane's terminal once the chat has gone", async () => {
+    openAgentInboxRail(SID);
+    const pane = document.createElement("div");
+    pane.innerHTML = '<div class="xterm"><textarea data-testid="term"></textarea></div>';
+    document.body.appendChild(pane);
+    closeAgentInboxRailToTerminal(SID, pane);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+    // A covered terminal is inert until then: focus waits for the next frame.
+    expect(document.activeElement).not.toBe(pane.querySelector("textarea"));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(pane.querySelector("textarea"));
+    pane.remove();
   });
 
-  it("setAgentInboxRailWidth stores a width keyed by tab id", () => {
-    setAgentInboxRailWidth(TAB, 560);
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB]).toBe(560);
-  });
-
-  it("writing the same value preserves slice identity (no churn on live drags)", () => {
-    setAgentInboxRailWidth(TAB, 460);
-    const before = useAgentInboxRailStore.getState().widthByTab;
-    setAgentInboxRailWidth(TAB, 460);
-    const after = useAgentInboxRailStore.getState().widthByTab;
-    expect(after).toBe(before);
-  });
-
-  it("tabs are isolated", () => {
-    setAgentInboxRailWidth(TAB, 500);
-    setAgentInboxRailWidth(TAB_B, 300);
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB]).toBe(500);
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB_B]).toBe(300);
-  });
-
-  it("cleanupTab removes the stored width", () => {
-    setAgentInboxRailWidth(TAB, 500);
-    cleanupAgentInboxRailTab(TAB);
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB]).toBeUndefined();
-    expect(TAB in useAgentInboxRailStore.getState().widthByTab).toBe(false);
-  });
-
-  it("cleanupTab on an unknown tab is a no-op (slice identity preserved)", () => {
-    setAgentInboxRailWidth(TAB, 500);
-    const before = useAgentInboxRailStore.getState().widthByTab;
-    cleanupAgentInboxRailTab("tab-never-written");
-    const after = useAgentInboxRailStore.getState().widthByTab;
-    expect(after).toBe(before);
-  });
-
-  it("width persists across session changes within the same tab", () => {
-    // tabId stays constant; the owning sessionId can change (re-attach, etc.) —
-    // widthByTab[tabId] must be independent of session identity.
-    setAgentInboxRailWidth(TAB, 560);
-    openAgentInboxRail("sid-first");
-    closeAgentInboxRail("sid-first");
-    openAgentInboxRail("sid-replacement");
-    expect(useAgentInboxRailStore.getState().widthByTab[TAB]).toBe(560);
-  });
-
-  it("remembers each tab's lens and drops it with the tab", () => {
-    setAgentInboxRailLens(TAB, "wire");
-    setAgentInboxRailLens(TAB_B, "spool");
-    expect(useAgentInboxRailStore.getState().lensByTab).toEqual({
-      [TAB]: "wire",
-      [TAB_B]: "spool",
-    });
-    const before = useAgentInboxRailStore.getState();
-    setAgentInboxRailLens(TAB, "wire");
-    expect(useAgentInboxRailStore.getState()).toBe(before);
-    cleanupAgentInboxRailTab(TAB);
-    expect(TAB in useAgentInboxRailStore.getState().lensByTab).toBe(false);
+  it("closes the chat and leaves focus alone when there is no pane to hand it to", () => {
+    openAgentInboxRail(SID);
+    expect(() => closeAgentInboxRailToTerminal(SID, null)).not.toThrow();
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
   });
 });

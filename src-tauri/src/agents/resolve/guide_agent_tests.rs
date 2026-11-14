@@ -9,7 +9,7 @@ use super::*;
 
 /// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs. The same
 /// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 26] = [
+const PHASE_1: [&str; 27] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -21,6 +21,7 @@ const PHASE_1: [&str; 26] = [
     "probe_environment",
     "reply",
     "send_message",
+    "send_role_message",
     "signal_progress",
     "signal_done",
     "create_local_organization",
@@ -37,9 +38,6 @@ const PHASE_1: [&str; 26] = [
     "set_epic_repos",
     "read_epic_repos",
 ];
-
-/// Phase 1 tools a build may not register yet: the environment probe lands in its own PR.
-const NOT_YET_SERVED: [&str; 1] = ["probe_environment"];
 
 /// What CodeSense allows every Claude launch before the agent's own list. Accepted for the
 /// guide (Decisions); its command sends every question as a card, never through `ask_user`.
@@ -111,7 +109,7 @@ fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
         .any(|pair| pair[0] == flag && pair[1] == value)
 }
 
-/// The phase 1 tools this build registers; any it doesn't must be a named pending one.
+/// The phase 1 tools, each of which this build must register.
 fn phase_1_served() -> BTreeSet<String> {
     let served: BTreeSet<String> = crate::mcp::handler::CodesenseHandler::served_tool_router()
         .list_all()
@@ -123,14 +121,10 @@ fn phase_1_served() -> BTreeSet<String> {
         .filter(|name| !served.contains(*name))
         .collect();
     assert!(
-        missing.iter().all(|name| NOT_YET_SERVED.contains(name)),
+        missing.is_empty(),
         "phase 1 names unregistered tools: {missing:?}"
     );
-    PHASE_1
-        .into_iter()
-        .filter(|name| served.contains(*name))
-        .map(str::to_string)
-        .collect()
+    PHASE_1.into_iter().map(str::to_string).collect()
 }
 
 fn phase_1_declared(resolved: &ResolvedAgent) -> BTreeSet<String> {

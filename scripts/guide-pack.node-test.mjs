@@ -31,6 +31,7 @@ const PHASE_1 = [
   // chat
   "reply",
   "send_message",
+  "send_role_message",
   "signal_progress",
   "signal_done",
   // setup, used only after a click
@@ -52,8 +53,8 @@ const PHASE_1 = [
 const sorted = (list) => [...list].sort();
 
 test("the phase 1 list is DESIGN's 24 tools plus the two epic-repo verbs", () => {
-  assert.equal(PHASE_1.length, 26);
-  assert.equal(new Set(PHASE_1).size, 26);
+  assert.equal(PHASE_1.length, 27);
+  assert.equal(new Set(PHASE_1).size, 27);
 });
 
 test("the pack builds clean under --check", () => {

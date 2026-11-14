@@ -29,6 +29,7 @@ describe("encode/decode round-trip", () => {
     { kind: "account", userId: 683658 },
     { kind: "create-team" },
     { kind: "attach-repo" },
+    { kind: "open-foreman" },
     { kind: "open-shortcuts" },
     { kind: "open-routines" },
     { kind: "open-agents" },
@@ -113,6 +114,27 @@ describe("buildStaticItems", () => {
     expect(shortcuts?.label).toBe("View keyboard shortcuts…");
     expect(shortcuts?.tier).toBe(CP_TIER.action);
     expect(noTeam.some((i) => decodeSelection(i.id)?.kind === "open-shortcuts")).toBe(true);
+  });
+
+  it("always offers the Foreman, right before the attach-repo action", () => {
+    const items = buildStaticItems(inputs);
+    const kinds = items.map((i) => decodeSelection(i.id)?.kind);
+    const at = kinds.indexOf("open-foreman");
+    expect(items[at]?.label).toBe("Foreman");
+    expect(items[at]?.tier).toBe(CP_TIER.action);
+    expect(kinds[at + 1]).toBe("attach-repo");
+    const noTeam = buildStaticItems({ ...inputs, canAttach: false });
+    expect(noTeam.some((i) => decodeSelection(i.id)?.kind === "open-foreman")).toBe(true);
+  });
+
+  it("marks the Foreman row only while its mail waits", () => {
+    const row = (waiting: boolean) =>
+      buildStaticItems({ ...inputs, foremanMailWaiting: waiting }).find(
+        (i) => decodeSelection(i.id)?.kind === "open-foreman",
+      );
+    expect(row(false)?.waiting).toBe(false);
+    expect(row(true)?.waiting).toBe(true);
+    expect(row(true)?.sublabel).toContain("mail waiting");
   });
 
   it("always offers the Scratch space (SLW-PT-21)", () => {
@@ -214,6 +236,7 @@ describe("dispatchSelection", () => {
       openRoutines: () => calls.push("openRoutines"),
       openAgents: () => calls.push("openAgents"),
       openScratchSpace: () => calls.push("openScratchSpace"),
+      openForeman: () => calls.push("openForeman"),
       addMachine: () => calls.push("addMachine"),
     };
   }
@@ -277,6 +300,12 @@ describe("dispatchSelection", () => {
     const h = handlers();
     expect(dispatchSelection("open-scratch-space", h, null)).toBe(true);
     expect(h.calls).toEqual(["openScratchSpace"]);
+  });
+
+  it("routes the Foreman entry to its opener", () => {
+    const h = handlers();
+    expect(dispatchSelection("open-foreman", h, null)).toBe(true);
+    expect(h.calls).toEqual(["openForeman"]);
   });
 
   it("routes the Routines entry to its opener", () => {
