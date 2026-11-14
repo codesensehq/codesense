@@ -156,38 +156,296 @@
   min-height: 0;
   height: 100%;
 }
-.ibx-splitter {
-  width: 6px;
-  flex: none;
-  cursor: col-resize;
-  position: relative;
-  background: var(--ibx-bg);
-  touch-action: none;
-  user-select: none;
-}
-.ibx-splitter::after {
-  content: "";
-  position: absolute;
-  inset: 0 2px;
-  background: var(--ibx-border);
-  transition: background 0.15s;
-}
-.ibx-splitter:hover::after,
-.ibx-splitter[data-dragging="true"]::after {
-  background: var(--ibx-accent);
-}
-.ibx-splitter:focus-visible {
-  outline: 2px solid var(--ibx-accent);
-  outline-offset: -2px;
-}
-.ibx-rail {
+
+/* ---------- agent chat overlay ----------
+ * One markup for every pane size: the overlay's data attributes carry its layout (the design's
+ * breakpoint table, `overlayLayout`), so each size draws its own head, record line and pins. */
+.ibx-ov {
   flex: none;
   display: flex;
   flex-direction: column;
-  background: var(--ibx-bg);
-  min-height: 0;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
+  background: var(--ibx-bg);
+  border-left: 1px solid var(--ibx-border);
+  z-index: 2;
+}
+.ibx-ov[data-placement="cover"] {
+  border-left: 0;
+}
+.ibx-ov-head {
+  flex: none;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--ibx-border);
+  min-width: 0;
+}
+.ibx-ov-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ibx-ov-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 4ch;
+  flex: 0 1 auto;
+}
+.ibx-ov-kind,
+.ibx-ov-now,
+.ibx-ov-record {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ibx-mfg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ibx-ov-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ibx-ov-line .ibx-ov-now,
+.ibx-ov-line .ibx-ov-record {
+  flex: 0 100 auto;
+}
+.ibx-ov-sp {
+  flex: 1;
+}
+.ibx-ov-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ibx-fg2);
+}
+.ibx-ov-btn:hover {
+  background: var(--ibx-raise);
+  color: var(--ibx-fg);
+}
+.ibx-ov[data-width="XS"] .ibx-ov-btn,
+.ibx-ov[data-width="S"] .ibx-ov-btn {
+  padding: 0;
+}
+
+/* Pins: one preview, five shapes by the pane (`data-pins`). */
+.ibx-ov-pins {
+  flex: none;
+  display: grid;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ibx-border);
+  min-width: 0;
+}
+.ibx-ov-pins[data-shape="tiles"] {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  grid-auto-flow: column;
+}
+.ibx-ov-pins[data-shape="rows"] {
+  max-height: 33%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ibx-ov-pins[data-shape="line"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.ibx-ov[data-pins="rail"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.ibx-ov[data-pins="rail"] > .ibx-ov-head {
+  grid-column: 1 / -1;
+}
+.ibx-ov[data-pins="rail"] > .ibx-ov-pins {
+  grid-column: 2;
+  grid-row: 2 / -1;
+  align-content: start;
+  border-bottom: 0;
+  border-left: 1px solid var(--ibx-border);
+  overflow-y: auto;
+}
+.ibx-ov[data-pins="rail"] > :not(.ibx-ov-head, .ibx-ov-pins) {
+  grid-column: 1;
+}
+.ibx-pk {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-areas: "d t v" ". s s" ". viz viz" ". l l";
+  gap: 2px 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 8px;
+  background: var(--ibx-card);
+  text-align: left;
+  line-height: 1.35;
+}
+.ibx-pk:hover {
+  border-color: var(--ibx-hair);
+}
+.ibx-pk[aria-expanded="true"] {
+  border-color: var(--ibx-accent-line);
+  background: var(--ibx-accent-wash);
+}
+.ibx-pk-d {
+  grid-area: d;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ibx-muted);
+}
+.ibx-pk[data-status="on-track"] .ibx-pk-d {
+  background: var(--ibx-green);
+}
+.ibx-pk[data-status="running"] .ibx-pk-d {
+  background: var(--ibx-accent);
+}
+.ibx-pk[data-status="needs-you"] .ibx-pk-d {
+  background: var(--ibx-amber);
+}
+.ibx-pk[data-status="stopped"] .ibx-pk-d {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ibx-mfg);
+}
+.ibx-pk[data-status="stopped"] .ibx-pk-v b {
+  color: var(--ibx-mfg);
+}
+.ibx-pk-t {
+  grid-area: t;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 3ch;
+}
+.ibx-pk-v {
+  grid-area: v;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+.ibx-pk-v b {
+  font-weight: 650;
+}
+.ibx-pk-v .u,
+.ibx-pk-s,
+.ibx-pk-ls {
+  font-size: 11px;
+  color: var(--ibx-mfg);
+}
+.ibx-pk-s {
+  grid-area: s;
+}
+.ibx-pk-viz {
+  grid-area: viz;
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--ibx-hair);
+}
+.ibx-pk-viz i {
+  display: block;
+  flex: 1;
+  background: var(--ibx-green);
+}
+.ibx-pk-viz i[data-status="needs-you"] {
+  background: var(--ibx-amber);
+}
+.ibx-pk-viz i[data-status="running"] {
+  background: var(--ibx-accent);
+}
+.ibx-pk-viz i[data-status="not-updating"] {
+  background: var(--ibx-muted);
+}
+.ibx-pk-viz.prog i {
+  flex: none;
+  background: var(--ibx-accent);
+}
+.ibx-pk-ls {
+  grid-area: l;
+  display: grid;
+  min-width: 0;
+}
+.ibx-pk-l {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Line: chips of dot, short name and value; a third chip wraps rather than hide. */
+.ibx-pk[data-shape="line"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.ibx-pk[data-shape="line"] .ibx-pk-t {
+  min-width: 0;
+}
+
+/* An opened pin: above the chat (≤ 45%) on a tall pane, else in the chat's place. */
+.ibx-ov-sheet {
+  flex: none;
+  max-height: 45%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 10px;
+  border-bottom: 1px solid var(--ibx-border);
+  background: var(--ibx-card);
+}
+.ibx-ov-sheet[data-in-place="true"] {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+}
+.ibx-ov-sheet-h {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: var(--ibx-card);
+}
+.ibx-ov-sheet-h b {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ibx-ov-gone {
+  color: var(--ibx-mfg);
+}
+.ibx-ov-chat {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+/* XS or short: no avatar column; the sender's name and time lead the text. */
+.ibx-ov[data-avatars="false"] .ibx-m .ibx-av {
+  display: none;
 }
 
 /* ---------- rail header ---------- */
@@ -1537,36 +1795,11 @@
   color: var(--ibx-mfg);
 }
 
-/* Narrow rail: the lens labels give way to their icons and the list column slims. */
-.ibx-rail[data-narrow="true"] .ibx-lens span {
-  display: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-th-list {
-  width: 132px;
-}
-.ibx-rail[data-narrow="true"] .ibx-scope .h {
-  display: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-scope .t {
-  flex: 0 1 auto;
-  max-width: none;
-}
-.ibx-rail[data-narrow="true"] .ibx-rh-top {
-  flex-wrap: wrap;
-}
-
 /* A stacked lens uses the full rail width. */
 .ibx-th-list.full {
   width: 100%;
   flex: 1;
   border-right: 0;
-}
-.ibx-rail[data-narrow="true"] .ibx-lrow {
-  grid-template-columns: 40px 14px minmax(0, 104px) 1fr;
-  gap: 6px;
-}
-.ibx-rail[data-narrow="true"] .ibx-lx {
-  margin-left: 30px;
 }
 
 /* ---------- a saved agent's inbox (Agents tab) ---------- */

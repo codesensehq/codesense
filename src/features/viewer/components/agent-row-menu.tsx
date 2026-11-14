@@ -3,7 +3,7 @@ import { useContext } from "react";
 import { openAgentEditor } from "@/features/agents/agents-virtual-tab";
 import { useAllAgentRowsStore } from "@/features/agents/lib/agent-names";
 import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
-import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { useAgentChatEligible } from "@/features/viewer/lib/agent-inbox-actions";
 import type { AgentTreeNode } from "@/features/viewer/lib/agent-list-view";
 import type { RoleHolding } from "@/features/viewer/hooks/use-role-holdings";
 import type { TeamAgentIdentity } from "@/features/viewer/hooks/use-team-agent-identities";
@@ -78,7 +78,7 @@ export function RowMenu({
   const { row } = node;
   const agentKey = agentKeyOfRevision(row.agentRevision);
   const definition = useAllAgentRowsStore((s) => s.rows?.find((agent) => agent.key === agentKey));
-  const inboxEligible = useRunningAgent(row.sessionId ?? "");
+  const inboxEligible = useAgentChatEligible(row);
   return (
     <>
       <ContextMenuLabel>Session</ContextMenuLabel>

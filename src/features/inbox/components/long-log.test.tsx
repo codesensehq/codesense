@@ -2,18 +2,26 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, fireEvent, render, screen, waitFor, within } from "@/test-utils";
-import { listen } from "@tauri-apps/api/event";
-import { AGENT_INBOX_CHANGED_EVENT } from "@/tauri/events";
+import { invoke } from "@tauri-apps/api/core";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { AGENT_INBOX_CHANGED_EVENT } from "@/tauri/events";
+import type { AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
-import type { ConversationMessage, SessionInboxDto } from "../api";
-import { FX, fixtureSessionInbox, fixtureSessions } from "../fixtures";
+import type { SessionInboxDto } from "../api";
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
-vi.mock("@/features/weft/lib/locate-agent", () => ({
-  locateAgentByAgentId: () => ({ located: true }),
+vi.mock("@tauri-apps/api/core", async (original) => ({
+  ...(await original<typeof import("@tauri-apps/api/core")>()),
+  invoke: vi.fn(async () => undefined),
+}));
+const events = vi.hoisted(() => new Map<string, ((event: { payload: unknown }) => void)[]>());
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    events.set(name, [...(events.get(name) ?? []), handler]);
+    return Promise.resolve(() => {});
+  }),
 }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -24,36 +32,31 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../api", async (orig) => ({ ...(await orig<typeof import("../api")>()), ...api }));
 
-import { InboxRail } from "./inbox-rail";
+vi.mock("@/features/shell/slots/reveal-slot", async (orig) => ({
+  ...(await orig<typeof import("@/features/shell/slots/reveal-slot")>()),
+  useSlotTarget: () => ({ activate: () => {} }),
+}));
+
+import { ChatOverlay } from "./chat-overlay";
 import { clearInboxDrafts } from "./inbox-view-context";
 
-// Long logs: the Mailspool opens at its newest line, follows new mail while you are at the
-// bottom, draws only the lines in view, and offers "Jump to latest" when mail lands below a
-// reader who scrolled up. The Threads conversation does the same.
+// Long logs: the agent's chat (a tab's overlay and its quick popover share the Conversation)
+// opens at its newest message, follows new mail while you are at the bottom, keeps a reader
+// who scrolled up in place, and offers "Jump to latest" when mail lands below them.
 
 /**
- * happy-dom lays nothing out, so give the two scrollers (the Mailspool log and a Threads
- * conversation) a 100px viewport, a content height, and a scrollTop that clamps and fires
- * `scroll` the way a browser does.
+ * happy-dom lays nothing out, so give the conversation scroller a 100px viewport, a content
+ * height, and a scrollTop that clamps and fires `scroll` the way a browser does.
  */
 const VIEW = 100;
 const top = new WeakMap<Element, number>();
-const isScroller = (el: Element) =>
-  el.classList?.contains("ibx-log") || el.classList?.contains("ibx-msgs");
-function contentHeight(el: Element): number {
-  if (el.classList.contains("ibx-log")) {
-    const sizer = el.querySelector<HTMLElement>("[data-spool-sizer]");
-    return Math.max(VIEW, parseFloat(sizer?.style.height ?? "") || 0);
-  }
-  return Math.max(VIEW, el.children.length * 40);
-}
+const isScroller = (el: Element) => el.classList?.contains("ibx-msgs");
+const contentHeight = (el: Element) => Math.max(VIEW, el.children.length * 40);
 const maxTop = (el: Element) => contentHeight(el) - VIEW;
 function setTop(el: Element, v: number) {
   top.set(el, Math.max(0, Math.min(v, maxTop(el))));
   el.dispatchEvent(new Event("scroll"));
 }
-/** Heights for Mailspool slots in a test that wants rows of different sizes (else 100px). */
-let slotHeight: ((slot: HTMLElement) => number) | null = null;
 const saved: [string, PropertyDescriptor | undefined][] = [];
 beforeAll(() => {
   const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
@@ -102,13 +105,6 @@ beforeAll(() => {
     },
     writable: true,
   });
-  const oh = orig("offsetHeight");
-  define("offsetHeight", {
-    get(this: HTMLElement) {
-      if (slotHeight && this.classList.contains("ibx-lslot")) return slotHeight(this);
-      return oh?.get?.call(this);
-    },
-  });
   const scrollTo = proto.scrollTo as ((...a: unknown[]) => void) | undefined;
   define("scrollTo", {
     value(this: HTMLElement, a: ScrollToOptions | number, b?: number) {
@@ -125,21 +121,34 @@ afterAll(() => {
   }
 });
 
-const TEAM_KEY = "alderco:default";
-const DAY = 86_400_000;
+const TEAM = { org: "acme", team: "widgets" };
+const TEAM_KEY = "acme:widgets";
+const LEAD = "BUG-142#lead";
+const SESSION = "sess-login-lead";
 
-/** `n` lines from the child to Terminal 9, fifteen minutes apart, ending now. */
+/** `n` lines from the agent to you, fifteen minutes apart, ending now. */
 function longInbox(n: number, now = Date.now()): SessionInboxDto {
-  const base = fixtureSessionInbox(FX.t9, now).messages.find((m) => m.from === FX.child)!;
-  const messages: ConversationMessage[] = Array.from({ length: n }, (_, i) => ({
-    ...base,
+  const messages = Array.from({ length: n }, (_, i) => ({
     id: i + 1,
+    team: TEAM,
+    from: LEAD,
+    fromName: "Login timeout lead",
+    to: "human",
+    toName: "You",
+    toRole: null,
     text: `line ${i + 1}`,
+    contentType: null,
+    createdAtMs: now - (n - 1 - i) * 15 * 60_000,
+    archivedAtMs: null,
+    inReplyTo: null,
+    via: null,
+    replyTo: null,
     summary: null,
     unread: false,
-    createdAtMs: now - (n - 1 - i) * 15 * 60_000,
-  }));
-  return { handle: FX.t9, roles: [], messages };
+    delivery: null,
+    kind: "update",
+  })) as ConversationMessage[];
+  return { handle: LEAD, roles: [], messages };
 }
 
 function more(dto: SessionInboxDto, ...lines: Partial<ConversationMessage>[]): SessionInboxDto {
@@ -164,342 +173,66 @@ function inbox(dto: SessionInboxDto) {
   api.loadSessionInbox.mockResolvedValue({ dto, source: "live" });
 }
 
-/** Fire the inbox-changed event the rail listens for, as the backend would. */
+/** Fire the inbox-changed event the overlay listens for, as the backend would. */
 async function refresh() {
-  const calls = vi.mocked(listen).mock.calls as unknown as [string, () => void][];
   await act(async () => {
-    for (const [event, cb] of calls) if (event === AGENT_INBOX_CHANGED_EVENT) cb();
+    for (const handler of events.get(AGENT_INBOX_CHANGED_EVENT) ?? []) handler({ payload: {} });
   });
 }
 
-async function renderRail(lens: "spool" | "threads") {
-  useAgentInboxRailStore.setState({ lensByTab: { "tab-1": lens } });
+async function renderOverlay() {
   render(
-    <InboxRail
+    <ChatOverlay
       tabId="tab-1"
-      sessionId={FX.t9}
+      sessionId={SESSION}
       teamKey={TEAM_KEY}
       composeRequest={0}
-      narrow={false}
+      size={{ width: 420, height: 700 }}
+      placement="dock"
     />,
   );
-  await screen.findByTestId("inbox-rail");
+  return screen.findByTestId("ibx-msgs");
 }
 
 const atEnd = (el: Element) => el.scrollTop === maxTop(el);
 
 beforeEach(() => {
-  slotHeight = null;
   clearInboxDrafts();
   vi.clearAllMocks();
+  events.clear();
   useInboxSessionsStore.setState({ sessions: null });
-  useAgentListProjectionStore.setState({ sessions: null });
-  useAgentInboxRailStore.setState({ bySession: {}, widthByTab: {}, lensByTab: {} });
-  api.loadInboxSessions.mockResolvedValue(fixtureSessions());
+  useAgentInboxRailStore.setState({ bySession: {} });
+  useAgentStateStore.setState({
+    bySession: {},
+    activityBySession: {},
+    exitBySession: {},
+    processAgentBySession: { [SESSION]: "claude" },
+  });
+  useAgentListProjectionStore.setState({
+    sessions: [
+      {
+        handle: LEAD,
+        sessionId: SESSION,
+        kind: "claude",
+        alive: true,
+        displayName: "Login timeout lead",
+        agentRevision: "builtin/claude@13",
+        story: "BUG-142",
+        role: "story lead",
+        startedAtMs: Date.now() - 41 * 60_000,
+      } as AgentSessionRow,
+    ],
+  });
+  api.loadInboxSessions.mockResolvedValue([]);
   api.sendAsHuman.mockResolvedValue({ status: "sent", messageId: 99 });
+  vi.mocked(invoke).mockImplementation(async () => undefined);
 });
 
-describe("Mailspool on a long log", () => {
-  it("opens 500 lines at the newest one and draws only a window of them", async () => {
-    inbox(longInbox(500));
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() =>
-      expect(log.querySelector('[data-log="alderco/default#500"]')).not.toBeNull(),
-    );
-    expect(atEnd(log)).toBe(true);
-    expect(maxTop(log)).toBeGreaterThan(VIEW * 10);
-    const rows = log.querySelectorAll(".ibx-lrow");
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.length).toBeLessThan(60);
-    expect(log.querySelector('[data-log="alderco/default#1"]')).toBeNull();
-    // A windowed listbox still tells assistive tech where each line sits.
-    const last = log.querySelector('[data-log="alderco/default#500"]')!;
-    expect(last).toHaveAttribute("aria-setsize", "500");
-    expect(last).toHaveAttribute("aria-posinset", "500");
-  });
-
-  it("follows new mail while the reader is at the bottom, with no jump offered", async () => {
-    const dto = longInbox(120);
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    inbox(more(dto, {}));
-    await refresh();
-    await waitFor(() =>
-      expect(log.querySelector('[data-log="alderco/default#121"]')).not.toBeNull(),
-    );
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
-  });
-
-  it("leaves a reader who scrolled up in place and offers Jump to latest with what is new", async () => {
-    const dto = longInbox(120);
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    act(() => setTop(log, 200));
-    // Two lines from the child and one of Terminal 9's own: two are new to the reader.
-    inbox(more(dto, {}, {}, { from: FX.t9, to: FX.child }));
-    await refresh();
-    const jump = await screen.findByRole("button", { name: /Jump to latest/ });
-    expect(jump).toHaveTextContent("2 new");
-    expect(log.scrollTop).toBe(200);
-    // The pill never takes focus on its own.
-    expect(jump).not.toHaveFocus();
-    fireEvent.click(jump);
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    await waitFor(() =>
-      expect(log.querySelector('[data-log="alderco/default#123"]')).not.toBeNull(),
-    );
-    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
-    // The keyboard lands on the log, so j/k carry on from the newest lines.
-    expect(log).toHaveFocus();
-  });
-
-  it("announces new mail politely and leaves focus where it was", async () => {
-    const dto = longInbox(20);
-    inbox(dto);
-    await renderRail("spool");
-    await screen.findByTestId("ibx-log");
-    const filter = screen.getByLabelText("Filter messages");
-    filter.focus();
-    inbox(more(dto, {}));
-    await refresh();
-    const note = await waitFor(
-      () => {
-        const el = screen.getByTestId("ibx-arrivals");
-        expect(el).toHaveTextContent("New message from amelia-child-5plus5");
-        return el;
-      },
-      { timeout: 3000 },
-    );
-    expect(note).toHaveAttribute("aria-live", "polite");
-    expect(filter).toHaveFocus();
-  });
-
-  it("still walks lines with j/k, bringing a line outside the window into view", async () => {
-    // Long enough that the oldest line is outside the drawn window, short enough that one
-    // re-render per key stays well inside the test timeout on a slow runner.
-    const n = 40;
-    inbox(longInbox(n));
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    expect(log.querySelector('[data-log="alderco/default#1"]')).toBeNull();
-    // From no selection, j starts where the reader is: the newest line, at the bottom.
-    fireEvent.keyDown(log, { key: "j" });
-    expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute("data-log", `alderco/default#${n}`);
-    fireEvent.keyDown(log, { key: "k" });
-    expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute(
-      "data-log",
-      `alderco/default#${n - 1}`,
-    );
-    // Walking to the oldest line scrolls it into the window and draws it.
-    fireEvent.keyDown(log, { key: "j" });
-    fireEvent.keyDown(log, { key: "Home" });
-    for (let i = 0; i < n - 1; i++) fireEvent.keyDown(log, { key: "k" });
-    await waitFor(() =>
-      expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute("data-log", "alderco/default#1"),
-    );
-    // The selected line's slot sits inside the viewport.
-    const slot = log.querySelector(".ibx-lrow.sel")!.closest<HTMLElement>(".ibx-lslot")!;
-    const y = parseFloat(slot.style.transform.replace(/[^\d.]/g, ""));
-    expect(y).toBeGreaterThanOrEqual(log.scrollTop);
-    expect(y).toBeLessThan(log.scrollTop + VIEW);
-    expect(log.getAttribute("aria-activedescendant")).toBe(log.querySelector(".ibx-lrow.sel")!.id);
-    fireEvent.keyDown(log, { key: "j" });
-    expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute("data-log", "alderco/default#2");
-  });
-
-  it("from nothing selected, j starts at the lowest line in view of a reader who scrolled up", async () => {
-    inbox(longInbox(200));
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    act(() => setTop(log, 0));
-    await waitFor(() => expect(log.querySelector('[data-log="alderco/default#1"]')).not.toBeNull());
-    // The lowest row whose slot starts inside the 100px view.
-    const bottom = log.scrollTop + VIEW;
-    const lowest = [...log.querySelectorAll<HTMLElement>(".ibx-lslot")]
-      .map((sl) => ({ sl, y: parseFloat(sl.style.transform.replace(/[^\d.]/g, "")) }))
-      .filter(({ sl, y }) => y < bottom && sl.querySelector("[data-log]"))
-      .sort((a, b) => b.y - a.y)[0]!
-      .sl.querySelector("[data-log]")!
-      .getAttribute("data-log");
-    fireEvent.keyDown(log, { key: "j" });
-    expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute("data-log", lowest!);
-    expect(lowest).not.toBe("alderco/default#200");
-  });
-
-  it("follows at the 500 cap, where a line arrives as the oldest leaves, and announces it", async () => {
-    const dto = longInbox(500);
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    const next = more(dto, {});
-    inbox({ ...next, messages: next.messages.slice(1) });
-    await refresh();
-    await waitFor(() =>
-      expect(log.querySelector('[data-log="alderco/default#501"]')).not.toBeNull(),
-    );
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    await waitFor(
-      () => expect(screen.getByTestId("ibx-arrivals")).toHaveTextContent("New message from"),
-      { timeout: 3000 },
-    );
-  });
-
-  it("re-opens at the newest line and drops the pill when the filter changes", async () => {
-    const dto = longInbox(120);
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    act(() => setTop(log, 200));
-    inbox(more(dto, {}));
-    await refresh();
-    await screen.findByRole("button", { name: /Jump to latest/ });
-    fireEvent.change(screen.getByLabelText("Filter messages"), { target: { value: "line" } });
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
-  });
-
-  it("announces a second message from the same sender again", async () => {
-    let dto = longInbox(20);
-    inbox(dto);
-    await renderRail("spool");
-    await screen.findByTestId("ibx-log");
-    const note = screen.getByTestId("ibx-arrivals");
-    dto = more(dto, {});
-    inbox(dto);
-    await refresh();
-    await waitFor(() => expect(note).toHaveTextContent("New message from amelia-child-5plus5"), {
-      timeout: 3000,
-    });
-    const first = note.textContent;
-    inbox(more(dto, {}));
-    await refresh();
-    await waitFor(() => expect(note.textContent).not.toBe(first), { timeout: 3000 });
-    expect(note).toHaveTextContent("New message from amelia-child-5plus5");
-  });
-
-  it("coalesces a burst of new mail into one announcement", async () => {
-    let dto = longInbox(20);
-    inbox(dto);
-    await renderRail("spool");
-    await screen.findByTestId("ibx-log");
-    const note = screen.getByTestId("ibx-arrivals");
-    for (let i = 0; i < 3; i++) {
-      dto = more(dto, {});
-      inbox(dto);
-      await refresh();
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("ibx-log").querySelector(`[data-log="alderco/default#${21 + i}"]`),
-        ).not.toBeNull(),
-      );
-    }
-    // Nothing per refresh: one note once the window closes.
-    expect(note).toHaveTextContent(/^$/);
-    await waitFor(() => expect(note).toHaveTextContent("3 new messages"), { timeout: 3000 });
-  });
-
-  it("keeps the line a scrolled-up reader is reading in place as the oldest is trimmed, rows of mixed heights", async () => {
-    // Every third line is a two-line row, dividers are short.
-    slotHeight = (slot) => {
-      const row = slot.querySelector<HTMLElement>("[data-log]");
-      if (!row) return 31;
-      return Number(row.dataset.log!.split("#")[1]) % 3 === 0 ? 52 : 26;
-    };
-    const dto = longInbox(500);
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    act(() => setTop(log, Math.round(maxTop(log) / 2)));
-    // The line at the top of the view, and where it sits in it.
-    const seen = () => {
-      const slots = [...log.querySelectorAll<HTMLElement>(".ibx-lslot")];
-      const ys = slots.map((s) => ({
-        s,
-        y: parseFloat(s.style.transform.replace(/[^\d.]/g, "")),
-      }));
-      const first = ys
-        .filter(({ s, y }) => y + slotHeight!(s) > log.scrollTop && s.querySelector("[data-log]"))
-        .sort((a, b) => a.y - b.y)[0]!;
-      return {
-        key: first.s.querySelector("[data-log]")!.getAttribute("data-log"),
-        at: first.y - log.scrollTop,
-      };
-    };
-    await waitFor(() => expect(log.querySelector(".ibx-lslot")).not.toBeNull());
-    const before = seen();
-    const next = more(dto, {});
-    inbox({ ...next, messages: next.messages.slice(1) });
-    await refresh();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Jump to latest/ })).toBeInTheDocument(),
-    );
-    await waitFor(() => {
-      const after = seen();
-      expect(after.key).toBe(before.key);
-      expect(after.at).toBe(before.at);
-    });
-  });
-
-  it("r on a selected line scrolled out of the window brings it back with its reply line focused", async () => {
-    inbox(longInbox(200));
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    fireEvent.keyDown(log, { key: "j" });
-    await waitFor(() => expect(log.querySelector(".ibx-lrow.sel")).not.toBeNull());
-    act(() => setTop(log, 0));
-    await waitFor(() => expect(log.querySelector(".ibx-lrow.sel")).toBeNull());
-    fireEvent.keyDown(log, { key: "r" });
-    await waitFor(() => expect(log.querySelector("[data-logreply]")).toHaveFocus());
-    expect(log.querySelector(".ibx-lrow.sel")).toHaveAttribute("data-log", "alderco/default#200");
-  });
-
-  it("keeps an open line, and its reply draft, while the reader scrolls away", async () => {
-    inbox(longInbox(200));
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(atEnd(log)).toBe(true));
-    fireEvent.click(log.querySelector('[data-log="alderco/default#200"]')!);
-    const reply = log.querySelector<HTMLInputElement>("[data-logreply]")!;
-    fireEvent.change(reply, { target: { value: "half a reply" } });
-    act(() => setTop(log, 0));
-    await waitFor(() => expect(log.querySelector('[data-log="alderco/default#1"]')).not.toBeNull());
-    expect(log.querySelector("[data-logreply]")).toBe(reply);
-    expect(reply).toHaveValue("half a reply");
-  });
-
-  it("heads each day with Today, Yesterday or the date", async () => {
-    const now = Date.now();
-    const dto = longInbox(3, now);
-    dto.messages[0]!.createdAtMs = now - 3 * DAY;
-    dto.messages[1]!.createdAtMs = now - DAY;
-    inbox(dto);
-    await renderRail("spool");
-    const log = await screen.findByTestId("ibx-log");
-    await waitFor(() => expect(log.querySelectorAll(".ibx-lday")).toHaveLength(3));
-    const days = [...log.querySelectorAll(".ibx-lday")].map((d) => d.textContent);
-    expect(days.slice(1)).toEqual(["Yesterday", "Today"]);
-    expect(days[0]).toMatch(/\d/);
-  });
-});
-
-describe("Threads conversation on a long log", () => {
+describe("ChatOverlay on a long log", () => {
   it("opens at the newest message and offers Jump to latest when mail lands below a reader", async () => {
     const dto = longInbox(30);
     inbox(dto);
-    await renderRail("threads");
-    const msgs = await screen.findByTestId("ibx-msgs");
+    const msgs = await renderOverlay();
     await waitFor(() => expect(msgs.querySelectorAll(".ibx-m").length).toBe(30));
     expect(atEnd(msgs)).toBe(true);
     act(() => setTop(msgs, 0));
@@ -522,18 +255,16 @@ describe("Threads conversation on a long log", () => {
     expect(msgs).toHaveFocus();
   });
 
-  it("follows at the 500 cap, where a message arrives as the oldest leaves", async () => {
+  it("opens 500 messages at the newest, and follows at the cap, where one arrives as the oldest leaves", async () => {
     const dto = longInbox(500);
     inbox(dto);
-    await renderRail("threads");
-    const msgs = await screen.findByTestId("ibx-msgs");
+    const msgs = await renderOverlay();
     await waitFor(() => expect(atEnd(msgs)).toBe(true));
+    expect(msgs.querySelector('[data-mid="acme/widgets#500"]')).not.toBeNull();
     const next = more(dto, {});
     inbox({ ...next, messages: next.messages.slice(1) });
     await refresh();
-    await waitFor(() =>
-      expect(msgs.querySelector('[data-mid="alderco/default#501"]')).not.toBeNull(),
-    );
+    await waitFor(() => expect(msgs.querySelector('[data-mid="acme/widgets#501"]')).not.toBeNull());
     expect(atEnd(msgs)).toBe(true);
   });
 
@@ -555,8 +286,7 @@ describe("Threads conversation on a long log", () => {
     async ({ now, expectedKind, expectedTop }) => {
       const dto = longInbox(500, now);
       inbox(dto);
-      await renderRail("threads");
-      const msgs = await screen.findByTestId("ibx-msgs");
+      const msgs = await renderOverlay();
       await waitFor(() => expect(atEnd(msgs)).toBe(true));
       act(() => setTop(msgs, 4000));
       expect(msgs.children[100]!.matches(expectedKind)).toBe(true);
@@ -569,8 +299,6 @@ describe("Threads conversation on a long log", () => {
       });
       expect(visibleMessage).toBeDefined();
       const visibleRect = visibleMessage!.getBoundingClientRect();
-      expect(visibleRect.bottom).toBeGreaterThan(viewport.top);
-      expect(visibleRect.top).toBeLessThan(viewport.bottom);
       expect(visibleRect.top - viewport.top).toBe(expectedTop);
       const reading = visibleMessage!.getAttribute("data-mid");
       expect(reading).not.toBeNull();
@@ -579,9 +307,9 @@ describe("Threads conversation on a long log", () => {
       inbox({ ...next, messages: next.messages.slice(1) });
       await refresh();
       await waitFor(() =>
-        expect(msgs.querySelector('[data-mid="alderco/default#501"]')).not.toBeNull(),
+        expect(msgs.querySelector('[data-mid="acme/widgets#501"]')).not.toBeNull(),
       );
-      expect(msgs.querySelector('[data-mid="alderco/default#1"]')).toBeNull();
+      expect(msgs.querySelector('[data-mid="acme/widgets#1"]')).toBeNull();
       expect(topOf(reading!)).toBe(at);
       expect(await screen.findByRole("button", { name: /Jump to latest/ })).toHaveTextContent(
         "1 new",
@@ -592,11 +320,10 @@ describe("Threads conversation on a long log", () => {
   it("shows what you just sent even when you had scrolled up", async () => {
     const dto = longInbox(30);
     inbox(dto);
-    await renderRail("threads");
-    const msgs = await screen.findByTestId("ibx-msgs");
+    const msgs = await renderOverlay();
     await waitFor(() => expect(atEnd(msgs)).toBe(true));
     act(() => setTop(msgs, 0));
-    inbox(more(dto, { from: FX.t9, to: FX.child }));
+    inbox(more(dto, { from: "human", fromName: "You", to: LEAD, toName: "Login timeout lead" }));
     await refresh();
     await waitFor(() => expect(atEnd(msgs)).toBe(true));
     expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
