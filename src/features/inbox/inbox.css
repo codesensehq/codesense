@@ -2272,3 +2272,204 @@ button.ibx-media-open {
 .ibx-lb-foot a:hover {
   text-decoration: underline;
 }
+
+/* The person's pins of a chat's messages. A message's action row sits over the bubble's top
+   edge (top right; top left for your own), shown on hover, while focus is inside the message,
+   and after a tap; an HTML message's title bar is its action row, always shown. */
+.ibx-m .bub {
+  position: relative;
+}
+.ibx-acts {
+  position: absolute;
+  top: -14px;
+  right: 6px;
+  z-index: 2;
+  display: none;
+  padding: 1px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 6px;
+  background: var(--ibx-bg);
+  box-shadow: var(--ibx-shadow);
+}
+.ibx-m.out .ibx-acts {
+  right: auto;
+  left: 6px;
+}
+.ibx-m:hover .ibx-acts,
+.ibx-m:focus-within .ibx-acts,
+.ibx-m[data-tapped] .ibx-acts {
+  display: flex;
+}
+.ibx-pin-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ibx-mfg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ibx-pin-b:hover {
+  background: var(--ibx-raise);
+  color: var(--ibx-fg);
+}
+.ibx-pin-b:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+.ibx-pin-b[aria-pressed="true"] {
+  color: var(--ibx-accent-ink);
+}
+/* At the cap: dimmed ahead of time, still focusable, and hover doesn't brighten it. */
+.ibx-pin-b[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.ibx-pin-b[aria-disabled="true"] > * {
+  opacity: 0.45;
+}
+.ibx-pin-b[aria-disabled="true"]:hover {
+  background: none;
+  color: var(--ibx-mfg);
+}
+/* In the overlay (under 480 px wide, always) Pin is its icon, named by its tooltip. */
+.ibx-ov .ibx-pin-b {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+}
+.ibx-ov .ibx-pin-b .lbl {
+  display: none;
+}
+@media (pointer: coarse) {
+  .ibx-pin-b {
+    min-width: 36px;
+    height: 36px;
+  }
+  .ibx-acts {
+    top: -40px;
+  }
+}
+.ibx-m.pinned .bub {
+  border-color: var(--ibx-accent-line);
+}
+.ibx-pin-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-tag svg {
+  color: var(--ibx-accent);
+}
+.ibx-pin-tag b {
+  color: var(--ibx-fg);
+  font-weight: 600;
+}
+.ibx-m.out .ibx-pin-tag,
+.ibx-m.out .ibx-pin-note {
+  justify-self: end;
+}
+.ibx-pin-note {
+  display: grid;
+  grid-template-columns: 16px minmax(0, auto) auto;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 8px;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-note.danger {
+  border-color: var(--destructive);
+}
+.ibx-pin-note.danger svg {
+  color: var(--destructive);
+}
+.ibx-pin-act {
+  border: 1px solid var(--ibx-border);
+  border-radius: 6px;
+  background: var(--ibx-bg);
+  color: var(--ibx-fg);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.ibx-pin-act:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+.ibx-dm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--ibx-hair);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+}
+.ibx-dm-bar + .bub {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.ibx-dm-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ibx-fg);
+}
+.ibx-dm-kind {
+  color: var(--ibx-mfg);
+}
+.ibx-m.pinned .ibx-dm-bar {
+  border-color: var(--ibx-accent-line);
+}
+/* The live region: read, never seen. */
+.ibx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The tag fades in where motion is welcome; with reduced motion nothing moves or fades. */
+@media (prefers-reduced-motion: no-preference) {
+  .ibx-pin-tag {
+    animation: ibx-pin-tag-in 160ms var(--ibx-ease);
+  }
+}
+@keyframes ibx-pin-tag-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A pin with no preview (the person's): a glyph where an agent's pin has its status dot. */
+.ibx-pk.own .ibx-pk-g {
+  grid-area: d;
+  flex: none;
+  color: var(--ibx-accent);
+}
+.ibx-pk-meta {
+  color: var(--ibx-mfg);
+}
+.ibx-pk-q {
+  font-style: italic;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}

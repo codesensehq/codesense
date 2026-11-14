@@ -16,6 +16,7 @@ import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/com
 
 import { runBridgeCommand } from "@/features/dashboard/components/html-bridge";
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
+import { msgKey } from "../model";
 
 vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
@@ -500,5 +501,185 @@ describe("ChatOverlay", () => {
       );
       expect(screen.queryByTestId("group-pane")).toBeNull();
     });
+  });
+});
+
+describe("ChatOverlay: the person pins a message", () => {
+  // A one-thread engine double: pin, unpin and restore change the list the next read returns.
+  let held: AgentPin[];
+  let removed: AgentPin[];
+  let failNext = false;
+  beforeEach(() => {
+    held = PINS.map((p) => ({ ...p }));
+    removed = [];
+    failNext = false;
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      // An HTML message looks up its team's pages; there are none here.
+      if (cmd === "list_panes") return { panes: [], contentRoot: null };
+      if (cmd !== "agent_pins") return undefined;
+      const a = args as { op: string; messageId?: number };
+      if (failNext && a.op !== "read") {
+        failNext = false;
+        throw new Error("offline");
+      }
+      let outcome: string | undefined;
+      if (a.op === "pin") {
+        held.push({
+          messageId: a.messageId!,
+          position: held.length,
+          pinnedBy: "human",
+          pinnedAtMs: NOW,
+        });
+        outcome = "pinned";
+      } else if (a.op === "unpin") {
+        const at = held.findIndex((p) => p.messageId === a.messageId);
+        removed.push({ ...held[at]!, position: at });
+        held.splice(at, 1);
+        outcome = "unpinned";
+      } else if (a.op === "restore") {
+        const back = removed.find((p) => p.messageId === a.messageId)!;
+        held.splice(back.position, 0, back);
+        outcome = "restored";
+      }
+      const pins = held.map((p, position) => ({ ...p, position }));
+      return {
+        status: "pins",
+        ...TEAM,
+        agentId: "builtin/claude",
+        storyId: "BUG-142",
+        pins,
+        outcome,
+      };
+    });
+  });
+  const messageKeyOf = (id: number) => msgKey(msg(id, LEAD, "human", ""));
+  const row = (id: number) =>
+    document.querySelector<HTMLElement>(`[data-mid="${messageKeyOf(id)}"]`)!;
+  const pinOf = (id: number) => within(row(id)).getByTestId("ibx-pin");
+  const ops = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd, a]) => cmd === "agent_pins" && (a as { op: string }).op !== "read")
+      .map(([, a]) => [(a as { op: string }).op, (a as { messageId: number }).messageId]);
+
+  it("pins a message from its action row: the button turns Unpin, the tag says you, the live region says so", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    const pin = pinOf(4);
+    expect(pin).toHaveAccessibleName("Pin");
+    pin.focus();
+    fireEvent.click(pin);
+    await waitFor(() => expect(pinOf(4)).toHaveAccessibleName("Unpin"));
+    expect(ops()).toEqual([["pin", 4]]);
+    expect(pinOf(4)).toHaveFocus();
+    expect(within(row(4)).getByTestId("ibx-pin-tag")).toHaveTextContent("Pinned by you");
+    expect(screen.getByTestId("ibx-pin-live")).toHaveTextContent(
+      'Pinned "Review is clean; merge…". 3 of 3 pinned.',
+    );
+    // The new pin is in the strip, named by its message.
+    expect(await screen.findByTestId("chat-overlay-pin-4")).toBeInTheDocument();
+  });
+
+  it("at the cap every Pin is dimmed ahead of time; a click names whose pins fill it and replaces nothing", async () => {
+    held.push({ messageId: 2, position: 2, pinnedBy: "human", pinnedAtMs: NOW });
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-2");
+    const pin = pinOf(4);
+    expect(pin).toHaveAttribute("aria-disabled", "true");
+    expect(pin).toHaveAccessibleName("Pin (3 of 3 pinned)");
+    fireEvent.click(pin);
+    const note = within(row(4)).getByTestId("ibx-pin-note");
+    expect(note).toHaveTextContent(
+      "3 of 3 pinned (2 by Login timeout lead, 1 by you). Unpin one to pin this.",
+    );
+    expect(ops()).toEqual([]);
+    fireEvent.keyDown(note, { key: "Escape" });
+    expect(within(row(4)).queryByTestId("ibx-pin-note")).toBeNull();
+    fireEvent.click(pin);
+    fireEvent.click(within(row(4)).getByRole("button", { name: "Show pins" }));
+    expect(screen.getByTestId("chat-overlay-pin-3")).toHaveFocus();
+  });
+
+  it("unpins an agent's pin with Undo, which puts it back as it was until the next pin, unpin or Esc", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    expect(within(row(3)).getByTestId("ibx-pin-tag")).toHaveTextContent(
+      "Pinned by Login timeout lead",
+    );
+    fireEvent.click(pinOf(3));
+    const undo = await within(row(3)).findByRole("button", { name: "Undo" });
+    expect(screen.queryByTestId("chat-overlay-pin-3")).toBeNull();
+    fireEvent.click(undo);
+    await screen.findByTestId("chat-overlay-pin-3");
+    expect(ops()).toEqual([
+      ["unpin", 3],
+      ["restore", 3],
+    ]);
+    expect(within(row(3)).getByTestId("ibx-pin-tag")).toHaveTextContent(
+      "Pinned by Login timeout lead",
+    );
+    expect(within(row(3)).queryByRole("button", { name: "Undo" })).toBeNull();
+    // Esc ends an Undo too.
+    fireEvent.click(pinOf(3));
+    await within(row(3)).findByRole("button", { name: "Undo" });
+    fireEvent.keyDown(screen.getByTestId("ibx-msgs"), { key: "Escape" });
+    expect(within(row(3)).queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("your pin previews its message: a quote card for text, a name card for HTML, each with a glyph", async () => {
+    arrive(msg(5, LEAD, "human", "<title>Merge board</title><p>x</p>", { contentType: "html" }));
+    await renderOverlay(300, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    fireEvent.click(pinOf(4));
+    const quote = await screen.findByTestId("chat-overlay-pin-4");
+    expect(quote).toHaveAttribute("data-own", "quote");
+    expect(quote).toHaveTextContent("Review is clean; merge card is next.");
+    expect(quote).toHaveTextContent("Pinned by you");
+    // An agent's pin keeps its preview and status dot.
+    expect(screen.getByTestId("chat-overlay-pin-3")).not.toHaveAttribute("data-own");
+    fireEvent.click(pinOf(3));
+    await waitFor(() => expect(screen.queryByTestId("chat-overlay-pin-3")).toBeNull());
+    fireEvent.click(within(row(5)).getByTestId("ibx-pin"));
+    const card = await screen.findByTestId("chat-overlay-pin-5");
+    expect(card).toHaveAttribute("data-own", "name");
+    expect(card).toHaveTextContent("Merge board");
+    expect(card).toHaveTextContent("Dashboard from Login timeout lead");
+  });
+
+  it("a pin that fails keeps its state and offers Try again", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    failNext = true;
+    fireEvent.click(pinOf(4));
+    const note = await within(row(4)).findByRole("alert");
+    expect(note).toHaveTextContent(
+      "Couldn't pin. Try again. If it keeps failing, reload the page.",
+    );
+    expect(pinOf(4)).toHaveAccessibleName("Pin");
+    fireEvent.click(within(note).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(pinOf(4)).toHaveAccessibleName("Unpin"));
+  });
+
+  it("an HTML message has Pin in its title bar, named by its <title>, and the strip names its pin the same", async () => {
+    arrive(
+      msg(
+        5,
+        LEAD,
+        "human",
+        "<html><head><title>Merge board</title></head><body><h1>x</h1></body></html>",
+        {
+          contentType: "html",
+        },
+      ),
+    );
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    const bar = within(row(5)).getByTestId("ibx-dm-bar");
+    expect(bar).toHaveTextContent("Merge board");
+    expect(bar).toHaveTextContent("Dashboard");
+    fireEvent.click(within(bar).getByTestId("ibx-pin"));
+    const chip = await screen.findByTestId("chat-overlay-pin-5");
+    expect(chip).toHaveTextContent("Merge board");
+    expect(chip).not.toHaveTextContent("<");
   });
 });

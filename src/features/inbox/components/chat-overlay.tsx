@@ -21,23 +21,25 @@ import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
-import { markInboxMessageRead, type AgentSessionRow } from "@/tauri/commands";
+import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
 import { goToSession } from "../actions";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
+import { usePersonPins } from "../hooks/use-person-pins";
+import { pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useSessionInbox } from "../hooks/use-session-inbox";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
-import { HUMAN, msgKey, sameTeam } from "../model";
+import { HUMAN, formatClock, labelOf, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
 import { GroupChatPane, type GroupRoom } from "./group-chat";
 import { Ico, InboxLoading, MessageBody, ReadFailure, StaleNotice } from "./primitives";
-import { PinPreview } from "./pin-preview";
+import { PinPreview, type OwnPinCard } from "./pin-preview";
 import { Conversation } from "./threads-lens";
 
 /**
@@ -194,20 +196,48 @@ export function ChatOverlay({
 
   // The thread is the saved agent and story the session was launched with, as the engine keys
   // it: the launch's agent, else the one its tab says it runs.
-  const { pins } = useAgentPins(
-    team ?? home,
-    lead?.agent ?? agentKeyOfRevision(row?.agentRevision),
-    row?.story ?? lead?.story ?? null,
-  );
+  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
+  const pinStory = row?.story ?? lead?.story ?? null;
+  const { pins, apply } = useAgentPins(team ?? home, pinAgent, pinStory);
+  const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
+  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
   const pinTitle = (id: number) => {
     const m = messages.find((x) => x.id === id && (!team || sameTeam(x.team, team)));
-    return m?.summary || m?.text.split("\n")[0] || `Pin ${id}`;
+    return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
+  };
+  // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
+  const ownCard = (p: AgentPin): OwnPinCard | null => {
+    const m = messages.find((x) => x.id === p.messageId && (!team || sameTeam(x.team, team)));
+    if (p.preview || !m) return null;
+    const who = senderOf(m);
+    const at = formatClock(m.createdAtMs);
+    if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
+    const pinnedBy = whoPinned(p.pinnedBy, (from) => labelOf(dir, from));
+    return {
+      kind: "quote",
+      meta: `${who} · ${at} · Pinned by ${pinnedBy}`,
+      rest: quoteOf(m, who).rest,
+    };
   };
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
   const openedMessage = opened
     ? (messages.find((m) => m.id === opened.messageId && (!team || sameTeam(m.team, team))) ?? null)
     : null;
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
+  // The person pins this chat's messages into the same thread: Show pins goes to the strip.
+  const personPins = usePersonPins({
+    team: team ?? home,
+    agentId: pinAgent,
+    storyId: pinStory,
+    pins,
+    apply,
+    sender: senderOf,
+    labelOf: (from) => labelOf(dir, from),
+    onShowPins: () => {
+      const first = pins[0];
+      if (first) pinRefs.current.get(first.messageId)?.focus();
+    },
+  });
   const closePin = () => {
     const id = openPin;
     setOpenPin(null);
@@ -337,6 +367,7 @@ export function ChatOverlay({
                 pin={p}
                 shape={pinShape}
                 title={pinTitle(p.messageId)}
+                own={ownCard(p)}
                 tall={tall}
                 open={p.messageId === openPin}
                 onOpen={() => setOpenPin(p.messageId === openPin ? null : p.messageId)}
@@ -394,6 +425,7 @@ export function ChatOverlay({
                 defaultTo={handle}
                 quick
                 marks={marks}
+                pins={personPins}
                 empty={
                   <div className="ibx-empty" data-testid="chat-overlay-empty">
                     <strong>No messages yet</strong>
