@@ -76,5 +76,11 @@
     "reason": "fails only in full multi-crate runs (load/env)",
     "issue": "https://github.com/codesensehq/codesense/issues/5",
     "added": "2026-11-07"
+  },
+  {
+    "id": "vitest:src/features/shell/right-pane/panes/inbox-pane.seam.test.tsx#keeps the open reader's older range and cursor when one incoming message overlaps it",
+    "reason": "timing-sensitive under full-suite load; flaked in merge-queue runs",
+    "issue": "https://github.com/codesensehq/codesense/issues/4",
+    "added": "2026-11-14"
   }
 ]
