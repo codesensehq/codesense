@@ -31,7 +31,7 @@ const lead = (state: string): Row => ({
   sessionId: "s1",
   handle: "lead-1",
   state,
-  story: "S-1",
+  story: "demo-story",
   role: "lead",
   unread: 0,
   mailNotice: null,
@@ -73,7 +73,7 @@ function setup(roster: Row[], thread: Row[] = []) {
 const kitOf = () => (window as unknown as { codesense: { kit: Kit } }).codesense.kit;
 const mountOn = (s: ReturnType<typeof setup>, extra: Record<string, unknown> = {}) =>
   kitOf().chat.mount(s.el, {
-    storyId: "S-1",
+    storyId: "demo-story",
     leadRole: "lead",
     transport: s.transport,
     reads: s.reads,

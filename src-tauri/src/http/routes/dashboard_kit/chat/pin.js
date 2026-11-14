@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// pinToBottom(log, {settle, win}): the one "stay at the newest message" rule for every chat log (story page, sprint page; the agent full view and the overlay's pane reuse it).
+// pinToBottom(log, {settle, win}): the one "stay at the newest message" rule for every chat log (any page's chat log; other chat views can reuse it).
 // A reader within PIN_NEAR px of the bottom is following: the log goes to the newest message on open, whenever the caller reports new content (onContentChanged) and, with settle, whenever the log's box resizes
 // or fonts finish loading, so a layout that was not final at first paint cannot strand the log above the newest message. A reader who scrolls up stops following and keeps their place.
 // No timers: ResizeObserver, document.fonts.ready and one animation frame.

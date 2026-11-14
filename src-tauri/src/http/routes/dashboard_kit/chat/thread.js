@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The thread until the transcript story: inbox({sessionId}) for each of this story's lead rows plus inbox({role}), merged by message id and sorted by time (AC8).
+// The thread: inbox({sessionId}) for each of this story's lead rows plus inbox({role}), merged by message id and sorted by time.
 export const rowsOf=answer=>Array.isArray(answer)?answer:Array.isArray(answer&&answer.messages)?answer.messages:[];
 export function mergeThread(...lists){
  const byId=new Map();

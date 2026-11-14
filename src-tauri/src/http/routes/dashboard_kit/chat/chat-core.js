@@ -23,7 +23,7 @@ export function createMarkLatch(){
   return mark;
  };
 }
-// The card format the briefs name (`_common.md` "Card format"): the question, then one line `Options: `A`, `B`, or `C`. My pick: A, because <reason>.`
+// The card format: the question, then one line `Options: `A`, `B`, or `C`. My pick: A, because <reason>.`
 // Options are backticked and plain: two to six, each short and distinct, none a `<placeholder>` that needs typing. Anything else is not a card of buttons and the page shows its text with a reply box.
 const MAX_OPTIONS=6,MAX_OPTION=80;
 export function parseCard(text){

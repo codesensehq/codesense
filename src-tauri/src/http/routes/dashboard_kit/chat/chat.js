@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// kit.chat.mount(el, {transport, reads, layout, cards, headerSlot, chips, ...}): the one chat DOM. A later story extends this (Group chat); a page never builds a second chat.
+// kit.chat.mount(el, {transport, reads, layout, cards, headerSlot, chips, ...}): the one chat DOM. A page never builds a second chat.
 // The peer is {storyId, leadRole} (the roster rows of that story's role) or an own target; timers {slowMs, failMs} bound a launch; card(text) builds the launch prompt.
-// A page with another peer or another frame passes options, never a second chat (the sprint page's, src/sprint/chat.js):
+// A page with another peer or another frame passes options, never a second chat:
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head.
@@ -55,7 +55,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const leadHandles=()=>new Set(target.rows(rows).map(row=>row.handle));
  const leadCount=()=>{const handles=leadHandles();return thread.filter(row=>sideOf(row,handles)==='lead').length+streams.size;};
  const presence=()=>presenceOf(live(),{launch:{state:launch.state,failure:launch.failure,stuck:launch.stuck},runningSince,done:isDone});
- // A dead or stuck launch points at the launched session first: another lead row can be live to presence (AC 1).
+ // A dead or stuck launch points at the launched session first: another lead row can be live to presence.
  const launchedFirst=()=>launch.stuck||(launch.state==='failed'&&launch.failure.kind==='exited');
  const terminalTarget=()=>(launchedFirst()&&launchSessionId)||(live()&&live().sessionId)||launchSessionId||null;
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
@@ -167,7 +167,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   composer.update({placeholder:p.placeholder,disabled:isDone,...(layout.composer?layout.composer(here):{})});
   for(const fn of listeners)fn();
  }
- // --- data: the thread is inbox({sessionId}) for each lead row of this story plus the role queue, merged (AC8).
+ // --- data: the thread is inbox({sessionId}) for each lead row of this story plus the role queue, merged.
  async function readThread(){
   const mine=++gen,peers=target.rows(rows);
   for(const row of peers)watched.add(row.sessionId);

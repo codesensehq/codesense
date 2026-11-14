@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// One needs-you card in the thread (mockup C1 to C3). The node is built from plain values by chat.js, which owns the state; a card changes only when its signature does.
+// One needs-you card in the thread (the question, its options, and the answered state). The node is built from plain values by chat.js, which owns the state; a card changes only when its signature does.
 // state: open | pending (a reply waits on the host confirm) | error | answered. A parsed card shows the lead's pick first; one chat-core cannot parse shows its text and a reply box.
 import {h} from './dom.js';
 import {CHAT_COPY,timeLabel} from './copy.js';

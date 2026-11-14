@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-// Presence: one state from the lead's sessions() row, shared by the face, the header line and the composer placeholder (AC7).
+// Presence: one state from the lead's sessions() row, shared by the face, the header line and the composer placeholder.
 import {CHAT_COPY,failureReason} from './copy.js';
 // Every row of this story's lead (a relaunch lists more than one) and the one that is live (any state but exited).
 export const leadRowsOf=(rows,storyId,role)=>(Array.isArray(rows)?rows:[]).filter(row=>row.story===storyId&&row.role===role);
 // The one live rule: the first row that has not exited (any other state counts as live to presence).
 export const liveOf=rows=>rows.find(row=>row.state!=='exited')||null;
 export const liveLeadOf=(rows,storyId,role)=>liveOf(leadRowsOf(rows,storyId,role));
-// Activity is progress.note only when its atMs is inside the current running stretch; a stale progress outlives the turn (spike g).
+// Activity is progress.note only when its atMs is inside the current running stretch; a stale progress note outlives the turn.
 export const activityOf=(row,runningSince)=>{const p=row&&row.progress;return p&&typeof p.note==='string'&&p.note&&Number.isFinite(p.atMs)&&p.atMs>=(runningSince||0)?p.note:CHAT_COPY.header.activityNone;};
 const by={
  starting:{face:'starting',header:CHAT_COPY.header.starting,placeholder:CHAT_COPY.placeholder.starting},

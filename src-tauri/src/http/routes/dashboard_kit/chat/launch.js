@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Launch-on-send machine and the page outbox (AC5, AC6). Pure over an injected transport and clock, so Node tests drive it on a fake clock.
+// Launch-on-send machine and the page outbox. Pure over an injected transport and clock, so Node tests drive it on a fake clock.
 // States: idle -> starting -> slow(20 s) | failed(reason: timeout, exited, or a launch error) | joined; a startup-stuck launched row holds starting with the timers stopped (`stuck`). Sends while starting go to the outbox, never a second launch and never the role queue.
 // Confirmable calls (openWorkspace, sendAsHuman) run one at a time: the dispatcher answers `busy` to a second while a host confirm waits.
 import {leadRowsOf} from './presence.js';
@@ -11,7 +11,7 @@ export const parseFailure=error=>{
  if(/^unavailable:/.test(code))return {kind:'unavailable',code,why:code.replace(/^unavailable:\s*/,'')};
  return {kind:'other',code};
 };
-// rowsOf(sessions) is this chat's peer rows (the story's lead rows by default); queue, when set, is where a message goes while no peer runs, in place of a launch (the sprint chat).
+// rowsOf(sessions) is this chat's peer rows (the story's lead rows by default); queue, when set, is where a message goes while no peer runs, in place of a launch (a chat with no lead of its own).
 export function createLaunch({transport,clock,storyId,leadRole,timers,card,onChange=()=>{},rowsOf=sessions=>leadRowsOf(sessions,storyId,leadRole),queue=null}){
  let state='idle',failure=null,sendFailure=null,rows=[],launchResult=null,settled=false,stuck=false,seq=0,ids=0,chain=Promise.resolve(),slowTimer=null,failTimer=null,staleDead=new Set();
  const messages=[],outbox=[],peerRows=()=>rowsOf(rows);
