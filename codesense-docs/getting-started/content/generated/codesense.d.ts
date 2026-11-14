@@ -1382,7 +1382,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1437,7 +1437,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1737,7 +1737,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1788,6 +1788,62 @@ declare namespace CodesenseSdk {
       text?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    restorePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:read:team · MCP twin role_state */
     roles(args?: Record<string, unknown>): Promise<unknown>;
     /** metadata · context:write */
@@ -2033,7 +2089,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;

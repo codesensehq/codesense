@@ -1176,7 +1176,7 @@ export type PinResult =
       agentId: string;
       storyId: string;
       pins: AgentPin[];
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
     }
   | { status: "invalid"; message: string };
 
@@ -1185,6 +1185,8 @@ export type AgentPinsOp =
   | { op: "read" }
   | { op: "pin"; messageId: number; position?: number; preview?: AgentPinPreview }
   | { op: "unpin"; messageId: number }
+  /** The Undo of an unpin: the pin comes back as it was. */
+  | { op: "restore"; messageId: number }
   | { op: "reorder"; messageIds: number[] };
 
 /** The human reads or changes an agent thread's pin list in `team`'s store. */

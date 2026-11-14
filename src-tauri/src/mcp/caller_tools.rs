@@ -82,7 +82,11 @@ pub(crate) async fn pin(
         params.message_id,
         params.position,
         params.preview,
-        params.remove == Some(true),
+        if params.restore == Some(true) {
+            agent_inbox::pins::PinChange::Restore
+        } else {
+            agent_inbox::pins::PinChange::from(params.remove == Some(true))
+        },
     )
     .await
     .map_err(|e| ErrorData::internal_error(e, None))?;

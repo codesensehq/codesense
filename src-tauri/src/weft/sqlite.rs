@@ -768,6 +768,9 @@ impl WeftStore {
         // SW-AGR-18: what the message asks of the human (`needs-you` / `update`), as the
         // sender set it. Nullable — NULL means the sender set none and reads resolve it.
         ensure_column(&conn, "wv_inbox", "kind", "TEXT")?;
+        // When a pin was unpinned (epoch ms). Nullable: NULL is a live pin. An unpinned
+        // pin keeps its row so a restore (the Undo) brings it back as it was.
+        ensure_column(&conn, "wv_pins", "removed_at", "INTEGER")?;
         // When an instance first claimed a role delivery (epoch seconds, like the
         // table's other times). Kept when a lapsed claim returns it to pending.
         ensure_column(&conn, "wv_role_delivery", "first_claimed_at", "INTEGER")?;
