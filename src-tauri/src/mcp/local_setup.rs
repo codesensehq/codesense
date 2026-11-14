@@ -301,6 +301,7 @@ pub(crate) mod tests {
             "rename_workspace",
             "add_source_repo",
             "attach_source_repo_path",
+            "clone_repo",
             "remove_source_repo",
         ] {
             assert!(commands::interactive_gate::INTERACTIVE_VERBS.contains(&tool));
