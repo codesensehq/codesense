@@ -22,7 +22,7 @@ pub struct Page {
 /// build when a page here is not the bundled file, so a docs update cannot drop the grant.
 pub const PAGES: &[Page] = &[Page {
     path: "getting-started/content/foreman/index.html",
-    sha256: "cb19679a0d08cd5ee852751b27e874beaaa7793b00e06a90d42b471dc1a7e144",
+    sha256: "274473d681daa8b1c62afda799d975215aceeea4bee343364de9f1ce55afe372",
 }];
 
 /// The agents a page holding the capability may launch: the Foreman and its setup guide. The
