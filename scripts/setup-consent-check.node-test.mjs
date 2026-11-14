@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { formatCardLine, parseCardLine } from "./lib/card-line.mjs";
+import {
+  formatCardLine,
+  parseCardLine,
+} from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { SETUP_VERBS, checkConsent, defaultActVerbs, turnsOf } from "./setup-consent-check.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));

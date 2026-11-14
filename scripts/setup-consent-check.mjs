@@ -9,7 +9,7 @@
 //
 // What it reads, in turn order:
 //   * a card: a `send_message` to `human` with `kind: needs-you` whose text ends in a card
-//     line (`scripts/lib/card-line.mjs`). A needs-you message without one is a question, not
+//     line (`parseCardLine` in the kit's `chat/chat-core.js`). A needs-you message without one is a question, not
 //     a card. Its message id comes from the call's result.
 //   * its click: the person's first answer to it, read from a `read_messages` result (the
 //     page's `replyAsHuman` lands there). When the thread carries `inReplyTo`, the answer is
@@ -27,7 +27,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCardLine } from "./lib/card-line.mjs";
+import { parseCardLine } from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { SETUP_VERBS } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
