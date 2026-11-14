@@ -7,10 +7,8 @@ import { ExcalidrawViewer } from "@/features/dashboard/components/excalidraw-vie
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
 import { ImageViewer } from "@/features/dashboard/components/image-viewer";
 import { CodeFileViewer } from "@/features/viewer/components/code-file-viewer";
-import {
-  MarkdownViewer,
-  type MarkdownExtras,
-} from "@/features/dashboard/components/markdown-viewer";
+import { type MarkdownExtras } from "@/features/dashboard/components/markdown-viewer";
+import { StoryAwareMarkdown } from "@/features/dashboard/components/story-aware-markdown";
 import { MarkdownRedlineViewer } from "@/features/git-sync/components/markdown-redline-viewer";
 import { getViewerFileType, type CommonViewerProps } from "@/shared/lib/viewer-file-type";
 import { resolveVirtualTab } from "@/shared/lib/virtual-viewer-registry";
@@ -85,7 +83,8 @@ export function renderViewer(
         />
       );
     case "markdown":
-      return <MarkdownViewer {...common} {...md} />;
+      // A story file (front matter `type: story|bug|spike`) opens the team's story page in this tab.
+      return <StoryAwareMarkdown {...common} {...md} onFrameShortcut={onFrameShortcut} />;
     case "excalidraw":
       // SW-SC-3: the canvas hot-reloads on an external write to its own file.
       // It reuses the same per-file `changedPaths` gate as html/markdown so a
@@ -102,7 +101,7 @@ export function renderViewer(
     default: {
       const _exhaustive: never = fileType;
       void _exhaustive;
-      return <MarkdownViewer {...common} {...md} />;
+      return <StoryAwareMarkdown {...common} {...md} />;
     }
   }
 }
