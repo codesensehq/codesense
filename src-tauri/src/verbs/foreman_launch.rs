@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The `foreman.launch` capability: a page may open a `team-workspace` agent only when it is
-//! one of the bundled Foreman pages. It is deliberately outside [`super::capabilities::ALL`],
+//! one of the bundled pages that name an agent to start: the Foreman page and the setup guide's. It is deliberately outside [`super::capabilities::ALL`],
 //! so no preset, declaration or per-dashboard override can hand it out; it is minted from the
 //! page file's own bytes, at its own place in the placed docs checkout.
 use sha2::{Digest, Sha256};
@@ -18,16 +18,29 @@ pub struct Page {
     pub sha256: &'static str,
 }
 
-/// The pages that hold it. `scripts/foreman-page.mjs --check` (in `gen:docs:check`) fails the
-/// build when a page here is not the bundled file, so a docs update cannot drop the grant.
-pub const PAGES: &[Page] = &[Page {
-    path: "getting-started/content/foreman/index.html",
-    sha256: "ff94132069b6e78fe2bc269be5e79c5c1c09bf01dadb659a505dfebeb775c8f2",
-}];
+/// The pages that hold it. `scripts/foreman-page.mjs --check` and `scripts/guide-page.mjs
+/// --check` (both in `gen:docs:check`) fail the build when a page here is not the bundled file,
+/// so a docs update cannot drop the grant.
+pub const PAGES: &[Page] = &[
+    Page {
+        path: "getting-started/content/foreman/index.html",
+        sha256: "ff94132069b6e78fe2bc269be5e79c5c1c09bf01dadb659a505dfebeb775c8f2",
+    },
+    Page {
+        path: "getting-started/content/guide/index.html",
+        sha256: "d23fa7d34fcc0fd157664a4696d97a8b7a43a00a68c8f0d1aab9e3a44fdb6115",
+    },
+];
 
-/// The agents a page holding the capability may launch: the Foreman and its setup guide. The
-/// grant is defence in depth beside the page's hash, so a page cannot start any other agent.
-pub const AGENTS: &[&str] = &["foreman-claude", "guide-claude"];
+/// The agents a page holding the capability may launch: the Foreman and the setup guide, one
+/// guide agent per runtime. The grant is defence in depth beside the page's hash, so a page
+/// cannot start any other agent.
+pub const AGENTS: &[&str] = &[
+    "foreman-claude",
+    "guide-claude",
+    "guide-codex",
+    "guide-opencode",
+];
 
 /// Whether a `team-workspace` open names an agent the page may launch. An open with no agent
 /// would run the team's default agent, so it is refused too.
@@ -35,12 +48,18 @@ pub fn agent_allowed(agent: Option<&str>) -> bool {
     agent.is_some_and(|agent| AGENTS.contains(&agent))
 }
 
-/// The bundled page as this source tree ships it, for tests that place it in a docs root.
+/// The bundled Foreman page as this source tree ships it, for tests that place it in a docs root.
 #[cfg(test)]
 pub(crate) fn shipped_page() -> std::path::PathBuf {
+    shipped_at(PAGES[0].path)
+}
+
+/// A bundled page by its `PAGES` path, as this source tree ships it.
+#[cfg(test)]
+pub(crate) fn shipped_at(path: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../codesense-docs")
-        .join(PAGES[0].path)
+        .join(path)
 }
 
 /// The grant a freshly minted frame holds, given the placed docs root.
@@ -96,11 +115,20 @@ mod tests {
         }]
     }
 
+    const GUIDE_PAGE: &str = "getting-started/content/guide/index.html";
+
     /// A docs root holding the page, and a second, unrelated dir.
     fn placed(body: &[u8]) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        placed_at(PAGE, body)
+    }
+
+    fn placed_at(
+        at: &str,
+        body: &[u8],
+    ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let docs = dir.path().join("docs");
-        let page = docs.join(PAGE);
+        let page = docs.join(at);
         std::fs::create_dir_all(page.parent().unwrap()).unwrap();
         std::fs::write(&page, body).unwrap();
         std::fs::create_dir_all(dir.path().join("team")).unwrap();
@@ -209,14 +237,68 @@ mod tests {
     }
 
     #[test]
-    fn only_the_foreman_and_its_guide_may_be_launched() {
+    fn only_the_foreman_and_the_setup_guide_may_be_launched() {
         assert!(agent_allowed(Some("foreman-claude")));
-        assert!(agent_allowed(Some("guide-claude")));
+        for guide in ["guide-claude", "guide-codex", "guide-opencode"] {
+            assert!(agent_allowed(Some(guide)), "{guide}");
+        }
+        assert!(!agent_allowed(Some("guide-hermes")));
         assert!(!agent_allowed(Some("dev-worker-claude")));
         assert!(!agent_allowed(Some("builtin/foreman-claude")));
         assert!(!agent_allowed(Some("")));
         // No agent would run the team's default agent.
         assert!(!agent_allowed(None));
+    }
+
+    #[test]
+    fn exactly_the_foreman_page_and_the_guide_page_are_pinned() {
+        let paths: Vec<&str> = PAGES.iter().map(|page| page.path).collect();
+        assert_eq!(paths, [PAGE, GUIDE_PAGE]);
+        assert!(!PAGES.is_empty());
+    }
+
+    #[test]
+    fn every_pinned_page_hashes_to_its_entry() {
+        // A page edited without its entry bumped fails here, not silently in the app.
+        for page in PAGES {
+            let bytes = std::fs::read(shipped_at(page.path))
+                .unwrap_or_else(|_| panic!("{} ships in the docs tree", page.path));
+            assert_eq!(
+                format!("{:x}", Sha256::digest(&bytes)),
+                page.sha256,
+                "{}: update its PAGES hash (node scripts/guide-page.mjs --write)",
+                page.path
+            );
+        }
+    }
+
+    #[test]
+    fn the_bundled_guide_page_holds_it_at_its_place_and_nothing_else_does() {
+        let bytes = std::fs::read(shipped_at(GUIDE_PAGE))
+            .expect("the bundled guide page ships in the docs tree");
+        let (_dir, docs, target) = placed_at(GUIDE_PAGE, &bytes);
+        assert_eq!(
+            grant_for(&docs, &target.to_string_lossy()).as_deref(),
+            Some(CAPABILITY)
+        );
+        // The same bytes at another place hold nothing, and neither does one more byte.
+        let other = docs.join("getting-started/content/other/index.html");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, &bytes).unwrap();
+        assert_eq!(grant_for(&docs, &other.to_string_lossy()), None);
+        std::fs::write(&target, [bytes.as_slice(), b" "].concat()).unwrap();
+        assert_eq!(grant_for(&docs, &target.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn the_foreman_page_does_not_hold_the_guide_pages_place_and_the_reverse() {
+        let foreman = std::fs::read(shipped_at(PAGE)).expect("the Foreman page ships");
+        let guide = std::fs::read(shipped_at(GUIDE_PAGE)).expect("the guide page ships");
+        // Each page's bytes at the other's path hold nothing: the entry is the pair, not the path.
+        for (at, body) in [(PAGE, &guide), (GUIDE_PAGE, &foreman)] {
+            let (_dir, docs, target) = placed_at(at, body);
+            assert_eq!(grant_for(&docs, &target.to_string_lossy()), None, "{at}");
+        }
     }
 
     #[test]

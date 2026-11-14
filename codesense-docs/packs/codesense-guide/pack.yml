@@ -10,6 +10,7 @@ requires:
     - { name: claude, optional: true }
     - { name: codex, optional: true }
     - { name: opencode, optional: true }
+  kit: { chat: 1 }
 parts:
   - { id: guide, kind: preset, includes: [ guide-claude, guide-codex, guide-opencode, guide-content, codesense-setup ], default: true }
   - { id: guide-claude, kind: agent, file: agents/guide-claude/agent.yaml, needs: [ guide-content, codesense-setup ] }
@@ -22,13 +23,13 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: 5cac87116ab8c8972d2428cc3b88081e071ef0bcaa18cfc88b18785b3e91395b
+    sha256: 9c9356fa16cfb788be809dd4d154f02dd008159a6ac0033960b402d515bed3f3
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: 5cac87116ab8c8972d2428cc3b88081e071ef0bcaa18cfc88b18785b3e91395b
+    sha256: 9c9356fa16cfb788be809dd4d154f02dd008159a6ac0033960b402d515bed3f3
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: 5cac87116ab8c8972d2428cc3b88081e071ef0bcaa18cfc88b18785b3e91395b
+    sha256: 9c9356fa16cfb788be809dd4d154f02dd008159a6ac0033960b402d515bed3f3
     exec: false
   - path: CHANGELOG.md
     sha256: 1614f9071daad5e4ad06d57852c6f8fada52966e9b37834344252edac00549b7
@@ -46,10 +47,16 @@ files:
     sha256: 0d94957543a4d3373e506d955bd3e73b96d287454d105d28c17785b23f7737d4
     exec: false
   - path: commands/codesense-setup.md
-    sha256: 5cac87116ab8c8972d2428cc3b88081e071ef0bcaa18cfc88b18785b3e91395b
+    sha256: 9c9356fa16cfb788be809dd4d154f02dd008159a6ac0033960b402d515bed3f3
+    exec: false
+  - path: content/guide/guide.js
+    sha256: ef5d9f76dd6c960ef59775227220546f21281d220b45168a763d9d26feb90d2d
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
+    exec: false
+  - path: content/guide/index.html
+    sha256: d23fa7d34fcc0fd157664a4696d97a8b7a43a00a68c8f0d1aab9e3a44fdb6115
     exec: false
   - path: docs/README.md
     sha256: ba5b6709d14bdb7b6f26d93d03b2346ad6fb3d65965eff63bf77c817ea3aee59
