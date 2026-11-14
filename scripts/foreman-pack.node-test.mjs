@@ -65,9 +65,10 @@ const mcp = (name) => `mcp__codesense__${name}`;
 // 2.69 bytes a token. Four bytes a token undercounted by a third.
 const BYTES_PER_TOKEN = 2.65;
 const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
-const ROOT_CAP = 2000;
+// 2k until the setup rules (offer, resume, hand-back) went in; flagged in that PR.
+const ROOT_CAP = 2200;
 
-test("the root prompt is the spec, under 2k tokens, passed as the agent's system prompt", () => {
+test("the root prompt is the spec, under 2.2k tokens, passed as the agent's system prompt", () => {
   const at = agent.args.indexOf("--append-system-prompt");
   assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(
@@ -413,6 +414,53 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
+});
+
+test("setup: offer once, launch the guide on a yes, resume, and take it back with a Set up: line", () => {
+  for (const phrase of [
+    "Set me up",
+    "list_orgs_teams",
+    "list_source_repos",
+    "offer setup once",
+    "Set up now · Not now",
+    "`setup-ledger`",
+    'agent:"guide-claude"',
+    'initial_prompt:"/codesense-setup"',
+    'mode:"visible-unfocused"',
+    "`/codesense-setup resume`",
+    "`Setup done:`",
+    "`claim_role_messages`",
+    "`ack_role_message`",
+    "`Set up:`",
+  ]) {
+    assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
+  }
+  // The Foreman makes no setup call itself; it hands over.
+  assert.ok(spec.includes("make no setup call"), "it only hands over");
+});
+
+test("setup: the offer guard, the Not now ledger write, the reuse search and the stopped read", () => {
+  const setup = spec.split("## Setup")[1].split("\n## ")[0];
+  for (const phrase of [
+    // The guard: an unanswered offer card in the inbox, or a skipped ledger row.
+    "unless `inbox_list` holds an unanswered one",
+    "`records_list`",
+    "`step: foreman-offer, state: skipped`",
+    // Not now is the one ledger write.
+    "Not now writes that row (`records_create`)",
+    // Reuse: a live guide any Foreman launched (this one or one before a relaunch), before any launch.
+    "Reuse a live `guide-*` session any `foreman-*` session launched (`list_sessions`), else `open_workspace",
+    // Resume: only a started, unfinished setup, with the thread's latest Guide handoff.
+    "started, not done: `/codesense-setup resume` plus the latest `Guide handoff:` text",
+    // Stopped: no hand-back, so the next wake reads the ledger and offers Resume.
+    "Setup ended with none: at your next wake read the ledger, say where it stopped and offer Resume",
+  ]) {
+    assert.ok(setup.includes(phrase), `the setup rules say: ${phrase}`);
+  }
+  assert.ok(
+    setup.indexOf("Reuse a live") < setup.indexOf("open_workspace"),
+    "reuse is looked for before the launch",
+  );
 });
 
 test("sprint leads: look for a live one on any machine, then launch the team's sprint agent from its config", () => {
