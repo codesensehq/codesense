@@ -1078,6 +1078,36 @@ test("a switched team that a later listing drops or archives is no longer in for
   }
   // Still listed, it stays in force.
   assert.deepEqual(after(setupOf(teamOf("web", ["acme/web"]))), []);
+  // An org that failed to load lists no teams, which says nothing about them.
+  assert.deepEqual(after(failedOrg()), []);
+});
+
+// A listing whose acme/context org could not be composed (`loadErrors` set, `teams` empty).
+const failedOrg = () => {
+  const listing = setupOf();
+  const acme = listing.data.orgs.find((o) => o.slug === "acme/context");
+  Object.assign(acme, { teams: [], loadErrors: ["could not read the team list"] });
+  return listing;
+};
+
+test("after create_team, only a good listing re-lists the switch: an empty, failed or partial one does not", () => {
+  const empty = call(`${P}describe_setup`, {}, setupOf());
+  for (const reread of [{ error: "boom" }, { data: { orgs: [] } }, "not json", failedOrg()])
+    assert.deepEqual(
+      checkConsent(
+        session(
+          [empty],
+          [card(1, TEAM)],
+          [click(2, 1, "Create web")],
+          [create],
+          [call(`${P}describe_setup`, {}, reread)],
+          [ledger()],
+        ),
+        GUIDE,
+      ).errors,
+      [],
+      JSON.stringify(reread),
+    );
 });
 
 test("an activating create_team must name a listed org, and a team with no folder holds no file", () => {
@@ -1113,6 +1143,29 @@ test("an activating create_team must name a listed org, and a team with no folde
   assert.ok(
     errors.some((e) => /wrote web\/content\/schema\/setup-ledger\.yaml, outside/.test(e)),
     errors.join("\n"),
+  );
+  // A listed org whose folder is empty holds no file either.
+  const rootless = setupOf();
+  rootless.data.orgs.find((o) => o.slug === "acme/context").orgRoot = "";
+  const bare = checkConsent(
+    session(
+      [call(`${P}describe_setup`, {}, rootless)],
+      [card(1, TEAM)],
+      [click(2, 1, "Create web")],
+      [create],
+      [
+        call(
+          `${P}create_content_file`,
+          { path: "web/content/schema/setup-ledger.yaml", content: "x" },
+          { ok: true },
+        ),
+      ],
+    ),
+    GUIDE,
+  ).errors;
+  assert.ok(
+    bare.some((e) => /wrote web\/content\/schema\/setup-ledger\.yaml, outside/.test(e)),
+    bare.join("\n"),
   );
 });
 

@@ -62,8 +62,8 @@ function earlierUnspent(allowed, name) {
 
 /**
  * The teams a `describe_setup` result lists that the guide may work in (non-archived, outside
- * the docs' org, each `{org, orgRoot, team, repos}`) and every such org's folder; `undefined`
- * when the result lists no org.
+ * the docs' org, each `{org, orgRoot, team, repos}`), every such org's folder and the orgs that
+ * failed to load (`loadErrors`, so their teams are unknown); `undefined` when it lists no org.
  */
 function listedSetup(result) {
   let orgs;
@@ -77,9 +77,11 @@ function listedSetup(result) {
   if (!orgs?.length) return undefined;
   const teams = [];
   const roots = new Map(); // each non-docs org's folder, even when it has no team yet
+  const unread = new Set(); // orgs that failed to load: their empty `teams` says nothing
   for (const org of orgs) {
     if (org.slug === DOCS_ORG) continue;
     roots.set(org.slug, org.orgRoot);
+    if (org.loadErrors?.length) unread.add(org.slug);
     for (const team of org.teams ?? [])
       if (team.archived === false)
         teams.push({
@@ -89,7 +91,7 @@ function listedSetup(result) {
           repos: (team.sourceRepos ?? []).map((r) => r.slug),
         });
   }
-  return { teams, roots };
+  return { teams, roots, unread };
 }
 
 const nameOf = (t) => `${t.org}/${t.team}`;
@@ -355,9 +357,13 @@ export function checkConsent(
       } else if (name === "describe_setup") {
         const setup = listedSetup(raw.result);
         if (setup) {
+          // An org that failed to load keeps the teams the last listing gave it.
+          const kept = listed.filter((t) => setup.unread.has(t.org));
           ({ teams: listed, roots } = setup);
-          // From here on the switch is read against this listing, with no fallback.
-          if (switched) switched.relisted = true;
+          listed = [...listed, ...kept];
+          // From here on the switch is read against this listing, with no fallback, unless its
+          // own org failed to load.
+          if (switched && !setup.unread.has(switched.org)) switched.relisted = true;
         }
       } else if (name === "read_terminal_tab") {
         if (typeof input.handle !== "string" || input.handle === "")
