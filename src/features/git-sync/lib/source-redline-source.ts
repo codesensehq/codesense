@@ -19,6 +19,7 @@ import { sourceCommitChangeset as invokeSourceCommitChangeset } from "@/tauri/co
 import { sourceCommitFileRedline as invokeSourceCommitFileRedline } from "@/tauri/commands";
 import { sourceCommitGraph as invokeSourceCommitGraph } from "@/tauri/commands";
 import { sourceFileRedline as invokeSourceFileRedline } from "@/tauri/commands";
+import { sourceImageSides as invokeSourceImageSides, type ImageSides } from "@/tauri/commands";
 import { sourceRemoteChangeset as invokeSourceRemoteChangeset } from "@/tauri/commands";
 import { sourceRemoteFileRedline as invokeSourceRemoteFileRedline } from "@/tauri/commands";
 import { sourceWorktreeChangeset as invokeSourceWorktreeChangeset } from "@/tauri/commands";
@@ -71,6 +72,7 @@ const changesetInflight = new Map<string, InFlight<PublishFile[]>>();
 const redlineInflight = new Map<string, InFlight<FileRedline>>();
 const commitChangesetInflight = new Map<string, InFlight<PublishFile[]>>();
 const commitRedlineInflight = new Map<string, InFlight<FileRedline>>();
+const imageSidesInflight = new Map<string, InFlight<ImageSides>>();
 
 /** Join the fields of a dedupe key with a separator that cannot appear in a
  *  canonical path or git ref. Null/undefined fields collapse to the empty
@@ -103,6 +105,7 @@ export function __resetSourceRedlineCache(): void {
   redlineInflight.clear();
   commitChangesetInflight.clear();
   commitRedlineInflight.clear();
+  imageSidesInflight.clear();
   __resetSubscribeState();
 }
 
@@ -616,5 +619,23 @@ export function sourceCommitFileRedline(
   );
 }
 
+/**
+ * A raster file's Before | After bytes in a LOCAL source worktree, for its rendered
+ * diff: at the working tree (no `sha`, before at the same merge-base as
+ * {@link sourceFileRedline}) or at a commit. Deduped like the redline.
+ */
+export function sourceFileImageSides(
+  worktreePath: string,
+  filePath: string,
+  opts: { oldPath?: string; baseRef?: string; sha?: string },
+): Promise<ImageSides> {
+  const key = joinKey([worktreePath, filePath, opts.oldPath, opts.baseRef, opts.sha]);
+  return dedupe(imageSidesInflight, key, () =>
+    invokeSourceImageSides(worktreePath, filePath, opts),
+  );
+}
+
 /** Revalidates configured attachment and WORKTREE identity on every call. */
 export { openDiffRead as readOpenDiff } from "@/tauri/commands";
+/** A raster file's sides for the open-diff tab, revalidated as {@link readOpenDiff} is. */
+export { openDiffImageRead as readOpenDiffImages } from "@/tauri/commands";

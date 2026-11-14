@@ -231,6 +231,20 @@ pub async fn open_diff_read<R: tauri::Runtime>(
     await_blocking("open_diff_read", move || Ok(crate::attribution::diff::read(&home, &crate::domain::Principal::from(user_id), &scope, &params))).await
 }
 
+/// A raster file's Before | After bytes for the open-diff tab, revalidated exactly as
+/// [`open_diff_read`] is.
+#[tauri::command]
+pub async fn open_diff_image_read<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    params: crate::attribution::diff::Params,
+    frame_id: Option<String>,
+    page: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let scope = crate::context_repo::caller_scope::for_management_view(&app, page.as_deref(), frame_id.as_deref())?;
+    let (home, user_id) = crate::commands::route_to_context::resolve_ambient(&app).await?;
+    await_blocking("open_diff_image_read", move || Ok(crate::attribution::diff::read_images(&home, &crate::domain::Principal::from(user_id), &scope, &params))).await
+}
+
 /// Committed attribution; the page and MCP share one resolver.
 #[tauri::command]
 pub async fn why_line<R: tauri::Runtime>(

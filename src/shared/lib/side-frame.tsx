@@ -142,6 +142,11 @@ const IMAGE_MIME: Record<string, string> = {
   webp: "image/webp",
 };
 
+/** A raster image (PNG, JPEG, GIF, WebP) a side draws from its bytes; an SVG is not. */
+export function isRasterImage(filePath: string): boolean {
+  return Object.hasOwn(IMAGE_MIME, extensionOf(filePath) ?? "");
+}
+
 /** A raster image side from its base64 bytes. Never an SVG: that can carry
  *  script, so it goes through {@link SideFrame}. */
 export function SideImage({
