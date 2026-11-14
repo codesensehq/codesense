@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { toast } from "sonner";
 
-import { getActiveWorkspaceContext } from "@/shared/hooks/use-active-workspace-context";
+import type { ActiveWorkspaceContext } from "@/shared/hooks/use-active-workspace-context";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -60,8 +60,10 @@ export async function openStoryDashboard(deps: StoryDashboardDeps): Promise<void
 }
 
 /** The app's dependencies for {@link openStoryDashboard}: the active team's focus and the viewer store. */
-export function liveStoryDashboardDeps(): StoryDashboardDeps {
-  const { teamKey, workspace } = getActiveWorkspaceContext();
+export function liveStoryDashboardDeps({
+  teamKey,
+  workspace,
+}: ActiveWorkspaceContext): StoryDashboardDeps {
   const store = useViewerStore.getState();
   return {
     teamKey,

@@ -543,9 +543,8 @@ const shortcutActions: readonly ShortcutAction[] = [
     defaultKeystroke: "",
     scope: "team",
     run: () => {
-      const { teamKey } = getActiveWorkspaceContext();
-      if (teamKey === NO_TEAM_SENTINEL) return;
-      void openStoryDashboard(liveStoryDashboardDeps());
+      // With no team active there is no story in focus, and the item says so.
+      void openStoryDashboard(liveStoryDashboardDeps(getActiveWorkspaceContext()));
     },
   },
   {
