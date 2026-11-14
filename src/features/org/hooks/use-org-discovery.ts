@@ -7,10 +7,8 @@ import { toast } from "sonner";
 import { discoverLocalOrgs } from "@/shared/api/org";
 import { ensureCodesenseDocs, ensureSampleRepo, type CodesenseDocsResult } from "@/tauri/commands";
 import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
-import {
-  afterPersistedSelectionRestored,
-  openCodesenseDocsReadme,
-} from "../lib/codesense-docs-landing";
+import { openStartLanding } from "@/features/foreman/open-foreman";
+import { afterPersistedSelectionRestored } from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -174,7 +172,8 @@ export function useOrgDiscovery() {
         setOrgs(loadedOrgs);
         // Later launches reopen the last opened context repo (and, through the per-repo
         // memory, its last team). Only the very first launch, proven by a restored session
-        // with no last-opened repo, lands in the CodeSense docs with its README open.
+        // with no last-opened repo, lands in the CodeSense docs. What opens there, the
+        // Foreman or the README, is `openStartLanding`'s call, once per app start.
         stopDeciding = afterPersistedSelectionRestored(() => {
           if (cancelled) return;
           // The last-opened repo, whether the restore landed before `setOrgs` (which drops
@@ -188,7 +187,7 @@ export function useOrgDiscovery() {
           if (launch.slug && launch.slug !== useOrgStore.getState().activeOrgSlug) {
             setActiveOrg(launch.slug);
           }
-          if (launch.firstLaunch && docs) openCodesenseDocsReadme(docs.readme_path);
+          if (docs) openStartLanding(docs.readme_path);
         });
       } catch (error) {
         reportTransient(error);

@@ -13,6 +13,8 @@ export const CODESENSE_DOCS_TEAM = "getting-started";
 export const CODESENSE_DOCS_DISPLAY_NAME = "CodeSense Docs";
 /** The README the first launch opens, relative to the repo root. */
 export const CODESENSE_DOCS_README = "getting-started/content/README.html";
+/** The bundled Foreman page, relative to the repo root. */
+export const CODESENSE_DOCS_FOREMAN_PAGE = "getting-started/content/foreman/index.html";
 
 /** Same copy the backend refuses an edit with. */
 export const CODESENSE_DOCS_READ_ONLY =
@@ -45,6 +47,21 @@ export function pickLaunchOrg(input: {
     return { slug: CODESENSE_DOCS_SLUG, firstLaunch: activeOrgSlug === null };
   }
   return { slug: orgs[0]?.slug ?? null, firstLaunch: false };
+}
+
+/**
+ * What a settled launch opens, once per app start.
+ * - `foreman` when "Open the Foreman when CodeSense starts" is on (the default).
+ * - Otherwise the docs README when no context repo of the user's own is connected, so a
+ *   new user always has an entry point.
+ * - Otherwise nothing: the last session's tabs are all that opens.
+ */
+export function pickStartLanding(input: {
+  orgs: readonly Pick<Org, "slug">[];
+  openForemanOnStart: boolean | undefined;
+}): "foreman" | "readme" | "none" {
+  if (input.openForemanOnStart !== false) return "foreman";
+  return input.orgs.every((o) => isCodesenseDocs(o.slug)) ? "readme" : "none";
 }
 
 /** Pinned first, then the rest alphabetically: the order never moves on selection. */
