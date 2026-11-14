@@ -4,9 +4,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   Bot,
   ChevronsUpDown,
+  Compass,
   Keyboard,
-  MessageSquare,
   LayoutDashboard,
+  MessageSquare,
   Monitor,
   NotebookPen,
   Plus,
@@ -53,6 +54,8 @@ import {
 } from "@/features/org/components/missing-context-repos";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
+import { openForeman } from "@/features/foreman/open-foreman";
+import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { useRoutinesStore, watchRoutineCounts } from "@/features/routines/stores/routines-store";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
@@ -436,8 +439,26 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
   // Routines live in the Agents tab (SPEC §10): this opens Agents → Schedule.
   const routinesLabel =
     routinesNeedYou > 0 ? `Schedule — ${needsYouText(routinesNeedYou)}` : "Schedule";
+  // The section mounts with the open menu, so mail is read only while it is on screen.
+  const foremanMail = useForemanMailWaiting(true);
   return (
     <MenuSection id="you" label="You" heading={<YouHeading />}>
+      <button
+        type="button"
+        role="menuitem"
+        data-testid="identity-menu-foreman"
+        aria-label={foremanMail ? "Foreman — mail waiting" : undefined}
+        onClick={go(openForeman)}
+        className={MENU_ITEM}
+      >
+        <MenuLeadIcon>
+          <MessageSquare size={15} strokeWidth={1.75} />
+        </MenuLeadIcon>
+        <span>Foreman</span>
+        {foremanMail && (
+          <StatusMark data-testid="identity-menu-foreman-dot" mark="question" size="sm" />
+        )}
+      </button>
       <button
         type="button"
         role="menuitem"
@@ -471,7 +492,7 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
         className={MENU_ITEM}
       >
         <MenuLeadIcon>
-          <MessageSquare size={15} strokeWidth={1.75} />
+          <Compass size={15} strokeWidth={1.75} />
         </MenuLeadIcon>
         <span>Set up CodeSense</span>
       </button>

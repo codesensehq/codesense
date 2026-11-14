@@ -13,6 +13,7 @@ import {
   folderName,
   orderContextRepos,
   pickLaunchOrg,
+  pickStartLanding,
 } from "./codesense-docs";
 
 const docs = { slug: CODESENSE_DOCS_SLUG, display_name: CODESENSE_DOCS_DISPLAY_NAME };
@@ -129,5 +130,17 @@ describe("switcher order and connect states", () => {
     );
     expect(defaultContextRepoLocation("/Users/me/", "!!!")).toBe("/Users/me/CodeSense/context");
     expect(defaultContextRepoLocation("/Users/me", "..")).toBe("/Users/me/CodeSense/context");
+  });
+});
+
+describe("pickStartLanding", () => {
+  it("opens the Foreman by default, with or without repos of the user's own", () => {
+    expect(pickStartLanding({ orgs: [docs], openForemanOnStart: undefined })).toBe("foreman");
+    expect(pickStartLanding({ orgs: [docs, acme], openForemanOnStart: true })).toBe("foreman");
+  });
+
+  it("with the setting off, opens the README only when the user has no repo of their own", () => {
+    expect(pickStartLanding({ orgs: [docs], openForemanOnStart: false })).toBe("readme");
+    expect(pickStartLanding({ orgs: [docs, acme], openForemanOnStart: false })).toBe("none");
   });
 });

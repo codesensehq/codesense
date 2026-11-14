@@ -12,7 +12,7 @@
     {
       "id": "local-setup",
       "title": "Local organizations and setup",
-      "tools": ["create_local_organization", "attach_context_repository", "list_context_attachments", "detach_context_repository", "commit_registry_edit_local", "save_source_repo_attachment", "describe_setup", "list_orgs_teams", "set_active_team"],
+      "tools": ["create_local_organization", "attach_context_repository", "list_context_attachments", "detach_context_repository", "commit_registry_edit_local", "save_source_repo_attachment", "describe_setup", "probe_environment", "list_orgs_teams", "set_active_team"],
       "docs": "arc-b-model/orgs.html",
       "searchTerms": ["local", "organizations", "setup"],
       "calls": [{"tool": "list_orgs_teams", "arguments": {}}]
@@ -276,7 +276,7 @@
     {
       "id": "arc-l",
       "title": "Notes and team management",
-      "tools": ["notes_list", "notes_read", "notes_create", "notes_write", "notes_search", "notes_history", "notes_read_at", "notes_restore", "get_publish_set", "set_private_items_use", "create_team", "rename_team", "archive_team", "delete_team", "set_team_parent", "set_team_starter_page", "add_source_repo", "attach_source_repo_path"],
+      "tools": ["notes_list", "notes_read", "notes_create", "notes_write", "notes_search", "notes_history", "notes_read_at", "notes_restore", "get_publish_set", "set_private_items_use", "create_team", "rename_team", "archive_team", "delete_team", "set_team_parent", "set_team_starter_page", "add_source_repo", "attach_source_repo_path", "clone_repo"],
       "docs": "arc-l-factory/team-and-notes-tools.html",
       "searchTerms": ["notes", "and", "team", "management"],
       "calls": [{"tool": "notes_list", "arguments": {}}]

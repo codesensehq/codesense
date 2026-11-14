@@ -383,6 +383,27 @@ const INVOKE_META = {
       "Per-session token usage and spend for the sessions CodeSense launched, on this Mac and the remote machines it connects to, with per-day totals. Each session's `machineId` is the machine it ran on, as `machines()` names it (`local` for this Mac). Takes optional `sinceMs` and `untilMs` (local days: `sinceMs`'s day included, `untilMs`'s day excluded), `sessionId`, `cwd`, `story` (one story id) and `limit`. `costUsd` is `null` only when a call used tokens on a model with no rate. Every call the CLI reports counts, including Codex's start-up cache warm-up, which Codex's own total leaves out.",
     examples: [{ args: {}, result: { sessions: [], days: [], totals: {} } }],
   },
+  sessionRecord: {
+    description:
+      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb)`.",
+    examples: [
+      {
+        args: { handle: "agent-1" },
+        result: {
+          handle: "agent-1",
+          sessionId: "s_1",
+          cli: "claude",
+          model: "claude-sonnet-5-5",
+          tokens: { input: 1200, output: 340, cacheRead: 0, cacheWrite: 0 },
+          costUsd: 0.42,
+          durationMs: 360000,
+          story: { id: "DEMO-1" },
+          files: [{ path: "src/main.rs", commits: ["abc1234"] }],
+          unavailable: {},
+        },
+      },
+    ],
+  },
   modelRates: {
     description:
       "Every stored rate (USD per million tokens), by model prefix and then by day: the seeded list prices (from `1970-01-01`) and the ones `setModelRate` set. A model's rate on a day is the latest one from on or before that day, under its longest matching prefix. `cacheReadPerMtok: null` is 0.1x input; `long: null` is one price at every prompt length.",
@@ -1158,6 +1179,14 @@ const KIT = [
     example: "const { sessions, totals } = await codesense.sessionUsage({ limit: 20 });",
   },
   {
+    name: "codesense.sessionRecord",
+    category: "data-read",
+    wraps: "invoke('sessionRecord', args)",
+    description:
+      "One agent's session record by launch handle: model, tokens, cost, duration, files and story.",
+    example: "const record = await codesense.sessionRecord({ handle: 'agent-1' });",
+  },
+  {
     name: "codesense.modelRates",
     category: "data-read",
     wraps: "invoke('modelRates')",
@@ -1186,6 +1215,15 @@ const KIT = [
     wraps: "codesense:worktrees-changed listener",
     description: "Nudge callback for managed worktree changes.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  {
+    name: "codesense.onSessionRecordChanged",
+    category: "data-read",
+    wraps: "codesense:session-record-changed listener",
+    description:
+      "Nudge callback for when an agent's session record may have changed. Pass the record's `sessionIds` as the second argument to hear only about that agent's session.",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   {
     name: "codesense.onPasteTargetChanged",
@@ -1891,6 +1929,16 @@ const EVENT_META = {
     timing: "On managed worktree change",
     description: "Nudge for `worktrees()` listeners.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  "codesense:session-record-changed": {
+    direction: "parent-to-doc",
+    payload: "`{sessionId?}`: the session that changed; absent when the host cannot tell which",
+    timing:
+      "On the agent's progress, completion or exit, and about 2 s after usage is stored for its session. Files from commits have no event of their own; they refresh on progress, completion and exit",
+    description:
+      "Nudge for `sessionRecord()` listeners. `onSessionRecordChanged(cb, sessionIds)` runs `cb` only for those sessions (and for a nudge that names none).",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   "codesense:setup-changed": {
     direction: "parent-to-doc",

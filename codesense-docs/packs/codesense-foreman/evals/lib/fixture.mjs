@@ -60,7 +60,7 @@ export const ANSWERED_CARD = {
 // What the scripted guide stub does, for the setup hand-off cases. The real setup agent belongs to
 // the onboarding work; this walks the ledger's steps and ends with the hand-back line the setup
 // skill's `foreman-handback` block names (a test ties the two together).
-export const SETUP_STEPS = ["team", "source-repos", "gh"];
+export const SETUP_STEPS = ["team", "source-repos", "git-access"];
 export const stepDone = (ledger, step) => ledger.some((r) => r.step === step && r.state === "done");
 // The setup hand-off's launch form (foreman.md); the stubs and tests share it.
 export const SETUP_LAUNCH = {
@@ -74,7 +74,7 @@ export const SETUP_LAUNCH = {
 export const agentId = (a) => String(a ?? "").split("/").pop();
 export const HANDBACK_PREFIX = "Setup done:";
 export const HANDBACK_ROLE = "codesense-foreman";
-const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, gh signed in`;
+const HANDBACK_TEXT = `${HANDBACK_PREFIX} team ${CONFIG.team}, 2 repos, git access via git credentials`;
 // A card the Foreman raised and the person has not answered: the offer guard reads it.
 const OFFER_CARD = {
   id: 4200,
@@ -162,6 +162,17 @@ git push -q -u origin HEAD
 
 // The scripted team's story-create skill, as read_content_file returns it.
 export const SKILL_PATH = "skills/story-create/SKILL.md";
+
+// The team's recorded git-access method, as read_content_file returns it. The setup guide
+// writes it; the Foreman reads it before it opens a pull request.
+export const GIT_ACCESS_PATH = "tools/git-access.md";
+export const GIT_ACCESS = {
+  gh: "# Git access\n\nMethod: gh (the GitHub CLI, signed in).\n",
+  "github-mcp": "# Git access\n\nMethod: GitHub MCP (the github server's create_pull_request).\n",
+  credentials: "# Git access\n\nMethod: the user's own git credentials. No pull request tool.\n",
+};
+// The one non-CodeSense MCP tool the Foreman may call: a GitHub MCP method opens the PR with it.
+export const GITHUB_PR = "mcp__github__create_pull_request";
 export const SKILL = `# story-create
 
 Run both from the story's worktree:
@@ -173,6 +184,8 @@ Run both from the story's worktree:
 //   fail_first_pr: the first `gh pr create` fails.
 //   story_team: "generic" (default), "scripted" (team scripts and a story-create skill) or "docs"
 //     (the docs team: no user team).
+//   git_access: the method recorded at tools/git-access.md: "gh", "github-mcp", "credentials" (plain
+//     git, no PR tool) or "none" (the default: no file, read_content_file finds nothing).
 //   no_remote: home has no `origin`.
 //   planted_prior: a previous run's worktree and remote branch already exist.
 //   handoff: a planted `foreman-x` worktree and a live child session.
@@ -184,7 +197,7 @@ Run both from the story's worktree:
 //   no_repos: list_source_repos shows no repo, even in a user team.
 //   guide: "complete" or {stop_after: n}: the scripted guide stub runs when the Foreman launches a
 //     guide-* session with a /codesense-setup prompt; it stops after n steps and sends nothing.
-const KEYS = ["offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+const KEYS = ["git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -228,6 +241,7 @@ export async function createFixture(options = {}) {
   const unknown = Object.keys(options).filter((k) => !KEYS.includes(k));
   if (unknown.length) throw new Error(`unknown fixture keys: ${unknown.join(", ")}`);
   if (!["generic", "scripted", "docs"].includes(options.story_team ?? "generic")) throw new Error(`unknown story_team ${options.story_team}`);
+  if (![...Object.keys(GIT_ACCESS), "none", undefined].includes(options.git_access)) throw new Error(`unknown git_access ${options.git_access}`);
   if (!["mixed", undefined].includes(options.inbox)) throw new Error(`unknown inbox ${options.inbox}`);
   for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched", "no_repos"])
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);
@@ -239,6 +253,7 @@ export async function createFixture(options = {}) {
   const opts = {
     failFirstPr: options.fail_first_pr === true,
     storyTeam: options.story_team ?? "generic",
+    gitAccess: options.git_access ?? "none",
     noRemote: options.no_remote === true,
     plantedPrior: options.planted_prior === true,
     handoff: options.handoff === true,
@@ -469,6 +484,8 @@ function build(root, opts) {
       if (tool === "query_context")
         return { hits: opts.storyTeam === "scripted" ? [{ path: SKILL_PATH, name: "story-create" }] : [] };
       if (tool === "read_content_file" && opts.storyTeam === "scripted" && record.args.path === SKILL_PATH) return { text: SKILL };
+      if (tool === "read_content_file" && record.args.path === GIT_ACCESS_PATH)
+        return opts.gitAccess === "none" ? { error: "File not found" } : { text: GIT_ACCESS[opts.gitAccess] };
       if (tool === "who_am_i") return { handle: CONFIG.self, sessionId: CONFIG.self };
       if (tool === "agent_list") return { agents: [{ id: CONFIG.sprintLeadAgent }, { id: "story-lead-claude" }, { id: `guide-${CONFIG.runtime}` }] };
       if (tool === "get_story_format") return { text: "Frontmatter: type, status, sprint. Then Purpose and Acceptance Criteria." };
@@ -509,6 +526,7 @@ function build(root, opts) {
         home: { before: homeBefore, after: homeState() },
         foremanBranches: foremanBranches(),
         // The new-story variant the fixture plays, so graders don't need a second copy of it.
+        gitAccess: opts.gitAccess,
         variant: opts.storyTeam === "docs" ? "docs" : opts.noRemote ? "no-remote" : opts.storyTeam,
         // Where the Foreman runs: relative tool paths resolve from here.
         homeDir: home,

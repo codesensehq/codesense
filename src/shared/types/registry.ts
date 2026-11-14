@@ -46,6 +46,8 @@ export interface RawTeamEntry {
   /** Mirrors Rust `RawTeamEntry.landing_page`: the team's home page, relative to
    *  its content folder. Absent ⇒ README.md / README.html / index.html. */
   landing_page?: string;
+  /** Mirrors Rust `RawTeamEntry.agent_page`: the team's agent page, relative to its content root. */
+  agent_page?: string;
 }
 
 export interface RawTeamsYml {

@@ -38,6 +38,7 @@ const GUIDE = (state: string): Row => ({
   agent: "guide-claude",
   state,
   unread: 0,
+  avatar: "builtin-funny:coffee-bot",
 });
 const lead = (messageId: number, text: string, extra: Row = {}): Row => ({
   messageId,
@@ -85,6 +86,12 @@ async function open(page: Page, options: Options = {}) {
     const path = new URL(route.request().url()).pathname;
     const file = KIT_FILES[path];
     if (file) return route.fulfill({ contentType: file[1], body: readFileSync(file[0]) });
+    const face = path.match(/^\/kit\/v1\/avatars\/(builtin-[a-z-]+)\/([a-z-]+)\.svg$/);
+    if (face)
+      return route.fulfill({
+        contentType: "image/svg+xml",
+        body: readFileSync(`src/assets/avatar-packs/${face[1]}/${face[2]}.svg`),
+      });
     return route.fulfill({ contentType: "text/html", body: PAGE });
   });
   await page.addInitScript(
@@ -703,3 +710,20 @@ for (const viewport of [
       });
     }
   });
+
+test("the guide's message rows show the guide's avatar, once for a run, and the person's carry none", async ({
+  page,
+}) => {
+  const { live } = await open(page);
+  await live([lead(2, "Hi."), lead(3, "Let's start."), human(4, "Hello"), lead(5, "Next step.")]);
+  const faces = page.locator(
+    '.msg .cs-avatar img[src="/kit/v1/avatars/builtin-funny/coffee-bot.svg"]',
+  );
+  await expect(faces).toHaveCount(2);
+  await expect(page.locator(".msg.you .cs-avatar")).toHaveCount(0);
+  await expect(page.locator('.msg [title="CodeSense setup"]').first()).toBeVisible();
+  if (SHOTS) {
+    mkdirSync(SHOTS, { recursive: true });
+    await page.screenshot({ path: join(SHOTS, "faces-guide.png") });
+  }
+});

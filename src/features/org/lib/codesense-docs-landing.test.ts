@@ -6,7 +6,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
-import { openCodesenseDocsReadme, openCodesenseSetup } from "./codesense-docs-landing";
+import { openCodesenseDocsLanding, openCodesenseSetup } from "./codesense-docs-landing";
 
 const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
@@ -85,8 +85,8 @@ describe("openCodesenseSetup", () => {
   });
 });
 
-describe("openCodesenseDocsReadme", () => {
-  it("opens the README as a landing, in the docs team", () => {
+describe("openCodesenseDocsLanding", () => {
+  it("opens the page as a landing, in the docs team", () => {
     useOrgStore.setState({ orgs: [docs] as never, activeOrgSlug: null, activeTeamName: null });
     useViewerStore.setState({
       openedTeams: [],
@@ -95,7 +95,7 @@ describe("openCodesenseDocsReadme", () => {
       layoutMode: "console",
       terminalVisible: true,
     });
-    expect(openCodesenseDocsReadme()).toBe(true);
+    openCodesenseDocsLanding(`${ROOT}/getting-started/content/README.html`);
     expect(useViewerStore.getState().activeTab[KEY]).toBe(
       `${ROOT}/getting-started/content/README.html`,
     );

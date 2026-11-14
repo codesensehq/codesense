@@ -6,7 +6,6 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import {
-  CODESENSE_DOCS_README,
   CODESENSE_DOCS_SETUP,
   CODESENSE_DOCS_SLUG,
   CODESENSE_DOCS_TEAM,
@@ -45,11 +44,13 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
+/**
  * A page of the docs repo as a tab of its "Getting started" team. Says why when it can't: the
- * docs repo is not connected, or its team can't be selected.
+ * docs repo is not connected, or its team can't be selected. `pathIn` names the page's path
+ * from the docs repo root.
  */
 function openDocsPage(
-  relPath: string,
+  pathIn: (docsRoot: string) => string,
   options: { keepLayout?: boolean; hash?: string },
 ): "opened" | "no-docs" | "no-team" {
   const docs = useOrgStore.getState().orgs.find((org) => org.slug === CODESENSE_DOCS_SLUG);
@@ -62,8 +63,7 @@ function openDocsPage(
   if (activeOrgSlug !== CODESENSE_DOCS_SLUG || activeTeamName !== CODESENSE_DOCS_TEAM)
     return "no-team";
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-  const path = `${docs.org_root.replace(/[/\\]+$/, "")}/${relPath}`;
-  useViewerStore.getState().openFile(teamKey, "", path, {
+  useViewerStore.getState().openFile(teamKey, "", pathIn(docs.org_root), {
     ...(options.keepLayout ? { keepLayout: true } : {}),
     ...(options.hash ? { hash: options.hash } : {}),
   });
@@ -71,12 +71,12 @@ function openDocsPage(
 }
 
 /**
- * The docs README, as a landing (not the user's open: full-screen CLI stays on). A launch
- * that lands in the docs for a profile with a context repo of its own but no saved selection
- * opens this, so it never lands on an empty docs team.
+ * A start-up landing: open `path` (the Foreman page or the README) in the CodeSense docs
+ * repo's "Getting started" team as the active tab. No modal, no welcome screen. A landing,
+ * not the user's open: full-screen CLI stays on.
  */
-export function openCodesenseDocsReadme(): boolean {
-  return openDocsPage(CODESENSE_DOCS_README, { keepLayout: true }) === "opened";
+export function openCodesenseDocsLanding(path: string): void {
+  openDocsPage(() => path, { keepLayout: true });
 }
 
 /**
@@ -89,7 +89,7 @@ export function openCodesenseDocsReadme(): boolean {
  * False when the page can't open; a reopen (not a landing) says why in a toast.
  */
 export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
-  const result = openDocsPage(CODESENSE_DOCS_SETUP, {
+  const result = openDocsPage((root) => `${root.replace(/[/\\]+$/, "")}/${CODESENSE_DOCS_SETUP}`, {
     keepLayout: options.landing,
     hash: options.resume ? "#resume" : undefined,
   });

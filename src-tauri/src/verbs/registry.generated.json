@@ -4150,6 +4150,34 @@
     "module": "agent"
   },
   {
+    "name": "sessionRecord",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly.",
+    "audited": false,
+    "action": false,
+    "module": "agent"
+  },
+  {
     "name": "sessionUsage",
     "class": "read",
     "argsSchema": {

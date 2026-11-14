@@ -2094,6 +2094,54 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
 });
 
+const recordNudges = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-record-changed");
+
+it("nudges a session record with the session an agent's progress, end or exit names", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  for (const [event, payload] of [
+    ["mcp:agent-progress", { sessionId: "tab-1" }],
+    ["mcp:agent-done", { sessionId: "tab-1" }],
+    ["pty-exit", { session_id: "tab-1" }],
+  ] as const) {
+    post.mockClear();
+    events.get(event)!({ payload });
+    expect(recordNudges(post), event).toEqual([
+      { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    ]);
+  }
+  // An event that names no session is broad, and progress still nudges the activity listeners.
+  post.mockClear();
+  events.get("mcp:agent-progress")!({ payload: null });
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
+  expect(post.mock.calls.map(([m]) => m.type)).toContain("codesense:agent-activity-changed");
+});
+
+it("nudges a session record on usage stored for its sessions, one nudge per session", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("session-usage-changed")!({ payload: { sessionIds: ["tab-1", "tab-2"] } });
+  expect(recordNudges(post)).toEqual([
+    { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    { type: "codesense:session-record-changed", sessionId: "tab-2" },
+  ]);
+});
+
+it("a hidden frame holds one broad record nudge when two sessions changed while it was away", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("record", "all", post, false);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-1" } });
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-2" } });
+  expect(recordNudges(post)).toEqual([]);
+  frame.visible(true);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
+});
+
 it.each(["before", "after"])(
   "a hidden live team frame keeps broad changes arriving %s named rows on its timed flush",
   async (order) => {

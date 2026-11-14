@@ -5,13 +5,10 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { discoverLocalOrgs } from "@/shared/api/org";
-import { ensureCodesenseDocs, ensureSampleRepo } from "@/tauri/commands";
-import { CODESENSE_DOCS_SLUG, pickLaunchOrg } from "@/shared/lib/codesense-docs";
-import {
-  afterPersistedSelectionRestored,
-  openCodesenseDocsReadme,
-  openCodesenseSetup,
-} from "../lib/codesense-docs-landing";
+import { ensureCodesenseDocs, ensureSampleRepo, type CodesenseDocsResult } from "@/tauri/commands";
+import { pickLaunchOrg } from "@/shared/lib/codesense-docs";
+import { openStartLanding } from "@/features/foreman/open-foreman";
+import { afterPersistedSelectionRestored } from "../lib/codesense-docs-landing";
 import { loadOrg } from "@/shared/api/registry";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -88,8 +85,9 @@ export function useOrgDiscovery() {
         logger.info("boot", "org discovery: start");
         // SW-OC-16: every install has the CodeSense docs context repo. Place and connect
         // it before discovery so it is always one of the context repos found.
+        let docs: CodesenseDocsResult | null = null;
         try {
-          await promiseWithTimeout(ensureCodesenseDocs(), DOCS_PLACEMENT_TIMEOUT_MS, () => {
+          docs = await promiseWithTimeout(ensureCodesenseDocs(), DOCS_PLACEMENT_TIMEOUT_MS, () => {
             logger.warn("boot", "org discovery: CodeSense docs placement watchdog fired");
             return null;
           });
@@ -173,9 +171,10 @@ export function useOrgDiscovery() {
         const lastOpenedBeforeRefresh = previous.activeOrgSlug;
         setOrgs(loadedOrgs);
         // Later launches reopen the last opened context repo (and, through the per-repo
-        // memory, its last team). Only the very first launch, proven by a restored session
-        // with no last-opened repo and none of the person's own, lands in the CodeSense docs with
-        // the setup page open (its README stays reachable from the tree).
+        // memory, its last team); the very first launch, proven by a restored session with
+        // no last-opened repo and none of the person's own, picks the CodeSense docs. Then
+        // `openStartLanding` opens the setup page (first launch), the Foreman or the README
+        // in the docs, once per app start.
         stopDeciding = afterPersistedSelectionRestored(() => {
           if (cancelled) return;
           // The last-opened repo, whether the restore landed before `setOrgs` (which drops
@@ -189,10 +188,7 @@ export function useOrgDiscovery() {
           if (launch.slug && launch.slug !== useOrgStore.getState().activeOrgSlug) {
             setActiveOrg(launch.slug);
           }
-          if (launch.firstLaunch) openCodesenseSetup({ landing: true });
-          // Docs only because nothing was selected, with a repo of the person's own: the README.
-          else if (launch.slug === CODESENSE_DOCS_SLUG && restored === null)
-            openCodesenseDocsReadme();
+          if (docs) openStartLanding(docs.readme_path, launch.firstLaunch);
         });
       } catch (error) {
         reportTransient(error);

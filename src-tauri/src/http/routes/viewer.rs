@@ -327,7 +327,7 @@ const LIVE_HUB_JS: &str = include_str!("live_hub.js");
 /// by `pnpm gen:verbs` with `dashboard_kit/codesense.d.ts`, which declares the same methods.
 const VERB_METHODS_JS: &str = include_str!("verb_methods.generated.js");
 
-const DATA_READS_JS: &str = r#"(function(){var c=window.codesense;if(!c)return;function on(t){return function(cb){function h(e){if(e.source===window.parent&&e.data&&e.data.type===t)cb()}window.addEventListener('message',h);return function(){window.removeEventListener('message',h)}}}var m={routines:function(){return c.invoke('routines')},routine:function(a){return c.invoke('routine',a)},routineRuns:function(a){return c.invoke('routineRuns',a)},routineRun:function(a){return c.invoke('routineRun',a)},runs:function(a){return c.invoke('runs',a||{})},run:function(a){return c.invoke('run',a)},runEvidence:function(a){return c.invoke('runEvidence',a)},runWorkProduct:function(a){return c.invoke('runWorkProduct',a)},worktrees:function(){return c.invoke('worktrees')},machines:function(){return c.invoke('machines')},sessionRead:function(a){return c.invoke('sessionRead',a)},whyLine:function(a){return c.invoke('whyLine',a)},setup:function(){return c.invoke('setup')},storyChanges:function(a){return c.invoke('storyChanges',a)},sessionUsage:function(a){return c.invoke('sessionUsage',a||{})},modelRates:function(){return c.invoke('modelRates')},canPasteToTerminal:function(){return c.invoke('canPasteToTerminal')},onRoutinesChanged:on('codesense:routines-changed'),onMachinesChanged:on('codesense:machines-changed'),onWorktreesChanged:on('codesense:worktrees-changed'),onPasteTargetChanged:on('codesense:paste-target-changed')};for(var k in m)c[k]=m[k]})();"#;
+const DATA_READS_JS: &str = r#"(function(){var c=window.codesense;if(!c)return;function on(t){return function(cb,ids){function h(e){var d=e.data;if(e.source===window.parent&&d&&d.type===t&&(!ids||!d.sessionId||[].concat(ids).indexOf(d.sessionId)>=0))cb()}window.addEventListener('message',h);return function(){window.removeEventListener('message',h)}}}var m={routines:function(){return c.invoke('routines')},routine:function(a){return c.invoke('routine',a)},routineRuns:function(a){return c.invoke('routineRuns',a)},routineRun:function(a){return c.invoke('routineRun',a)},runs:function(a){return c.invoke('runs',a||{})},run:function(a){return c.invoke('run',a)},runEvidence:function(a){return c.invoke('runEvidence',a)},runWorkProduct:function(a){return c.invoke('runWorkProduct',a)},worktrees:function(){return c.invoke('worktrees')},machines:function(){return c.invoke('machines')},sessionRead:function(a){return c.invoke('sessionRead',a)},whyLine:function(a){return c.invoke('whyLine',a)},setup:function(){return c.invoke('setup')},storyChanges:function(a){return c.invoke('storyChanges',a)},sessionUsage:function(a){return c.invoke('sessionUsage',a||{})},sessionRecord:function(a){return c.invoke('sessionRecord',a)},modelRates:function(){return c.invoke('modelRates')},canPasteToTerminal:function(){return c.invoke('canPasteToTerminal')},onRoutinesChanged:on('codesense:routines-changed'),onMachinesChanged:on('codesense:machines-changed'),onWorktreesChanged:on('codesense:worktrees-changed'),onSessionRecordChanged:on('codesense:session-record-changed'),onPasteTargetChanged:on('codesense:paste-target-changed')};for(var k in m)c[k]=m[k]})();"#;
 
 #[derive(Deserialize)]
 pub struct ViewerQuery {
@@ -1954,6 +1954,7 @@ mod tests {
             ("whyLine:function(a)", "'whyLine',a"),
             ("setup:function()", "'setup'"),
             ("sessionUsage:function(a)", "'sessionUsage',a||{}"),
+            ("sessionRecord:function(a)", "'sessionRecord',a"),
             ("modelRates:function()", "'modelRates'"),
             ("canPasteToTerminal:function()", "'canPasteToTerminal'"),
         ] {
@@ -1967,6 +1968,7 @@ mod tests {
             ("onRoutinesChanged", "codesense:routines-changed"),
             ("onMachinesChanged", "codesense:machines-changed"),
             ("onWorktreesChanged", "codesense:worktrees-changed"),
+            ("onSessionRecordChanged", "codesense:session-record-changed"),
             ("onPasteTargetChanged", "codesense:paste-target-changed"),
         ] {
             assert!(DATA_READS_JS.contains(&format!("{on}:on('{event}')")));

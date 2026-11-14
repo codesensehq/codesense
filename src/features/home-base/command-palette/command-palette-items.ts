@@ -40,6 +40,7 @@ export type CommandPaletteSelection =
   | { kind: "account"; userId: number }
   | { kind: "create-team" }
   | { kind: "attach-repo" }
+  | { kind: "open-foreman" }
   | { kind: "open-pane"; panelId: string }
   | { kind: "command"; actionId: string }
   | { kind: "open-shortcuts" }
@@ -63,6 +64,8 @@ export function encodeSelection(sel: CommandPaletteSelection): string {
       return "create-team";
     case "attach-repo":
       return "attach-repo";
+    case "open-foreman":
+      return "open-foreman";
     case "open-pane":
       return `pane${SEP}${sel.panelId}`;
     case "command":
@@ -85,6 +88,7 @@ export function encodeSelection(sel: CommandPaletteSelection): string {
 export function decodeSelection(id: string): CommandPaletteSelection | null {
   if (id === "create-team") return { kind: "create-team" };
   if (id === "attach-repo") return { kind: "attach-repo" };
+  if (id === "open-foreman") return { kind: "open-foreman" };
   if (id === "open-shortcuts") return { kind: "open-shortcuts" };
   if (id === "open-routines") return { kind: "open-routines" };
   if (id === "open-agents") return { kind: "open-agents" };
@@ -160,6 +164,8 @@ export interface StaticIndexInputs {
   /** SW-RM-UI-1: the machine registry is available, so "Add machine…" can run —
    *  a palette command renders nothing until searched, so it adds no friction. */
   canAddMachine: boolean;
+  /** Foreman mail waits and no Foreman is live: the Foreman row shows a dot. */
+  foremanMailWaiting?: boolean;
   /** How many of the user's routines need them; shown on the Routines row above 0. */
   routinesNeedingYou: number;
   /** The custom right panes the active team sees, offered as "Open pane: …" (empty
@@ -256,6 +262,14 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
     id: encodeSelection({ kind: "open-scratch-space" }),
     label: "Private",
     sublabel: "action · open what only you see",
+    tier: CP_TIER.action,
+  });
+  // The Foreman is global: its page lives in the bundled docs, whichever team is open.
+  items.push({
+    id: encodeSelection({ kind: "open-foreman" }),
+    label: "Foreman",
+    sublabel: `action · open the Foreman${inputs.foremanMailWaiting ? " · mail waiting" : ""}`,
+    waiting: inputs.foremanMailWaiting === true,
     tier: CP_TIER.action,
   });
   if (inputs.canAttach) {
@@ -377,6 +391,7 @@ export interface CommandPaletteHandlers {
   openAgents: () => void;
   openSetup: () => void;
   openScratchSpace: () => void;
+  openForeman: () => void;
   addMachine: () => void;
 }
 
@@ -413,6 +428,9 @@ export function dispatchSelection(
     case "attach-repo":
       if (attachTargetTeam === null) return false;
       handlers.attachRepo(attachTargetTeam);
+      return true;
+    case "open-foreman":
+      handlers.openForeman();
       return true;
     case "open-pane":
       handlers.openPane(sel.panelId);

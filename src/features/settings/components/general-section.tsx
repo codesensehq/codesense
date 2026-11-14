@@ -346,6 +346,11 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
     label: "Agents list",
     keywords: ["agents", "list", "dock", "dashboard", "cli", "built-in", "html", "sidebar"],
   },
+  openForemanOnStart: {
+    key: "openForemanOnStart",
+    label: "Open the Foreman when CodeSense starts",
+    keywords: ["foreman", "start", "startup", "launch", "open", "welcome", "assistant"],
+  },
   osNotifications: {
     key: "osNotifications",
     label: "Notify when an agent needs you",
@@ -464,6 +469,7 @@ export function GeneralSection({ query }: { query: string }) {
           {visibleSet.has("quitOnClose") && isMac() && <QuitOnCloseRow />}
           {/* SV-8: the menu-bar item is macOS-only. */}
           {visibleSet.has("terminalServerMenuBar") && isMac() && <TerminalServerMenuBarRow />}
+          {visibleSet.has("openForemanOnStart") && <OpenForemanOnStartRow />}
           {visibleSet.has("osNotifications") && <OsNotificationsRow />}
           {visibleSet.has("notifyOnFinish") && <NotifyOnFinishRow />}
           {visibleSet.has("notificationSound") && <NotificationSoundRow />}
@@ -1709,6 +1715,30 @@ function WorktreeParallelismRow() {
           <p className="mt-1 text-[10px] text-muted-foreground">{footerCopy}</p>
         </>
       }
+    />
+  );
+}
+
+// ---------- The Foreman tab on start ----------
+
+function OpenForemanOnStartRow() {
+  // undefined means "use default (on)".
+  const raw = useViewerStore((s) => s.settings.openForemanOnStart);
+  const active = raw ?? true;
+  const updateSettings = useViewerStore((s) => s.updateSettings);
+  return (
+    <RadioGroupRow
+      label={GENERAL_ROW_SPECS.openForemanOnStart.label}
+      ariaLabel="Open the Foreman when CodeSense starts"
+      testId="settings-open-foreman-on-start"
+      value={active ? "on" : "off"}
+      options={[
+        { value: "on", label: "On" },
+        { value: "off", label: "Off" },
+      ]}
+      onChange={(v) => updateSettings({ openForemanOnStart: v === "on" })}
+      gridClassName="grid-cols-2"
+      buttonPaddingClassName="px-2 py-1.5"
     />
   );
 }

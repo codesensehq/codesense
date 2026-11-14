@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH } = await lib("fixture");
+const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS } =
+  await lib("fixture");
 const { loadExtraCases, grade } = await lib("graders");
 
 const extra = loadExtraCases();
@@ -246,6 +247,24 @@ test("setup-resume: a started ledger launches with resume, and the guide's first
   });
 });
 
+test("git access is a capability: the ledger step is git-access and the hand-back names a method, not gh", async () => {
+  assert.deepEqual(SETUP_STEPS, ["team", "source-repos", "git-access"]);
+  const id = "setup-handback";
+  await withFixture(caseOf(id), async (fx) => {
+    launchWith()({ fx, turns: caseOf(id).input.turns });
+    const text = fx.tool(F, "claim_role_messages", { role: HANDBACK_ROLE }).deliveries[0].text;
+    assert.match(text, /git access via git credentials/);
+    assert.doesNotMatch(text, /\bgh\b/);
+  });
+  assert.doesNotMatch(
+    caseOf(id)
+      .rubric.map((r) => r.ask)
+      .join(" "),
+    /\bgh\b/,
+  );
+  assert.ok(caseOf("setup-rerun").fixture.ledger.some((r) => r.step === "git-access"));
+});
+
 test("setup-handback: claim, ack, then exactly one reply", async () => {
   const launch = (fx, turns) => launchWith()({ fx, turns });
   await red("setup-handback", ({ fx, turns }) => launch(fx, turns), /did not claim the hand-back/);
@@ -302,14 +321,11 @@ test("a broken setup fixture is refused", async () => {
 
 test("the setup skill's hand-back block and the guide stub agree", () => {
   const skill = readFileSync(
-    new URL(
-      "../codesense-docs/getting-started/content/examples/skills/codesense-setup/SKILL.md",
-      import.meta.url,
-    ),
+    new URL("../codesense-docs/packs/codesense-guide/commands/codesense-setup.md", import.meta.url),
     "utf8",
   );
   const block = /<!-- foreman-handback -->([\s\S]*?)<!-- \/foreman-handback -->/.exec(skill)?.[1];
-  assert.ok(block, "SKILL.md has a foreman-handback block");
+  assert.ok(block, "the pack skill has a foreman-handback block");
   assert.ok(block.includes(`\`${HANDBACK_PREFIX}\``), "the block names the Setup done: prefix");
   assert.ok(block.includes(`role:${HANDBACK_ROLE}`), "the block names the queue");
   assert.match(block, /launched by another session/);

@@ -94,11 +94,11 @@ test("a profile that has opened a context repo before does not land on the setup
   expect(await setupTabs(page)).toBe(0);
 });
 
-test("a profile with a context repo of its own and no saved selection lands on the docs README, not the setup page", async ({
+test("a profile with a context repo of its own and no saved selection lands on the docs with the Foreman open, not the setup page", async ({
   page,
 }) => {
   await bootFresh(page, "/");
   await discovered(page);
-  await expect.poll(() => active(page)).toMatch(/README\.html$/);
+  await expect.poll(() => active(page)).toMatch(/foreman\/index\.html$/);
   expect(await setupTabs(page)).toBe(0);
 });

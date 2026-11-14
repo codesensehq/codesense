@@ -3,6 +3,7 @@
 # Then a reminder request gets the Foreman's no-timers answer.
 id: recover-error
 fixture:
+  git_access: gh
   fail_first_pr: true
 input:
   turns:

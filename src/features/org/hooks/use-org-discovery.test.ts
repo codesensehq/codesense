@@ -7,6 +7,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
 import { buildTeamKey } from "@/shared/lib/team-key";
+import { resetStartLanding } from "@/features/foreman/open-foreman";
 import { useOrgDiscovery } from "./use-org-discovery";
 
 // These bounds mirror the constants in use-org-discovery.ts (kept in sync here
@@ -223,6 +224,11 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
   const DOCS_ROOT = "/home/.codesense/users/guest/codesense-docs";
   const README = `${DOCS_ROOT}/getting-started/content/README.html`;
   const SETUP = `${DOCS_ROOT}/getting-started/content/guide/index.html`;
+  const FOREMAN = `${DOCS_ROOT}/getting-started/content/foreman/index.html`;
+  const DOCS_KEY = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
+  function openForemanOnStart(on: boolean) {
+    useViewerStore.setState((s) => ({ settings: { ...s.settings, openForemanOnStart: on } }));
+  }
   const docsSummary = {
     slug: CODESENSE_DOCS_SLUG,
     org_root: DOCS_ROOT,
@@ -252,6 +258,9 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetOrgStore();
+    // Each test is its own app start.
+    resetStartLanding();
+    openForemanOnStart(true);
     useViewerStore.setState({
       openedTeams: [],
       activeTab: {},
@@ -296,26 +305,45 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
     expect(viewer.activeTab[teamKey]).toBe(SETUP);
   });
 
+  it("first launch with the Foreman setting off: still the setup page, not the README", async () => {
+    openForemanOnStart(false);
+    discoverMock.mockResolvedValue([docsSummary]);
+    renderHook(() => useOrgDiscovery());
+    await settle();
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(SETUP);
+  });
+
   it("the setup landing keeps a full-screen CLI on: it is not the user's open", async () => {
     useViewerStore.setState({ layoutMode: "console", terminalVisible: true });
     discoverMock.mockResolvedValue([docsSummary]);
     renderHook(() => useOrgDiscovery());
     await settle();
-    const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
-    expect(useViewerStore.getState().activeTab[teamKey]).toBe(SETUP);
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(SETUP);
     expect(useViewerStore.getState().layoutMode).toBe("console");
   });
 
-  it("own context repo but no saved selection: lands in the docs with the README open, not the setup page", async () => {
+  it("own context repo but no saved selection: lands in the docs with the Foreman open, not the setup page", async () => {
     discoverMock.mockResolvedValue([docsSummary, ownSummary]);
     renderHook(() => useOrgDiscovery());
     await settle();
-    const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
     expect(useOrgStore.getState().activeOrgSlug).toBe(CODESENSE_DOCS_SLUG);
-    expect(useViewerStore.getState().activeTab[teamKey]).toBe(README);
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(FOREMAN);
   });
 
-  it("later launch: reopens the last opened context repo, not the docs, and opens no setup page", async () => {
+  it("docs-only repo that was last opened, setting off: the README", async () => {
+    openForemanOnStart(false);
+    useOrgStore.setState({
+      activeOrgSlug: CODESENSE_DOCS_SLUG,
+      activeTeamName: CODESENSE_DOCS_TEAM,
+    });
+    discoverMock.mockResolvedValue([docsSummary]);
+    renderHook(() => useOrgDiscovery());
+    await settle();
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(README);
+  });
+
+  it("later launch, setting off: reopens the last opened context repo, not the docs, and opens nothing", async () => {
+    openForemanOnStart(false);
     useOrgStore.setState({
       activeOrgSlug: "local/acme",
       activeTeamName: "billing",
@@ -332,6 +360,7 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
   });
 
   it("never picks the docs before the session is restored, however long that takes", async () => {
+    openForemanOnStart(false);
     useOrgStore.setState({ stateLoaded: false });
     discoverMock.mockResolvedValue([docsSummary, ownSummary]);
     const { result } = renderHook(() => useOrgDiscovery());
@@ -372,20 +401,29 @@ describe("useOrgDiscovery — launch landing (SW-OC-16)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(useOrgStore.getState().activeOrgSlug).toBe(CODESENSE_DOCS_SLUG);
-    expect(
-      useViewerStore.getState().activeTab[buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM)],
-    ).toBe(SETUP);
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(SETUP);
   });
 
-  it("a last-opened context repo that is gone falls back to the docs without the first-launch setup page", async () => {
+  it("a last-opened context repo that is gone falls back to the docs, where the Foreman opens, not the setup page", async () => {
     useOrgStore.setState({ activeOrgSlug: "local/deleted", activeTeamName: "x" });
     discoverMock.mockResolvedValue([docsSummary]);
     renderHook(() => useOrgDiscovery());
     await settle();
     expect(useOrgStore.getState().activeOrgSlug).toBe(CODESENSE_DOCS_SLUG);
-    expect(
-      useViewerStore.getState().activeTab[buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM)],
-    ).toBeUndefined();
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(FOREMAN);
+  });
+
+  it("later launch, setting on: the Foreman opens in the docs", async () => {
+    useOrgStore.setState({
+      activeOrgSlug: "local/acme",
+      activeTeamName: "billing",
+      lastTeamByOrgSlug: { "local/acme": "billing" },
+    });
+    discoverMock.mockResolvedValue([docsSummary, ownSummary]);
+    renderHook(() => useOrgDiscovery());
+    await settle();
+    expect(useViewerStore.getState().activeTab[DOCS_KEY]).toBe(FOREMAN);
+    expect(useOrgStore.getState().activeOrgSlug).toBe(CODESENSE_DOCS_SLUG);
   });
 
   it("a failed docs placement never blocks discovery of the user's own context repos", async () => {
