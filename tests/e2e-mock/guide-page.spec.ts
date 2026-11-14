@@ -117,7 +117,12 @@ async function open(page: Page, options: Options = {}) {
                       teams: [{ name: "getting-started", archived: false, sourceRepos: [] }],
                     },
                     ...(begun
-                      ? [{ slug: "acme", teams: [{ name: "web", archived: false, sourceRepos: [] }] }]
+                      ? [
+                          {
+                            slug: "acme",
+                            teams: [{ name: "web", archived: false, sourceRepos: [] }],
+                          },
+                        ]
                       : []),
                   ],
             };
