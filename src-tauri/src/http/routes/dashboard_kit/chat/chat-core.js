@@ -46,6 +46,23 @@ export function parseCard(text){
  const because=pick?after.replace(/`/g,'').trim().slice(pick.length).match(/^[\s,.;:-]*because\s+([\s\S]*?)\.?\s*$/i):null;
  return {question,options:pick?[pick,...options.filter(option=>option!==pick)]:options,pick,reason:because?because[1].trim():null};
 }
+// The agent's trailing suggestion line: `Next: `A`, `B`` (or `Next: A · B`, for a chip with a comma in it), the last line of a message. The text above it and the chips are returned; null when the message does not end with one.
+// One to four chips, each short and distinct and none a `<placeholder>`; anything else is not chips and stays text. The kit's chat and the overlay read it from here.
+const MAX_NEXT=4,MAX_CHIP=80;
+export function parseNext(text){
+ if(typeof text!=='string')return null;
+ const lines=text.split(/\r?\n/);
+ let at=lines.length-1;
+ while(at>=0&&!lines[at].trim())at--;
+ if(at<0||!/^\s*Next:/i.test(lines[at]))return null;
+ const rest=lines[at].replace(/^\s*Next:\s*/i,'');
+ const quoted=[...rest.matchAll(/`([^`]+)`/g)].map(match=>match[1].trim());
+ const chips=(quoted.length?quoted:rest.split('·').map(part=>part.trim())).filter(Boolean);
+ const distinct=new Set(chips.map(chip=>chip.toLowerCase()));
+ if(!chips.length||chips.length>MAX_NEXT||distinct.size!==chips.length)return null;
+ if(chips.some(chip=>chip.length>MAX_CHIP||/[<>]/.test(chip)))return null;
+ return {text:lines.slice(0,at).join('\n').trimEnd(),chips};
+}
 // A card is answered when the thread holds the person's own row replying to it, whichever place sent it (here or the Inbox). Returns {text, at} or null.
 export function cardAnswer(cardId,thread){
  const row=(Array.isArray(thread)?thread:[]).find(item=>item&&item.from==='human'&&item.inReplyTo===cardId);

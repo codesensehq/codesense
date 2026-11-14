@@ -17,6 +17,8 @@ export function createComposer({onSend,rows='2',label=CHAT_COPY.composerLabel,hi
    if(nextHint!==undefined)region.querySelector('.hint').textContent=nextHint;
    if(nextSend!==undefined)send.textContent=nextSend;
   },
+  // setText(text): puts text in the box for the person to edit (a chip's pencil), cursor at the end; false while the composer is disabled.
+  setText(text){if(input.disabled)return false;input.value=text;input.focus();input.setSelectionRange(text.length,text.length);return true;},
   // post(text): another control's message (a page's starter) on the same path as a typed one, refused while the composer is disabled. True when it went.
   post(text){if(!text||input.disabled)return false;onSend(text);return true;}};
 }

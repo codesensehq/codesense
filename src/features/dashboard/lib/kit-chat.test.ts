@@ -116,6 +116,7 @@ describe("kit.chat", () => {
       "deliveryMark",
       "isBusy",
       "parseCard",
+      "parseNext",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
       "mergeThread",
@@ -605,5 +606,137 @@ describe("kit.chat page layout and activity", () => {
     expect(row.compareDocumentPosition(s.el.querySelector(".log .msg")!)).toBe(
       Node.DOCUMENT_POSITION_PRECEDING,
     );
+  });
+});
+
+describe("kit.chat suggestion chips from the Next line", () => {
+  const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
+    messageId: id,
+    from,
+    text,
+    createdAtMs: at,
+  });
+  const chipsOf = (el: HTMLElement) =>
+    [...el.querySelectorAll<HTMLElement>(".chips [data-chip]")].map((node) => node.dataset.chip);
+  const bodies = (el: HTMLElement) =>
+    [...el.querySelectorAll(".log .msg .body")].map((node) => node.textContent);
+  const NEXT = "All set.\n\nNext: `Bring in my issues`, `What have you set up?`";
+
+  it("is off by default: the Next line stays in the message and no chips appear", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".chips")).toBeNull();
+    expect(bodies(s.el)).toEqual([NEXT]);
+  });
+
+  it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, { next: true });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues", "What have you set up?"]);
+    expect(bodies(s.el)).toEqual(["All set."]);
+    expect(s.el.querySelector(".chips")!.getAttribute("role")).toBe("group");
+    expect(s.el.querySelectorAll(".chips [data-chip-edit]").length).toBe(0);
+  });
+
+  it("a Next chip sends its text like a typed message, and the chips go once the person has sent", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, { next: true });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Bring in my issues"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenCalledWith("lead-1", "Bring in my issues");
+    expect(chipsOf(s.el)).toEqual([]);
+  });
+
+  it("offers no chips when the lead's newest message has no Next line, or the person spoke last", async () => {
+    const newer = setup([lead("idle")], [reply(1, NEXT), reply(2, "Working on it.")]);
+    mountOn(newer, { next: true });
+    await flush();
+    expect(chipsOf(newer.el)).toEqual([]);
+    const answered = setup([lead("idle")], [reply(1, NEXT), reply(2, "later", "human")]);
+    mountOn(answered, { next: true });
+    await flush();
+    expect(chipsOf(answered.el)).toEqual([]);
+  });
+
+  it("a card is not chips: a needs-you message keeps its own buttons", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          ...reply(1, "Create your team?\nOptions: `Do it`, `Not now`.\nNext: `a`, `b`"),
+          kind: "needs-you",
+        },
+      ],
+    );
+    mountOn(s, { next: true });
+    await flush();
+    expect(chipsOf(s.el)).toEqual([]);
+  });
+
+  it("static chips follow the Next chips, and a Next chip with the same label as a static one shows once", async () => {
+    const s = setup([lead("idle")], [reply(1, NEXT)]);
+    mountOn(s, {
+      next: true,
+      chips: [
+        { label: "What have you set up?", text: "What have you set up?" },
+        { label: "Status?", text: "What is the status?" },
+      ],
+    });
+    await flush();
+    expect(chipsOf(s.el)).toEqual(["Bring in my issues", "What have you set up?", "Status?"]);
+  });
+
+  describe("the edit pencil", () => {
+    const pencil = (el: HTMLElement, label: string) =>
+      el.querySelector<HTMLButtonElement>(`[data-chip-edit="${label}"]`);
+
+    it("next: {edit: true} adds a pencil that puts the text in the composer and sends nothing", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, { next: { edit: true } });
+      await flush();
+      const edit = pencil(s.el, "Bring in my issues")!;
+      expect(edit.getAttribute("aria-label")).toBe("Edit “Bring in my issues” before sending");
+      expect(edit.title).toBe("Edit before sending");
+      edit.click();
+      await flush();
+      const input = s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!;
+      expect(input.value).toBe("Bring in my issues");
+      expect(document.activeElement).toBe(input);
+      expect(input.selectionStart).toBe(input.value.length);
+      expect(s.send).not.toHaveBeenCalled();
+      // The person edits, then sends it: the edited text goes, not the chip's.
+      input.value += " from acme/web";
+      s.el.querySelector<HTMLButtonElement>("#sv-send")!.click();
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-1", "Bring in my issues from acme/web");
+    });
+
+    it("a static chip takes a pencil with edit: true, and without it has none", async () => {
+      const s = setup([lead("idle")]);
+      mountOn(s, {
+        chips: [
+          { label: "Status?", text: "What is the status?", edit: true },
+          { label: "Plain", text: "plain" },
+        ],
+      });
+      await flush();
+      expect(pencil(s.el, "Status?")).not.toBeNull();
+      expect(pencil(s.el, "Plain")).toBeNull();
+      pencil(s.el, "Status?")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe(
+        "What is the status?",
+      );
+    });
+
+    it("the pencil does nothing once the chat is done", async () => {
+      const s = setup([lead("idle")], [reply(1, NEXT)]);
+      mountOn(s, { next: { edit: true }, done: true });
+      await flush();
+      pencil(s.el, "Bring in my issues")!.click();
+      expect(s.el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.value).toBe("");
+    });
   });
 });

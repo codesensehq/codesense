@@ -35,7 +35,8 @@
     unload: "Messages you sent are still waiting for the story lead.",
     unloadKept: "Some messages weren't sent.",
     logLabel: "Story lead chat",
-    chips: "Quick replies"
+    chips: "Quick replies",
+    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" }
   };
   var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
   var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
@@ -128,6 +129,22 @@
     const pick = options.filter((option) => said.startsWith(option.toLowerCase()) && !/[a-z0-9]/.test(said.charAt(option.length))).sort((a, b) => b.length - a.length)[0] || null;
     const because = pick ? after.replace(/`/g, "").trim().slice(pick.length).match(/^[\s,.;:-]*because\s+([\s\S]*?)\.?\s*$/i) : null;
     return { question, options: pick ? [pick, ...options.filter((option) => option !== pick)] : options, pick, reason: because ? because[1].trim() : null };
+  }
+  var MAX_NEXT = 4;
+  var MAX_CHIP = 80;
+  function parseNext(text) {
+    if (typeof text !== "string") return null;
+    const lines = text.split(/\r?\n/);
+    let at = lines.length - 1;
+    while (at >= 0 && !lines[at].trim()) at--;
+    if (at < 0 || !/^\s*Next:/i.test(lines[at])) return null;
+    const rest = lines[at].replace(/^\s*Next:\s*/i, "");
+    const quoted = [...rest.matchAll(/`([^`]+)`/g)].map((match) => match[1].trim());
+    const chips = (quoted.length ? quoted : rest.split("·").map((part) => part.trim())).filter(Boolean);
+    const distinct = new Set(chips.map((chip) => chip.toLowerCase()));
+    if (!chips.length || chips.length > MAX_NEXT || distinct.size !== chips.length) return null;
+    if (chips.some((chip) => chip.length > MAX_CHIP || /[<>]/.test(chip))) return null;
+    return { text: lines.slice(0, at).join("\n").trimEnd(), chips };
   }
   function cardAnswer(cardId, thread) {
     const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
@@ -505,6 +522,14 @@
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
       },
+      // setText(text): puts text in the box for the person to edit (a chip's pencil), cursor at the end; false while the composer is disabled.
+      setText(text) {
+        if (input.disabled) return false;
+        input.value = text;
+        input.focus();
+        input.setSelectionRange(text.length, text.length);
+        return true;
+      },
       // post(text): another control's message (a page's starter) on the same path as a typed one, refused while the composer is disabled. True when it went.
       post(text) {
         if (!text || input.disabled) return false;
@@ -625,7 +650,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], activity = false, copy: words = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], next = false, activity = false, copy: words = null }) {
     const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, copy = words ? mergeCopy(words) : CHAT_COPY;
     const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
@@ -669,9 +694,25 @@
       fails.clear();
       launch.send(text);
     };
-    const chipsBox = chips.length ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }, ...chips.map((chip) => h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
-      if (!isDone) sendChip(chip.text);
-    } }, chip.label))) : null;
+    const nextOpt = next ? typeof next === "object" ? next : {} : null;
+    const pencil = () => {
+      const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("class", "ico");
+      svg.setAttribute("aria-hidden", "true");
+      path.setAttribute("d", "M4 20h4L19 9l-4-4L4 16z");
+      svg.append(path);
+      return svg;
+    };
+    const chipNode = (chip) => {
+      const main = h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
+        if (!isDone) sendChip(chip.text);
+      } }, chip.label);
+      return chip.edit ? h("span", { class: "pchip" }, main, h("button", { type: "button", class: "btn sm ed", "data-chip-edit": chip.label, "aria-label": copy.chipEdit.label(chip.label), title: copy.chipEdit.title, onclick: () => {
+        if (!isDone) composer.setText(chip.text);
+      } }, pencil())) : main;
+    };
+    const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
     el.replaceChildren(h("div", { class: variant ? `chatcol ${variant}` : "chatcol", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
@@ -792,6 +833,31 @@
       const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
       return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
     }
+    function nextChips() {
+      if (!nextOpt) return [];
+      const handles = leadHandles();
+      let newest = null, mine = 0;
+      for (const row of thread) {
+        const side = sideOf(row, handles), at = row.createdAtMs || 0;
+        if (side === "lead") {
+          if (!newest || at >= newest.at) newest = { row, at };
+        } else if (side === "you") mine = Math.max(mine, at);
+      }
+      for (const item of launch.messages) mine = Math.max(mine, item.sentAt);
+      if (!newest || newest.at < mine || cards !== false && newest.row.kind === "needs-you") return [];
+      const parsed = parseNext(newest.row.text || newest.row.summary || "");
+      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit) })) : [];
+    }
+    function paintChips() {
+      if (!chipsBox) return;
+      const list = [...nextChips(), ...chips], seen = /* @__PURE__ */ new Set(), shown = list.filter((chip) => !seen.has(chip.label) && seen.add(chip.label));
+      const sig = JSON.stringify(shown.map((chip) => [chip.label, chip.text, Boolean(chip.edit)]));
+      if (sig !== chipSig.v) {
+        chipSig.v = sig;
+        chipsBox.replaceChildren(...shown.map(chipNode));
+      }
+      chipsBox.hidden = !shown.length;
+    }
     function threadItems() {
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
       for (const row of thread) {
@@ -801,7 +867,9 @@
           continue;
         }
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
-        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, row.text, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: row.text || row.summary || "", mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
+        const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
+        if (nextOpt && side === "lead" && row.text && !shown) continue;
+        entries.push({ t: row.createdAtMs || 0, id: "m" + row.messageId, sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"), make: () => bubble({ id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, side) });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
@@ -839,6 +907,7 @@
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
       const act = activityItem(), want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
+      paintChips();
       pin.onContentChanged();
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
@@ -863,8 +932,8 @@
         render();
       }));
     }
-    function took(next) {
-      thread = next;
+    function took(next2) {
+      thread = next2;
       if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
       for (const row of thread) streams.delete(row.messageId);
       if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;
@@ -888,19 +957,19 @@
       fails.delete("thread");
       took(mergeThread(...lists));
     }
-    function onRows(next) {
+    function onRows(next2) {
       const firstRoster = !gotRows;
       gotRows = true;
       const before = live();
-      rows = next;
+      rows = next2;
       const now = live();
       if (now && now.state === "running" && (!before || before.state !== "running") && lastLiveState !== null) runningSince = clock.now();
       lastLiveState = now ? now.state : "none";
-      launch.rows(next);
+      launch.rows(next2);
       const moved = target.follow && (before && before.handle) !== (now && now.handle);
       if (moved) pin.reset();
-      const again = sources ? sources.seen(target.rows(next), firstRoster) : false;
-      if (!started || moved || again || target.rows(next).some((row) => !watched.has(row.sessionId))) {
+      const again = sources ? sources.seen(target.rows(next2), firstRoster) : false;
+      if (!started || moved || again || target.rows(next2).some((row) => !watched.has(row.sessionId))) {
         const more = started && Boolean(sources);
         const read = readThread(more);
         if (!started) firstRead = read;
@@ -980,6 +1049,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();
