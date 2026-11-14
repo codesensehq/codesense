@@ -13,6 +13,13 @@
 //   node scripts/pack-build.mjs --check    change nothing; exit 1 on any drift or error
 //   --root <dir>   a folder of packs (default codesense-docs/packs)
 //   --pack <dir>   one pack folder (built even with no skill part: a fixture or a new pack)
+//
+// What a failed build leaves behind. Every name, path, link, source and file is checked
+// before the first write, so a validation failure writes nothing. A write that fails after
+// that (a full disk, a directory where a copy goes, a leftover temporary name) stops the
+// build with a named error and removes its temporary file; copies written before it stay,
+// each whole, because every write is a temporary sibling and a rename. The guarantee is
+// whole files and no stray temporary, not an all-or-nothing set: rerun the build to finish.
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -21,6 +28,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -113,8 +121,13 @@ export function listPackFiles(dir) {
 /** Write through a temporary sibling and a rename, so a failed write leaves the old file. */
 function writeAtomic(path, bytes) {
   const temp = join(dirname(path), `.${basename(path)}.pack-build-${process.pid}`);
-  writeFileSync(temp, bytes, { flag: "wx" });
-  renameSync(temp, path);
+  try {
+    writeFileSync(temp, bytes, { flag: "wx" });
+    renameSync(temp, path);
+  } catch (e) {
+    rmSync(temp, { force: true });
+    throw e;
+  }
 }
 
 export function skillCopies(manifest) {
@@ -130,6 +143,17 @@ export function skillCopies(manifest) {
   return copies;
 }
 
+/** `lstat` of a path, or null when it doesn't exist. */
+function statOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// Defense in depth for the target: `partErrors` has already fixed the name, and the
+// `TARGET_PATHS` prefixes are constant, so a built copy can't leave the pack today.
 const insidePack = (dir, rel) => {
   const full = resolve(dir, rel);
   return !rel.startsWith("/") && (full === dir || full.startsWith(dir + sep));
@@ -240,23 +264,24 @@ export function buildPack(dir, { check = false, force = false } = {}) {
       }
   }
   // Nothing is read or written until every name, path and link is known to be safe.
-  if (errors.length) return { errors: [...new Set(errors)], written };
+  if (errors.length) return { errors, written };
 
   // Plan every change first; nothing is written unless the whole pack is clean.
   const plan = new Map();
   for (const copy of copies) {
     const sourcePath = join(dir, copy.source);
-    if (!existsSync(sourcePath)) {
+    const sourceStat = statOrNull(sourcePath);
+    if (!sourceStat) {
       errors.push(`${copy.part}: skill source ${copy.source} is missing or outside the pack`);
       continue;
     }
-    if (!lstatSync(sourcePath).isFile()) {
+    if (!sourceStat.isFile()) {
       errors.push(`${copy.source}: not a regular file`);
       continue;
     }
     const source = readFileSync(sourcePath);
     const target = join(dir, copy.path);
-    const current = existsSync(target) && lstatSync(target).isFile() ? readFileSync(target) : null;
+    const current = statOrNull(target)?.isFile() ? readFileSync(target) : null;
     if (current && sha256(current) === sha256(source)) continue;
     if (check)
       errors.push(
@@ -308,17 +333,21 @@ export function buildPack(dir, { check = false, force = false } = {}) {
   errors.push(...chatCodeErrors(dir, manifest, present));
   if (errors.length || check) return { errors, written };
 
-  for (const [path, bytes] of plan) {
-    const target = join(dir, path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeAtomic(target, bytes);
-    written.push(path);
-  }
+  const write = (path, bytes) => {
+    try {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeAtomic(join(dir, path), bytes);
+      written.push(path);
+    } catch (e) {
+      errors.push(`${path}: cannot write: ${e.code ?? e.message.split("\n")[0]}`);
+    }
+    return errors.length === 0;
+  };
+  for (const [path, bytes] of plan) if (!write(path, bytes)) return { errors, written };
   if (relist) {
     const doc = parseDocument(text);
     doc.set("files", doc.createNode(wanted));
-    writeAtomic(manifestPath, doc.toString({ lineWidth: 0 }));
-    written.push("pack.yml");
+    write("pack.yml", doc.toString({ lineWidth: 0 }));
   }
   return { errors, written };
 }
@@ -339,7 +368,7 @@ export function run(dirs, { check, force = false }) {
     const { errors, written, legacy } = buildPack(dir, { check, force });
     if (legacy)
       console.log(`pack-build: ${name}: legacy pack (no skill parts, no files), schema ok`);
-    for (const e of errors) console.error(`pack-build: ${name}: ${e}`);
+    for (const e of new Set(errors)) console.error(`pack-build: ${name}: ${e}`);
     for (const w of written) console.log(`pack-build: ${name}: wrote ${w}`);
     if (errors.length) failed = true;
   }
