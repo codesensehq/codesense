@@ -5681,6 +5681,26 @@ describe("the Agents pane, round two", () => {
     });
   });
 
+  it("a headless run, even mid-turn, has no chat icon, M or inbox menu items", async () => {
+    listResult = [row({ handle: "batch", kind: "headless" })];
+    hooked("sid-batch");
+    // Its MCP signals name its CLI, which would make a tab's session a running agent.
+    useAgentStateStore.setState((s) => ({
+      bySession: { ...s.bySession, "sid-batch": { ...s.bySession["sid-batch"], agent: "claude" } },
+    }));
+    renderList();
+    const headless = await screen.findByRole("button", { name: agentRow(/batch/) });
+    expect(
+      within(headless.closest(".ag-row") as HTMLElement).queryByTestId("agent-row-message"),
+    ).toBeNull();
+    fireEvent.keyDown(headless, { key: "m" });
+    expect(screen.queryByRole("dialog", { name: /Messages with batch/ })).toBeNull();
+    fireEvent.contextMenu(headless);
+    expect(await screen.findByRole("menuitem", { name: "Open run output" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open inbox" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Message in inbox" })).toBeNull();
+  });
+
   it("a utility launcher keeps its children but has no inbox menu or M shortcut", async () => {
     listResult = [
       row({ handle: "utility", kind: "live-pty" }),

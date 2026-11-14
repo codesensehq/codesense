@@ -1,0 +1,4 @@
+id: one
+name: One
+runtime: claude
+args: [--permission-mode=bypassPermissions]

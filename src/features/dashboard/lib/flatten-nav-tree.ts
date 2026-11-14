@@ -7,7 +7,7 @@ import type { BlockedDep } from "@/shared/lib/pipeline-graph/resolve-nav-readine
 import { isInstalledNavPath } from "@/shared/lib/pipeline-graph/composite-to-repo-scan";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
 import { storyMetadataTitle } from "@/shared/lib/pipeline-graph/story-display-title";
-import { compareNavNames, orderSubEpics, type NodeCounts } from "./nav-ordering";
+import { compareNavNames, navTextMatches, orderSubEpics, type NodeCounts } from "./nav-ordering";
 import { normalizePinPath, type NavPinMeta, type PinnedNavItem } from "./nav-pins";
 import { STAGE_GROUPS } from "@/shared/lib/nav-lens";
 
@@ -216,12 +216,12 @@ export function buildNavSearchFilter(args: {
   const matchedDirPaths = new Set<string>();
   const ancestorDirPaths = new Set<string>();
 
-  const matches = (name: string): boolean => name.toLowerCase().includes(q);
+  const matches = (name: string): boolean => navTextMatches(q, name);
   /** A non-story row matches only by name, and only while files are listed at all. */
   const fileMatches = (name: string): boolean => !storiesOnly && matches(name);
   const storyMatches = (s: StoryRef): boolean =>
     (!storyFilter || storyFilter(s)) &&
-    (!q || matches(s.fileName) || matches(storyMetadataTitle(s) ?? "") || matches(s.storyId ?? ""));
+    (!q || navTextMatches(q, s.fileName, storyMetadataTitle(s), s.storyId));
 
   const markAncestors = (parents: readonly string[]) => {
     for (const p of parents) ancestorDirPaths.add(p);

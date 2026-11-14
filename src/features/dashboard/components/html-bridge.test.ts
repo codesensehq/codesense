@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { setDashboardLaunchController, type DashboardLaunchController } from "./dashboard-launch";
 import { liveHub } from "../lib/live-hub";
+import type { AgentPinsOp } from "@/tauri/commands";
 
 const mockGetDependencyStatus = vi.fn();
 const mockAnalyze = vi.fn();
@@ -45,6 +46,8 @@ const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
 const mockReactAsHuman = vi.fn();
+const mockAgentPins = vi.fn();
+const mockAgentPinsPrepareView = vi.fn();
 const mockAgentDefinitionsPrepare = vi.fn();
 const mockMarkInboxMessagesRead = vi.fn();
 const mockMarkInboxMessagesUnread = vi.fn();
@@ -66,12 +69,15 @@ const mockSessionReadUsage = vi.fn();
 const mockSessionRead = vi.fn();
 const mockWhyLine = vi.fn();
 const mockSetupStatus = vi.fn();
+const mockAgentLaunchOpen = vi.fn();
+const mockSetupState = vi.fn();
 const mockSessionSetModelRate = vi.fn();
 const mockSessionReadModelRates = vi.fn();
 vi.mock("@/tauri/commands", () => ({
   fileSurfaceCall: (...args: unknown[]) => mockFileSurfaceCall(...args),
   fileSurfacePrepareView: (...args: unknown[]) => mockFileSurfacePrepareView(...args),
   sendPromptToAgent: (...args: unknown[]) => mockSendPromptToAgent(...args),
+  agentLaunchOpen: (...a: unknown[]) => mockAgentLaunchOpen(...a),
   routineReadList: (...a: unknown[]) => mockRoutineReadList(...a),
   routineReadGet: (...a: unknown[]) => mockRoutineReadGet(...a),
   routineReadRuns: (...a: unknown[]) => mockRoutineReadRuns(...a),
@@ -86,6 +92,7 @@ vi.mock("@/tauri/commands", () => ({
   sessionRead: (...a: unknown[]) => mockSessionRead(...a),
   whyLine: (...a: unknown[]) => mockWhyLine(...a),
   setupStatus: (...a: unknown[]) => mockSetupStatus(...a),
+  setupState: (...a: unknown[]) => mockSetupState(...a),
   sessionSetModelRate: (...a: unknown[]) => mockSessionSetModelRate(...a),
   sessionReadModelRates: (...a: unknown[]) => mockSessionReadModelRates(...a),
   queryContext: (q: unknown, page?: string) => mockQueryContext(q, page),
@@ -111,6 +118,8 @@ vi.mock("@/tauri/commands", () => ({
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
+  agentPins: (...a: unknown[]) => mockAgentPins(...a),
+  agentPinsPrepareView: (...a: unknown[]) => mockAgentPinsPrepareView(...a),
   agentDefinitionsPrepare: (...a: unknown[]) => mockAgentDefinitionsPrepare(...a),
   markInboxMessagesRead: (...a: unknown[]) => mockMarkInboxMessagesRead(...a),
   markInboxMessagesUnread: (...a: unknown[]) => mockMarkInboxMessagesUnread(...a),
@@ -303,6 +312,8 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "openTab",
       "openWorkspace",
       "page",
+      "pin",
+      "pins",
       "postMessage",
       "prefs",
       "queryContext",
@@ -319,6 +330,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "records.search",
       "records.setFields",
       "records.write",
+      "reorderPins",
       "replyAsHuman",
       "roles",
       "routeToContext",
@@ -351,6 +363,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "setStatus",
       "setUiState",
       "setup",
+      "setupState",
       "showMenu",
       "showPopover",
       "stopSession",
@@ -358,6 +371,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "storyTotals",
       "subscribe",
       "unarchive",
+      "unpin",
       "unsubscribe",
       "updates",
       "validateYaml",
@@ -954,6 +968,79 @@ describe("draft action verb", () => {
     await expect(runBridgeCommand("draft", { level: "", from: "/a" })).rejects.toThrow(
       /non-empty strings/,
     );
+  });
+});
+
+describe("openWorkspace team-workspace target", () => {
+  const page = {
+    target: { kind: "team-workspace", name: "Foreman", worktree: "foreman", createWorktree: true },
+    agent: "foreman-claude",
+    model: "opus",
+    role: "foreman",
+    initialPrompt: "Hello",
+    mode: "visible-unfocused",
+  };
+
+  beforeEach(() => mockAgentLaunchOpen.mockReset());
+
+  it("launches through the native team launch, not the story controller", async () => {
+    const opened = { status: "opened", handle: "h", name: "Foreman", message: "Opened Foreman." };
+    mockAgentLaunchOpen.mockResolvedValue(opened);
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toEqual(opened);
+    expect(mockAgentLaunchOpen).toHaveBeenCalledWith({
+      target: "team-workspace",
+      name: "Foreman",
+      worktree: "foreman",
+      createWorktree: true,
+      team: undefined,
+      org: undefined,
+      agent: "foreman-claude",
+      model: "opus",
+      role: "foreman",
+      initialPrompt: "Hello",
+      mode: "visible-unfocused",
+    });
+  });
+
+  it("returns a refusal the page can match, never throws it", async () => {
+    const refusal = {
+      status: "invalid",
+      handle: null,
+      name: null,
+      message: "default has no worktree named 'foreman'. Pass createWorktree:true to create it",
+    };
+    mockAgentLaunchOpen.mockResolvedValue(refusal);
+    await expect(
+      runBridgeCommand("openWorkspace", {
+        target: { kind: "team-workspace", name: "Foreman", worktree: "foreman" },
+      }),
+    ).resolves.toEqual(refusal);
+    expect(mockAgentLaunchOpen.mock.calls[0][0].createWorktree).toBeUndefined();
+  });
+
+  it("reports a repeat launch as alreadyLive", async () => {
+    mockAgentLaunchOpen.mockResolvedValue({ status: "alreadyLive", handle: "h", name: "Foreman" });
+    await expect(runBridgeCommand("openWorkspace", page)).resolves.toMatchObject({
+      status: "alreadyLive",
+    });
+  });
+
+  it.each([
+    [{ target: { kind: "team-workspace" } }, /needs a \{ name \}/],
+    [{ target: { kind: "team-workspace", name: " " } }, /name, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", createWorktree: "yes" } },
+      /createWorktree, if present, must be a boolean/,
+    ],
+    [{ target: { kind: "team-workspace", name: "F" }, mode: "loud" }, /mode, if present/],
+    [{ target: { kind: "team-workspace", name: "F" }, model: " " }, /model, if present/],
+    [
+      { target: { kind: "team-workspace", name: "F", profile: "dev" } },
+      /^invalid: openWorkspace launches/,
+    ],
+  ])("refuses a malformed call %#", async (args, message) => {
+    await expect(runBridgeCommand("openWorkspace", args)).rejects.toThrow(message);
+    expect(mockAgentLaunchOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -1880,6 +1967,131 @@ describe("agents read model verbs", () => {
     expect(METADATA_ACTION_VERBS).toContain("react");
   });
 
+  it("pins then reads an agent thread's pin list in the doc's team", async () => {
+    // A one-thread engine double: the bridge must hand each call to the engine with the
+    // doc's team and the thread, so a pin is what the next read returns.
+    const pins: number[] = [];
+    mockAgentPins.mockImplementation(
+      async (team: unknown, agentId: string, storyId: string | null, call: AgentPinsOp) => {
+        if (call.op === "pin") pins.splice(call.position ?? pins.length, 0, call.messageId);
+        if (call.op === "unpin") pins.splice(pins.indexOf(call.messageId), 1);
+        if (call.op === "reorder") pins.splice(0, pins.length, ...call.messageIds);
+        return {
+          status: "pins",
+          ...(team as object),
+          agentId,
+          storyId: storyId ?? "",
+          pins: pins.map((messageId, position) => ({ messageId, position })),
+        };
+      },
+    );
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    await runBridgeCommand("pin", { ...thread, messageId: 7 }, DOC);
+    await runBridgeCommand("pin", { ...thread, messageId: 3, position: 0 }, DOC);
+    const read = (await runBridgeCommand("pins", thread, DOC)) as {
+      pins: Array<{ messageId: number }>;
+      team: string;
+    };
+    expect(read.pins.map((p) => p.messageId)).toEqual([3, 7]);
+    expect(read.team).toBe("default");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "pin",
+      messageId: 3,
+      position: 0,
+    });
+    await runBridgeCommand("reorderPins", { ...thread, messageIds: [7, 3] }, DOC);
+    await runBridgeCommand("unpin", { ...thread, messageId: 7 }, DOC);
+    const after = (await runBridgeCommand("pins", thread, DOC)) as {
+      pins: Array<{ messageId: number }>;
+    };
+    expect(after.pins.map((p) => p.messageId)).toEqual([3]);
+    // No story: the thread of a session launched with none.
+    await runBridgeCommand("pins", { agentId: "acme/default/dev" }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "acme/default/dev", null, {
+      op: "read",
+    });
+    expect(METADATA_ACTION_VERBS).toEqual(expect.arrayContaining(["pin", "unpin", "reorderPins"]));
+    expect(READ_VERBS).toContain("pins");
+  });
+
+  it("refuses a pins call with no thread, a bad message id or a bad position", async () => {
+    mockAgentPins.mockReset();
+    await expect(runBridgeCommand("pins", {}, DOC)).rejects.toThrow(/pins: \{agentId\}/);
+    await expect(runBridgeCommand("pin", { agentId: "a", messageId: "7" }, DOC)).rejects.toThrow(
+      /messageId/,
+    );
+    await expect(
+      runBridgeCommand("pin", { agentId: "a", messageId: 7, position: -1 }, DOC),
+    ).rejects.toThrow(/pin: position/);
+    await expect(
+      runBridgeCommand("reorderPins", { agentId: "a", messageIds: "7" }, DOC),
+    ).rejects.toThrow(/messageIds/);
+    for (const preview of ["5 of 5", ["QA"], null]) {
+      await expect(
+        runBridgeCommand("pin", { agentId: "a", messageId: 7, preview }, DOC),
+      ).rejects.toThrow(/pin: preview/);
+    }
+    expect(mockAgentPins).not.toHaveBeenCalled();
+  });
+
+  it("hands a pin's preview to the engine as the page sent it", async () => {
+    mockAgentPins.mockResolvedValue({ status: "invalid", message: "unused" });
+    const preview = {
+      shortName: "QA",
+      value: "5 of 5",
+      unit: "ACs traced",
+      status: "on-track",
+      chart: { kind: "segments", segments: ["on-track", "needs-you"], label: "1 of 2" },
+      lines: ["Checks green on the merged head"],
+    };
+    await runBridgeCommand("pin", { agentId: "a", messageId: 7, preview }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "a", null, {
+      op: "pin",
+      messageId: 7,
+      position: undefined,
+      preview,
+    });
+  });
+
+  it("a pins subscription prepares the thread's view in the doc's team", async () => {
+    const viewKey = "pins:acme/default:acme/default/dev:DEMO-1";
+    mockAgentPinsPrepareView.mockResolvedValueOnce(viewKey);
+    const subscribe = vi.fn(async () => ({ topic: "pins", viewKey, rev: 1, snapshot: [] }));
+    await runBridgeCommand(
+      "subscribe",
+      { topic: "pins", agentId: "acme/default/dev", storyId: "DEMO-1" },
+      { ...DOC, liveFrame: async () => ({ subscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1");
+    expect(subscribe).toHaveBeenCalledWith("pins", undefined, { viewKey });
+  });
+
+  it("a pins unsubscribe names the thread's view without preparing one", async () => {
+    const unsubscribe = vi.fn(async () => undefined);
+    await runBridgeCommand(
+      "unsubscribe",
+      { topic: "pins", agentId: "acme/default/dev@4", storyId: "DEMO-1" },
+      { ...DOC, liveFrame: async () => ({ unsubscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledWith("pins", {
+      viewKey: "pins:acme/default:acme/default/dev:DEMO-1",
+    });
+  });
+
+  it("a page on the pins topic prepares no view: pins has no pages to turn", async () => {
+    const page = vi.fn();
+    await expect(
+      runBridgeCommand(
+        "page",
+        { topic: "pins", cursor: "c", agentId: "acme/default/dev", storyId: "DEMO-1" },
+        { ...DOC, liveFrame: async () => ({ page }) as never },
+      ),
+    ).rejects.toThrow(/pins topic has no pages/);
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(page).not.toHaveBeenCalled();
+  });
+
   it("agents carries each definition's avatar for faces of ended sessions", async () => {
     mockAgentDefinitionsPrepare.mockResolvedValue({
       topic: "agentDefinitions",
@@ -2295,6 +2507,7 @@ describe("routine, run, worktree and machine read verbs", () => {
       "sessionRead",
       "whyLine",
       "setup",
+      "setupState",
       "storyChanges",
       "storyTotals",
       "sessionUsage",
@@ -2411,6 +2624,32 @@ describe("routine, run, worktree and machine read verbs", () => {
     mockSetupStatus.mockResolvedValue(answer);
     await expect(runBridgeCommand("setup", undefined, DOC)).resolves.toBe(answer);
     expect(mockSetupStatus).toHaveBeenCalledWith();
+  });
+
+  it("setupState is the read-only orgs, teams and source repos, passed through unchanged", async () => {
+    const answer = {
+      orgs: [
+        {
+          slug: "acme/ctx",
+          displayName: "Acme",
+          loadErrors: [],
+          teams: [
+            {
+              name: "docs",
+              archived: false,
+              parentTeam: null,
+              synced: true,
+              sourceRepos: [
+                { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    mockSetupState.mockResolvedValue(answer);
+    await expect(runBridgeCommand("setupState", undefined, DOC)).resolves.toBe(answer);
+    expect(mockSetupState).toHaveBeenCalledWith();
   });
 
   it("worktrees is list_worktrees; machines is list_machines for the doc's own team", async () => {

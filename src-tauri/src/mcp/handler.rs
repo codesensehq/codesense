@@ -32,6 +32,7 @@ use super::avatar_tools;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
+use super::probe_environment::ProbeEnvironmentParams;
 use super::routine_tools;
 use super::setup_tools;
 #[cfg(test)]
@@ -2414,6 +2415,12 @@ impl CodesenseHandler {
                         "available": status.git.available,
                         "path": status.git.path,
                         "version": status.git.version,
+                    },
+                    "gh": {
+                        "available": status.gh.available,
+                        "path": status.gh.path,
+                        "version": status.gh.version,
+                        "resolving": status.gh.resolving,
                     },
                     // Per-agent status keyed by agent basename (was a single
                     // `claude` field). Each entry is `{available, path, resolving}`;
@@ -6258,6 +6265,39 @@ impl CodesenseHandler {
     }
 
     #[tool(
+        description = "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned."
+    )]
+    async fn probe_environment(
+        &self,
+        Parameters(params): Parameters<ProbeEnvironmentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = crate::mcp::probe_environment::probe_environment_request(
+            self.app_handle.clone(),
+            params,
+        )
+        .await
+        .map_err(|e| ErrorData::invalid_params(format!("probe_environment: {e}"), None))?;
+        ok_json(report)
+    }
+
+    #[tool(
+        description = "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`)."
+    )]
+    async fn pack_validate(
+        &self,
+        Parameters(params): Parameters<PackValidateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let report = pack_validate_request(
+            self.app_handle.clone(),
+            self.connection_session(),
+            self.remote_team().map(Into::into),
+            params.path,
+        )
+        .await?;
+        ok_json(report)
+    }
+
+    #[tool(
         description = "Set epic repos — add/remove the source repos an epic workspace assembles by rewriting the epic doc `repos:` frontmatter (the source of truth). Read-modify-write: pass the FULL desired list (not a delta); each entry is a canonical `owner/repo`, and duplicates/formatting are normalized. REJECTED if the target is not an epic doc. After the write, CodeSense re-assembles the epic's integration worktrees in the background (non-blocking — this call returns immediately). Inputs: `epicFilePath` (the epic main-doc path — pass your `$CODESENSE_EPIC_DOC_PATH`), `repos` (the full desired `owner/repo` list; an empty list clears it). Returns the re-read list."
     )]
     async fn set_epic_repos(
@@ -6716,6 +6756,23 @@ impl CodesenseHandler {
         let explicit = params.session_id.clone();
         let caller = self.inbox_caller(explicit.as_deref(), connection.as_deref())?;
         super::caller_tools::react(&host, caller, params).await
+    }
+
+    #[tool(
+        description = "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}."
+    )]
+    async fn pin(
+        &self,
+        Parameters(params): Parameters<PinParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use crate::commands::agent_inbox::AppInboxHost;
+        let host = AppInboxHost {
+            app: self.app_handle.clone(),
+        };
+        let connection = self.connection_session();
+        let explicit = params.session_id.clone();
+        let caller = self.inbox_caller(explicit.as_deref(), connection.as_deref())?;
+        super::caller_tools::pin(&host, caller, params).await
     }
 
     // Full description: `feedback_tool::DESCRIPTION`, set in `served_tool_router`.
@@ -10485,6 +10542,35 @@ async fn read_epic_repos_request<R: tauri::Runtime>(
     .map_err(|e| ErrorData::invalid_params(format!("read_epic_repos: {e}"), None))
 }
 
+/// Validate before reading, so a path outside the caller's context never reaches the checks.
+async fn pack_validate_request<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session: Option<String>,
+    remote: Option<commands::dashboard_launch::LaunchTeam>,
+    path: String,
+) -> Result<serde_json::Value, ErrorData> {
+    let scope =
+        crate::context_repo::caller_scope::for_session(&app, session.as_deref(), remote).await;
+    commands::await_blocking("mcp.pack_validate", move || {
+        let path = std::path::Path::new(&path);
+        if !path.is_absolute() {
+            return Err("path is the pack folder's absolute path".to_string());
+        }
+        scope.existing(path)?;
+        commands::files::validate_context_path_for(path, &app, &scope)?;
+        // The walk reads the folder's real path, so that is the one held to the scope.
+        let real = std::fs::canonicalize(path).map_err(|_| "not a folder".to_string())?;
+        scope.existing(&real)?;
+        commands::files::validate_context_path_for(&real, &app, &scope)?;
+        if !real.is_dir() {
+            return Err("not a folder".to_string());
+        }
+        serde_json::to_value(crate::packs::validate::validate_dir(&real)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ErrorData::invalid_params(format!("pack_validate: {e}"), None))
+}
+
 fn dispatch_rendered_document_request<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path_str: &str,
@@ -12224,6 +12310,10 @@ pub struct OpenWorkspaceParams {
     /// `builtin/claude-unattended` for a headless open.
     #[serde(default)]
     pub agent: Option<String>,
+    /// The model to run (with `target`), such as `opus` or `sonnet`: passed to the agent's CLI
+    /// as `--model <model>` after the agent's own args. Omitted, the agent's own model.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Who is launching: your `$CODESENSE_TAB_SESSION_ID`. Omit when a person asked.
     /// Shown as "Launched by"; nothing is checked against it.
     #[serde(default, alias = "launchedBy")]
@@ -12425,6 +12515,28 @@ pub struct ReactParams {
     #[serde(default)]
     pub remove: Option<bool>,
     /// Omit to react as this connection's verified tab. If supplied, it must name that
+    /// same tab. An unbound connection is refused.
+    #[serde(default, alias = "sessionId")]
+    pub session_id: Option<String>,
+}
+
+/// Pin a message into the caller's own thread, or unpin it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct PinParams {
+    /// The message to pin, from `send_message`, `reply` or `read_messages`.
+    #[serde(alias = "messageId")]
+    pub message_id: i64,
+    /// Where it goes among the pins: 0 is first; omitted or past the end, it goes last.
+    #[serde(default)]
+    pub position: Option<u32>,
+    /// `true` unpins it.
+    #[serde(default)]
+    pub remove: Option<bool>,
+    /// What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.
+    /// On a message already pinned it replaces that pin's preview.
+    #[serde(default)]
+    pub preview: Option<crate::weft::pins::PinPreview>,
+    /// Omit to pin as this connection's verified tab. If supplied, it must name that
     /// same tab. An unbound connection is refused.
     #[serde(default, alias = "sessionId")]
     pub session_id: Option<String>,
@@ -14740,6 +14852,14 @@ pub struct ReadEpicReposParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct PackValidateParams {
+    /// The pack folder's absolute path: the one holding `pack.yml`, inside a context repo
+    /// you can read.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SetEpicReposParams {
     /// The epic main-doc path — pass your `$CODESENSE_EPIC_DOC_PATH`.
     pub epic_file_path: String,
@@ -16784,6 +16904,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn open_workspace_accepts_a_model_for_a_targeted_launch() {
+        let request: OpenWorkspaceParams = serde_json::from_value(
+            json!({ "target": "team-workspace", "name": "Agent", "model": "sonnet" }),
+        )
+        .unwrap();
+        assert_eq!(request.model.as_deref(), Some("sonnet"));
+        let request: OpenWorkspaceParams =
+            serde_json::from_value(json!({ "target": "team-workspace", "name": "Agent" })).unwrap();
+        assert_eq!(request.model, None);
+    }
+
+    #[test]
     fn list_worktrees_advertises_optional_context_filters_without_new_tools() {
         let tool = CodesenseHandler::served_tool_router()
             .list_all()
@@ -17101,6 +17233,10 @@ pub(crate) mod tests {
         // (the shipped epic-workspace cores, MCP-exposed for epic-scoped agents).
         "read_epic_repos",
         "set_epic_repos",
+        // Read-only look at this Mac for the setup guide.
+        "probe_environment",
+        // Read-only pack folder validator.
+        "pack_validate",
         // Git-sync verb surface. `get_publish_set` is also a Tauri
         // command (the session-less picker). The 7th verb
         // (`gs_snapshot`) is the in-memory snapshot primitive.
@@ -17170,6 +17306,7 @@ pub(crate) mod tests {
         "read_messages",
         "reply",
         "react",
+        "pin",
         "who_am_i",
         // Beta feedback from an agent, through the form's path (beta builds only).
         "feedback_send",

@@ -2094,21 +2094,52 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
 });
 
-it("nudges every frame to reread a session record on an agent's progress, end or exit", async () => {
+const recordNudges = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-record-changed");
+
+it("nudges a session record with the session an agent's progress, end or exit names", async () => {
   const post = vi.fn();
   hub.attach("record", "all", post, true);
   await vi.advanceTimersByTimeAsync(0);
-  const nudges = () =>
-    post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-record-changed");
-  for (const event of ["mcp:agent-progress", "mcp:agent-done", "pty-exit"]) {
+  for (const [event, payload] of [
+    ["mcp:agent-progress", { sessionId: "tab-1" }],
+    ["mcp:agent-done", { sessionId: "tab-1" }],
+    ["pty-exit", { session_id: "tab-1" }],
+  ] as const) {
     post.mockClear();
-    events.get(event)!({ payload: { handle: "agent-1" } });
-    expect(nudges(), event).toEqual([{ type: "codesense:session-record-changed" }]);
+    events.get(event)!({ payload });
+    expect(recordNudges(post), event).toEqual([
+      { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    ]);
   }
-  // Progress still nudges the activity listeners it always did.
+  // An event that names no session is broad, and progress still nudges the activity listeners.
   post.mockClear();
   events.get("mcp:agent-progress")!({ payload: null });
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
   expect(post.mock.calls.map(([m]) => m.type)).toContain("codesense:agent-activity-changed");
+});
+
+it("nudges a session record on usage stored for its sessions, one nudge per session", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("session-usage-changed")!({ payload: { sessionIds: ["tab-1", "tab-2"] } });
+  expect(recordNudges(post)).toEqual([
+    { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    { type: "codesense:session-record-changed", sessionId: "tab-2" },
+  ]);
+});
+
+it("a hidden frame holds one broad record nudge when two sessions changed while it was away", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("record", "all", post, false);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-1" } });
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-2" } });
+  expect(recordNudges(post)).toEqual([]);
+  frame.visible(true);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
 });
 
 it.each(["before", "after"])(
@@ -2240,4 +2271,93 @@ it("drops held ids for another team when the frame is rekeyed before it shows", 
   const delivered = inboxChanges(post).flatMap((m) => m.changes ?? []);
   expect(delivered).toEqual([{ team: ops, messageIds: [9] }]);
   expect(inboxChanges(post)).toContainEqual({ type: "codesense:inbox-changed" });
+});
+
+// A setup write tells every page once, whichever native events the write raises. Each case
+// fires the events its write emits, in order, as far apart as a git commit or a bind's
+// reconcile can put them, then lets the burst settle.
+const setupWrites: [string, string[]][] = [
+  ["create_team", ["org-registry-changed"]],
+  // CreateTeam, then SetTeamParent: two registry commits.
+  ["create_team with a parent", ["org-registry-changed", "org-registry-changed"]],
+  ["delete_team", ["org-registry-changed"]],
+  ["attach_context_repository", ["context-attachments-changed"]],
+  // The registry commit, then the folder's binding after its reconcile.
+  ["add_source_repo with a local folder", ["org-registry-changed", "source-attachments-changed"]],
+];
+// `setupState()` needs machines:read, so only a frame holding it is told the setup changed.
+const setupReader = { grants: ["sessions:read", "machines:read"] };
+const setupChanges = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.filter(([m]) => m.type === "codesense:setup-changed");
+for (const [write, emitted] of setupWrites)
+  it(`raises one codesense:setup-changed for ${write}`, async () => {
+    const post = vi.fn();
+    const frame = hub.attach("setup", "all", post, true, false, undefined, setupReader);
+    await frame.subscribe("sessions");
+    for (const event of emitted) {
+      events.get(event)!({ payload: null });
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    await vi.advanceTimersByTimeAsync(500);
+    expect(setupChanges(post)).toHaveLength(1);
+    // A later write is a new change.
+    events.get(emitted[0])!({ payload: null });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(setupChanges(post)).toHaveLength(2);
+  });
+it("tells the page during a long run of setup events, not only after it", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("setup-run", "all", post, true, false, undefined, setupReader);
+  await frame.subscribe("sessions");
+  // A bulk edit: one registry event every 300 ms for 3 s.
+  for (let elapsed = 0; elapsed < 2100; elapsed += 300) {
+    events.get("org-registry-changed")!({ payload: null });
+    await vi.advanceTimersByTimeAsync(300);
+  }
+  expect(setupChanges(post)).toHaveLength(1);
+  for (let elapsed = 2100; elapsed < 3000; elapsed += 300) {
+    events.get("org-registry-changed")!({ payload: null });
+    await vi.advanceTimersByTimeAsync(300);
+  }
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(post)).toHaveLength(2);
+});
+it("holds a setup change for a hidden page and replays it once on show", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("setup-hidden", "all", post, false, false, undefined, setupReader);
+  const subscribed = frame.subscribe("sessions");
+  events.get("org-registry-changed")!({ payload: null });
+  events.get("source-attachments-changed")!({ payload: null });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(post)).toHaveLength(0);
+  frame.visible(true);
+  await subscribed;
+  expect(setupChanges(post)).toHaveLength(1);
+});
+
+it("tells setup-changed only to frames holding machines:read", async () => {
+  const reader = vi.fn();
+  const teamOnly = vi.fn();
+  const ungranted = vi.fn();
+  const a = hub.attach("setup-reader", "all", reader, true, false, undefined, setupReader);
+  const b = hub.attach("setup-team", "all", teamOnly, true, false, undefined, {
+    grants: ["sessions:read", "repo:read"],
+  });
+  const c = hub.attach("setup-none", "all", ungranted, true);
+  await Promise.all([a, b, c].map((f) => f.subscribe("sessions")));
+  events.get("org-registry-changed")!({ payload: null });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(reader)).toHaveLength(1);
+  expect(setupChanges(teamOnly)).toHaveLength(0);
+  expect(setupChanges(ungranted)).toHaveLength(0);
+});
+it("follows a rebound frame's grant for setup-changed", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("setup-rebind", "all", post, true, false, undefined, {
+    grants: ["repo:read"],
+  });
+  frame.rekey("all", undefined, ["machines:read"]);
+  events.get("org-registry-changed")!({ payload: null });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(setupChanges(post)).toHaveLength(1);
 });

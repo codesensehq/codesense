@@ -265,6 +265,17 @@ describe("TeamWorkspaceEmptyState", () => {
       expect(screen.queryByText(/no teams yet/i)).not.toBeInTheDocument();
     });
 
+    it("an org whose teams are all archived reads as having no teams yet", () => {
+      useOrgStore.setState({
+        orgs: [{ ...ACME, teams: [{ name: "core", source_repos: [], archived: true }] }],
+        activeOrgSlug: "acme",
+        activeTeamName: null,
+        workspaceRepos: {},
+      });
+      render(<TeamWorkspaceEmptyState />);
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/no teams in acme yet/i);
+    });
+
     it("zero-teams state opens the Create Team dialog (no dead-end team switcher)", async () => {
       // The org genuinely has no teams. The team switcher can't mount without
       // an active team, so the CTA opens the SW-OB-1 Create Team dialog

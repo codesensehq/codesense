@@ -694,7 +694,7 @@
     }
   },
   "sources": {
-    "src-tauri/src/panes/mod.rs": "4c424a762475bb20538f5c5e9c287962361c38e516160f1c2d59a8530cb9f041",
+    "src-tauri/src/panes/mod.rs": "e1ef4c9a97a3f1ef84ba972b02b3612b04287c85609271f39bf9bc0f21f4e36b",
     "src-tauri/src/panes/manifest.rs": "08c8869011a375d14d866f056d2d4d5ee2c729d5b08ba8c78123021717ef6f36"
   }
 }

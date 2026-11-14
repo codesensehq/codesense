@@ -1790,6 +1790,34 @@ fn machine_stats_stream_a_snapshot_then_deltas_to_subscription_owners() {
     assert!(!topics.has_subscribers("machineStats"));
 }
 
+#[test]
+fn dropping_a_window_names_the_views_its_subscriptions_followed() {
+    use super::projection::TopicRegistry;
+    let mut topics = TopicRegistry::default();
+    for (id, owner, key) in [
+        ("frame:a", "window-a", "pins:x"),
+        ("frame:b", "window-a", "pins:y"),
+        ("frame:c", "window-b", "pins:y"),
+    ] {
+        topics
+            .subscribe_window(id, "pins", key, None, None)
+            .unwrap();
+        topics.set_owner(id, owner);
+    }
+    let mut gone = topics.drop_owner("window-a");
+    gone.sort();
+    assert_eq!(
+        gone,
+        vec![
+            ("pins".to_owned(), "pins:x".to_owned()),
+            ("pins".to_owned(), "pins:y".to_owned()),
+        ]
+    );
+    // The view another window still follows is held; the one nobody follows can be dropped.
+    assert!(!topics.has_view_subscribers("pins", "pins:x"));
+    assert!(topics.has_view_subscribers("pins", "pins:y"));
+}
+
 fn startup_snapshot(observed: bool) -> codesense_pty_core::activity::Snapshot {
     serde_json::from_value(json!({
         "session":"s","identity":{"hostBootId":"b","sessionIncarnation":"p","invocationId":"i"},

@@ -1,0 +1,44 @@
+# A full example packs.lock.yml: one catalog pack with both kinds of external part. Schema-only:
+# `starter` stands for a part of the required starter pack.
+lock_format: 1
+packs:
+  - id: codesense-team
+    version: 1.0.0
+    source:
+      {
+        kind: catalog,
+        url: https://dl.codesense.ai/packs/codesense-team/1.0.0/codesense-team-1.0.0.tar.gz,
+      }
+    archive_sha256: …
+    trust: verified # verified | bundled | unverified
+    catalog_sequence: 42
+    installed_at: 2026-11-20T18:00:00Z
+    pack_team: pack-codesense-team
+    previous_parent: parent # restored on uninstall
+    parts:
+      { installed: [starter, bmad, impeccable, claude-bmad-impeccable], excluded: [manager-wake] }
+    agents: [{ id: claude-bmad-impeccable, revision: 1, sha256: … }]
+    routines: [{ id: manager-wake, sha256: …, enabled_at_install: false }]
+    seeds: [{ path: README.html, sha256: … }]
+    external:
+      - {
+          id: impeccable,
+          method: files,
+          source: "https://github.com/pbakaus/impeccable",
+          version: 4.6.0,
+          commit: <40-hex>,
+          tree_sha256: …,
+          follow: pinned,
+          license: { spdx: Apache-2.0, class: open-source, confidence: 0.99 },
+          fetched_at: …,
+        }
+      - {
+          id: bmad,
+          method: setup,
+          source: "npm:bmad-method",
+          version: 6.11.0,
+          integrity: sha512-…,
+          follow: pinned,
+          license: { spdx: MIT, class: open-source },
+          setup: { state: done, verified_version: 6.11.0, at: … },
+        }

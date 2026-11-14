@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { useEffect, useState } from "react";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { exitTopmostOverlay } from "@/shared/lib/focus-utils";
 import { FullscreenOverlayShell } from "./fullscreen-overlay-shell";
 
 afterEach(cleanup);
@@ -56,6 +57,20 @@ describe("FullscreenOverlayShell", () => {
     const onExit = vi.fn();
     renderShell({ isFullscreen: true, onExit });
     fireEvent.keyDown(document, { key: "Escape" });
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("exits when ⌘W asks the topmost overlay to leave, and only while maximized", () => {
+    const onExit = vi.fn();
+    const view = renderShell({ isFullscreen: false, onExit });
+    expect(exitTopmostOverlay()).toBe(false);
+    expect(onExit).not.toHaveBeenCalled();
+    view.rerender(
+      <FullscreenOverlayShell isFullscreen onExit={onExit} testId="test-shell">
+        <div />
+      </FullscreenOverlayShell>,
+    );
+    expect(exitTopmostOverlay()).toBe(true);
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 

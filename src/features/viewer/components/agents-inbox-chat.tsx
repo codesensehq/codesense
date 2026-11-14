@@ -4,30 +4,16 @@ import { SquareTerminal, WifiOff } from "lucide-react";
 
 import { goToSession } from "@/features/inbox/actions";
 import { revealSlot } from "@/features/shell/slots/reveal-slot";
-import type { ConversationMessage } from "@/features/inbox/api";
-import { teamOfKey } from "@/features/inbox/components/inbox-rail";
 import { InboxViewProvider, type InboxView } from "@/features/inbox/components/inbox-view-context";
 import { InboxLoading, ReadFailure, StaleNotice } from "@/features/inbox/components/primitives";
 import { Conversation } from "@/features/inbox/components/threads-lens";
-import { fixtureSessions } from "@/features/inbox/fixtures";
+import { useAgentConversation } from "@/features/inbox/hooks/use-agent-conversation";
 import { useDocumentVisible } from "@/features/inbox/hooks/use-document-visible";
-import { useInboxSessions } from "@/features/inbox/hooks/use-inbox-sessions";
 import { useSessionInbox } from "@/features/inbox/hooks/use-session-inbox";
-import {
-  HUMAN,
-  buildDirectory,
-  msgKey,
-  normalizeMessage,
-  participant,
-  roleSummaries,
-  sameTeam,
-  sendCheck,
-} from "@/features/inbox/model";
+import { HUMAN, msgKey, participant, sendCheck } from "@/features/inbox/model";
 import { UNKNOWN_MACHINE_LABEL } from "@/features/machines/lib/machine-offline";
 import { PopupHead } from "@/features/viewer/components/agents-popup-head";
 import { useRowPopover } from "@/features/viewer/components/agents-popover";
-import type { InboxTeam } from "@/tauri/commands";
-import { useCurrentUser } from "@/shared/lib/get-current-user";
 import { markInboxMessageRead } from "@/tauri/commands";
 
 export interface InboxChatProps {
@@ -71,25 +57,6 @@ const draftFocused = (dialog: HTMLElement) => {
     active.value.trim().length > 0
   );
 };
-
-/** A message between the human and `handle`, either way (role mail and other agents' are not). */
-const between = (m: ConversationMessage, handle: string) =>
-  !m.toRole && ((m.from === handle && m.to === HUMAN) || (m.from === HUMAN && m.to === handle));
-
-/** The team an agent works in, by its mail: the pane's team when the agent wrote there, else
- *  where it last wrote, else the pane's team (null when there is none). */
-function agentTeam(
-  messages: readonly ConversationMessage[],
-  handle: string,
-  home: InboxTeam | null,
-): InboxTeam | null {
-  const own = messages.filter((m) => m.from === handle);
-  if (home && own.some((m) => sameTeam(m.team, home))) return home;
-  // The latest by when it was written: a read lists teams one after another, not by time.
-  let last: ConversationMessage | null = null;
-  for (const m of own) if (!last || m.createdAtMs > last.createdAtMs) last = m;
-  return last ? last.team : home;
-}
 
 /** The note an agent on an offline machine wears: its mail is kept on this Mac and pushed to it
  *  again when the machine reconnects. `machine` is its name, or {@link UNKNOWN_MACHINE_LABEL}. */
@@ -139,40 +106,16 @@ export function InboxChatPopover({
   // Only this agent's inbox: a read still naming the agent shown before is not shown for it.
   const data = read.data && read.data.handle === handle ? read.data : null;
   const { source, error, reload } = read;
-  const sessions = useInboxSessions();
-  const user = useCurrentUser();
-
-  const messages = useMemo(() => (data?.messages ?? []).map(normalizeMessage), [data]);
   // The agent the chat shows: a handle names a session within its team, so the team is part of
   // it. Joined as JSON: a team name or a handle can hold any separator a plain join would use.
   const chatKey = JSON.stringify([teamKey, handle]);
-  // The read spans every synced team; a handle names a session within its team, so the chat
-  // shows only the agent's own team's mail (its other teams' mail is other conversations). The
-  // team is settled by the first read and kept while the chat shows this agent: mail arriving in
-  // another team never moves the conversation, or a send, there mid-chat.
-  const readTeam = useMemo(
-    () => agentTeam(messages, handle, teamOfKey(teamKey)),
-    [messages, handle, teamKey],
-  );
-  const [pinned, setPinned] = useState<{ chat: string; team: InboxTeam | null } | null>(null);
-  if (data && pinned?.chat !== chatKey) setPinned({ chat: chatKey, team: readTeam });
-  const team = pinned?.chat === chatKey ? pinned.team : readTeam;
-  // The shown team's mail: what the chat, its roles and where a send goes are read from.
-  const teamMessages = useMemo(
-    () => (team ? messages.filter((m) => sameTeam(m.team, team)) : messages),
-    [messages, team],
-  );
-  const conversation = useMemo(
-    () => teamMessages.filter((m) => between(m, handle)),
-    [teamMessages, handle],
-  );
-  const dir = useMemo(() => {
-    // Demo messages (dev only) name demo sessions; label them from the demo roster too.
-    const rows =
-      source === "fixture" ? [...(sessions ?? []), ...fixtureSessions()] : (sessions ?? []);
-    return buildDirectory(rows, messages, { humanName: user?.display_name });
-  }, [sessions, source, messages, user?.display_name]);
-  const roles = useMemo(() => roleSummaries(dir, teamMessages), [dir, teamMessages]);
+  const { team, home, teamMessages, conversation, dir, roles } = useAgentConversation({
+    data,
+    source,
+    handle,
+    teamKey,
+    chatKey,
+  });
   // Where the New line goes: the first message it sent you that was unread as the chat opened.
   // Kept while the chat shows this agent, though opening it reads them.
   const [newLine, setNewLine] = useState<{ chat: string; from: string | null } | null>(null);
@@ -231,7 +174,7 @@ export function InboxChatPopover({
       held: [],
       // Its own drafts: closing the chat and opening it again finds what was being written.
       drafts: `agent-chat:${chatKey}`,
-      fallbackTeam: team ?? teamOfKey(teamKey),
+      fallbackTeam: team ?? home,
       source,
       // The chat draws no Reply chips: everything here goes to this agent.
       replyTo: () => {},
@@ -257,7 +200,7 @@ export function InboxChatPopover({
       // The header says the machine is offline; the composer's line need not say it again.
       offlineNoted: offlineMachine !== null,
     }),
-    [handle, chatKey, dir, teamMessages, roles, teamKey, team, source, offlineMachine],
+    [handle, chatKey, dir, teamMessages, roles, home, team, source, offlineMachine],
   );
 
   // What a first message does, as the agent stands: it waits for an offline machine, and an

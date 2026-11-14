@@ -1,0 +1,5 @@
+id: nightly
+name: Nightly
+owner: me
+agent: yolo
+task: Do the thing.

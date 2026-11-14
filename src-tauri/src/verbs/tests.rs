@@ -992,3 +992,73 @@ fn open_diff_uses_existing_repo_read_and_typed_after_range_contract() {
         assert!(jsonschema::is_valid(&spec.result_schema, &value));
     }
 }
+
+#[test]
+fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
+    let registry = Registry::default();
+    for (name, class, grant, twin) in [
+        ("pins", Class::Read, "inbox:read:team", None),
+        ("pin", Class::Metadata, "inbox:write", Some("pin")),
+        ("unpin", Class::Metadata, "inbox:write", Some("pin")),
+        ("reorderPins", Class::Metadata, "inbox:write", None),
+    ] {
+        let verb = registry.get(name).expect(name);
+        assert_eq!(verb.module, "inbox", "{name}");
+        assert_eq!((verb.class, verb.grant.as_str()), (class, grant), "{name}");
+        assert_eq!(verb.mcp_twin.as_deref(), twin, "{name}");
+        assert!(
+            twin.is_some() || verb.presentation_only_reason.is_some(),
+            "{name}"
+        );
+        assert!(verb.inbox_target && !verb.confirmable, "{name}");
+        let write = class != Class::Read;
+        assert_eq!((verb.action, verb.audited), (write, write), "{name}");
+        assert_eq!(verb.args_schema["required"][0], "agentId", "{name}");
+        let ok = json!({"status":"pins","org":"acme","team":"core","agentId":"a","storyId":"","pins":[{"messageId":1,"position":0,"pinnedBy":"human","pinnedAtMs":1}],"outcome":"pinned"});
+        assert!(jsonschema::is_valid(&verb.result_schema, &ok), "{name}");
+        assert!(jsonschema::is_valid(
+            &verb.result_schema,
+            &json!({"status":"invalid","message":"no message 9"})
+        ));
+    }
+    let pin = &registry.get("pin").unwrap().args_schema;
+    assert!(jsonschema::is_valid(
+        pin,
+        &json!({"agentId":"a","storyId":"DEMO-1","messageId":4,"position":0})
+    ));
+    assert!(!jsonschema::is_valid(pin, &json!({"agentId":"a"})));
+    assert!(!jsonschema::is_valid(
+        pin,
+        &json!({"agentId":"a","messageId":4,"position":-1})
+    ));
+    let reorder = &registry.get("reorderPins").unwrap().args_schema;
+    assert!(jsonschema::is_valid(
+        reorder,
+        &json!({"agentId":"a","messageIds":[3,1]})
+    ));
+    assert!(!jsonschema::is_valid(
+        reorder,
+        &json!({"agentId":"a","messageIds":[0]})
+    ));
+    // A page subscribing to a thread's pins needs the inbox read grant, as the read does.
+    let subscribe = registry.get("subscribe").unwrap();
+    assert_eq!(
+        subscribe.required_capability(&caller("team"), &json!({"topic":"pins"})),
+        "inbox:read:team"
+    );
+    // Paging asks the same grant, not the broad `sessions:read` a plain topic page takes.
+    let page = registry.get("page").unwrap();
+    assert_eq!(
+        page.required_capability(&caller("team"), &json!({"topic":"pins"})),
+        "inbox:read:team"
+    );
+    assert_eq!(
+        super::dispatcher::action_target(
+            &caller("team"),
+            "reorderPins",
+            &json!({"messageIds":[1,2]})
+        )
+        .as_deref(),
+        Some("2 pins")
+    );
+}

@@ -50,6 +50,10 @@ pub(crate) struct FakeHost {
     media_workspaces: Mutex<HashMap<String, PathBuf>>,
     /// Every `role_message_queued` call: `(team, role, message id, sender)`.
     queued: Mutex<Vec<(String, String, i64, String)>>,
+    /// handle → the saved agent and story it was launched with.
+    threads: Mutex<HashMap<String, (String, Option<String>)>>,
+    /// Every `pins_changed` call: `(team, thread)`.
+    pin_events: Mutex<Vec<(String, crate::weft::pins::ThreadKey)>>,
 }
 
 impl FakeHost {
@@ -90,7 +94,22 @@ impl FakeHost {
             media_scopes: Mutex::default(),
             media_workspaces: Mutex::default(),
             queued: Mutex::default(),
+            threads: Mutex::default(),
+            pin_events: Mutex::default(),
         })
+    }
+
+    /// `handle` was launched from saved agent `agent` on `story`.
+    pub(crate) fn launched_from(&self, handle: &str, agent: &str, story: Option<&str>) {
+        self.threads.lock().unwrap().insert(
+            handle.to_string(),
+            (agent.to_string(), story.map(String::from)),
+        );
+    }
+
+    /// Every pin list change reported so far, as `(team, thread)`.
+    pub(crate) fn pin_events(&self) -> Vec<(String, crate::weft::pins::ThreadKey)> {
+        self.pin_events.lock().unwrap().clone()
     }
 
     /// A tab `list_sessions` lists: one a person opened by hand has its session id as its
@@ -174,6 +193,10 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
+    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
+        crate::media::read_cached(&self.dir.path().join("media-cache"), sha)
+    }
+
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
         self.media_scopes
             .lock()
@@ -333,6 +356,15 @@ impl InboxHost for FakeHost {
             sender.to_string(),
         ));
     }
+    async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
+        self.threads.lock().unwrap().get(handle).cloned()
+    }
+    fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
+        self.pin_events
+            .lock()
+            .unwrap()
+            .push((team.team.clone(), thread.clone()));
+    }
     async fn owning_story_for_path(&self, team: &LaunchTeam, logical_path: &str) -> Option<String> {
         self.story_owners
             .lock()
@@ -353,7 +385,7 @@ fn known(handle: &str, session: &str, name: &str, running: bool) -> KnownSession
     }
 }
 
-fn launch_team(team: &str) -> LaunchTeam {
+pub(crate) fn launch_team(team: &str) -> LaunchTeam {
     LaunchTeam {
         org: ORG.to_string(),
         team: team.to_string(),
@@ -365,7 +397,7 @@ pub(crate) fn port(host: &Arc<FakeHost>) -> Arc<dyn InboxHost> {
     host.clone()
 }
 
-fn sent_id(result: SendResult) -> i64 {
+pub(crate) fn sent_id(result: SendResult) -> i64 {
     match result {
         SendResult::Sent { message_id, .. } => message_id,
         other => panic!("expected sent, got {other:?}"),
@@ -1833,6 +1865,8 @@ async fn the_human_sees_delivery_state_and_withdraws_a_waiting_message() {
     assert_eq!(state_of(&view, waiting), Some(InboxDeliveryState::Reading));
     assert_eq!(state_of(&view, taken), Some(InboxDeliveryState::Queued));
 
+    let thread = crate::weft::pins::ThreadKey::new("agent-a", Some("story-1")).unwrap();
+    crate::weft::pins::pin_add(&store, &thread, taken, HUMAN, None, None).unwrap();
     let before = *fake.changed.lock().unwrap();
     assert!(matches!(
         withdraw_by_human(&*host, &team, taken).await.unwrap(),
@@ -1842,6 +1876,11 @@ async fn the_human_sees_delivery_state_and_withdraws_a_waiting_message() {
         *fake.changed.lock().unwrap(),
         before + 1,
         "a withdrawal refreshes the list"
+    );
+    assert_eq!(
+        fake.pin_events(),
+        vec![("default".to_string(), thread)],
+        "a withdrawal refreshes the thread that pins the message"
     );
     assert_eq!(
         withdraw_by_human(&*host, &team, waiting).await.unwrap(),
@@ -5748,4 +5787,147 @@ async fn a_sender_in_another_team_hears_of_a_reaction_through_read_messages() {
     let again: serde_json::Value =
         serde_json::from_str(&again.content[0].as_text().unwrap().text).unwrap();
     assert!(again.get("reactions").is_none(), "{again}");
+}
+
+#[tokio::test]
+async fn archive_and_restore_refresh_the_threads_that_pin_the_messages() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let team = launch_team("default");
+    let store = WeftStore::open(fake.team_store("default")).unwrap();
+    let insert =
+        |to| inbox::inbox_insert(&store, "H1", to, "hello", None, None, None, None, None).unwrap();
+    let pinned = insert(HUMAN);
+    let other = insert(HUMAN);
+    let thread = crate::weft::pins::ThreadKey::new("agent-a", Some("story-1")).unwrap();
+    crate::weft::pins::pin_add(&store, &thread, pinned, HUMAN, None, None).unwrap();
+    let ids = vec![pinned, other];
+    mark_archived_many_by_human(&*host, &team, ids.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.pin_events(),
+        vec![("default".to_string(), thread.clone())]
+    );
+    unarchive_many_by_human(&*host, &team, ids, vec![])
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.pin_events(),
+        vec![
+            ("default".to_string(), thread.clone()),
+            ("default".to_string(), thread)
+        ],
+        "a restore refreshes it again"
+    );
+}
+
+/// A GIF the media inspector accepts, and its cache name.
+const GIF: &[u8] = b"GIF89a\x02\x00\x03\x00";
+
+/// A message in `team` carrying `attachment`, with `GIF` in the fake's media cache.
+fn media_message(fake: &FakeHost, team: &str, attachment: crate::media::Attachment) -> i64 {
+    let cache = fake.dir.path().join("media-cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(gif_sha()), GIF).unwrap();
+    let path = fake.team_store(team);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let store = WeftStore::open(path).unwrap();
+    let id =
+        inbox::inbox_insert(&store, "agent-1", HUMAN, "", None, None, None, None, None).unwrap();
+    inbox::inbox_set_attachments(&store, id, &[attachment]).unwrap();
+    id
+}
+
+fn gif_sha() -> String {
+    use sha2::Digest as _;
+    format!("{:x}", sha2::Sha256::digest(GIF))
+}
+
+fn gif_attachment(state: &str) -> crate::media::Attachment {
+    crate::media::Attachment {
+        kind: "image".into(),
+        sha256: Some(gif_sha()),
+        mime: Some("image/gif".into()),
+        width: Some(2),
+        height: Some(3),
+        bytes: Some(GIF.len() as u64),
+        alt: "a wave".into(),
+        source_url: None,
+        source_host: None,
+        state: state.into(),
+        reason: None,
+        retryable: false,
+    }
+}
+
+#[tokio::test]
+async fn read_media_returns_a_cached_image_the_message_carries() {
+    let fake = FakeHost::new();
+    // The record claims PNG; the type served is the one the bytes show.
+    let mut attachment = gif_attachment("cached");
+    attachment.mime = Some("image/png".into());
+    let id = media_message(&fake, "default", attachment);
+    let got = read_media(&port(&fake), launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(got.mime, "image/gif");
+    assert_eq!(got.bytes, GIF);
+    let mut frame = b"image/gif\n".to_vec();
+    frame.extend_from_slice(GIF);
+    assert_eq!(got.into_frame(), frame);
+}
+
+#[tokio::test]
+async fn read_media_refuses_what_the_message_does_not_serve() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let cached = media_message(&fake, "default", gif_attachment("cached"));
+    let pending = media_message(&fake, "default", gif_attachment("pending"));
+    // Cached bytes under a hash this message doesn't carry.
+    let other = "a".repeat(64);
+    std::fs::write(fake.dir.path().join("media-cache").join(&other), GIF).unwrap();
+    assert!(read_media(&host, launch_team("default"), cached, other)
+        .await
+        .is_err());
+    // The message carries the hash, but not as a cached image.
+    assert!(
+        read_media(&host, launch_team("default"), pending, gif_sha())
+            .await
+            .is_err()
+    );
+    // The same message id asked of another team's inbox.
+    media_message(&fake, "design", gif_attachment("pending"));
+    assert!(read_media(&host, launch_team("design"), cached, gif_sha())
+        .await
+        .is_err());
+    // A malformed hash is refused before any lookup, even for an unknown team.
+    for bad in [
+        gif_sha().to_uppercase(),
+        "../etc/passwd".into(),
+        String::new(),
+    ] {
+        assert_eq!(
+            read_media(&host, launch_team("nowhere"), cached, bad).await,
+            Err("invalid media hash".to_string())
+        );
+    }
+}
+
+#[test]
+fn a_pin_thread_comes_from_the_registry_record_never_a_tab_tag() {
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    let state = DashboardLaunchState::new(2);
+    state.register("SW-1#bare", "sess-bare", Some("codesense"));
+    let bare = state.snapshot().remove(0);
+    assert_eq!(bare.agent_revision, None);
+    assert_eq!(registry_thread(&bare), None);
+
+    let mut named = bare.clone();
+    named.agent_revision = Some("acme/api/backend@4".into());
+    named.meta.story = Some("DEMO-1".into());
+    assert_eq!(
+        registry_thread(&named),
+        Some(("acme/api/backend".to_string(), Some("DEMO-1".to_string())))
+    );
 }

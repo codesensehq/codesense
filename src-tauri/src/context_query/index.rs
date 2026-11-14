@@ -23,6 +23,7 @@ use super::engine::{self, BodyReader, Corpus, QueryError, Viewer};
 use super::model::{ContextQuery, ContextQueryResult, Kind, Layer};
 use super::record::{ContextRecord, HeadingEntry};
 use super::relations::{self, Relations};
+use crate::commands::pipeline_format::entities::{decode_entities, NamedSet};
 use crate::commands::pipeline_format::{self, PipelineFileFormat};
 
 /// Bytes read from the top of a Markdown file to parse its frontmatter.
@@ -174,41 +175,6 @@ mod plain {
     re!(STRIKE, r"~~(.+?)~~");
     re!(EMPH, r"(^|[\s(\[])[*_](\S(?:[^*_]*?\S)?)[*_]");
     re!(TAG, r"<[^>]+>");
-    re!(ENTITY, r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);");
-}
-
-/// Decode the HTML character references a summary may carry (`&amp;`, `&#39;`,
-/// `&#x2014;` …); an unknown name is kept as written.
-fn decode_entities(text: &str) -> String {
-    plain::ENTITY
-        .replace_all(text, |c: &regex::Captures| {
-            let body = &c[1];
-            let ch = if let Some(hex) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X"))
-            {
-                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-            } else if let Some(dec) = body.strip_prefix('#') {
-                dec.parse::<u32>().ok().and_then(char::from_u32)
-            } else {
-                match body {
-                    "amp" => Some('&'),
-                    "lt" => Some('<'),
-                    "gt" => Some('>'),
-                    "quot" => Some('"'),
-                    "apos" => Some('\''),
-                    "nbsp" => Some(' '),
-                    "mdash" => Some('—'),
-                    "ndash" => Some('–'),
-                    "hellip" => Some('…'),
-                    "rsquo" => Some('’'),
-                    "lsquo" => Some('‘'),
-                    "rdquo" => Some('”'),
-                    "ldquo" => Some('“'),
-                    _ => None,
-                }
-            };
-            ch.map(String::from).unwrap_or_else(|| c[0].to_string())
-        })
-        .into_owned()
 }
 
 /// SW-DNS-2: a section as plain prose: Markdown's inline markup (links, images,
@@ -225,7 +191,7 @@ fn plain_text(format: PipelineFileFormat, text: &str) -> String {
         t = plain::STRIKE.replace_all(&t, "$1").into_owned();
         t = plain::EMPH.replace_all(&t, "$1$2").into_owned();
     }
-    decode_entities(&t)
+    decode_entities(&t, NamedSet::Text)
 }
 
 /// SW-DNS-2: the summary text of a pipeline doc's head: the first of `headings`

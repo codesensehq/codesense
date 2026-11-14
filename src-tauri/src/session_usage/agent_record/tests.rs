@@ -128,6 +128,39 @@ fn an_unpriced_model_gives_no_cost_and_says_why() {
     let record = assemble("dev", &half, None, None);
     assert_eq!(record["costUsd"], Value::Null);
     assert!(record["unavailable"]["cost"].is_string());
+    assert_eq!(record["unpricedModels"], json!(["no-price"]));
+}
+
+#[test]
+fn some_unpriced_models_give_the_priced_sum_and_name_the_rest() {
+    let (priced_only, _store) = store();
+    launched(priced_only.path(), AgentCli::Claude, "dev", "claude-sonnet-5-5", None);
+    let expected = assemble("dev", &half(priced_only.path(), "dev"), None, None);
+    assert!(expected["costUsd"].as_f64().unwrap() > 0.0);
+
+    let (dir, _store) = store();
+    launched(dir.path(), AgentCli::Claude, "dev", "claude-sonnet-5-5", None);
+    let mut other = event(
+        "e-unpriced",
+        "tab-dev",
+        "no-price",
+        AT,
+        Tokens {
+            input: 50,
+            ..Default::default()
+        },
+    );
+    other.cli = AgentCli::Claude;
+    UsageStore::open(&dir.path().join("usage.sqlite"))
+        .unwrap()
+        .ingest(&[other])
+        .unwrap();
+    let record = assemble("dev", &half(dir.path(), "dev"), None, None);
+    // The row `session_usage` leaves null stays null there; the record gives what is priced.
+    assert!(usage_row(dir.path(), "tab-dev").cost_usd.is_none());
+    assert_eq!(record["costUsd"], expected["costUsd"]);
+    assert_eq!(record["unpricedModels"], json!(["no-price"]));
+    assert!(record["unavailable"]["cost"].as_str().unwrap().contains("priced part"));
 }
 
 #[test]
@@ -227,3 +260,84 @@ fn a_session_with_no_story_or_agent_is_its_own_chain() {
     let record = assemble("solo", &half, None, None);
     assert_eq!(record["chain"], json!(["tab-solo"]));
 }
+
+fn page(shas: &[&str], next: Option<&str>) -> CommitPage {
+    CommitPage {
+        commits: shas
+            .iter()
+            .map(|sha| (sha.to_string(), vec![format!("{sha}.rs")], vec!["s".to_owned()]))
+            .collect(),
+        unavailable: None,
+        next: next.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn commits_are_read_page_by_page_until_the_last() {
+    let seen = std::sync::Mutex::new(Vec::new());
+    let (commits, reason) = collect_commits(|cursor| {
+        seen.lock().unwrap().push(cursor.clone());
+        let page = match cursor.as_deref() {
+            None => page(&["c1", "c2"], Some("p2")),
+            Some("p2") => page(&["c3"], Some("p3")),
+            _ => page(&["c4"], None),
+        };
+        async move { Ok(page) }
+    })
+    .await
+    .unwrap();
+    let shas: Vec<_> = commits.iter().map(|c| c.0.as_str()).collect();
+    assert_eq!(shas, ["c1", "c2", "c3", "c4"]);
+    assert_eq!(reason, None);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [None, Some("p2".to_owned()), Some("p3".to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn a_story_with_more_pages_than_the_cap_stops_at_it_and_says_so() {
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let (commits, reason) = collect_commits(|_| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async { Ok(page(&["c"], Some("more"))) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), COMMIT_PAGES);
+    assert_eq!(commits.len(), COMMIT_PAGES);
+    assert_eq!(reason.as_deref(), Some("more commits than one record reads"));
+}
+
+#[tokio::test]
+async fn unreadable_commits_keep_what_was_read_and_mark_files_unavailable() {
+    let (dir, _store) = store();
+    launched(dir.path(), AgentCli::Claude, "dev", "claude-sonnet-5-5", None);
+    let half = half(dir.path(), "dev");
+    let mine = half.session_id.clone();
+    let (commits, reason) = collect_commits(|cursor| {
+        let page = match cursor {
+            None => CommitPage {
+                commits: vec![("c1".into(), vec!["a.rs".into()], vec![mine.clone()])],
+                unavailable: None,
+                next: Some("p2".into()),
+            },
+            Some(_) => CommitPage {
+                commits: Vec::new(),
+                unavailable: Some("the story's repository is not on this machine".into()),
+                next: None,
+            },
+        };
+        async move { Ok(page) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(commits.len(), 1);
+    let record = assemble("dev", &half, Some(&commits), reason.as_deref());
+    assert_eq!(record["files"], json!([{"path": "a.rs", "commits": ["c1"]}]));
+    assert_eq!(
+        record["unavailable"]["files"],
+        "the story's repository is not on this machine"
+    );
+}
+

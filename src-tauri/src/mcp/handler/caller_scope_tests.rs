@@ -86,3 +86,53 @@ fn epic_repos_request_uses_child_session_while_parent_is_active() {
     );
     assert_eq!(read("content/shared.md").unwrap(), vec!["acme/code"]);
 }
+
+#[test]
+fn the_folder_validator_refuses_a_hidden_folder_like_a_missing_one_and_reads_its_own() {
+    let f = AppFixture::new();
+    f.session("child-session", Some("child"));
+    for team in ["parent", "child"] {
+        f.fixture
+            .write(team, "content/packs/p/pack.yml", "pack_format: 1\n");
+    }
+    let validate = |path: String| {
+        tauri::async_runtime::block_on(pack_validate_request(
+            f.app.handle().clone(),
+            Some("child-session".into()),
+            None,
+            path,
+        ))
+    };
+    let at = |team: &str, rel: &str| f.fixture.path(team, rel).display().to_string();
+    let hidden = validate(at("parent", "content/packs/p")).unwrap_err();
+    let missing = validate(at("parent", "content/packs/missing")).unwrap_err();
+    assert_eq!(hidden, missing);
+    let own = validate(at("child", "content/packs/p")).unwrap();
+    assert_eq!(own["ok"], false);
+    assert_eq!(own["errors"][0]["code"], "manifest_invalid");
+    let relative = validate("packs/p".into()).unwrap_err();
+    assert!(
+        relative.message.contains("absolute"),
+        "{}",
+        relative.message
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_folder_validator_holds_a_symlinked_folder_to_its_real_path() {
+    let f = AppFixture::new();
+    f.session("child-session", Some("child"));
+    f.fixture
+        .write("parent", "content/secret-pack/pack.yml", "pack_format: 1\n");
+    let link = f.fixture.path("child", "content/packs/linked");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(f.fixture.path("parent", "content/secret-pack"), &link).unwrap();
+    let result = tauri::async_runtime::block_on(pack_validate_request(
+        f.app.handle().clone(),
+        Some("child-session".into()),
+        None,
+        link.display().to_string(),
+    ));
+    assert!(result.is_err(), "{result:?}");
+}

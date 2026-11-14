@@ -1,0 +1,52 @@
+pack_format: 1
+id: good-pack
+name: good-pack
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+license: MIT
+requires:
+  clis:
+    - { name: claude }
+  kit: { chat: 1 }
+parts:
+  - { id: all, kind: preset, includes: [helper, handbook, page, hello], default: true }
+  - { id: helper, kind: agent, file: agents/helper/agent.yaml, needs: [ghost] }
+  - { id: handbook, kind: content, title: Handbook, paths: ["content/handbook/**"] }
+  - { id: page, kind: dashboards, paths: ["content/page/**"] }
+  - id: hello
+    kind: skill
+    source: commands/hello.md
+    targets: [claude, codex, opencode]
+setup_steps: ["setup/steps/*.yml"]
+files:
+  - path: .agents/skills/hello/SKILL.md
+    sha256: 93f588e8feff443641509ca7cfac49226147b092948b10c532fdd40498de39a6
+    exec: false
+  - path: .claude/skills/hello/SKILL.md
+    sha256: 93f588e8feff443641509ca7cfac49226147b092948b10c532fdd40498de39a6
+    exec: false
+  - path: .opencode/command/hello.md
+    sha256: 93f588e8feff443641509ca7cfac49226147b092948b10c532fdd40498de39a6
+    exec: false
+  - path: CHANGELOG.md
+    sha256: 08af173c77d5f653708931410c5ba1102a0eb2c44406ce6d7c6f55be0380f8ee
+    exec: false
+  - path: LICENSE
+    sha256: 78ccf3c3f93a5edd22317674793f47d6f233ae4ffaf3d04c3bcbc2c064c71120
+    exec: false
+  - path: agents/helper/agent.yaml
+    sha256: f9a54ab8f1496f5fd5c72269b3409bb1e899f589bf1f6b237b1e236a8f0a6070
+    exec: false
+  - path: commands/hello.md
+    sha256: 93f588e8feff443641509ca7cfac49226147b092948b10c532fdd40498de39a6
+    exec: false
+  - path: content/handbook/README.md
+    sha256: def5af2e41cdeab5de0ace7573a7c76042ec2e7672b4b82bde0058059eb3870b
+    exec: false
+  - path: content/page/index.html
+    sha256: d1b0e2fb1d4d6cac14382e2a710ab6c906e9812c1ff619c049007a5c3356765d
+    exec: false
+  - path: setup/steps/greet.yml
+    sha256: e6b0030ba23e7ba4258d2ae157f56c08631d3761f1ec9813f52645b8122fffeb
+    exec: false

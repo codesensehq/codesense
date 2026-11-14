@@ -25,6 +25,8 @@ Rules:
   the reason in plain language. Show it to the user, fix the input, and don't retry
   blindly.
 - Keep it short. One section at a time, a line or two per step.
+- When the arguments start with `resume`, skip every step the `setup-ledger` shows done
+  and start at the first one that isn't.
 
 ## 1. Discover
 
@@ -109,3 +111,11 @@ proposal. Preview before saving, and ask before creating or enabling anything.
 
 Call `describe_setup` one last time. Report what this run changed, what is still left,
 and anything that is waiting on the user in the app, such as a workspace to attach.
+
+## 7. Hand back
+
+<!-- foreman-handback -->
+When launched by another session, send `Setup done:` and a one-line summary (team, repos, the git-access method) with
+`send_role_message` to `role:codesense-foreman` before you call `signal_done`. If you were started by hand,
+skip this.
+<!-- /foreman-handback -->

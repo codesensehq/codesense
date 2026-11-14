@@ -90,6 +90,10 @@ export interface Team {
    *  (`teams.yml` `landing_page:`). Absent ⇒ README.md / README.html /
    *  index.html at the content root, else nothing. */
   landing_page?: string | null;
+  /** The team's agent page, opened from an agent's "Full view"; relative to the team's content
+   *  root. Mirrors the Rust `Team.agent_page` (`teams.yml` `agent_page:`). Absent ⇒ the team has
+   *  no agent page and its agents show no Full view. */
+  agent_page?: string | null;
 }
 
 // Per-org config flags, mirroring Rust `OrgConfigFlags` (serialized from
