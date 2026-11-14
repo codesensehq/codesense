@@ -243,8 +243,11 @@
   const newest = (rows) =>
     [...rows].sort((a, b) => (b.startedAtMs || b.createdAtMs || 0) - (a.startedAtMs || a.createdAtMs || 0))[0] || null;
   // The guide's own face: its newest session's avatar, which the roster keeps after the session exits.
-  const guideFace = () => {
-    const row = newest(S.reads ? S.reads.latestSessions().filter(isGuide) : []);
+  // Only the guide's own rows get it: another agent's message in the guide's inbox is drawn as that sender.
+  const guideFace = (msg) => {
+    const rows = S.reads ? S.reads.latestSessions().filter(isGuide) : [];
+    if (!msg || !rows.some((row) => row.handle === msg.from)) return null;
+    const row = newest(rows);
     return { name: COPY.lead, face: (row && row.avatar) || null };
   };
   const guideTarget = () => ({

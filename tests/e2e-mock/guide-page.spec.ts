@@ -625,6 +625,18 @@ for (const viewport of [
     }
   });
 
+test("another agent's message in the guide's inbox shows no guide avatar", async ({ page }) => {
+  const { live } = await open(page);
+  await live([
+    lead(2, "Hi."),
+    { ...lead(3, "Handing back."), from: "foreman-1", fromName: "Foreman" },
+  ]);
+  await expect(page.locator(".msg.other")).toHaveCount(1);
+  await expect(page.locator('.msg.other img[src*="coffee-bot"]')).toHaveCount(0);
+  await expect(page.locator('.msg.other [title="CodeSense setup"]')).toHaveCount(0);
+  await expect(page.locator(".msg.other")).toContainText("Foreman");
+});
+
 test("the guide's message rows show the guide's avatar, once for a run, and the person's carry none", async ({
   page,
 }) => {
