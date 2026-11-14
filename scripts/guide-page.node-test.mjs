@@ -132,6 +132,33 @@ test("a script the page's hash does not cover fails: a sibling script, a second 
   });
 });
 
+test("unquoted src and href, a <base>, an @import and an <iframe> each fail", () => {
+  const planted = [
+    [
+      ['<script src="/kit/v1/chat.js">', "<script src=guide.js>"],
+      "a script the page's hash does not cover",
+    ],
+    [
+      [
+        '<link rel="stylesheet" href="/kit/v1/kit.css">',
+        "<link rel=stylesheet href=https://x.test/a.css>",
+      ],
+      "style sheet other than the kit's",
+    ],
+    [["<style>", '<base href="https://x.test/"><style>'], "<base>"],
+    [["<style>", "<style>@import url(https://x.test/a.css);"], "@import"],
+    [["<body>", '<body><iframe src="https://x.test/"></iframe>'], "<iframe>"],
+  ];
+  for (const [[from, to], text] of planted)
+    scratch((change, root) => {
+      change(TEMPLATE, (html) => {
+        assert.ok(html.includes(from), from);
+        return html.replace(from, to);
+      });
+      reports(check(root), text);
+    });
+});
+
 test("a guide.js that would end the inline script is refused", () => {
   assert.throws(() => pageText(read(TEMPLATE), "x = '</script>';"), /end its inline script/);
 });

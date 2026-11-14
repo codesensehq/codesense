@@ -10,7 +10,8 @@
 //
 // The checks, each of which fails the build:
 //   1. the page's inline script is exactly guide.js;
-//   2. the page loads no script but the kit's own (`/kit/v1/`) and its one inline script;
+//   2. the page loads no script or style sheet but the kit's own (`/kit/v1/`) and its one inline
+//      script, quoted or not, and has no <base>, @import or <iframe> to load or re-point others;
 //   3. the page's sha256 equals its `PAGES` entry, and the docs bundle ships exactly these bytes,
 //      so neither a page edit nor a docs update can silently drop the grant.
 import { createHash } from "node:crypto";
@@ -46,6 +47,14 @@ export function pageText(template, source) {
   return template.replace(INLINE, () => `${BEGIN}${source.replace(/\n+$/, "")}${END}`);
 }
 
+/** Each `attr` value on a `tag` element, quoted or not. */
+const attrValues = (html, tag, attr) =>
+  [
+    ...html.matchAll(
+      new RegExp(`<${tag}\\b[^>]*\\s${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "gi"),
+    ),
+  ].map((match) => match[1] ?? match[2] ?? match[3]);
+
 /**
  * Every drift problem as a message; empty when guide.js, the page and the grant agree.
  * `bundled` gives the page's bytes as the docs bundle ships them.
@@ -67,13 +76,17 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
     out.push(
       `${TEMPLATE}: its inline script is not ${SOURCE}; run node scripts/guide-page.mjs --write`,
     );
-  for (const [, src] of html.matchAll(/<script\b[^>]*\ssrc=["']([^"']*)["']/gi))
+  for (const src of attrValues(html, "script", "src"))
     if (!src.startsWith("/kit/v1/"))
       out.push(`${TEMPLATE}: loads ${src}; a script the page's hash does not cover`);
-  if ((html.match(/<script\b(?![^>]*\ssrc=)/gi) ?? []).length !== 1)
+  if ((html.match(/<script\b(?![^>]*\ssrc\s*=)/gi) ?? []).length !== 1)
     out.push(`${TEMPLATE}: must hold exactly one inline script`);
-  if (/<link\b[^>]*\shref=["'](?!\/kit\/v1\/)/i.test(html))
+  if (attrValues(html, "link", "href").some((href) => !href.startsWith("/kit/v1/")))
     out.push(`${TEMPLATE}: links a style sheet other than the kit's`);
+  // Each would load or re-point bytes the page's hash does not cover.
+  if (/<base\b/i.test(html)) out.push(`${TEMPLATE}: has a <base>, which re-points the kit's URLs`);
+  if (/@import\b/i.test(html)) out.push(`${TEMPLATE}: its style has an @import`);
+  if (/<iframe\b/i.test(html)) out.push(`${TEMPLATE}: has an <iframe>`);
   const pageBytes = readFileSync(join(root, DOCS_ROOT, PAGE));
   if (!bundled().equals(pageBytes))
     out.push(
