@@ -107,8 +107,9 @@ pub struct CloneStopped {
     /// The folder was created by `clone_repo` and is now gone.
     pub removed: bool,
     /// Why nothing was removed: `not_recorded` (not a folder this verb created, or
-    /// already stopped or bound), `not_a_folder` (gone, or now a symlink or a file),
-    /// `finished` (a finished checkout is never Stop's to remove) or `remove_failed`
+    /// already stopped or bound), `starting` (its tab hasn't opened yet; kept on
+    /// record, so Stop can be retried), `not_a_folder` (gone, or now a symlink or a
+    /// file), `finished` (a finished checkout is never Stop's to remove) or `remove_failed`
     /// (kept on record, so Stop can be retried).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
@@ -443,6 +444,8 @@ pub(crate) fn clone_argv(git: &str, valid: &ValidClone) -> Option<Vec<String>> {
 struct Created {
     path: PathBuf,
     tab: Option<String>,
+    /// The tab has opened (`set_tab` ran); until then Stop has nothing to close.
+    opened: bool,
 }
 
 /// The folders `clone_repo` created and Stop may remove.
@@ -471,6 +474,7 @@ impl CloneRecords {
                 Created {
                     path: path.to_path_buf(),
                     tab: None,
+                    opened: false,
                 },
             );
         }
@@ -484,6 +488,7 @@ impl CloneRecords {
             <[Created]>::iter_mut(&mut self.entries()).find(|entry| entry.path == path)
         {
             entry.tab = tab.map(str::to_string);
+            entry.opened = true;
         }
     }
 
@@ -511,15 +516,29 @@ impl CloneRecords {
         });
     }
 
+    /// Forget a folder whose git exited and left nothing, only while the record is
+    /// still this call's: a newer clone may have cleared it as stale and reserved
+    /// the folder since.
+    pub(crate) fn forget_exited(&self, path: &Path, tab: Option<&str>) {
+        match tab {
+            Some(tab) => self.forget_tab(path, tab),
+            None => self.forget(path),
+        }
+    }
+
     /// Remove `path` when this verb created it and its clone hasn't finished. The
     /// record is dropped once the folder is gone or can never be Stop's (it is no
     /// longer a real folder, or it holds a finished checkout); a failed removal keeps
-    /// it, so Stop can be retried. A path that was never recorded is left alone.
+    /// it, so Stop can be retried. A reservation whose tab hasn't opened yet is kept
+    /// too: its git is about to run. A path that was never recorded is left alone.
     /// The caller closes the clone's tab first.
     pub(crate) fn stop(&self, path: &Path) -> CloneStopped {
         let mut created = self.entries();
         if !<[Created]>::iter(&created).any(|entry| entry.path == path) {
             return CloneStopped::kept("not_recorded");
+        }
+        if <[Created]>::iter(&created).any(|entry| entry.path == path && !entry.opened) {
+            return CloneStopped::kept("starting");
         }
         let real_dir = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
         let outcome = if !real_dir {
