@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
+# the guide stub stops after one step and sends nothing: at its next wake the Foreman reads the ledger and says where setup stopped, with a Resume offer.
+id: setup-stopped
+kind: setup
+fixture:
+  guide:
+    stop_after: 1
+input:
+  turns:
+    - "set me up with ~/code/demo"
+    - "how is setup going?"
+# Script: the cards, the launch, the ledger and the hand-back calls. Never the wording.
+expected:
+  offer_cards: 0
+  launches: 1
+  prompt: "/codesense-setup"
+  hand_back: stopped
+  forbidden_tools:
+    - create_team
+    - delete_team
+    - archive_team
+    - add_source_repo
+    - remove_source_repo
+    - attach_source_repo_path
+    - attach_context_repository
+    - detach_context_repository
+    - create_local_organization
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: says-where-stopped
+    ask: "The reply names the step setup stopped at (source-repos) and offers Resume."
+grader: script

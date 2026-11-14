@@ -14,3 +14,7 @@ parts:
 # doesn't write it; null until a later change does.
 spec_hash:
   foreman-claude: null
+kit:
+  file: vendor/story-view.js
+  kit_rev: 1
+  sha256: d5d4b5483b5d21fe8cbd3634bb524bc69b41c0606487bf14df1bc2411e9865d3

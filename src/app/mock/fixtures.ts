@@ -50,6 +50,7 @@ const MOCK_AGENT_INSTALLS: Record<string, AgentBinaryStatus> = {
 /** Dependency discovery includes every registered CLI in registry order, installed or absent. */
 export const mockDependencyStatus: DependencyStatus = {
   git: { available: true, path: "/usr/bin/git", version: "2.43.0" },
+  gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0", resolving: false },
   agents: Object.fromEntries(
     AGENT_RUNTIMES.map((cli) => [
       cli,
