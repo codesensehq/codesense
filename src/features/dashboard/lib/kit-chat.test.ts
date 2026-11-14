@@ -897,6 +897,20 @@ describe("kit.chat consent cards (the card line)", () => {
     expect(s.el.querySelector(".card")!.hasAttribute("data-step")).toBe(false);
   });
 
+  it("a lead message that is not a needs-you card shows its card line raw, with no buttons and no consent", async () => {
+    for (const kind of ["update", undefined]) {
+      const row: Row = { ...card(`Creating it now.\n${LINE}`), kind };
+      const s = setup([lead("idle")], [row]);
+      mountOn(s, { cards: { consent: true } });
+      await flush();
+      expect(s.el.textContent).toContain(LINE);
+      expect(s.el.querySelector(".card")).toBeNull();
+      expect(s.el.querySelector("[data-ans]")).toBeNull();
+      expect(s.el.querySelector("[data-consent]")).toBeNull();
+      expect(s.el.querySelector("[data-step]")).toBeNull();
+    }
+  });
+
   it("a line that is not well formed stays in the text and the card falls back to the page's parser", async () => {
     const bad = "Go?\ncard: clone · write · x=Go";
     const s = setup([lead("idle")], [card(bad)]);

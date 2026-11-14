@@ -109,9 +109,10 @@ test("the vendored header is the sha256 of the rest of the file, and pack.yml re
 
 test("PAGES lists the page at the path the docs bundle places it, with its hash", () => {
   const entries = launchPages(readFileSync(join(ROOT, LAUNCH_RS), "utf8"));
+  // The setup guide's page holds the grant too (`guide-page.node-test.mjs` checks its own entry).
   assert.deepEqual(
     entries.map((entry) => entry.path),
-    [PAGE],
+    [PAGE, "getting-started/content/guide/index.html"],
   );
   assert.equal(entries[0].sha256, sha256(readFileSync(join(ROOT, DOCS_ROOT, PAGE))));
 });
