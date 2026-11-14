@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { PACKS_ROOT, ROOT, buildPack, docsMapping, syncDocs } from "./pack-build.mjs";
+import { PACKS_ROOT, ROOT, buildPack, docsMapping, docsRoots, syncDocs } from "./pack-build.mjs";
 
 const PACK = join(PACKS_ROOT, "codesense-guide");
 const DOCS = join(ROOT, "codesense-docs/getting-started");
@@ -115,51 +115,81 @@ test("Claude's allow list is exactly the phase 1 tools", () => {
   ]);
 });
 
-test("Codex runs in the read-only sandbox with exactly the phase 1 bridge tools", () => {
-  const { permissions, mcp } = agent("codex");
+test("Codex runs in the read-only sandbox, with web search off and exactly the phase 1 bridge tools", () => {
+  const { permissions, mcp, args } = agent("codex");
   assert.equal(permissions.codex.sandbox_mode, "read-only");
   assert.equal(permissions.codex.approval_policy, "never");
+  // codex-cli 0.167.0's key; its values are disabled, cached, indexed and live.
+  assert.deepEqual(args, ["-c", 'web_search="disabled"']);
   assert.deepEqual(sorted(mcp.bridge_tools), sorted(PHASE_1));
 });
 
-test("OpenCode denies shell, edit and web and gets exactly the phase 1 bridge tools", () => {
+test("OpenCode denies shell, edit, web and subagents and gets exactly the phase 1 bridge tools", () => {
   const { permissions, mcp } = agent("opencode");
   const rules = permissions.opencode.permission;
-  for (const key of ["bash", "edit", "webfetch", "external_directory"])
-    assert.equal(rules[key], "deny", key);
+  // Nothing may fall through to the foreground's `"*": "ask"`: no one watches that terminal.
+  assert.deepEqual(rules, {
+    bash: "deny",
+    edit: "deny",
+    webfetch: "deny",
+    websearch: "deny",
+    codesearch: "deny",
+    task: "deny",
+    external_directory: "deny",
+  });
   assert.deepEqual(sorted(mcp.bridge_tools), sorted(PHASE_1));
+});
+
+/** The args that name a model: `--model`, `--model=<m>`, `-m`, or a `-c model=…` override. */
+function modelArgs(args) {
+  return args
+    .map(String)
+    .filter((a) => a === "-m" || a.startsWith("--model") || /^\s*model\s*=/.test(a));
+}
+
+test("the model guard catches every way to name a model", () => {
+  for (const args of [
+    ["--model", "m"],
+    ["--model=m"],
+    ["-m", "m"],
+    ["-c", "model=m"],
+    ["--config", 'model="m"'],
+  ])
+    assert.notDeepEqual(modelArgs(args), [], args.join(" "));
+  assert.deepEqual(modelArgs(["-c", 'web_search="disabled"', "--disallowedTools", "Bash"]), []);
 });
 
 test("no agent names a model: the page picks it per setup state through openWorkspace", () => {
+  for (const runtime of ["claude", "codex", "opencode"])
+    assert.deepEqual(modelArgs(agent(runtime).args ?? []), [], runtime);
+});
+
+test("no agent stages context: a team-workspace launch skips it, so the command holds the rules", () => {
   for (const runtime of ["claude", "codex", "opencode"]) {
-    const { args = [] } = agent(runtime);
-    assert.ok(!args.includes("--model"), runtime);
-    assert.ok(!args.some((a) => String(a).startsWith("model=")), runtime);
+    const definition = agent(runtime);
+    assert.equal(definition.runtime, runtime);
+    assert.ok(!("context" in definition), runtime);
   }
+  assert.ok(!existsSync(join(PACK, "content/guide/PROMPT.md")));
 });
 
-test("each agent stages its own runtime's copy of the skill and the root prompt only", () => {
-  const stages = {
-    claude: ".claude/skills/codesense-setup",
-    codex: ".agents/skills/codesense-setup",
-    opencode: ".opencode/command/codesense-setup.md",
-  };
-  const prompt = { claude: "CLAUDE.md", codex: "AGENTS.md", opencode: "AGENTS.md" };
-  for (const [runtime, skill] of Object.entries(stages)) {
-    const { context, runtime: declared } = agent(runtime);
-    assert.equal(declared, runtime);
-    assert.deepEqual(context, [
-      { path: "guide/PROMPT.md", dest: prompt[runtime] },
-      { path: skill },
-    ]);
-  }
-});
-
-test("the root prompt is short and forbids secrets and unclicked changes", () => {
-  const text = readFileSync(join(PACK, "content/guide/PROMPT.md"), "utf8");
-  assert.ok(text.length < 1400, `${text.length} bytes`);
-  for (const rule of [/Next:/, /Never type, ask for or repeat secrets/, /click/])
-    assert.match(text, rule);
+test("the command opens with the root rules: reply, Next:, cards in the card line format, no ask_user", () => {
+  const text = readFileSync(join(PACK, "commands/codesense-setup.md"), "utf8");
+  const body = text.slice(text.indexOf("\n---\n", 4) + 5);
+  const rules = body.slice(0, body.indexOf("Argument:"));
+  for (const rule of [
+    /Reply with `reply`; the person never sees your terminal/,
+    /at most 120 words/,
+    /`Next:`/,
+    /never through `ask_user`/,
+    /`card: <step> · <class> · <act>=<label> \| <act>=<label>`/,
+    /`none=<label>`/,
+    /Never type, ask for or repeat secrets/,
+    /Never change anything without the person's click/,
+    /`Sources:`/,
+  ])
+    assert.match(rules, rule);
+  assert.ok(text.length < 4500, `${text.length} bytes`);
 });
 
 test("the old example recipe is gone and exactly one skill has the name", () => {
@@ -178,7 +208,6 @@ test("the docs bundle carries the pack's copies, and a hand edit to any one fail
     "getting-started/config/agents/guide-claude/agent.yaml",
     "getting-started/config/agents/guide-codex/agent.yaml",
     "getting-started/config/agents/guide-opencode/agent.yaml",
-    "getting-started/content/guide/PROMPT.md",
     "getting-started/content/guide/handoff.md",
     "getting-started/content/.claude/skills/codesense-setup/SKILL.md",
     "getting-started/content/.agents/skills/codesense-setup/SKILL.md",
@@ -206,6 +235,25 @@ test("the docs bundle carries the pack's copies, and a hand edit to any one fail
         `an edit to ${to} is caught`,
       );
       writeFileSync(path, original);
+    }
+    // A file the pack no longer has, left under one of its folders, is an orphan.
+    assert.deepEqual(docsRoots(manifest), [
+      "getting-started/config/agents/guide-claude/",
+      "getting-started/config/agents/guide-codex/",
+      "getting-started/config/agents/guide-opencode/",
+      "getting-started/content/.agents/skills/codesense-setup/",
+      "getting-started/content/.claude/skills/codesense-setup/",
+      "getting-started/content/.opencode/command/codesense-setup.md",
+      "getting-started/content/guide/",
+    ]);
+    for (const left of [
+      "getting-started/content/guide/PROMPT.md",
+      "getting-started/config/agents/guide-codex/notes.md",
+    ]) {
+      writeFileSync(join(dir, left), "left behind\n");
+      const { errors } = syncDocs(PACK, manifest, { check: true, docsRoot: dir });
+      assert.deepEqual(errors, [`docs orphan: ${left} is not in the pack (remove it)`]);
+      rmSync(join(dir, left));
     }
     writeFileSync(join(dir, pairs[0].to), "stale\n");
     const fixed = syncDocs(PACK, manifest, { check: false, docsRoot: dir });

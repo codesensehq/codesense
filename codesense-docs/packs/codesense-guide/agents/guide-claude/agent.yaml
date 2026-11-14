@@ -12,9 +12,6 @@ args:
 env:
   MAX_MCP_OUTPUT_TOKENS: "8000"
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
-context:
-  - { path: guide/PROMPT.md, dest: CLAUDE.md }
-  - { path: .claude/skills/codesense-setup }
 permissions:
   claude:
     # Anything not allowed below is refused, not asked.

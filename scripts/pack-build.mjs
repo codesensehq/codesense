@@ -9,7 +9,8 @@
 //      source mounts `kit.chat` and builds no chat of its own.
 // A pack with no skill part and no `files` is a legacy pack: schema-checked, never rewritten.
 //   5. for a pack the docs bundle carries (`DOCS_BUNDLED`), map its agents, `content/` and
-//      built skill copies into `codesense-docs/getting-started/`, and fail on drift there too.
+//      built skill copies into `codesense-docs/getting-started/`, and fail on drift there too,
+//      and on a file left under the pack's own folders there that the pack no longer has.
 //
 //   node scripts/pack-build.mjs            write the copies and `files`
 //   node scripts/pack-build.mjs --check    change nothing; exit 1 on any drift or error
@@ -400,12 +401,58 @@ export function docsMapping(dir, manifest) {
   return [...pairs.values()].sort((a, b) => (a.to < b.to ? -1 : 1));
 }
 
+/**
+ * The folders and files under `codesense-docs/` that belong to this pack alone: each agent's
+ * `config/agents/<id>/`, each content glob's fixed folder (`content/guide/**` gives
+ * `getting-started/content/guide/`), and each built skill copy (its folder for a `SKILL.md`,
+ * else the file). A file under one of them that no mapping writes is an orphan.
+ */
+export function docsRoots(manifest) {
+  const roots = new Set();
+  for (const part of manifest.parts ?? []) {
+    if (part.kind === "agent")
+      roots.add(`getting-started/config/agents/${part.file.split("/").at(-2)}/`);
+    else if (part.kind === "content")
+      for (const glob of part.paths) {
+        const fixed = glob.split("/");
+        const wild = fixed.findIndex((s) => /[*?]/.test(s));
+        const folder = (wild < 0 ? fixed.slice(0, -1) : fixed.slice(0, wild)).join("/");
+        if (folder.startsWith("content/") && folder.length > "content/".length)
+          roots.add(`getting-started/content/${folder.slice("content/".length)}/`);
+      }
+  }
+  for (const copy of skillCopies(manifest))
+    roots.add(
+      basename(copy.path) === "SKILL.md"
+        ? `getting-started/content/${dirname(copy.path)}/`
+        : `getting-started/content/${copy.path}`,
+    );
+  return [...roots].sort();
+}
+
+/** Files under the pack's docs roots that no mapping writes, as paths under `docsRoot`. */
+function docsOrphans(manifest, mapped, docsRoot) {
+  const orphans = [];
+  const walk = (rel) => {
+    const stat = statOrNull(join(docsRoot, rel));
+    if (!stat) return;
+    if (stat.isDirectory())
+      for (const name of readdirSync(join(docsRoot, rel)).sort()) walk(`${rel}/${name}`);
+    else if (!mapped.has(rel)) orphans.push(rel);
+  };
+  for (const root of docsRoots(manifest)) walk(root.replace(/\/$/, ""));
+  return orphans;
+}
+
 /** Check or write the docs-bundle copies of one pack. `docsRoot` is the `codesense-docs` folder. */
 export function syncDocs(dir, manifest, { check = false, docsRoot = DOCS_ROOT } = {}) {
   dir = resolve(dir);
   const errors = [];
   const written = [];
-  for (const { from, to } of docsMapping(dir, manifest)) {
+  const pairs = docsMapping(dir, manifest);
+  for (const orphan of docsOrphans(manifest, new Set(pairs.map((p) => p.to)), docsRoot))
+    errors.push(`docs orphan: ${orphan} is not in the pack (remove it)`);
+  for (const { from, to } of pairs) {
     const source = statOrNull(join(dir, from))?.isFile() ? readFileSync(join(dir, from)) : null;
     if (!source) {
       errors.push(`docs: ${from} is missing in the pack (build the pack first)`);

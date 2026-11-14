@@ -4,9 +4,11 @@ description: Sets up CodeSense with you. It checks this Mac, asks what you work 
 created_by: codesense
 runtime: codex
 launch: foreground
-context:
-  - { path: guide/PROMPT.md, dest: AGENTS.md }
-  - { path: .agents/skills/codesense-setup }
+# The page passes the model when it launches (setup model while setup is incomplete, the cheaper one after).
+args:
+  # No web search (checked against codex-cli 0.167.0: `web_search` is disabled|cached|indexed|live).
+  - -c
+  - web_search="disabled"
 permissions:
   codex:
     # A read-only sandbox: no file writes. The bridge list below is what it can call.
