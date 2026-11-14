@@ -168,8 +168,11 @@ export const SKILL_PATH = "skills/story-create/SKILL.md";
 export const GIT_ACCESS_PATH = "tools/git-access.md";
 export const GIT_ACCESS = {
   gh: "# Git access\n\nMethod: gh (the GitHub CLI, signed in).\n",
+  "github-mcp": "# Git access\n\nMethod: GitHub MCP (the github server's create_pull_request).\n",
   credentials: "# Git access\n\nMethod: the user's own git credentials. No pull request tool.\n",
 };
+// The one non-CodeSense tool the Foreman may call: a GitHub MCP method opens the PR with it.
+export const GITHUB_PR = "mcp__github__create_pull_request";
 export const SKILL = `# story-create
 
 Run both from the story's worktree:
@@ -181,8 +184,8 @@ Run both from the story's worktree:
 //   fail_first_pr: the first `gh pr create` fails.
 //   story_team: "generic" (default), "scripted" (team scripts and a story-create skill) or "docs"
 //     (the docs team: no user team).
-//   git_access: the method recorded at tools/git-access.md: "gh", "credentials" (plain git, no PR
-//     tool) or "none" (the default: no file, read_content_file finds nothing).
+//   git_access: the method recorded at tools/git-access.md: "gh", "github-mcp", "credentials" (plain
+//     git, no PR tool) or "none" (the default: no file, read_content_file finds nothing).
 //   no_remote: home has no `origin`.
 //   planted_prior: a previous run's worktree and remote branch already exist.
 //   handoff: a planted `foreman-x` worktree and a live child session.
@@ -238,7 +241,7 @@ export async function createFixture(options = {}) {
   const unknown = Object.keys(options).filter((k) => !KEYS.includes(k));
   if (unknown.length) throw new Error(`unknown fixture keys: ${unknown.join(", ")}`);
   if (!["generic", "scripted", "docs"].includes(options.story_team ?? "generic")) throw new Error(`unknown story_team ${options.story_team}`);
-  if (!["gh", "credentials", "none", undefined].includes(options.git_access)) throw new Error(`unknown git_access ${options.git_access}`);
+  if (![...Object.keys(GIT_ACCESS), "none", undefined].includes(options.git_access)) throw new Error(`unknown git_access ${options.git_access}`);
   if (!["mixed", undefined].includes(options.inbox)) throw new Error(`unknown inbox ${options.inbox}`);
   for (const k of ["fail_first_pr", "no_remote", "planted_prior", "handoff", "rename_launched", "no_repos"])
     if (k in options && typeof options[k] !== "boolean") throw new Error(`${k} must be true or false`);

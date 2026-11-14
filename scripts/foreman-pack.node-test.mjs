@@ -356,6 +356,7 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
     "I don't set timers.",
     "never launch a story lead or a specialist",
     "never answer a needs-you card for the person",
+    "they answer on the page",
     "no lead for that sprint is live on any machine",
     "one Foreman per Mac",
   ]) {
@@ -412,17 +413,34 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "`validate_story`",
     "`sprint: backlog`",
     "`planning`",
-    "gh pr create",
-    "tools/git-access.md",
-    "its PR tool",
-    "no `gh`; name the pushed branch",
-    "With no remote",
+    "Commit and push what the skill didn't, open the PR, remove the worktree",
+    "With no remote, no push or PR",
     "one command to merge",
     "never touch the canonical clone",
     "Home gets no commit",
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
+});
+
+test("every PR, story or not, goes through the recorded git-access method and never needs gh", () => {
+  // The rule sits on the PR form itself, so it covers a PR outside the story flow too (Trevor 42102).
+  const work = spec.split("## Where you work")[1].split("\n## ")[0];
+  const form = work.split("\n").find((line) => line.startsWith("- a PR"));
+  assert.ok(form, "the allowed forms list a PR form");
+  for (const phrase of [
+    "after `read_content_file` `tools/git-access.md`",
+    '`gh`: `gh pr create --head <branch> --title "<title>" --body "<body>"`',
+    "GitHub MCP: its PR tool",
+    "any other or none: no `gh`; name the pushed branch",
+  ]) {
+    assert.ok(form.includes(phrase), `the PR form says: ${phrase}`);
+  }
+  assert.equal(
+    spec.match(/gh pr create/g).length,
+    1,
+    "gh pr create appears only behind the record",
+  );
 });
 
 test("setup: offer once, launch the guide on a yes, resume, and take it back with a Set up: line", () => {
@@ -513,7 +531,6 @@ test("waiting: the chat surface's open needs-you cards only, and its view as a d
     "open cards only",
     `inbox_list {kind:"needs-you", limit:50}`,
     "story id",
-    "they answer on the page",
     "needs-you view",
     "never a copy",
   ]) {
@@ -583,7 +600,7 @@ test("a team's story-create scripts run inside a foreman-* worktree", () => {
 test("the spec's worktree, sprint-lead, story-script and handoff forms read literally", () => {
   for (const phrase of [
     "`../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
-    "launched by you for it",
+    "launched by you for sprint <n>",
     "Commit and push what the skill didn't",
     "`reply` once with `Foreman handoff:`",
   ]) {

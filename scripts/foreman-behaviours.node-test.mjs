@@ -11,7 +11,8 @@ import path from "node:path";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, fixtureFor, PRIOR_BRANCH, CONFIG, GIT_ACCESS_PATH } = await lib("fixture");
+const { createFixture, fixtureFor, PRIOR_BRANCH, CONFIG, GIT_ACCESS_PATH, GITHUB_PR } =
+  await lib("fixture");
 const { loadCases, loadExtraCases, grade } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval } = await lib("runner");
@@ -23,6 +24,7 @@ const EXTRA = [
   "new-story-generic",
   "new-story-git-access-credentials",
   "new-story-git-access-gh",
+  "new-story-git-access-github-mcp",
   "new-story-git-access-none",
   "new-story-no-remote",
   "new-story-scripted",
@@ -121,7 +123,13 @@ const WT_OF = (branch) => `../foreman-${branch.slice(8)}`;
 // The generic flow for one story, from the Create turn on, with knobs for a wrong agent.
 function makeStory(
   fx,
-  { branch = "foreman/dark-mode-ab12", base = "origin/main", validate = true, keep = false } = {},
+  {
+    branch = "foreman/dark-mode-ab12",
+    base = "origin/main",
+    validate = true,
+    keep = false,
+    readRecord = true,
+  } = {},
 ) {
   const wt = WT_OF(branch);
   const dir = path.join(fx.root, wt.slice(3));
@@ -140,7 +148,7 @@ function makeStory(
   fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
   if (base === "origin/main") {
     fx.git(["-C", wt, "push", "-u", "origin", branch]);
-    fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    if (readRecord) fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
     fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
   }
   if (!keep) fx.git(["worktree", "remove", wt]);
@@ -796,10 +804,10 @@ test("new-story: a pull request head given as owner:branch or -H<branch> is the 
 
 // ---- git access ---------------------------------------------------------------------------
 
-// The story flow of the generic case, ending where a driver chooses: read the record, or not;
-// open the PR, or not.
+// The story flow of the generic case, ending where a driver chooses: read the record (before the
+// PR, after it, or not at all); open the PR with gh, with the GitHub MCP tool, or not.
 const gitAccessStory =
-  ({ read = true, pr = false, push = true } = {}) =>
+  ({ read = true, readAfter = false, pr = false, push = true } = {}) =>
   async ({ caseDef, fx }) => {
     const [request, create] = caseDef.input.turns;
     const branch = "foreman/dark-mode-ab12";
@@ -822,26 +830,64 @@ const gitAccessStory =
     fx.write(path.join(fx.root, `${wt.slice(3)}.msg`), "Add the story\n");
     fx.git(["-C", wt, "commit", "-s", "-F", `${wt}.msg`]);
     if (push) fx.git(["-C", wt, "push", "-u", "origin", branch]);
-    if (read) fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
-    if (pr) fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
+    const readRecord = () => fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
+    if (read && !readAfter) readRecord();
+    if (pr === "gh") fx.gh(["pr", "create", "--head", branch, "--title", "x", "--body", "y"], dir);
+    if (pr === "mcp")
+      fx.tool(F, GITHUB_PR, {
+        owner: "acme",
+        repo: "demo",
+        head: branch,
+        base: "main",
+        title: "x",
+        body: "y",
+      });
+    if (readAfter) readRecord();
     fx.git(["worktree", "remove", wt]);
     fx.say("Done.");
   };
 
 test("git access: a recorded gh method opens the pull request with gh", async () => {
   const id = "new-story-git-access-gh";
-  assert.deepEqual((await play(gitAccessStory({ pr: true }), id)).failures, []);
+  assert.deepEqual((await play(gitAccessStory({ pr: "gh" }), id)).failures, []);
   redFor(await play(gitAccessStory({ pr: false }), id), /0 pr create calls, expected 1/);
+  redFor(await play(gitAccessStory({ pr: "mcp" }), id), /1 GitHub MCP pull requests, expected 0/);
   redFor(
-    await play(gitAccessStory({ pr: true, read: false }), id),
+    await play(gitAccessStory({ pr: "gh", read: false }), id),
     /never read the recorded git-access method/,
+  );
+  redFor(
+    await play(gitAccessStory({ pr: "gh", readAfter: true }), id),
+    /opened a pull request before reading the recorded git-access method/,
+  );
+});
+
+test("git access: each story's pull request reads the record first, not just the first story's", async () => {
+  redFor(
+    await play(
+      generic((i) => ({ readRecord: i === 0 })),
+      "new-story-generic",
+    ),
+    /opened a pull request before reading the recorded git-access method \(foreman\/dark-mode-cd34\)/,
+  );
+});
+
+test("git access: a recorded GitHub MCP method opens the pull request with its tool, never gh", async () => {
+  const id = "new-story-git-access-github-mcp";
+  assert.deepEqual((await play(gitAccessStory({ pr: "mcp" }), id)).failures, []);
+  redFor(await play(gitAccessStory({ pr: false }), id), /0 GitHub MCP pull requests, expected 1/);
+  redFor(await play(gitAccessStory({ pr: "gh" }), id), /1 gh calls with no gh git-access method/);
+  redFor(
+    await play(gitAccessStory({ pr: "mcp", readAfter: true }), id),
+    /opened a pull request before reading the recorded git-access method/,
   );
 });
 
 test("git access: with none recorded, or plain git credentials, push and hand over with zero gh calls", async () => {
   for (const id of ["new-story-git-access-none", "new-story-git-access-credentials"]) {
     assert.deepEqual((await play(gitAccessStory(), id)).failures, [], id);
-    redFor(await play(gitAccessStory({ pr: true }), id), /1 gh calls with no gh git-access method/);
+    redFor(await play(gitAccessStory({ pr: "gh" }), id), /1 gh calls with no gh git-access method/);
+    redFor(await play(gitAccessStory({ pr: "mcp" }), id), /1 GitHub MCP pull requests, expected 0/);
     redFor(
       await play(gitAccessStory({ read: false }), id),
       /never read the recorded git-access method/,
@@ -856,6 +902,7 @@ test("git access: with none recorded, or plain git credentials, push and hand ov
 test("git access: the fixture serves the record for gh and credentials, and nothing for none", async () => {
   for (const [method, text] of [
     ["gh", /Method: gh/],
+    ["github-mcp", /Method: GitHub MCP/],
     ["credentials", /own git credentials/],
     ["none", undefined],
   ]) {
@@ -863,7 +910,7 @@ test("git access: the fixture serves the record for gh and credentials, and noth
     try {
       const got = fx.tool(F, "read_content_file", { path: GIT_ACCESS_PATH });
       if (text) assert.match(got.text, text);
-      else assert.equal(got.text, undefined);
+      else assert.deepEqual(got, { error: "File not found" });
     } finally {
       fx.teardown();
     }

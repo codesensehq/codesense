@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { agentId, ghCommand, GIT_ACCESS_PATH, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
+import { agentId, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -219,16 +219,24 @@ function newStory(s, e) {
     if (!made.includes(branch.name)) out.push(`${branch.name} is not a branch a worktree was made on`);
   }
   if (remote) {
-    const read = firstSeq(calls, (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH);
-    if (read === Infinity) out.push("never read the recorded git-access method");
-    if (s.gitAccess !== "gh") {
-      // None recorded, or a method that can't open a PR: the branch is pushed and handed over.
-      if (s.ghCalls.length) out.push(`${s.ghCalls.length} gh calls with no gh git-access method`);
-    } else if (s.ghCalls.some((g) => g.seq < read)) out.push("opened a pull request before reading the recorded git-access method");
-    const heads = s.ghCalls.filter((g) => g.create).map((g) => headOf(g.argv));
-    const wanted = s.gitAccess === "gh" ? creates : 0;
-    if (heads.length !== wanted) out.push(`${heads.length} pr create calls, expected ${wanted}`);
-    if (wanted && !same([...heads].sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
+    // The recorded method opens each PR: gh's, or the GitHub MCP tool's. None recorded, or a
+    // method that can't open a PR: the branch is pushed and handed over, with no gh call.
+    const viaGh = s.ghCalls.filter((g) => g.create).map((g) => ({ seq: g.seq, head: headOf(g.argv) }));
+    const viaMcp = calls.filter((c) => c.tool === GITHUB_PR).map((c) => ({ seq: c.seq, head: c.args.head }));
+    if (s.gitAccess !== "gh" && s.ghCalls.length) out.push(`${s.ghCalls.length} gh calls with no gh git-access method`);
+    const wanted = (method) => (s.gitAccess === method ? creates : 0);
+    if (viaGh.length !== wanted("gh")) out.push(`${viaGh.length} pr create calls, expected ${wanted("gh")}`);
+    if (viaMcp.length !== wanted("github-mcp")) out.push(`${viaMcp.length} GitHub MCP pull requests, expected ${wanted("github-mcp")}`);
+    const prs = [...viaGh, ...viaMcp].sort((a, b) => a.seq - b.seq);
+    if (prs.length && !same(prs.map((p) => p.head).sort(), mine.map((b) => b.name).sort())) out.push("the pull requests were not opened from the story branches");
+    // The record is read before each PR (after the one before it), and at least once.
+    const isRead = (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH;
+    if (!calls.some(isRead)) out.push("never read the recorded git-access method");
+    else
+      prs.forEach((pr, i) => {
+        if (!calls.some((c) => isRead(c) && c.seq > (prs[i - 1]?.seq ?? 0) && c.seq < pr.seq))
+          out.push(`opened a pull request before reading the recorded git-access method (${pr.head})`);
+      });
   } else {
     if (s.ghCalls.length) out.push("opened a pull request with no remote");
     if (git.some((g) => /^(?:-C \S+ )?push\b/.test(g.line))) out.push("pushed with no remote");
@@ -392,7 +400,7 @@ const graders = {
     if (writes.length !== e.gh_writes) out.push(`${writes.length} gh writes, expected ${e.gh_writes} (the failed pr create)`);
     const failedCall = s.ghCalls.find((g) => g.create && g.ok === false);
     if (!failedCall) return [...out, "no pr create was attempted"];
-    const read = firstSeq(s.calls, (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH);
+    const read = firstSeq(foremanCalls(s), (c) => c.tool === "read_content_file" && c.args.path === GIT_ACCESS_PATH);
     if (!(read < failedCall.seq)) out.push("attempted the pull request before reading the recorded git-access method");
     // `--head owner:branch` names the same branch.
     const head = (flagValue(failedCall.argv, "-H", "--head") ?? failedCall.branch)?.replace(/^[^:/]+:/, "");
