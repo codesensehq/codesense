@@ -132,7 +132,7 @@ test("a script the page's hash does not cover fails: a sibling script, a second 
   });
 });
 
-test("unquoted or slash-separated src and href, a <base>, an @import and an <iframe> each fail", () => {
+test("unquoted, slash-separated or quote-adjacent src and href, a <base>, an @import and an <iframe> each fail", () => {
   const planted = [
     [
       ['<script src="/kit/v1/chat.js">', "<script src=guide.js>"],
@@ -154,6 +154,17 @@ test("unquoted or slash-separated src and href, a <base>, an @import and an <ifr
     ],
     [
       ['<script src="/kit/v1/chat.js">', '<script/src="https://x.test/a.js">'],
+      "a script the page's hash does not cover",
+    ],
+    [
+      [
+        '<link rel="stylesheet" href="/kit/v1/kit.css">',
+        '<link rel="stylesheet"href=https://x.test/a.css>',
+      ],
+      "style sheet other than the kit's",
+    ],
+    [
+      ['<script src="/kit/v1/chat.js">', '<script type="module"src="https://x.test/a.js">'],
       "a script the page's hash does not cover",
     ],
     [["<style>", '<base href="https://x.test/"><style>'], "<base>"],
