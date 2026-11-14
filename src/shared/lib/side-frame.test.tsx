@@ -33,6 +33,9 @@ describe("sideFrameDoc", () => {
     expect(doc).toBe(CSP_META + sidePrelude("") + HOSTILE);
     expect(sidePrelude("n1")).toContain(`addEventListener("pagehide"`);
     expect(sidePrelude("n1")).toContain(JSON.stringify(`${SIDE_LEFT_MESSAGE}n1`));
+    // document.open() would erase the listener: it is locked before the side runs.
+    expect(sidePrelude("n1")).toContain(`lock("open",refuse)`);
+    expect(sidePrelude("n1")).toContain("configurable:false");
   });
 
   it("the policy loads nothing from the network, the disk or a sibling file", () => {

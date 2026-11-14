@@ -56,6 +56,22 @@ test("a remote diff side renders and runs inline, but makes no request of its ow
   await expect(side.locator("#marker")).toHaveText("remote side", { timeout: 30_000 });
   // Its own script ran: the sandbox allows scripts, only the network is closed.
   await expect(side.locator("#marker")).toHaveAttribute("data-ran", "yes");
+  await expect(side.locator("#written")).toHaveText("written");
+  // Once parsed, the document can't be reopened: that would erase the side's unload report.
+  const reopened = await page
+    .frames()
+    .find((f) => f.url() === "about:srcdoc")!
+    .evaluate(() =>
+      ["open", "write", "writeln"].map((name) => {
+        try {
+          (document as any)[name]("<p>x</p>");
+          return "allowed";
+        } catch (e) {
+          return (e as DOMException).name;
+        }
+      }),
+    );
+  expect(reopened).toEqual(["SecurityError", "SecurityError", "SecurityError"]);
   const frame = page.frames().find((f) => f.url() === "about:srcdoc")!;
   await expect.poll(() => frame.evaluate(() => (window as any).fetched)).toBe("refused");
   await expect.poll(() => frame.evaluate(() => (window as any).socket)).toBe("refused");
@@ -100,6 +116,8 @@ for (const [name, path] of [
   ["location.href", "/nav-href"],
   ["a meta refresh", "/nav-refresh"],
   ["a link click", "/nav-click"],
+  ["document.open() and then location.href", "/nav-reopen"],
+  ["another realm's document.open() and then location.href", "/nav-realm"],
 ] as const) {
   test(`a side that navigates itself by ${name} sends at most one request and is closed`, async ({
     page,

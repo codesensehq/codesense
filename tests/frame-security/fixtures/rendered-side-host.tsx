@@ -8,7 +8,9 @@ import { SideFrame } from "../../../src/shared/lib/side-frame";
 //   through every subresource kind: fetch, image, stylesheet, nested frame, object,
 //   WebSocket and a blob worker;
 // - `href`, `refresh`, `click`: navigate itself to the probe (location.href, a meta
-//   refresh, a link click), the one request the CSP can't stop.
+//   refresh, a link click), the one request the CSP can't stop;
+// - `reopen`, `realm`: erase the page with document.open() (its own, or another
+//   realm's) before navigating, so no unload listener of the old page is left.
 const params = new URLSearchParams(location.search);
 const probe = `http://127.0.0.1:${params.get("probe")}`;
 const watch = `<script>
@@ -42,6 +44,8 @@ ${watch}
     window.worker = "refused";
   }
   document.getElementById("marker").dataset.ran = "yes";
+  // Writing while the page parses is ordinary page code and still works.
+  document.write('<p id="written">written</p>');
 </script>
 <img src="file:///etc/hosts">
 <img src="${probe}/img">
@@ -52,6 +56,23 @@ ${watch}
   refresh: `<meta http-equiv="refresh" content="0; url=${probe}/nav-refresh"><h1 id="marker">navigates</h1>`,
   click: `<h1 id="marker">navigates</h1><a id="go" href="${probe}/nav-click">go</a>
 <script>document.getElementById("go").click();</script>`,
+  // Erase the prelude's listener with document.open(), then navigate before the load.
+  reopen: `<h1 id="marker">navigates</h1><script>
+  document.addEventListener("DOMContentLoaded", () => {
+    try { document.open(); } catch {}
+    location.href = "${probe}/nav-reopen";
+  });
+</script>`,
+  // The same through another realm's Document.prototype.open (an about:blank frame).
+  realm: `<h1 id="marker">navigates</h1><script>
+  document.addEventListener("DOMContentLoaded", () => {
+    try {
+      const other = document.body.appendChild(document.createElement("iframe"));
+      other.contentWindow.Document.prototype.open.call(document);
+    } catch {}
+    location.href = "${probe}/nav-realm";
+  });
+</script>`,
 };
 
 createRoot(document.getElementById("root")!).render(

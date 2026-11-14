@@ -34,15 +34,25 @@ export const SIDE_LEFT_MESSAGE = "codesense:side-left:";
  * navigated, even before its own load finished), it tells the host, naming its
  * drawing by `nonce`. The poster is bound here, and the listener is the first
  * capture listener on the window, so the side's own scripts can neither replace
- * it nor stop it. It then removes itself, so the side's DOM is as it was
- * authored. The nonce is not a secret: a forged message can only close a side.
+ * it nor stop it. `document.open()` would erase it, so `open` is locked on
+ * `Document.prototype` and on the document, and `write`/`writeln` (which open
+ * the document once parsing is done) throw after parsing. It then removes
+ * itself, so the side's DOM is as it was authored. The nonce is not a secret: a
+ * forged message can only close a side.
  */
 export function sidePrelude(nonce: string): string {
   const message = JSON.stringify(SIDE_LEFT_MESSAGE + nonce);
   return (
-    `<script>(()=>{const post=parent.postMessage.bind(parent);` +
+    `<script>(()=>{const post=parent.postMessage.bind(parent),doc=document,` +
+    `proto=Document.prototype,write=proto.write,writeln=proto.writeln,` +
+    `refuse=()=>{throw new DOMException("A rendered diff side can't reopen its document","SecurityError")},` +
+    `lock=(name,value)=>{for(const at of [proto,doc])` +
+    `Object.defineProperty(at,name,{value,writable:false,configurable:false})};` +
     `addEventListener("pagehide",()=>post(${message},"*"),true);` +
-    `document.currentScript.remove()})()</script>`
+    `lock("open",refuse);` +
+    `lock("write",function(...a){if(doc.readyState!=="loading")refuse();return write.apply(this,a)});` +
+    `lock("writeln",function(...a){if(doc.readyState!=="loading")refuse();return writeln.apply(this,a)});` +
+    `doc.currentScript.remove()})()</script>`
   );
 }
 
