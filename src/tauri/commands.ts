@@ -5622,11 +5622,13 @@ export interface GitStatus {
   version: string | null;
 }
 
-/** The GitHub CLI, detected like git. Whether it is signed in is not part of this status. */
+/** The GitHub CLI, detected like git. Whether it is signed in is not part of this status.
+ *  `resolving` is true at startup until the background login-shell `$PATH` probe has run. */
 export interface GhStatus {
   available: boolean;
   path: string | null;
   version: string | null;
+  resolving: boolean;
 }
 
 export interface AgentBinaryStatus {

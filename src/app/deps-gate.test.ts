@@ -26,7 +26,7 @@ function status(
 ): DependencyStatus {
   return {
     git: { available: false, path: null, version: null, ...git },
-    gh: { available: false, path: null, version: null },
+    gh: { available: false, path: null, version: null, resolving: false },
     agents: {
       [basename]: { ...agent(), ...claude },
     },
@@ -103,7 +103,7 @@ describe("computeDepsReady (SW-AN-3 / SW-AN-44)", () => {
   it("holds the splash on any resolving agent when the basename is unknown (order-independent)", () => {
     const s: DependencyStatus = {
       git: { available: true, path: "/usr/bin/git", version: "2.44" },
-      gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0" },
+      gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0", resolving: false },
       agents: {
         aider: { ...agent(), available: true, path: "/usr/bin/aider" },
         claude: { ...agent(), resolving: true },

@@ -44,7 +44,7 @@ function status(
 ): DependencyStatus {
   return {
     git: { available: true, path: "/usr/bin/git", version: "2.50.0" },
-    gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0" },
+    gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0", resolving: false },
     agents: {
       claude: {
         available: true,
