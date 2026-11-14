@@ -7,12 +7,20 @@
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head.
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message).
 //  chips: [{label, text}]: one-tap messages above the composer, sent like typed text.
+//  copy: the page's own words over CHAT_COPY, one level deep (a section it names keeps the keys it leaves out).
+//  target also takes, all off by default:
+//   pick(peerRows)->row: the live row, for presence and for the row a send goes to (default: the first that has not exited, and for a send the first that is joinable).
+//   handles(peerRows)->[handle]: more handles whose messages are the peer's side of the thread (an older peer's).
+//   sources(peerRows)->[id]: the mailboxes the thread reads, one read each (transport.threadOf(id), plus the role queue), instead of read(); a source that fails never hides the rest, and the thread says so (unread, stale rows).
+//   bindLaunched, keepUnsent: the launch's rules (launch.js).
+// The mount returns post(text) (a message from another control, true when it went), threadFailed(), threadSettled() and refresh(onlyNew), which reads again (only the sources not read yet).
 // state is {lead, fail(what,text), clear(what)}; fail puts a role=alert row in the thread's status slot.
 import {h} from './dom.js';
-import {CHAT_COPY,failureText,modelLabel,timeLabel} from './copy.js';
-import {createLaunch,parseFailure} from './launch.js';
+import {CHAT_COPY,failureText,mergeCopy,modelLabel,timeLabel} from './copy.js';
+import {createLaunch,joinable,parseFailure} from './launch.js';
 import {activityOf,leadRowsOf,liveOf,presenceOf} from './presence.js';
 import {mergeThread,newestFrom,sideOf} from './thread.js';
+import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {cardAnswer,createMarkLatch,parseCard} from './chat-core.js';
@@ -41,62 +49,72 @@ const storyTarget=(storyId,leadRole)=>({
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[]}){
- const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard;
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],copy:words=null}){
+ const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
  const cardState=new Map(),drafts=new Map();
  let refocusCard=null;
- let started=false,firstRead=Promise.resolve(),rows=[],thread=[],model=null,joinedAt=null,runningSince=0,lastLiveState=null,launchSessionId=null,isDone=done,awaitBase=null,gen=0,refocus=false;
+ let started=false,gotRows=false,firstRead=Promise.resolve(),rows=[],thread=[],model=null,joinedAt=null,runningSince=0,lastLiveState=null,launchSessionId=null,isDone=done,awaitBase=null,gen=0,refocus=false;
  const streams=new Map(),watched=new Set(),listeners=new Set(),cache=new Map();
  const fails=new Map();
  const wrapped={launch:async prompt=>{const result=await transport.launch(prompt);if(result&&result.sessionId)launchSessionId=result.sessionId;return result;},send:(handle,text)=>transport.send(handle,text)};
- const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue});
- const live=()=>liveOf(target.rows(rows));
- const leadHandles=()=>new Set(target.rows(rows).map(row=>row.handle));
+ const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue,pickLive:target.pick,bindLaunched:target.bindLaunched,keepUnsent:target.keepUnsent});
+ // The live row for presence: the launched row while it can be joined (bindLaunched), else the page's rule over the peer rows.
+ const live=()=>{const own=target.bindLaunched?launch.launchedIn(rows):null;return joinable(own)?own:(target.pick||liveOf)(target.rows(rows));};
+ const leadHandles=()=>new Set([...target.rows(rows).map(row=>row.handle),...(target.handles?target.handles(target.rows(rows)):[])]);
+ // target.sources: the thread is read by source, each on its own.
+ const sources=target.sources?createSources({transport,clock,peers:()=>target.rows(rows),sourcesOf:target.sources}):null;
  const leadCount=()=>{const handles=leadHandles();return thread.filter(row=>sideOf(row,handles)==='lead').length+streams.size;};
- const presence=()=>presenceOf(live(),{launch:{state:launch.state,failure:launch.failure,stuck:launch.stuck},runningSince,done:isDone});
+ const presence=()=>presenceOf(live(),{launch:{state:launch.state,failure:launch.failure,stuck:launch.stuck},runningSince,done:isDone},copy);
  // A dead or stuck launch points at the launched session first: another lead row can be live to presence.
  const launchedFirst=()=>launch.stuck||(launch.state==='failed'&&launch.failure.kind==='exited');
  const terminalTarget=()=>(launchedFirst()&&launchSessionId)||(live()&&live().sessionId)||launchSessionId||null;
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
- const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||'Story lead chat'});
+ const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
  const pin=pinToBottom(log,{win});
  const status=h('div',{class:'status-slot',id:'sv-status',tabindex:'-1'});
- const composer=createComposer({onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel});
+ const composer=createComposer({onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
  const sendChip=text=>{awaitBase=leadCount();fails.clear();launch.send(text);};
- const chipsBox=chips.length?h('div',{class:'chips',role:'group','aria-label':CHAT_COPY.chips},...chips.map(chip=>h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label))):null;
+ const chipsBox=chips.length?h('div',{class:'chips',role:'group','aria-label':copy.chips},...chips.map(chip=>h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label))):null;
  el.replaceChildren(h('div',{class:'chatcol'},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
  const bubble=(item,side)=>h('div',{class:`msg ${side}`,'data-mid':item.id===undefined?null:String(item.id)},
   h('div',{class:'meta'},`${item.who} · ${timeLabel(item.at)}`),h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null);
- const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',CHAT_COPY.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},CHAT_COPY.row.typing));
- const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?CHAT_COPY.terminal:CHAT_COPY.terminalOff);};
+ const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
+ const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
  const alertRow=(kind,why,code,...extra)=>h('div',{class:'sys danger',role:'alert','data-row':kind},alertIcon(),h('span',{class:'why'},why),code?h('code',{class:'code'},code):null,...extra);
  // Status rows are reconciled by signature, like the thread: a pushed event that changes nothing leaves the node (focus on its button, the role=alert announcement) alone.
  const statusCache=new Map();
+ // A page that reads its thread by source (target.sources): history that could not be read says so with Retry; a refresh that failed after a good read says when, so old mail is not taken as current.
+ const readRows=()=>{
+  if(!sources)return [];
+  const retry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{readThread();}},copy.row.retry),stale=sources.staleAt();
+  if(sources.failedNow())return [{id:'unread',sig:'u',make:()=>alertRow('unread',copy.row.unread,'',retry())}];
+  return stale===null?[]:[{id:'stale',sig:'st|'+stale,make:()=>h('div',{class:'sys warn',role:'status','data-row':'stale'},h('span',{},copy.row.stale(timeLabel(stale))),retry())}];
+ };
  function statusItems(){
-  const state=launch.state,p=presence(),on=Boolean(terminalTarget()),out=[];
+  const state=launch.state,p=presence(),on=Boolean(terminalTarget()),out=[...readRows()];
   for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'');row.setAttribute('data-fail',what);return row;}});
   if((state==='starting'||state==='slow')&&launch.stuck){
-   out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},CHAT_COPY.row.needsTerminal),termButton('sv-term-stuck'))});
+   out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},copy.row.needsTerminal),termButton('sv-term-stuck'))});
   }else if(state==='starting'||state==='slow'){
-   out.push({id:'starting',sig:'s',make:()=>h('div',{class:'sys','data-row':'starting'},face('starting',`${CHAT_COPY.lead} · ${CHAT_COPY.header.starting}`),h('span',{},CHAT_COPY.row.starting))});
-   if(state==='slow')out.push({id:'slow',sig:'slow|'+on,make:()=>h('div',{class:'sys warn','data-row':'slow'},h('span',{},CHAT_COPY.row.slow),termButton('sv-term-slow'))});
+   out.push({id:'starting',sig:'s',make:()=>h('div',{class:'sys','data-row':'starting'},face('starting',`${copy.lead} · ${copy.header.starting}`),h('span',{},copy.row.starting))});
+   if(state==='slow')out.push({id:'slow',sig:'slow|'+on,make:()=>h('div',{class:'sys warn','data-row':'slow'},h('span',{},copy.row.slow),termButton('sv-term-slow'))});
   }else if(state==='failed'){
    const failure=launch.failure;
-   out.push({id:'failed',sig:['f',failure.kind,failure.code,failureText(failure),on].join('|'),make:()=>alertRow('failed',failureText(failure),failure.code,failure.kind==='timeout'||failure.kind==='exited'?termButton('sv-term-failed'):null,
-    h('button',{type:'button',class:'btn sm','data-retry':'1',onclick:()=>{refocus=true;launch.retry();status.focus();}},CHAT_COPY.row.retry))});
+   out.push({id:'failed',sig:['f',failure.kind,failure.code,failureText(failure,copy),on].join('|'),make:()=>alertRow('failed',failureText(failure,copy),failure.code,failure.kind==='timeout'||failure.kind==='exited'?termButton('sv-term-failed'):null,
+    h('button',{type:'button',class:'btn sm','data-retry':'1',onclick:()=>{refocus=true;launch.retry();status.focus();}},copy.row.retry))});
   }else{
    const sf=launch.sendFailure;
-   if(sf)out.push({id:'send-failed',sig:['sf',sf.why,sf.code].join('|'),make:()=>alertRow('send-failed',CHAT_COPY.failure.send(sf.why||sf.code),sf.code,
-    h('button',{type:'button',class:'btn sm','data-retry-send':'1',onclick:()=>{launch.retrySend();}},CHAT_COPY.row.retry))});
+   if(sf)out.push({id:'send-failed',sig:['sf',sf.why,sf.code].join('|'),make:()=>alertRow('send-failed',copy.failure.send(sf.why||sf.code),sf.code,
+    h('button',{type:'button',class:'btn sm','data-retry-send':'1',onclick:()=>{launch.retrySend();}},copy.row.retry))});
    if(joinedAt!==null){
-    const text=CHAT_COPY.row.joined(model?modelLabel(model):CHAT_COPY.row.modelNone,activityOf(live(),runningSince));
-    out.push({id:'joined',sig:['j',p.face,p.header,text].join('|'),make:()=>h('div',{class:'sys','data-row':'joined'},face(p.face,`${CHAT_COPY.lead} · ${p.header}`),h('span',{},text))});
+    const text=copy.row.joined(model?modelLabel(model):copy.row.modelNone,activityOf(live(),runningSince,copy));
+    out.push({id:'joined',sig:['j',p.face,p.header,text].join('|'),make:()=>h('div',{class:'sys','data-row':'joined'},face(p.face,`${copy.lead} · ${p.header}`),h('span',{},text))});
    }
   }
   return out;
@@ -132,20 +150,23 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   for(const row of thread){
    const side=sideOf(row,handles),needs=cards!==false&&row.kind==='needs-you'&&side==='lead';
    if(needs){entries.push(cardEntry(row));continue;}
-   const who=side==='you'?CHAT_COPY.who.you:side==='lead'?target.leadName(row):(row.fromName||row.from||''),own=sentHere.get(row.messageId),mark=own?markOfItem(own):null;
-   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,row.text,side,row.createdAtMs,mark].join('|'),make:()=>bubble({id:row.messageId,text:row.text||row.summary||'',mark:mark&&CHAT_COPY.mark[mark],markKey:mark,who,at:row.createdAtMs},side)});
+   const who=side==='you'?copy.who.you:side==='lead'?target.leadName(row):(row.fromName||row.from||''),own=sentHere.get(row.messageId),mark=own?markOfItem(own):null;
+   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,row.text,side,row.createdAtMs,mark].join('|'),make:()=>bubble({id:row.messageId,text:row.text||row.summary||'',mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},side)});
   }
   for(const item of launch.messages){
    if(item.messageId!==undefined&&rowIds.has(item.messageId))continue;
    const mark=markOfItem(item);
-   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble({text:item.text,mark:CHAT_COPY.mark[mark]||null,markKey:mark,who:CHAT_COPY.who.you,at:item.sentAt},'you')});
+   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble({text:item.text,mark:copy.mark[mark]||null,markKey:mark,who:copy.who.you,at:item.sentAt},'you')});
   }
   entries.sort((a,b)=>a.t-b.t);
-  for(const [id,text] of streams)if(!rowIds.has(id))entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble({id,text,who:CHAT_COPY.lead,at:clock.now()},'lead')});
+  for(const [id,text] of streams)if(!rowIds.has(id))entries.push({t:Infinity,id:'s'+id,sig:'s|'+id+'|'+text,make:()=>bubble({id,text,who:copy.lead,at:clock.now()},'lead')});
   return entries;
  }
  const awaiting=()=>awaitBase!==null&&leadCount()<=awaitBase&&(launch.state==='joined'||Boolean(live()&&live().state==='running'));
+ // A result that names only a handle (a team workspace open) finds its session through the launch's launchedRow, so Show terminal works after a failed start.
+ function noteLaunched(){if(!target.bindLaunched)return;const row=launch.launchedRow();if(row)launchSessionId=row.sessionId;}
  function render(){
+  noteLaunched();
   const p=presence();
   if(launch.state==='joined'&&joinedAt===null){
    joinedAt=clock.now();const row=live();
@@ -168,35 +189,53 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   for(const fn of listeners)fn();
  }
  // --- data: the thread is inbox({sessionId}) for each lead row of this story plus the role queue, merged.
- async function readThread(){
+ // By source: each answer is kept on its own and a late one never undoes a newer one, so no read is dropped for being old.
+ async function readSources(onlyNew){
+  const mine=++gen,peers=target.rows(rows);
+  for(const row of peers)watched.add(row.sessionId);
+  took(await sources.read(mine,onlyNew,early=>{thread=early;render();}));
+ }
+ // A thread read landed: it settles the running time, the streamed rows it now holds and the wait for a reply.
+ function took(next){
+  thread=next;
+  if(runningSince===0)runningSince=newestFrom(thread,leadHandles());
+  for(const row of thread)streams.delete(row.messageId);
+  if(awaitBase!==null&&leadCount()>awaitBase)awaitBase=null;
+  render();
+ }
+ async function readThread(onlyNew=false){
+  if(sources)return readSources(onlyNew);
   const mine=++gen,peers=target.rows(rows);
   for(const row of peers)watched.add(row.sessionId);
   let lists;
   try{lists=await target.read(peers,transport);}catch(error){if(mine===gen){fails.set('thread',(error&&error.message)||String(error));render();}return;}
   if(mine!==gen)return;
   fails.delete('thread');
-  thread=mergeThread(...lists);
-  if(runningSince===0)runningSince=newestFrom(thread,leadHandles());
-  for(const row of thread)streams.delete(row.messageId);
-  if(awaitBase!==null&&leadCount()>awaitBase)awaitBase=null;
-  render();
+  took(mergeThread(...lists));
  }
  function onRows(next){
+  const firstRoster=!gotRows;gotRows=true;
   const before=live();rows=next;const now=live();
   if(now&&now.state==='running'&&(!before||before.state!=='running')&&lastLiveState!==null)runningSince=clock.now();
   lastLiveState=now?now.state:'none';
   launch.rows(next);
   const moved=target.follow&&(before&&before.handle)!==(now&&now.handle);
   if(moved)pin.reset();
-  if(!started||moved||target.rows(next).some(row=>!watched.has(row.sessionId))){const read=readThread();if(!started)firstRead=read;started=true;}else render();
+  // A source (a handle) that comes back on a session not seen before is read again; a roster then reads only the sources it adds.
+  const again=sources?sources.seen(target.rows(next),firstRoster):false;
+  if(!started||moved||again||target.rows(next).some(row=>!watched.has(row.sessionId))){const more=started&&Boolean(sources);const read=readThread(more);if(!started)firstRead=read;started=true;}else render();
  }
  const offs=[reads.on('sessions',()=>onRows(reads.latestSessions())),reads.on('inbox',()=>{readThread();}),reads.on('activity',()=>render())];
  if(typeof transport.stream==='function')offs.push(transport.stream(chunk=>{streams.set(chunk.messageId,(streams.get(chunk.messageId)||'')+chunk.text);render();}));
- const onUnload=event=>{if(launch.hasHeld()){event.preventDefault();event.returnValue=CHAT_COPY.unload;return CHAT_COPY.unload;}};
+ const onUnload=event=>{if(launch.hasHeld()){const text=launch.hasKept()?copy.unloadKept:copy.unload;event.preventDefault();event.returnValue=text;return text;}};
  win.addEventListener('beforeunload',onUnload);
  render();
  if(layout.autofocus!==false)composer.input.focus();
- reads.sessions();
+ // A page that reads by source does not wait on the roster: a sessions read that fails or never answers still settles the first thread read.
+ if(sources){started=true;firstRead=readThread(true);}
+ // A roster that answered before this mount (a page opened with a session in its address reads it first) is taken as the first one.
+ const roster=reads.sessions();
+ if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());});
  return {
   unmount(){offs.forEach(off=>off&&off());pin.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
@@ -205,7 +244,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   focusLead:()=>{const target=terminalTarget();return target?Promise.resolve(transport.gotoAgent(target)):Promise.reject(new Error('not running'));},
   stopLead:()=>{const row=live();return row?Promise.resolve(transport.stop(row.handle)):Promise.reject(new Error('not running'));},
   // The first thread read, once the first roster is in: a page that paints around the chat waits on it. refresh() re-reads the thread.
-  loaded:()=>reads.sessions().then(()=>firstRead),refresh:()=>readThread(),
+  loaded:()=>reads.sessions().then(()=>firstRead),refresh:onlyNew=>readThread(onlyNew),
+  // A message from another control (a page's starter) goes the way a typed one does; true when it went.
+  post:text=>composer.post(text),threadFailed:()=>Boolean(sources&&sources.failedNow()),threadSettled:()=>!sources||sources.settled(),
   presence,launch,showTerminal,thread:()=>thread,leadHandles,terminalOn:()=>Boolean(terminalTarget()),lead:live,
   setDone(value){isDone=Boolean(value);render();},
   subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},
