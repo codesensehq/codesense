@@ -127,6 +127,8 @@ struct AgentEntry {
 struct DependencyManagerInner {
     git_path: Option<PathBuf>,
     git_version: Option<String>,
+    /// The user's `gh`. Optional: only the setup guide reads it.
+    gh: GhEntry,
     /// SW-AN-44: resolved agent binaries keyed by descriptor basename (was a single
     /// `claude_path` + `claude_resolving`). Startup seeds+probes the bundled
     /// (default) basename exactly as before; additional basenames are filled by
@@ -160,6 +162,28 @@ pub struct GitStatus {
     pub version: Option<String>,
 }
 
+/// The GitHub CLI's detected state. Startup only stats the known locations (no spawn, no
+/// login shell); the startup background thread resolves it against the shared login-shell
+/// `$PATH`, fills the version and clears `resolving`.
+#[derive(Debug, Clone, Default)]
+struct GhEntry {
+    path: Option<PathBuf>,
+    version: Option<String>,
+    resolving: bool,
+}
+
+/// The GitHub CLI, reported like git. Whether it is signed in is not part of the status;
+/// the read-only `probe_environment` tool answers that. `resolving` is true until the
+/// startup background resolution has run.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhStatus {
+    pub available: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    pub resolving: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentBinaryStatus {
@@ -187,6 +211,7 @@ pub struct AgentBinaryStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DependencyStatus {
     pub git: GitStatus,
+    pub gh: GhStatus,
     /// SW-AN-44: per-agent status keyed by descriptor basename (was a single claude-named
     /// `claude` field). With only the built-in Claude descriptor installed, `agents["claude"]`
     /// is byte-identical to the old `.claude`. Serializes as a JSON object.
@@ -212,6 +237,13 @@ impl DependencyManager {
         }
 
         let (git_path, git_version) = Self::resolve_git();
+        // gh starts resolving: a stat of its known locations only. The login-shell `$PATH`
+        // and `gh --version` run on the background thread with the agents.
+        let gh = GhEntry {
+            path: stat_known_gh(&known_gh_locations()),
+            version: None,
+            resolving: true,
+        };
         // SW-OB-12: the bundled agent is resolved ENTIRELY on a background thread
         // (see `spawn_agent_background_resolve`), so `.setup()` / first paint never
         // blocks on the login-shell `$PATH` probe or a `<agent> --version` spawn.
@@ -241,6 +273,7 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path,
                 git_version,
+                gh,
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -272,6 +305,7 @@ impl DependencyManager {
             basenames.push(default_basename);
         }
         let login_path = probe_login_path();
+        self.resolve_gh_with_login_path(login_path.as_deref());
         for basename in &basenames {
             self.resolve_agent_with_login_path(basename, login_path.as_deref(), || {});
         }
@@ -294,6 +328,41 @@ impl DependencyManager {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.git_path = git_path;
         inner.git_version = git_version;
+    }
+
+    /// Re-resolve the GitHub CLI only, against the process-wide login-shell `$PATH`
+    /// ([`cached_login_shell_path`]: probed once, then a stat per PATH entry and
+    /// `gh --version`). Blocking: call it off the main thread.
+    pub fn re_resolve_gh(&self) {
+        let login_path = cached_login_shell_path();
+        self.resolve_gh_with_login_path(login_path.as_deref());
+    }
+
+    /// Resolve `gh` against an already-probed login-shell `$PATH` (`None` = the probe
+    /// failed) and clear its `resolving`. Spawns `gh --version`: off the main thread only.
+    fn resolve_gh_with_login_path(&self, login_path: Option<&str>) {
+        let (path, version) = resolve_gh_with(
+            login_path,
+            known_gh_locations(),
+            user_local_gh_locations(),
+            parse_git_version,
+        );
+        debug!(target: "deps", "gh resolve complete: gh={path:?} (version={version:?})");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.gh = GhEntry {
+            path,
+            version,
+            resolving: false,
+        };
+    }
+
+    /// Whether gh is still waiting for its background resolution.
+    pub fn gh_resolving(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .gh
+            .resolving
     }
 
     /// SW-OB-12 / SW-AN-44: resolve `basename` against an already-probed login-shell
@@ -581,19 +650,50 @@ impl DependencyManager {
         self.fill_shadowed(basename, pending, parse_agent_version);
     }
 
-    /// Claim the first probe of `basename`: `true` when nothing has probed it yet, and the
-    /// claim is recorded (as not found) so a later or concurrent warm skips it. A warm
-    /// never probes a claimed basename again; a launch retries a miss once its cooldown
-    /// passes, and the explicit re-check ([`Self::re_resolve`]) probes it at once.
-    fn claim_first_probe(&self, basename: &str) -> bool {
+    /// Claim the first probe of each of `basenames` that nothing has probed yet, under one
+    /// lock, and return the claimed ones. A claim is recorded as not found and resolving, so
+    /// a CLI waiting for its probe never reads as not installed, and a later or concurrent
+    /// warm skips it. A warm never probes a claimed basename again; a launch retries a miss
+    /// once its cooldown passes, and the explicit re-check ([`Self::re_resolve`]) probes it
+    /// at once.
+    fn claim_first_probes<'a>(&self, basenames: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.agents.contains_key(basename) {
-            return false;
+        basenames
+            .into_iter()
+            .filter(|basename| {
+                if inner.agents.contains_key(*basename) {
+                    return false;
+                }
+                inner.agents.insert(
+                    basename.to_string(),
+                    AgentEntry {
+                        resolving: true,
+                        ..Default::default()
+                    },
+                );
+                true
+            })
+            .collect()
+    }
+
+    /// Warm `basenames`: claim every one not probed yet before probing the first, then
+    /// `resolve` each claimed basename in order against one login-shell `$PATH`
+    /// (`login_path`, probed only when something was claimed). Returns how many it probed.
+    fn warm_builtins_with(
+        &self,
+        basenames: &[&str],
+        login_path: impl FnOnce() -> Option<String>,
+        mut resolve: impl FnMut(&str, Option<&str>),
+    ) -> usize {
+        let claimed = self.claim_first_probes(basenames.iter().copied());
+        if claimed.is_empty() {
+            return 0;
         }
-        inner
-            .agents
-            .insert(basename.to_string(), AgentEntry::default());
-        true
+        let login_path = login_path();
+        for basename in &claimed {
+            resolve(basename, login_path.as_deref());
+        }
+        claimed.len()
     }
 
     /// Whether the background resolution for `basename` is still in flight (the
@@ -630,6 +730,12 @@ impl DependencyManager {
                 available: inner.git_path.is_some(),
                 path: inner.git_path.as_ref().map(|p| p.display().to_string()),
                 version: inner.git_version.clone(),
+            },
+            gh: GhStatus {
+                available: inner.gh.path.is_some(),
+                path: inner.gh.path.as_ref().map(|p| p.display().to_string()),
+                version: inner.gh.version.clone(),
+                resolving: inner.gh.resolving,
             },
             agents: inner
                 .agents
@@ -724,6 +830,7 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents: BTreeMap::new(),
             }),
             stale_resolve: Mutex::new(()),
@@ -759,11 +866,22 @@ impl DependencyManager {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
             known_locations: Box::new(no_known_locations),
         }
+    }
+
+    /// Mark `gh` found at `path` with `version`, as a resolution would.
+    pub(crate) fn set_gh_for_test(&self, path: &str, version: &str) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.gh = GhEntry {
+            path: Some(PathBuf::from(path)),
+            version: Some(version.to_string()),
+            resolving: false,
+        };
     }
 
     /// [`Self::re_resolve_stale`] against the PATH value `login_path` instead of a
@@ -1037,6 +1155,48 @@ fn known_git_locations() -> Vec<PathBuf> {
     locs
 }
 
+/// Where `gh` is usually installed: Homebrew (both architectures) and the official
+/// installer's `/usr/local/bin`. User-local `~/.local/bin` is not here, so a stale copy
+/// there never wins over the user's own `$PATH` (see [`user_local_gh_locations`]).
+fn known_gh_locations() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/opt/homebrew/bin/gh"),
+        PathBuf::from("/usr/local/bin/gh"),
+    ]
+}
+
+/// User-local `gh`, tried last: after the login-shell `$PATH` and the known locations.
+fn user_local_gh_locations() -> Vec<PathBuf> {
+    dirs::home_dir()
+        .map(|home| home.join(".local/bin/gh"))
+        .into_iter()
+        .collect()
+}
+
+/// The startup check for `gh`: the first of `known` that is an executable file. A stat
+/// only, with no spawn, so it never delays first paint.
+fn stat_known_gh(known: &[PathBuf]) -> Option<PathBuf> {
+    known
+        .iter()
+        .find_map(|path| is_executable_file(path).then(|| path.clone()))
+}
+
+/// Pick the user's `gh`: the installs on the login-shell `$PATH` (`login_path`) in PATH
+/// order, then `known`, then `user_local`; the first whose version parses wins. There is
+/// no version floor: this is the agent CLIs' candidate walk ([`resolve_agent_binary`])
+/// with a floor every version meets. The version parse is injected so tests never spawn
+/// a real `gh`.
+fn resolve_gh_with(
+    login_path: Option<&str>,
+    known: Vec<PathBuf>,
+    user_local: Vec<PathBuf>,
+    parse_version: impl Fn(&Path) -> Option<String>,
+) -> (Option<PathBuf>, Option<String>) {
+    let fallback = known.into_iter().chain(user_local).collect();
+    let resolution = resolve_agent_binary("gh", login_path, fallback, parse_version, |_| true);
+    (resolution.path, resolution.version)
+}
+
 /// Resolve a versioned binary the way the user's environment would: (a) stat a
 /// list of known install locations, spawning `<bin> --version` to gate each hit
 /// against `meets_floor`; then (b) a login-shell PATH probe for the miss (picks
@@ -1114,10 +1274,7 @@ fn resolve_versioned_binary(
 fn login_probe_shell() -> String {
     if let Ok(shell) = std::env::var("SHELL") {
         let path = Path::new(&shell);
-        let base_ok = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .is_some_and(|base| matches!(base, "zsh" | "bash"));
+        let base_ok = takes_lic(path);
         // Require the path to actually exist — a stale `$SHELL` (e.g. Homebrew
         // zsh after uninstall) would otherwise make every spawn fail with no
         // fallback. `exists()` here is fine: this runs on the background thread.
@@ -1126,6 +1283,24 @@ fn login_probe_shell() -> String {
         }
     }
     "zsh".to_string()
+}
+
+/// Whether `shell` is one the probes run with `-lic`: zsh or bash.
+fn takes_lic(shell: &Path) -> bool {
+    shell
+        .file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|base| matches!(base, "zsh" | "bash"))
+}
+
+/// The shell the env-set probe runs, given `$SHELL` (`shell_env`): the login probe's
+/// shell, or `None` when `$SHELL` names another shell (fish, nu, ...), whose variables a
+/// zsh stand-in would misread as unset.
+fn env_probe_shell(shell_env: Option<&str>) -> Option<String> {
+    match shell_env {
+        Some(shell) if !takes_lic(Path::new(shell)) => None,
+        _ => Some(login_probe_shell()),
+    }
 }
 
 /// SW-OB-12 (Central risk #1): resolve a binary the way the user's shell would.
@@ -1166,25 +1341,83 @@ pub fn resolve_binary_via_login_shell(name: &str, timeout: Duration) -> Option<P
 /// value). `script` MUST be caller-controlled — the charset check for
 /// interpolated user input lives in each caller, not here.
 fn run_login_shell_capture(script: &str, timeout: Duration) -> Option<String> {
-    let mut command = Command::new(login_probe_shell());
+    run_shell_capture(&login_probe_shell(), script, timeout)
+}
+
+/// [`run_login_shell_capture`] with the shell named, so tests can pass a fake one.
+fn run_shell_capture(shell: &str, script: &str, timeout: Duration) -> Option<String> {
+    let mut command = Command::new(shell);
     command.args(["-lic", script]);
     capture_stdout_within(command, timeout)
+}
+
+/// Brackets the env-set probe's answer, like [`PATH_SENTINEL_BEGIN`]/[`PATH_SENTINEL_END`].
+const ENV_SENTINEL_BEGIN: &str = "CS_ENV_BEGIN>>";
+const ENV_SENTINEL_END: &str = "<<CS_ENV_END";
+
+/// A shell variable name: a letter or `_`, then letters, digits and `_`.
+fn is_shell_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && !name.contains(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+}
+
+/// The fixed env-set probe for `names`: for each, `1` when the shell exports it with a
+/// non-empty value, else `0`, between the sentinels. A value is only expanded inside a
+/// test or sent to /dev/null; the script never prints it. `None` for an invalid name.
+fn login_env_set_script(names: &[&str]) -> Option<String> {
+    if names.iter().any(|name| !is_shell_name(name)) {
+        return None;
+    }
+    // Like the PATH probe, the sentinels exist only once printf joins them.
+    let tests: String = names
+        .iter()
+        .map(|name| {
+            format!(
+                " {{ [ -n \"${{{name}:-}}\" ] && printenv {name} >/dev/null 2>&1; }} && printf 1 || printf 0;"
+            )
+        })
+        .collect();
+    Some(format!(
+        "printf '%sBEGIN>>' 'CS_ENV_';{tests} printf '<<%sEND' 'CS_ENV_'"
+    ))
+}
+
+/// Which of `names` the user's login shell (the one agent CLIs start from) exports with a
+/// non-empty value, in order. Only `0`/`1` per name comes back from the shell, never a
+/// value. `None` when a name is invalid, `$SHELL` is not zsh or bash, or the shell fails,
+/// times out or answers in another shape. Blocking: spawns `$SHELL -lic`, bounded by
+/// `timeout`.
+pub fn login_shell_env_set(names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    let shell = env_probe_shell(std::env::var("SHELL").ok().as_deref())?;
+    env_set_in_shell(&shell, names, timeout)
+}
+
+fn env_set_in_shell(shell: &str, names: &[&str], timeout: Duration) -> Option<Vec<bool>> {
+    let script = login_env_set_script(names)?;
+    let raw = run_shell_capture(shell, &script, timeout)?;
+    let bits = extract_sentinel_value(&raw, ENV_SENTINEL_BEGIN, ENV_SENTINEL_END)?;
+    (bits.len() == names.len() && !bits.contains(|c: char| c != '0' && c != '1'))
+        .then(|| bits.chars().map(|c| c == '1').collect())
 }
 
 /// Run `command` and return its stdout, the whole capture bounded by
 /// `timeout`: an interactive shell may hang without a tty, and a process an rc
 /// file backgrounds inherits stdout and can hold the pipe open long after the
 /// shell exits. stdout drains on its own thread; past the deadline a shell
-/// still running is killed and reaped (None), and a shell that exited returns
-/// what it printed while the backgrounded holder keeps the detached reader.
+/// still running is killed and reaped (None), with everything in its process
+/// group (what its rc started), and a shell that exited returns what it printed
+/// while the backgrounded holder keeps the detached reader.
 fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<String> {
     use std::io::Read;
     use std::sync::mpsc;
 
-    let mut child = command
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // A new session, so a timeout stops what the rc started too.
+    in_new_session(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| warn!(target: "deps", "login-shell probe spawn failed: {}", e))
         .ok()?;
@@ -1215,16 +1448,14 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
             Ok(None) => {
                 if Instant::now() >= deadline {
                     warn!(target: "deps", "login-shell probe timed out after {:?}", timeout);
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_group_and_reap(&mut child);
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(e) => {
                 warn!(target: "deps", "login-shell probe wait failed: {}", e);
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group_and_reap(&mut child);
                 return None;
             }
         }
@@ -1237,6 +1468,36 @@ fn capture_stdout_within(mut command: Command, timeout: Duration) -> Option<Stri
     }
     let bytes = collected.lock().map(|buf| buf.clone()).unwrap_or_default();
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Start `command` as the leader of a new session, so its pid is also its group's id
+/// and a timeout can kill the group. Not just a new process group: under a terminal, an
+/// interactive shell in a background group stops on its first terminal access until the
+/// timeout; a new session has no terminal.
+#[cfg(unix)]
+fn in_new_session(command: &mut Command) {
+    // SAFETY: the hook runs in the child between fork and exec, and `setsid` is
+    // async-signal-safe and touches no memory of the parent.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(command, || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn in_new_session(_command: &mut Command) {}
+
+/// Kill `child`'s process group (it leads a session, see [`capture_stdout_within`]), then the
+/// child itself, and reap it.
+fn kill_group_and_reap(child: &mut std::process::Child) {
+    // Not reaped yet, so its pid is still its group's id.
+    crate::commands::dashboard_launch::kill_process_group(std::process::Child::id(child));
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Extract the value bracketed by `begin`/`end` sentinels from probe stdout.
@@ -1557,22 +1818,33 @@ pub async fn install_command_line_tools() -> Result<CltInstallResult, String> {
 /// version checks), and again once the shadowed installs are known.
 pub fn spawn_agent_background_resolve(app: tauri::AppHandle) {
     let basename = crate::agents::builtin::preferred_binary().to_owned();
-    if !app.state::<DependencyManager>().agent_resolving(&basename) {
+    let agent_resolving = app.state::<DependencyManager>().agent_resolving(&basename);
+    let gh_resolving = app.state::<DependencyManager>().gh_resolving();
+    if !agent_resolving && !gh_resolving {
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // One login-shell `$PATH` probe for the agent and gh; the agent goes first so
+        // the splash clears before gh's version check.
         let login_path = probe_login_path();
-        app.state::<DependencyManager>()
-            .resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
+        let dm = app.state::<DependencyManager>();
+        if agent_resolving {
+            dm.resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
                 let _ = app.emit("dep-status-changed", ());
             });
+        }
+        if gh_resolving {
+            dm.resolve_gh_with_login_path(login_path.as_deref());
+        }
         let _ = app.emit("dep-status-changed", ());
     });
 }
 
 /// Warm the deps cache for every built-in CLI's basename beyond the default one probed at
 /// startup, probing each once: a CLI found or not found is not probed again on the next team
-/// switch (a launch retries a miss after its cooldown; the explicit re-check re-probes it). A
+/// switch (a launch retries a miss after its cooldown; the explicit re-check re-probes it). Every
+/// one is claimed as resolving before the first is probed, so none reads as not installed while
+/// it waits. A
 /// launch reads the warmed cache via
 /// [`DependencyManager::launch_binary`] and REFUSES a cold basename, so without this Codex could
 /// never launch. Rides the idempotent team-activation seam (fires on first mount + every switch);
@@ -1585,21 +1857,17 @@ pub fn spawn_builtin_agents_warm<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let Some(dm) = app.try_state::<DependencyManager>() else {
             return;
         };
-        let mut warmed = 0u32;
-        // One `$PATH` probe shared by every basename this warm resolves.
-        let mut login_path: Option<Option<String>> = None;
-        for descriptor in AgentCli::ALL.map(descriptor) {
-            let basename = descriptor.binary.as_str();
-            if basename == default_basename || !dm.claim_first_probe(basename) {
-                continue;
-            }
-            let login_path = login_path.get_or_insert_with(probe_login_path);
+        let basenames: Vec<&str> = AgentCli::ALL
+            .into_iter()
+            .map(|cli| descriptor(cli).binary.as_str())
+            .filter(|basename| *basename != default_basename)
+            .collect();
+        let warmed = dm.warm_builtins_with(&basenames, probe_login_path, |basename, login_path| {
             // Each winner reaches the frontend before its shadowed installs are checked.
-            dm.resolve_agent_with_login_path(basename, login_path.as_deref(), || {
+            dm.resolve_agent_with_login_path(basename, login_path, || {
                 let _ = app.emit("dep-status-changed", ());
             });
-            warmed += 1;
-        }
+        });
         if warmed > 0 {
             let _ = app.emit("dep-status-changed", ());
         }
@@ -2223,6 +2491,175 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// A stand-in login shell: it ignores `-lic`, sets the variables an rc file would, prints
+    /// rc noise that includes a value, then runs the probe script with `/bin/sh`.
+    #[cfg(unix)]
+    fn fake_login_shell(dir: &Path, secret: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-zsh");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"rc noise {secret}\"\nexport SECRET_ONE='{secret}'\nexport EMPTY_ONE=''\nNOT_EXPORTED=x\nexec /bin/sh -c \"$2\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_reads_the_login_shell_and_returns_bools_only() {
+        let dir = fresh_test_dir("env_set_shell");
+        // Built at run time so no token-shaped literal sits in the source.
+        let secret = ["ghp", "_", &"x".repeat(36)].concat();
+        let shell = fake_login_shell(&dir, &secret);
+        let names = [
+            "SECRET_ONE",
+            "EMPTY_ONE",
+            "NOT_EXPORTED",
+            "NOT_THERE_AT_ALL",
+        ];
+        assert_eq!(
+            env_set_in_shell(shell.to_str().unwrap(), &names, Duration::from_secs(5)),
+            Some(vec![true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn env_set_script_never_prints_a_value_and_refuses_a_bad_name() {
+        let script = login_env_set_script(&["GH_TOKEN", "_X1"]).unwrap();
+        assert!(!script.contains(ENV_SENTINEL_BEGIN) && !script.contains(ENV_SENTINEL_END));
+        assert!(script.contains("printenv GH_TOKEN >/dev/null 2>&1"));
+        assert!(!script.contains("echo"));
+        for bad in ["", "1A", "A B", "A;B", "A$(x)", "A}", "a\nb"] {
+            assert_eq!(login_env_set_script(&["OK", bad]), None, "{bad:?}");
+            assert_eq!(
+                env_set_in_shell("/bin/sh", &[bad], Duration::from_secs(1)),
+                None
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_set_is_none_when_the_shell_hangs_or_answers_oddly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("env_set_odd");
+        let hang = dir.join("hang-zsh");
+        std::fs::write(&hang, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        assert_eq!(
+            env_set_in_shell(hang.to_str().unwrap(), &["A"], Duration::from_millis(300)),
+            None
+        );
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        let odd = dir.join("odd-zsh");
+        std::fs::write(&odd, "#!/bin/sh\nprintf 'CS_ENV_BEGIN>>1x<<CS_ENV_END'\n").unwrap();
+        std::fs::set_permissions(&odd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            env_set_in_shell(odd.to_str().unwrap(), &["A", "B"], Duration::from_secs(5)),
+            None
+        );
+    }
+
+    /// A login shell that times out is stopped with whatever its rc started.
+    #[cfg(unix)]
+    #[test]
+    fn an_env_probe_that_times_out_stops_what_the_rc_started() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("env_set_group");
+        let pid_file = dir.join("helper.pid");
+        let shell = dir.join("rc-zsh");
+        std::fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nsleep 30 &\necho $! > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            env_set_in_shell(shell.to_str().unwrap(), &["A"], Duration::from_millis(500)),
+            None
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only asks whether the process still exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the rc's helper outlived the probe"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The probe's shell leads a new session, not just a process group: an interactive
+    /// shell started in a background group of a terminal's session stops on its first
+    /// terminal access until the timeout, and a new session has no terminal at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_shell_probe_runs_in_its_own_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fresh_test_dir("probe_session");
+        let pid_file = dir.join("shell.pid");
+        let shell = dir.join("session-zsh");
+        std::fs::write(
+            &shell,
+            format!("#!/bin/sh\necho $$ > '{}'\nsleep 2\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = std::thread::spawn({
+            let shell = shell.clone();
+            move || run_shell_capture(shell.to_str().unwrap(), "true", Duration::from_secs(10))
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the shell never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: getsid only reads the session id of a live process.
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the shell leads its own session"
+        );
+        assert!(probe.join().unwrap().is_some());
+    }
+
+    /// The env-set probe answers only for zsh and bash: another `$SHELL` reads as unknown,
+    /// where a zsh stand-in would read its variables as unset.
+    #[test]
+    fn the_env_probe_runs_only_for_zsh_or_bash() {
+        for other in [
+            "/usr/bin/fish",
+            "/opt/homebrew/bin/nu",
+            "/bin/sh",
+            "/bin/tcsh",
+        ] {
+            assert_eq!(env_probe_shell(Some(other)), None, "{other}");
+        }
+        assert!(env_probe_shell(Some("/bin/zsh")).is_some());
+        assert!(env_probe_shell(Some("/usr/local/bin/bash")).is_some());
+        assert!(env_probe_shell(None).is_some());
+    }
+
     #[test]
     fn test_login_shell_probe_missing_binary_returns_none() {
         // A name that resolves to nothing must return None (not hang) within the timeout.
@@ -2299,6 +2736,129 @@ mod tests {
     }
 
     #[test]
+    fn extract_semver_token_reads_the_gh_version_line() {
+        assert_eq!(
+            extract_semver_token(
+                "gh version 2.50.0 (2024-05-01)\nhttps://github.com/cli/cli/releases/tag/v2.50.0\n"
+            ),
+            Some("2.50.0".to_string())
+        );
+    }
+
+    #[test]
+    fn status_reports_gh_beside_git_and_serializes_it_camel_case() {
+        let dm = DependencyManager::cached_for_test(&[("claude", Some("2.1.150"))]);
+        assert!(!dm.status().gh.available);
+        {
+            let mut inner = dm.inner.write().unwrap();
+            inner.gh = GhEntry {
+                path: Some(PathBuf::from("/opt/homebrew/bin/gh")),
+                version: Some("2.50.0".to_string()),
+                resolving: false,
+            };
+        }
+        let status = dm.status();
+        assert!(status.gh.available);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["gh"]["available"], true);
+        assert_eq!(json["gh"]["path"], "/opt/homebrew/bin/gh");
+        assert_eq!(json["gh"]["version"], "2.50.0");
+        assert_eq!(json["gh"]["resolving"], false);
+        assert_eq!(json["git"]["available"], false);
+    }
+
+    /// Startup never spawns for gh: it stats the known locations and leaves gh resolving
+    /// for the background thread, which has the shared login-shell `$PATH`.
+    #[test]
+    fn startup_leaves_gh_resolving_for_the_background_thread() {
+        let dm = DependencyManager::resolve();
+        let status = dm.status();
+        assert!(status.gh.resolving);
+        assert!(status.gh.version.is_none());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["gh"]["resolving"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_gh_stat_takes_the_first_executable_known_location() {
+        let root = fresh_test_dir("gh_startup_stat");
+        let missing = root.join("brew").join("gh");
+        let plain = root.join("plain").join("gh");
+        std::fs::create_dir_all(plain.parent().unwrap()).unwrap();
+        std::fs::write(&plain, b"not executable").unwrap();
+        let hit = exec_stub(&root.join("local"), "gh");
+        assert_eq!(
+            stat_known_gh(&[missing.clone(), plain, hit.clone()]),
+            Some(hit)
+        );
+        assert_eq!(stat_known_gh(&[missing]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_puts_the_login_path_before_user_local() {
+        let root = fresh_test_dir("gh_login_first");
+        let on_path = exec_stub(&root.join("asdf"), "gh");
+        let user_local = exec_stub(&root.join("dotlocal"), "gh");
+        let parse = versions(&[("asdf", "2.50.0"), ("dotlocal", "2.10.0")]);
+        let login_path = path_of(&[&root.join("asdf")]);
+        assert_eq!(
+            resolve_gh_with(Some(&login_path), vec![], vec![user_local.clone()], &parse),
+            (Some(on_path), Some("2.50.0".to_string()))
+        );
+        // Even when the user's PATH lists ~/.local/bin, it ranks where the user put it.
+        let both = path_of(&[&root.join("dotlocal"), &root.join("asdf")]);
+        assert_eq!(
+            resolve_gh_with(Some(&both), vec![], vec![user_local.clone()], &parse).0,
+            Some(user_local)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_without_a_login_path_takes_known_locations_then_user_local() {
+        let root = fresh_test_dir("gh_fallback");
+        let brew = exec_stub(&root.join("brew"), "gh");
+        let user_local = exec_stub(&root.join("dotlocal"), "gh");
+        let parse = versions(&[("brew", "2.49.0"), ("dotlocal", "2.10.0")]);
+        assert_eq!(
+            resolve_gh_with(None, vec![brew.clone()], vec![user_local.clone()], &parse).0,
+            Some(brew)
+        );
+        let gone = root.join("gone").join("gh");
+        assert_eq!(
+            resolve_gh_with(None, vec![gone], vec![user_local.clone()], &parse),
+            (Some(user_local), Some("2.10.0".to_string()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_resolution_skips_an_install_with_no_version_and_reports_a_miss() {
+        let root = fresh_test_dir("gh_no_version");
+        let broken = exec_stub(&root.join("broken"), "gh");
+        let brew = exec_stub(&root.join("brew"), "gh");
+        let parse = versions(&[("brew", "2.49.0")]);
+        assert_eq!(
+            resolve_gh_with(None, vec![broken.clone(), brew.clone()], vec![], &parse).0,
+            Some(brew)
+        );
+        assert_eq!(
+            resolve_gh_with(None, vec![broken], vec![], &parse),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn resolving_gh_against_a_login_path_clears_resolving() {
+        let dm = DependencyManager::resolve();
+        dm.resolve_gh_with_login_path(Some(""));
+        assert!(!dm.status().gh.resolving);
+        assert!(!dm.gh_resolving());
+    }
+
+    #[test]
     fn status_says_whether_each_cli_version_is_qualified_and_what_range_is() {
         let dm = DependencyManager::cached_for_test(&[
             ("opencode", Some("2.1.4")),
@@ -2361,6 +2921,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2390,7 +2951,7 @@ mod tests {
     /// over a synthetic second basename (no second descriptor shipped — that is SW-AN-45).
     /// A built-in CLI is probed once across team switches, whether or not it was found; a
     /// basename already in the map (the default, or one the startup probe seeded) is never
-    /// claimed.
+    /// claimed. A claimed CLI reads as resolving, not as missing, until its probe stores it.
     #[test]
     fn a_cli_is_claimed_for_its_first_probe_only() {
         let mut agents = BTreeMap::new();
@@ -2399,19 +2960,59 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
             known_locations: Box::new(no_known_locations),
         };
-        assert!(!dm.claim_first_probe("claude"));
-        assert!(dm.claim_first_probe("codex"));
-        assert!(!dm.claim_first_probe("codex"), "a second switch skips it");
-        assert_eq!(dm.agent("codex"), None);
+        assert_eq!(dm.claim_first_probes(["claude", "codex"]), ["codex"]);
         assert!(
-            !dm.agent_resolving("codex"),
-            "a claim never gates the splash"
+            dm.claim_first_probes(["codex"]).is_empty(),
+            "a second switch skips it"
         );
+        assert_eq!(dm.agent("codex"), None);
+        let status = dm.status();
+        let codex = &status.agents["codex"];
+        assert!(codex.resolving && !codex.available);
+    }
+
+    /// A warm claims every built-in before it probes the first, so a CLI waiting its turn
+    /// reads as resolving rather than not installed, and a later warm probes nothing.
+    #[test]
+    fn a_warm_claims_every_builtin_before_probing_the_first() {
+        let mut agents: BTreeMap<String, AgentEntry> = Default::default();
+        agents.insert("claude".to_string(), Default::default());
+        let dm = manager_with(agents);
+        let mut probed: Vec<String> = Default::default();
+        let warmed = dm.warm_builtins_with(
+            &["claude", "codex", "opencode"],
+            || None,
+            |basename, _| {
+                let status = dm.status();
+                for waiting in ["codex", "opencode"] {
+                    if probed.iter().any(|done| done == waiting) {
+                        continue;
+                    }
+                    let entry = &status.agents[waiting];
+                    assert!(
+                        entry.resolving && !entry.available,
+                        "{waiting} reads as resolving until its probe"
+                    );
+                }
+                dm.store_winner(basename, Default::default());
+                probed.push(basename.to_string());
+            },
+        );
+        assert_eq!(warmed, 2);
+        assert_eq!(probed, ["codex", "opencode"]);
+        assert!(!dm.agent_resolving("codex") && !dm.agent_resolving("opencode"));
+        let again = dm.warm_builtins_with(
+            &["codex", "opencode"],
+            || panic!("no PATH probe when nothing is claimed"),
+            |basename, _| panic!("{basename} probed twice"),
+        );
+        assert_eq!(again, 0);
     }
 
     #[test]
@@ -2437,6 +3038,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),
@@ -2881,6 +3483,7 @@ mod tests {
             inner: RwLock::new(DependencyManagerInner {
                 git_path: None,
                 git_version: None,
+                gh: GhEntry::default(),
                 agents,
             }),
             stale_resolve: Mutex::new(()),

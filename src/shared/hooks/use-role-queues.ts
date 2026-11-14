@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { agentReadRoles, type RoleQueue } from "@/tauri/commands";
 
+const READ_DEBOUNCE_MS = 250;
+
 /** The existing role read model: inspection only, scoped to the queue's own team. */
 export function useRoleQueues(teamKey: string) {
   const [state, setState] = useState<{
@@ -28,11 +30,18 @@ export function useRoleQueues(teamKey: string) {
       }
     };
     void load();
-    const stop = listen("agent-state-changed", () => void load()).catch(() => () => {});
+    // A burst of state changes is one re-read.
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    const later = () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => void load(), READ_DEBOUNCE_MS);
+    };
+    const stop = listen("agent-state-changed", later).catch(() => () => {});
     const timer = setInterval(() => void load(), 20_000);
     return () => {
       current = false;
       clearInterval(timer);
+      clearTimeout(pending);
       void stop.then((f) => f());
     };
   }, [teamKey]);

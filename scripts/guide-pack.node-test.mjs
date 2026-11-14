@@ -15,7 +15,7 @@ const yaml = (path) => parse(readFileSync(path, "utf8"));
 const agent = (runtime) => yaml(join(PACK, `agents/guide-${runtime}/agent.yaml`));
 
 // Phase 1's tool list, written out: DESIGN section 3.3's 24 tools plus the product step's
-// two epic-repo verbs, `set_active_team` and the git-access and clone steps' three. Later phases add their own tools in the PR that ships them, and
+// two epic-repo verbs, `set_active_team`, the Foreman hand-back's send_role_message and the git-access and clone steps' three. Later phases add their own tools in the PR that ships them, and
 // that PR edits this list; nothing derives it from the files under test.
 const PHASE_1 = [
   // reads
@@ -31,6 +31,7 @@ const PHASE_1 = [
   // chat
   "reply",
   "send_message",
+  "send_role_message",
   "signal_progress",
   "signal_done",
   // setup, used only after a click
@@ -57,9 +58,9 @@ const PHASE_1 = [
 ];
 const sorted = (list) => [...list].sort();
 
-test("the phase 1 list is DESIGN's 24 tools plus the two epic-repo verbs, set_active_team and the clone step's three", () => {
-  assert.equal(PHASE_1.length, 30);
-  assert.equal(new Set(PHASE_1).size, 30);
+test("the phase 1 list is DESIGN's 24 tools plus the two epic-repo verbs, set_active_team, the hand-back verb and the clone step's three", () => {
+  assert.equal(PHASE_1.length, 31);
+  assert.equal(new Set(PHASE_1).size, 31);
 });
 
 test("the pack builds clean under --check", () => {

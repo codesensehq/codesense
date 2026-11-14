@@ -113,6 +113,63 @@ const INVOKE_META = {
     description:
       "Persist a shared ui:<slotId> patch and echo its requestId in a delta. Uses host app-state storage, separate from page-private prefs.",
   },
+  pins: {
+    description:
+      "Read an agent thread's pin list in the frame's team: the thread is the saved agent agentId plus storyId (omit it for a session launched with no story). At most 3 pins, each with its preview once one is sent. Pins whose message is archived or withdrawn drop out. Subscribe with codesense.subscribe('pins', {agentId, storyId, onChange}) for live updates.",
+    examples: [
+      {
+        args: { agentId: "acme/core/dev", storyId: "DEMO-1" },
+        result: {
+          status: "pins",
+          org: "acme",
+          team: "core",
+          agentId: "acme/core/dev",
+          storyId: "DEMO-1",
+          pins: [
+            {
+              messageId: 42,
+              position: 0,
+              pinnedBy: "acme/core/dev",
+              pinnedAtMs: 1700000000000,
+              preview: { shortName: "QA", value: "5 of 5", unit: "ACs traced", status: "on-track" },
+              previewAtMs: 1700000060000,
+            },
+          ],
+        },
+      },
+    ],
+  },
+  pin: {
+    description:
+      "Pin a message of the frame's team into an agent thread at position (0 is first; omitted, last), with an optional preview: what the folded pin shows (shortName, value, unit, status, chart, up to 3 lines). Pinning a pinned message leaves it in place; a preview replaces its preview (outcome 'updated'). A thread holds at most 3 pins. Agents pin their own thread with the pin MCP tool.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } },
+      {
+        args: {
+          agentId: "acme/core/dev",
+          storyId: "DEMO-1",
+          messageId: 43,
+          preview: {
+            shortName: "Checks",
+            value: "48 passed",
+            unit: "0 failed",
+            status: "running",
+            chart: { kind: "progress", percent: 67, label: "2 of 3 test files run" },
+            lines: ["Running hub-order.test.ts"],
+          },
+        },
+      },
+    ],
+  },
+  unpin: {
+    description: "Take a message out of an agent thread's pin list; the pins after it move up.",
+    examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
+  },
+  reorderPins: {
+    description:
+      "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
+    examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageIds: [43, 42] } }],
+  },
   // ── READ verbs ─────────────────────────────────────────────────────────
   getDependencyStatus: {
     description:
@@ -282,6 +339,35 @@ const INVOKE_META = {
       "Managed worktrees on this Mac — one row per managed checkout. Pairs with `onWorktreesChanged(cb)`.",
     examples: [{ args: {}, result: [{ id: "wt-demo-1", path: "/Users/…/worktrees/demo-1" }] }],
   },
+  setupState: {
+    description:
+      "This Mac's orgs, teams and source repos, read-only: `{orgs}`. Each team has `synced` and its `sourceRepos`, each with an `attachment` of `attached`, `missing` or `unattached`. No local paths. Needs the machine-wide `machines:read` grant, since it lists every org on this Mac, and only a page holding it hears `codesense:setup-changed`.",
+    examples: [
+      {
+        args: {},
+        result: {
+          orgs: [
+            {
+              slug: "acme/context",
+              displayName: "Acme",
+              loadErrors: [],
+              teams: [
+                {
+                  name: "docs",
+                  archived: false,
+                  parentTeam: null,
+                  synced: true,
+                  sourceRepos: [
+                    { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
   canPasteToTerminal: {
     description:
       'Whether `sendPrompt({handle: "active", text, submit: false})` has a terminal to paste into: the selected terminal tab of the person\'s focused workspace. Pairs with `onPasteTargetChanged(cb)`.',
@@ -296,6 +382,27 @@ const INVOKE_META = {
     description:
       "Per-session token usage and spend for the sessions CodeSense launched, on this Mac and the remote machines it connects to, with per-day totals. Each session's `machineId` is the machine it ran on, as `machines()` names it (`local` for this Mac). Takes optional `sinceMs` and `untilMs` (local days: `sinceMs`'s day included, `untilMs`'s day excluded), `sessionId`, `cwd`, `story` (one story id) and `limit`. `costUsd` is `null` only when a call used tokens on a model with no rate. Every call the CLI reports counts, including Codex's start-up cache warm-up, which Codex's own total leaves out.",
     examples: [{ args: {}, result: { sessions: [], days: [], totals: {} } }],
+  },
+  sessionRecord: {
+    description:
+      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, chain, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; when a saved agent handed the story off from earlier sessions, `tokens`, `costUsd`, `durationMs` and `files` sum that chain, and `chain` lists its session ids, oldest first (one id when there is no handoff); `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb, sessionIds)`.",
+    examples: [
+      {
+        args: { handle: "agent-1" },
+        result: {
+          handle: "agent-1",
+          sessionId: "s_1",
+          cli: "claude",
+          model: "claude-sonnet-5-5",
+          tokens: { input: 1200, output: 340, cacheRead: 0, cacheWrite: 0 },
+          costUsd: 0.42,
+          durationMs: 360000,
+          story: { id: "DEMO-1" },
+          files: [{ path: "src/main.rs", commits: ["abc1234"] }],
+          unavailable: {},
+        },
+      },
+    ],
   },
   modelRates: {
     description:
@@ -1072,6 +1179,14 @@ const KIT = [
     example: "const { sessions, totals } = await codesense.sessionUsage({ limit: 20 });",
   },
   {
+    name: "codesense.sessionRecord",
+    category: "data-read",
+    wraps: "invoke('sessionRecord', args)",
+    description:
+      "One agent's session record by launch handle: model, tokens, cost, duration, files and story.",
+    example: "const record = await codesense.sessionRecord({ handle: 'agent-1' });",
+  },
+  {
     name: "codesense.modelRates",
     category: "data-read",
     wraps: "invoke('modelRates')",
@@ -1100,6 +1215,15 @@ const KIT = [
     wraps: "codesense:worktrees-changed listener",
     description: "Nudge callback for managed worktree changes.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  {
+    name: "codesense.onSessionRecordChanged",
+    category: "data-read",
+    wraps: "codesense:session-record-changed listener",
+    description:
+      "Nudge callback for when an agent's session record may have changed. Pass the record's `sessionIds` as the second argument to hear only about that agent's session.",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   {
     name: "codesense.onPasteTargetChanged",
@@ -1805,6 +1929,25 @@ const EVENT_META = {
     timing: "On managed worktree change",
     description: "Nudge for `worktrees()` listeners.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  "codesense:session-record-changed": {
+    direction: "parent-to-doc",
+    payload: "`{sessionId?}`: the session that changed; absent when the host cannot tell which",
+    timing:
+      "On the agent's progress, completion or exit, and about 2 s after usage is stored for its session. Files from commits have no event of their own; they refresh on progress, completion and exit",
+    description:
+      "Nudge for `sessionRecord()` listeners. `onSessionRecordChanged(cb, sessionIds)` runs `cb` only for those sessions (and for a nudge that names none).",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
+  },
+  "codesense:setup-changed": {
+    direction: "parent-to-doc",
+    payload: "N/A",
+    timing:
+      "After any change to orgs, teams or source repos: a team created or deleted, a context repo attached or a source repo added, among others",
+    description: "Nudge for `setupState()` re-reads. A burst of changes arrives as one message.",
+    example:
+      'window.addEventListener("message", (e) => {\n  if (e.data?.type === "codesense:setup-changed") codesense.setupState().then(render);\n});',
   },
   "codesense:paste-target-changed": {
     direction: "parent-to-doc",

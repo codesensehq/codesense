@@ -3,7 +3,7 @@
 // description is written by hand beside its handler and can drift from it, so these tests
 // read the handlers' Rust source and fail when a registry field isn't one they serialise.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
@@ -247,21 +247,14 @@ test("read_content_file: the registry takes its params struct's arguments and re
   ]);
 });
 
-// `probe_environment` lands with #113 (`mcp/probe_environment.rs`). Until that file is on the
-// base these skip, and the branch that rebases onto it runs them: they fail closed there.
 const PROBE_ENV = "mcp/probe_environment.rs";
-const probeEnv = {
-  skip:
-    !existsSync(join(ROOT, "src-tauri/src", PROBE_ENV)) &&
-    `${PROBE_ENV} (#113) is not on this base`,
-};
 
-test("probe_environment: the registry takes its params struct's arguments", probeEnv, () => {
+test("probe_environment: the registry takes its params struct's arguments", () => {
   const params = structs(rust(PROBE_ENV)).ProbeEnvironmentParams.map((f) => f.name);
   assert.deepEqual([...PROBE_TOOLS.probe_environment.params].sort(), [...params].sort());
 });
 
-test("probe_environment: every registry field is a key its report writes", probeEnv, () => {
+test("probe_environment: every registry field is a key its report writes", () => {
   const keys = jsonKeys(
     fnBody(rust(PROBE_ENV), "pub fn build_report(") +
       fnBody(rust(PROBE_ENV), "fn git_repo_report(") +

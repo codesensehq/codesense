@@ -38,10 +38,10 @@ export function afterPersistedSelectionRestored(decide: () => void): () => void 
 }
 
 /**
- * The very first launch: open the CodeSense docs repo's "Getting started" team with its
- * README as the active tab. No modal, no welcome screen.
+ * A start-up landing: open `path` (the Foreman page or the README) in the CodeSense docs
+ * repo's "Getting started" team as the active tab. No modal, no welcome screen.
  */
-export function openCodesenseDocsReadme(readmePath: string): void {
+export function openCodesenseDocsLanding(path: string): void {
   const org = useOrgStore.getState();
   if (org.activeOrgSlug !== CODESENSE_DOCS_SLUG || org.activeTeamName !== CODESENSE_DOCS_TEAM) {
     org.setActiveTeamIn(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
@@ -51,5 +51,5 @@ export function openCodesenseDocsReadme(readmePath: string): void {
   const teamKey = buildTeamKey(CODESENSE_DOCS_SLUG, CODESENSE_DOCS_TEAM);
   const viewer = useViewerStore.getState();
   // A landing, not the user's open: full-screen CLI stays on.
-  viewer.openFile(teamKey, "", readmePath, { keepLayout: true });
+  viewer.openFile(teamKey, "", path, { keepLayout: true });
 }

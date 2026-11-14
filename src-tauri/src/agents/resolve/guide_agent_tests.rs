@@ -7,10 +7,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`
-/// and the git-access and clone steps' three (a tab, its output, the clone verb). The same
-/// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 30] = [
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`,
+/// the Foreman hand-back's `send_role_message` and the git-access and clone steps' three (a tab,
+/// its output, the clone verb). The same list as `scripts/guide-pack.node-test.mjs`; a later
+/// phase edits both.
+const PHASE_1: [&str; 31] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -22,6 +23,7 @@ const PHASE_1: [&str; 30] = [
     "probe_environment",
     "reply",
     "send_message",
+    "send_role_message",
     "signal_progress",
     "signal_done",
     "create_local_organization",
@@ -42,10 +44,6 @@ const PHASE_1: [&str; 30] = [
     "read_epic_repos",
     "set_active_team",
 ];
-
-/// Phase 1 tools a build may not register yet: the environment probe and the clone verb land
-/// in their own PRs.
-const NOT_YET_SERVED: [&str; 2] = ["probe_environment", "clone_repo"];
 
 /// What CodeSense allows every Claude launch before the agent's own list. Accepted for the
 /// guide (Decisions); its command sends every question as a card, never through `ask_user`.
@@ -117,7 +115,7 @@ fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
         .any(|pair| pair[0] == flag && pair[1] == value)
 }
 
-/// The phase 1 tools this build registers; any it doesn't must be a named pending one.
+/// The phase 1 tools, each of which this build must register.
 fn phase_1_served() -> BTreeSet<String> {
     let served: BTreeSet<String> = crate::mcp::handler::CodesenseHandler::served_tool_router()
         .list_all()
@@ -129,14 +127,10 @@ fn phase_1_served() -> BTreeSet<String> {
         .filter(|name| !served.contains(*name))
         .collect();
     assert!(
-        missing.iter().all(|name| NOT_YET_SERVED.contains(name)),
+        missing.is_empty(),
         "phase 1 names unregistered tools: {missing:?}"
     );
-    PHASE_1
-        .into_iter()
-        .filter(|name| served.contains(*name))
-        .map(str::to_string)
-        .collect()
+    PHASE_1.into_iter().map(str::to_string).collect()
 }
 
 fn phase_1_declared(resolved: &ResolvedAgent) -> BTreeSet<String> {

@@ -223,6 +223,13 @@ pub(crate) trait InboxHost: Send + Sync {
     ) -> Option<String> {
         None
     }
+    /// The saved agent and the story the session under `handle` was launched with, which
+    /// key its pin thread. `None` for a session not launched from a saved agent.
+    async fn launch_thread(&self, _handle: &str) -> Option<(String, Option<String>)> {
+        None
+    }
+    /// The pin list of `thread` in `team`'s store changed.
+    fn pins_changed(&self, _team: &LaunchTeam, _thread: &crate::weft::pins::ThreadKey) {}
 }
 
 /// A session as the inbox addresses and names it.
@@ -1014,6 +1021,16 @@ pub(crate) async fn note_to_session_with(
     }
 }
 
+/// The saved agent and story a launch's pin thread is keyed by. Only the registry's own
+/// record of the launch names the agent: a remote tab's tag, which `list_sessions` falls
+/// back to, is not what the session was launched from.
+pub(crate) fn registry_thread(
+    row: &super::dashboard_launch::SessionSnapshot,
+) -> Option<(String, Option<String>)> {
+    let agent = crate::agents::manifest::AgentRevisionRef::key_of(row.agent_revision.as_deref()?)?;
+    Some((agent.to_string(), row.meta.story.clone()))
+}
+
 /// `send_message`: the caller (by its self-reported session id) messages `to`. Mail to
 /// a session goes to its team; mail to the human goes to the sender's team. An optional
 /// `attach_file` records a managed-file reference for the human preview — stored
@@ -1722,6 +1739,12 @@ pub(crate) enum ReactResult {
     Invalid { message: String },
 }
 
+/// Whether `who` may act on message `m` as a party to it: the mail is the team's role mail,
+/// or `who` sent it, received it, or is the address it replies to.
+pub(crate) fn is_party(m: &inbox::InboxMessage, who: &str) -> bool {
+    m.role.is_some() || m.from == who || m.to == who || m.reply_to.as_deref() == Some(who)
+}
+
 /// React as `reactor` to message `message_id` in the store at `own`. A caller that is a
 /// session (`party`) reacts only to mail it sent, received or is the reply target of, or
 /// to a role queue; the human's pane reacts to anything it shows.
@@ -1738,13 +1761,7 @@ async fn react_in(
     let emoji = emoji.to_string();
     let stored = with_store("react", path, move |store| {
         if party {
-            let held = inbox::inbox_get(store, message_id)?.is_some_and(|m| {
-                m.role.is_some()
-                    || m.from == reactor
-                    || m.to == reactor
-                    || m.reply_to.as_deref() == Some(reactor.as_str())
-            });
-            if !held {
+            if !inbox::inbox_get(store, message_id)?.is_some_and(|m| is_party(&m, &reactor)) {
                 return Ok(Err(format!("no message {message_id}")));
             }
         }
@@ -2194,11 +2211,13 @@ pub(crate) async fn mark_archived_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("mark_inbox_messages_archived", path, move |store| {
         inbox::inbox_mark_archived_many(store, &message_ids)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2214,11 +2233,13 @@ pub(crate) async fn unarchive_many_by_human(
 ) -> Result<u32, String> {
     let path = host.team_store(team).await?;
     let changed_ids = message_ids.clone();
+    let pin_path = path.clone();
     let changed = with_store("unarchive_inbox_messages", path, move |store| {
         inbox::inbox_unarchive_many(store, &message_ids, &restore_unread)
     })
     .await??;
     if changed > 0 {
+        pins::refresh_pin_threads(host, team, pin_path, changed_ids.clone()).await;
         host.inbox_event(InboxEvent::new(InboxChange::Archived, team, changed_ids));
     }
     Ok(changed)
@@ -2344,6 +2365,7 @@ pub(crate) async fn withdraw_by_human(
     message_id: i64,
 ) -> Result<WithdrawOutcome, String> {
     let path = host.team_store(team).await?;
+    let pin_path = path.clone();
     let now = chrono::Utc::now().timestamp_millis();
     let (outcome, changed) = with_store("withdraw_inbox_message", path, move |store| {
         crate::weft::role_inbox::withdraw_message_changed(store, message_id, now).map_err(|e| {
@@ -2355,6 +2377,7 @@ pub(crate) async fn withdraw_by_human(
     })
     .await??;
     if changed {
+        pins::refresh_pin_threads(host, team, pin_path, vec![message_id]).await;
         host.inbox_event(InboxEvent::new(InboxChange::Withdrawn, team, [message_id]));
     }
     Ok(outcome)
@@ -2874,6 +2897,25 @@ impl InboxHost for AppInboxHost {
         let _ = self.app.emit(INBOX_EVENT, event);
     }
 
+    async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
+        use tauri::Manager;
+        let rows = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()?
+            .snapshot();
+        let row = Iterator::find(&mut rows.iter(), |row| row.handle == handle)?;
+        registry_thread(row)
+    }
+
+    fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
+        use tauri::Emitter;
+        let _ = self.app.emit(
+            pins::AGENT_PINS_CHANGED_EVENT,
+            pins::PinsChanged::new(team, thread),
+        );
+        crate::live_hub::pins::refresh(&self.app, team.clone(), Some(thread.clone()));
+    }
+
     fn mail_stored(&self, handle: &str) {
         // Its notice goes to the host its tab runs on, this Mac's or a machine's.
         super::host_inbox::mail_stored(&self.app, handle);
@@ -3267,6 +3309,8 @@ pub async fn trigger_hydrate_from_inbox(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub mod pins;
 
 /// Refresh role delivery rows through the same typed inbox event as direct mail.
 pub(crate) async fn role_delivery_changed(

@@ -1,6 +1,6 @@
 {
   "counts": {
-    "builtins": 15,
+    "builtins": 16,
     "families": 1
   },
   "topics": [
@@ -757,6 +757,14 @@
           "description": "untyped (Value)"
         }
       ]
+    },
+    {
+      "name": "pins",
+      "rows": [
+        {
+          "description": "untyped (Value)"
+        }
+      ]
     }
   ],
   "families": [
@@ -1093,9 +1101,9 @@
     "admitsSource": "\n    let key = key.split(\"|\").next().unwrap_or(key);\n    key == \"all\" || scope == Some(key)\n"
   },
   "sources": {
-    "src-tauri/src/live_hub/projection.rs": "96f20439dc0a2cb6655514f025ee2689064e97ba1fa75deee77ca29e4340fe68",
+    "src-tauri/src/live_hub/projection.rs": "607f16894f79b18975ef38adcfa51c66c3e214ad6b088f46e0459475b34418e2",
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
-    "src-tauri/src/live_hub/mod.rs": "41cfbce9469f2d2b69a7fb6acab5cdfdba9b6ebf06cc802d6b9c03a6fbb34da5",
+    "src-tauri/src/live_hub/mod.rs": "2aa8c18996026926ab1ac6f7de87ed2e1afd6d84f5ed6f93c78ffb91534be91f",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
     "src-tauri/src/mcp/session_list.rs": "94bed4633747fb7396ad4f6a8e986929f3909219102eabf27de62d05350eb332",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",
@@ -1105,7 +1113,7 @@
     "src-tauri/src/live_hub/agent_list/rows.rs": "86be0bbd951d279e47bd938be31f1f5a4f8c70e24c0fc9e2db4fd9d07fa6dce2",
     "src-tauri/src/live_hub/agent_list/views.rs": "0fbc27242d28517476f53c8395fab13ba460850539003dd7d5bea97b685c5ebf",
     "src-tauri/src/records/projection.rs": "ff7eb296d7dc0ec988570db058eca494c34009e9ffca8ef7de1c65d2d064d913",
-    "src/features/dashboard/lib/live-hub.ts": "3c68c85a442a8b829d25e12e480675a08db1de71d77f5b92253130bfc31dd319",
+    "src/features/dashboard/lib/live-hub.ts": "8e399c46d4940cf8643435ad6052ef97e373e48f900595341c75b5efabbcb7e6",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7"
   },
   "untypedTopics": [
@@ -1124,6 +1132,7 @@
     "workspaceConfig",
     "prefs",
     "storyTotals",
+    "pins",
     "ui:<slotId>"
   ]
 }

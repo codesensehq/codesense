@@ -13,6 +13,8 @@ export const CODESENSE_DOCS_TEAM = "getting-started";
 export const CODESENSE_DOCS_DISPLAY_NAME = "CodeSense Docs";
 /** The README the first launch opens, relative to the repo root. */
 export const CODESENSE_DOCS_README = "getting-started/content/README.html";
+/** The bundled Foreman page, relative to the repo root. */
+export const CODESENSE_DOCS_FOREMAN_PAGE = "getting-started/content/foreman/index.html";
 
 /** Same copy the backend refuses an edit with. */
 export const CODESENSE_DOCS_READ_ONLY =
@@ -27,24 +29,33 @@ export function isCodesenseDocs(slug: string | null | undefined): boolean {
  * - The persisted last-opened repo when it is still connected (every later launch).
  * - A newly connected one, when a connect/create just happened.
  * - Otherwise (the very first launch, or the last-opened repo is gone) the CodeSense
- *   docs, so there is never a dead end; `firstLaunch` asks the caller to open its README.
+ *   docs, so there is never a dead end.
  */
 export function pickLaunchOrg(input: {
   orgs: readonly Pick<Org, "slug">[];
   activeOrgSlug: string | null;
   newlyConnected?: string | null;
-}): { slug: string | null; firstLaunch: boolean } {
+}): string | null {
   const { orgs, activeOrgSlug, newlyConnected } = input;
-  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) {
-    return { slug: newlyConnected, firstLaunch: false };
-  }
-  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) {
-    return { slug: activeOrgSlug, firstLaunch: false };
-  }
-  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) {
-    return { slug: CODESENSE_DOCS_SLUG, firstLaunch: activeOrgSlug === null };
-  }
-  return { slug: orgs[0]?.slug ?? null, firstLaunch: false };
+  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) return newlyConnected;
+  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) return activeOrgSlug;
+  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) return CODESENSE_DOCS_SLUG;
+  return orgs[0]?.slug ?? null;
+}
+
+/**
+ * What a settled launch opens, once per app start.
+ * - `foreman` when "Open the Foreman when CodeSense starts" is on (the default).
+ * - Otherwise the docs README when no context repo of the user's own is connected, so a
+ *   new user always has an entry point.
+ * - Otherwise nothing: the last session's tabs are all that opens.
+ */
+export function pickStartLanding(input: {
+  orgs: readonly Pick<Org, "slug">[];
+  openForemanOnStart: boolean | undefined;
+}): "foreman" | "readme" | "none" {
+  if (input.openForemanOnStart !== false) return "foreman";
+  return input.orgs.every((o) => isCodesenseDocs(o.slug)) ? "readme" : "none";
 }
 
 /** Pinned first, then the rest alphabetically: the order never moves on selection. */

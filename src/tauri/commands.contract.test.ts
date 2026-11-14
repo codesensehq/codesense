@@ -1314,12 +1314,18 @@ describe("Tauri IPC Contract", () => {
     // +1 on both sides for worktreeHydratedFiles/worktree_hydrated_files (the story files a
     // worktree's Rendered view serves), so 524/543.
     // +1 on both sides for readInboxMedia/read_inbox_media, so 525/544.
-    const EXPECTED_TS_COMMAND_COUNT = 525;
-    const EXPECTED_RUST_COMMAND_COUNT = 544;
+    // +1 on both sides for setupState/setup_state (the page's read of orgs, teams and source
+    // repos), so 526/545.
+    // +2 on both sides for agentPins/agent_pins and agentPinsPrepareView/agent_pins_prepare_view
+    // (an agent thread's pin list), so 528/547.
+    // +1 on both sides for sessionRecord/session_record (an agent's session record for a page),
+    // so 529/548.
+    const EXPECTED_TS_COMMAND_COUNT = 529;
+    const EXPECTED_RUST_COMMAND_COUNT = 548;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):
-    // 19 today, so 524 − 19 = 505.
+    // 19 today, so 544 − 19 = 525.
     expect(tsCommands.length).toBe(EXPECTED_TS_COMMAND_COUNT);
     expect(rustHandlers.length).toBe(EXPECTED_RUST_COMMAND_COUNT);
   });
