@@ -2079,6 +2079,17 @@ describe("agents read model verbs", () => {
     });
   });
 
+  it("a messageDelivery subscription takes the frame's granted view, as the inbox does", async () => {
+    const subscribe = vi.fn(async () => ({ topic: "messageDelivery", rev: 1, snapshot: [] }));
+    await runBridgeCommand(
+      "subscribe",
+      { topic: "messageDelivery" },
+      { ...DOC, liveFrame: async () => ({ subscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledWith("messageDelivery", undefined, undefined);
+  });
+
   it("a page on the pins topic prepares no view: pins has no pages to turn", async () => {
     const page = vi.fn();
     await expect(

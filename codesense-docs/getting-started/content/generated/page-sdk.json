@@ -17333,10 +17333,10 @@
   "sources": {
     "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "bf763939d6898d37a974077409e95f455f9357f7a87d0299aa5b944ba2e3e337",
     "src-tauri/src/verbs/registry.generated.json": "87e59ca692396b4329d6ee80d3f07fe1becec38f112f09b66aae4a2d738225b7",
-    "src-tauri/src/verbs/registry.rs": "b0327c45bae68ad3e361621cb1d67b17ef2f5c586bdab2c1f32a43f68b192673",
+    "src-tauri/src/verbs/registry.rs": "34401fe140c2187dda4a29012ee0dfdd086bc1dea0a5cb90e45a3d149e5dd00c",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "a9f4d618d7caa94935652c856182802ab20327fb2ef4fd969ed65c62e65f270a",
+    "src-tauri/src/http/routes/viewer.rs": "d11ec95f319fb30e823098a8669724e0fa3c47cce21c5a6f930407605f590b16",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

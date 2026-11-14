@@ -444,6 +444,9 @@ export function liveHubOutputs(app) {
   }
   const inboxSource = input.file("src-tauri/src/live_hub/inbox.rs");
   const inbox = jsonObjectShapes(inboxSource).filter((row) => row.properties.rowType);
+  const messageDelivery = jsonObjectShapes(inboxSource).filter(
+    (row) => row.properties.toldAtMs && row.properties.state,
+  );
   const agentItems = parseItems(input.file("src-tauri/src/live_hub/agent_list/rows.rs"));
   const agent = rustSchema(agentItems, "AgentListRow");
   const views = input.file("src-tauri/src/live_hub/agent_list/views.rs");
@@ -478,7 +481,13 @@ export function liveHubOutputs(app) {
         },
       ]
     : [];
-  const shapes = { sessions: [sessions], inbox, agentList: [agent, meta], records: [record] };
+  const shapes = {
+    sessions: [sessions],
+    inbox,
+    messageDelivery,
+    agentList: [agent, meta],
+    records: [record],
+  };
   const topics = builtins.map((name) => ({
     name,
     rows: shapes[name] ?? [{ description: "untyped (Value)" }],
