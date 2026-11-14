@@ -9,7 +9,7 @@
 | sessions:stop | true | false | closeTerminalTab, closeWorkspace, stopSession |  |
 | launch | true | false | openTab, openWorkspace, runSkill |  |
 | inbox:read:own | true | true | none in page registry |  |
-| inbox:read:team | true | true | embedMessage, humanStatus, inbox, openAgentInbox, openMessage, page, pins, roles, subscribe, unsubscribe, updates, watchAgentActivity, watchAgentInbox, watchInbox | page: topic=inbox; caller scope=team → inbox:read:team; subscribe: topic=pins → inbox:read:team; subscribe: topic=inbox; caller scope=team → inbox:read:team; unsubscribe: topic=pins → inbox:read:team; unsubscribe: topic=inbox; caller scope=team → inbox:read:team |
+| inbox:read:team | true | true | embedMessage, humanStatus, inbox, openAgentInbox, openMessage, page, pins, roles, subscribe, unsubscribe, updates, watchAgentActivity, watchAgentInbox, watchInbox | page: topic=pins → inbox:read:team; page: topic=inbox; caller scope=team → inbox:read:team; subscribe: topic=pins → inbox:read:team; subscribe: topic=inbox; caller scope=team → inbox:read:team; unsubscribe: topic=pins → inbox:read:team; unsubscribe: topic=inbox; caller scope=team → inbox:read:team |
 | inbox:read:all-teams | false | false | inboxRollup, page, subscribe, unsubscribe | page: topic=inbox; caller scope=other → inbox:read:all-teams; subscribe: topic=inbox; caller scope=other → inbox:read:all-teams; unsubscribe: topic=inbox; caller scope=other → inbox:read:all-teams |
 | inbox:write | true | true | archive, loadMedia, markRead, markUnread, pin, postMessage, react, reorderPins, replyAsHuman, sendAsHuman, setHumanStatus, unarchive, unpin |  |
 | records:read:own | false | false | page, records.collections, records.history, records.list, records.read, records.readAt, records.search, subscribe, unsubscribe | page: topic=records; bound collection scope=private → records:read:own; records.collections: bound collection scope=private → records:read:own; records.history: bound collection scope=private → records:read:own; records.list: bound collection scope=private → records:read:own; records.read: bound collection scope=private → records:read:own; records.readAt: bound collection scope=private → records:read:own; records.search: bound collection scope=private → records:read:own; subscribe: topic=records; bound collection scope=private → records:read:own; unsubscribe: topic=records; bound collection scope=private → records:read:own |
@@ -25,7 +25,7 @@
 | routines:manage | true | false | routineCancel |  |
 | repo:read | true | true | getWorkspaceStatus, openDiff, setup, worktrees |  |
 | repo:write | true | false | none in page registry |  |
-| machines:read | true | true | getDependencyStatus, machines |  |
+| machines:read | true | true | getDependencyStatus, machines, setupState |  |
 | machines:manage | false | false | none in page registry |  |
 | accounts:manage | false | false | setModelRate |  |
 | dashboards:install:private | false | false | none in page registry |  |

@@ -100,6 +100,11 @@
       "conditionalVerbs": [
         {
           "verb": "page",
+          "topic": "pins",
+          "capability": "inbox:read:team"
+        },
+        {
+          "verb": "page",
           "topic": "inbox",
           "callerScope": "team",
           "capability": "inbox:read:team"
@@ -592,7 +597,8 @@
       "messageSafe": true,
       "verbs": [
         "getDependencyStatus",
-        "machines"
+        "machines",
+        "setupState"
       ],
       "conditionalVerbs": []
     },
@@ -791,8 +797,8 @@
   },
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/registry.generated.json": "60ea679fcb46971df2b4748a111446816ca56d40f11e9000d86915d8b7adf288",
-    "src-tauri/src/verbs/registry.rs": "1e5e221a117e2e78fc59c72fca9dcffb69f65be2fdf120b6e9a92b6070b2ce4a",
+    "src-tauri/src/verbs/registry.generated.json": "680c1116a4fa31b471d13d7e1639788dbc045e1da71621262452d0d925c5eb8c",
+    "src-tauri/src/verbs/registry.rs": "91d765c65ee483cd72f3b481ab6ae918c5b0ce1edfe211ca05b9152bdbd39562",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }

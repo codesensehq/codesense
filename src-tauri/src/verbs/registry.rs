@@ -198,7 +198,7 @@ fn capability_for_verb(name: &str) -> &'static str {
         "routineRefresh" => "routines:run",
         "routineCancel" => "routines:manage",
         "getWorkspaceStatus" | "setup" | "worktrees" => "repo:read",
-        "getDependencyStatus" | "machines" => "machines:read",
+        "getDependencyStatus" | "machines" | "setupState" => "machines:read",
         "setModelRate" => "accounts:manage",
         _ => panic!("no capability for verb {name}"),
     }
@@ -1029,6 +1029,18 @@ fn register_resources(registry: &mut Registry) {
     registry.register_existing(
         "records",
         spec("setup", Class::Read, false, Some("describe_setup"), None, false, false),
+    );
+    registry.register_existing(
+        "records",
+        spec(
+            "setupState",
+            Class::Read,
+            false,
+            Some("describe_setup"),
+            None,
+            false,
+            false,
+        ),
     );
     registry.register_existing(
         "records",

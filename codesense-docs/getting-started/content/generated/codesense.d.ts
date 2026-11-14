@@ -1699,6 +1699,8 @@ declare namespace CodesenseSdk {
     }): Promise<unknown>;
     /** read · repo:read · MCP twin describe_setup */
     setup(args?: Record<string, unknown>): Promise<unknown>;
+    /** read · machines:read · MCP twin describe_setup */
+    setupState(args?: Record<string, unknown>): Promise<unknown>;
     /** read · sessions:read */
     showMenu(args: {
       anchorId?: string;

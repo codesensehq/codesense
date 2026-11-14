@@ -70,6 +70,7 @@ const mockSessionRead = vi.fn();
 const mockWhyLine = vi.fn();
 const mockSetupStatus = vi.fn();
 const mockAgentLaunchOpen = vi.fn();
+const mockSetupState = vi.fn();
 const mockSessionSetModelRate = vi.fn();
 const mockSessionReadModelRates = vi.fn();
 vi.mock("@/tauri/commands", () => ({
@@ -91,6 +92,7 @@ vi.mock("@/tauri/commands", () => ({
   sessionRead: (...a: unknown[]) => mockSessionRead(...a),
   whyLine: (...a: unknown[]) => mockWhyLine(...a),
   setupStatus: (...a: unknown[]) => mockSetupStatus(...a),
+  setupState: (...a: unknown[]) => mockSetupState(...a),
   sessionSetModelRate: (...a: unknown[]) => mockSessionSetModelRate(...a),
   sessionReadModelRates: (...a: unknown[]) => mockSessionReadModelRates(...a),
   queryContext: (q: unknown, page?: string) => mockQueryContext(q, page),
@@ -360,6 +362,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "setStatus",
       "setUiState",
       "setup",
+      "setupState",
       "showMenu",
       "showPopover",
       "stopSession",
@@ -2490,6 +2493,7 @@ describe("routine, run, worktree and machine read verbs", () => {
       "sessionRead",
       "whyLine",
       "setup",
+      "setupState",
       "storyChanges",
       "storyTotals",
       "sessionUsage",
@@ -2605,6 +2609,32 @@ describe("routine, run, worktree and machine read verbs", () => {
     mockSetupStatus.mockResolvedValue(answer);
     await expect(runBridgeCommand("setup", undefined, DOC)).resolves.toBe(answer);
     expect(mockSetupStatus).toHaveBeenCalledWith();
+  });
+
+  it("setupState is the read-only orgs, teams and source repos, passed through unchanged", async () => {
+    const answer = {
+      orgs: [
+        {
+          slug: "acme/ctx",
+          displayName: "Acme",
+          loadErrors: [],
+          teams: [
+            {
+              name: "docs",
+              archived: false,
+              parentTeam: null,
+              synced: true,
+              sourceRepos: [
+                { slug: "acme/web", remoteKey: "github.com/acme/web", attachment: "attached" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    mockSetupState.mockResolvedValue(answer);
+    await expect(runBridgeCommand("setupState", undefined, DOC)).resolves.toBe(answer);
+    expect(mockSetupState).toHaveBeenCalledWith();
   });
 
   it("worktrees is list_worktrees; machines is list_machines for the doc's own team", async () => {

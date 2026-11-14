@@ -1081,8 +1081,9 @@ pub use async_helpers::await_blocking;
 // +1 `write_binary_worktree_file` (a canvas drawn in a worktree writes its PNG render). → 503.
 // +1 `worktree_hydrated_files` (the story files a worktree's Rendered view serves). → 504.
 // +1 `agent_inbox::read_inbox_media` (the app window's cached inbox images). → 505.
-// +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 507.
-pub const EXPECTED_COMMAND_COUNT: usize = 507;
+// +1 `data_read_model::setup_state` (the page's `setupState()`: orgs, teams and source repos). → 506.
+// +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 508.
+pub const EXPECTED_COMMAND_COUNT: usize = 508;
 
 #[cfg(test)]
 mod tests {

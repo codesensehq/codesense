@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 111 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 112 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -1150,6 +1150,7 @@ Conditional grants (override the default when their conditions match):
 - topic=records; bound collection scope=private → records:read:own
 - topic=records; bound collection scope=team → records:read:team
 - topic=records; bound collection scope=story → records:read:team
+- topic=pins → inbox:read:team
 - topic=inbox; caller scope=team → inbox:read:team
 - topic=inbox; caller scope=other → inbox:read:all-teams
 
@@ -2191,6 +2192,16 @@ setup(args?: Record<string, unknown>): Promise<unknown>;
 read · repo:read · MCP twin describe_setup
 
 Class: read; default grant: repo:read; MCP twin: describe_setup.
+
+## VerbMethods: setupState
+
+```ts
+setupState(args?: Record<string, unknown>): Promise<unknown>;
+```
+
+read · machines:read · MCP twin describe_setup
+
+Class: read; default grant: machines:read; MCP twin: describe_setup.
 
 ## VerbMethods: showMenu
 
