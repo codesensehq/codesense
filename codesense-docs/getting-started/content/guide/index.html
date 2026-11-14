@@ -105,6 +105,7 @@ html, body { margin: 0; height: 100%; }
 .gp #empty .links { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 
 /* The chat: kit.chat's DOM in its page layout (a centred reading column, the thread the one scroller) */
+.gp main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .gp #chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .gp .chatcol { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; height: 100%; }
 .gp .log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 16px 24px 10px; }
@@ -195,8 +196,10 @@ html, body { margin: 0; height: 100%; }
     <span id="more-wrap"></span>
   </header>
   <div id="alerts"></div>
-  <main id="chat" aria-label="CodeSense setup"></main>
-  <div id="empty" hidden></div>
+  <main aria-label="CodeSense setup">
+    <div id="chat"></div>
+    <div id="empty" hidden></div>
+  </main>
   <details class="priv"><summary>Runs on your own CLI login. What you type and what it reads go to your CLI's provider. Nothing goes to CodeSense. <span class="lk">What it can see</span></summary>
     <div>Sees: your messages, the docs it reads, names and paths of your repos and teams, setup check results (installed, signed in: never tokens), and issue titles it previews for import. Never: source code, other conversations, passwords or tokens.</div></details>
 </div>
@@ -844,7 +847,8 @@ html, body { margin: 0; height: 100%; }
     if (!ids.length) return;
     ids.forEach((id) => S.marked.add(id));
     Promise.resolve(cs.invoke('markRead', { messageIds: ids })).catch(() => {
-      // Unmarked rows only stay unread in the Inbox; the page goes on.
+      // A refused or failed call is tried again on the next change or when the page is shown again.
+      ids.forEach((id) => S.marked.delete(id));
     });
   }
   document.addEventListener('visibilitychange', markShownRead);
@@ -863,16 +867,18 @@ html, body { margin: 0; height: 100%; }
     // The opener is unprompted: a person with no live setup agent gets one that speaks first.
     if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
   }
-  // Stops the live guide and waits for the roster to show it gone, so the next launch can't bind to it
+  // Stops the guide and waits for the roster to show it gone, so the next launch can't bind to it
   // or be answered with it. False, with the reason shown, when the stop is cancelled, refused or slow.
+  // The guide is read from the roster, not the chat's lead: a CLI at its sign-in screen is not joinable,
+  // so it is no lead, but it is still running and must stop before another guide opens.
   async function stopLive() {
-    const chat = S.chat;
-    const row = chat && chat.lead();
+    const reads = S.reads;
+    const row = reads ? newest(reads.latestSessions().filter((other) => isGuide(other) && other.state !== 'exited')) : null;
     if (!row) return true;
     notice('stop', null);
     let result;
     try {
-      result = await chat.stopLead();
+      result = await transport.stop(row.handle);
     } catch (error) {
       problem('stop', `Couldn't stop it: ${whyOf(error)}.`);
       return false;

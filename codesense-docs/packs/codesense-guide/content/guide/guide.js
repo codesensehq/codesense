@@ -638,7 +638,8 @@
     if (!ids.length) return;
     ids.forEach((id) => S.marked.add(id));
     Promise.resolve(cs.invoke('markRead', { messageIds: ids })).catch(() => {
-      // Unmarked rows only stay unread in the Inbox; the page goes on.
+      // A refused or failed call is tried again on the next change or when the page is shown again.
+      ids.forEach((id) => S.marked.delete(id));
     });
   }
   document.addEventListener('visibilitychange', markShownRead);
@@ -657,16 +658,18 @@
     // The opener is unprompted: a person with no live setup agent gets one that speaks first.
     if (controls.launch && !controls.stop) chat.launchLead().catch(() => {});
   }
-  // Stops the live guide and waits for the roster to show it gone, so the next launch can't bind to it
+  // Stops the guide and waits for the roster to show it gone, so the next launch can't bind to it
   // or be answered with it. False, with the reason shown, when the stop is cancelled, refused or slow.
+  // The guide is read from the roster, not the chat's lead: a CLI at its sign-in screen is not joinable,
+  // so it is no lead, but it is still running and must stop before another guide opens.
   async function stopLive() {
-    const chat = S.chat;
-    const row = chat && chat.lead();
+    const reads = S.reads;
+    const row = reads ? newest(reads.latestSessions().filter((other) => isGuide(other) && other.state !== 'exited')) : null;
     if (!row) return true;
     notice('stop', null);
     let result;
     try {
-      result = await chat.stopLead();
+      result = await transport.stop(row.handle);
     } catch (error) {
       problem('stop', `Couldn't stop it: ${whyOf(error)}.`);
       return false;

@@ -67,6 +67,8 @@ interface Options {
   /** How the app's gated `cs.act('stopSession')` answers: it stops, the person cancels, or it is refused. */
   stop?: "stopped" | "cancelled" | "denied";
   viewport?: { width: number; height: number };
+  /** How many `markRead` calls fail before one goes through. */
+  markReadFails?: number;
 }
 
 /** Opens the page over the fake bridge; returns the helpers a case drives it with. */
@@ -79,8 +81,9 @@ async function open(page: Page, options: Options = {}) {
     return route.fulfill({ contentType: "text/html", body: PAGE });
   });
   await page.addInitScript(
-    ({ agents, setupDone: done, stop }) => {
+    ({ agents, setupDone: done, stop, markReadFails }) => {
       let setupDone = done;
+      let readFails = markReadFails;
       const calls: Fake["calls"] = [];
       const copied: string[] = [];
       let sessionListener: ((rows: Row[] | null, error?: unknown) => void) | null = null;
@@ -118,6 +121,10 @@ async function open(page: Page, options: Options = {}) {
               handle: `guide-${calls.filter((c) => c.verb === verb).length}`,
             };
           if (verb === "stopSession") return { stopped: true };
+          if (verb === "markRead" && readFails > 0) {
+            readFails -= 1;
+            throw new Error("busy: too many writes");
+          }
           if (verb === "sendAsHuman") return { status: "sent", messageId: 90 + calls.length };
           if (verb === "replyAsHuman") return { status: "sent" };
           return { status: "ok" };
@@ -162,7 +169,12 @@ async function open(page: Page, options: Options = {}) {
         },
       };
     },
-    { agents, setupDone: options.setupDone ?? false, stop: options.stop ?? "stopped" },
+    {
+      agents,
+      setupDone: options.setupDone ?? false,
+      stop: options.stop ?? "stopped",
+      markReadFails: options.markReadFails ?? 0,
+    },
   );
   if (options.clock) await page.clock.install({ time: AT });
   await page.setViewportSize(options.viewport ?? { width: 1000, height: 760 });
@@ -278,6 +290,8 @@ test("with no agent CLI it shows the empty state and starts nothing; Check again
   await expect(page.getByRole("link", { name: "Install Codex" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Install OpenCode" })).toBeVisible();
   await expect(page.locator("#sv-composer-input")).toHaveCount(0);
+  // The empty state is the page's main landmark while there is no chat.
+  await expect(page.getByRole("main")).toContainText("No agent CLI found");
   expect(await calls("openWorkspace")).toHaveLength(0);
   const before = (await calls("getDependencyStatus")).length;
   await page.getByRole("button", { name: "Check again" }).click();
@@ -502,6 +516,25 @@ test("Switch waits for Claude to exit, opens Codex's guide, and no Claude row is
   await expect(page.locator('[data-notice="login"]')).toHaveCount(0);
 });
 
+test("Use Codex instead stops the Claude CLI at its sign-in screen, then opens Codex once it exits", async ({
+  page,
+}) => {
+  const { calls, sessions } = await open(page, { agents: TWO });
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
+  // A CLI at its login screen is not joinable, so it is not the chat's lead; it is still the guide.
+  await sessions([{ ...GUIDE("idle"), needsYouKind: "startup" }]);
+  await page.locator('[data-notice="login"] [data-act="use-other"]').click();
+  await expect.poll(async () => (await calls("stopSession")).length).toBe(1);
+  expect((await calls("stopSession"))[0].args).toEqual({ handle: "guide-1", via: "act" });
+  await sessions([{ ...GUIDE("idle"), needsYouKind: "startup" }]);
+  await page.waitForTimeout(400);
+  expect(await calls("openWorkspace")).toHaveLength(1);
+  await sessions([GUIDE("exited")]);
+  await expect.poll(async () => (await calls("openWorkspace")).length).toBe(2);
+  expect((await calls("openWorkspace"))[1].args.agent).toBe("guide-codex");
+  await expect(page.locator("#rt")).toContainText("Codex");
+});
+
 test("a user team's own guide-claude agent is not the setup guide", async ({ page }) => {
   const { calls, sessions } = await open(page);
   await expect.poll(async () => (await calls("openWorkspace")).length).toBe(1);
@@ -525,6 +558,15 @@ test("the guide's messages the page shows are marked read, each once", async ({ 
   ]);
   await expect.poll(async () => (await calls("markRead")).length).toBe(2);
   expect((await calls("markRead"))[1].args).toEqual({ messageIds: [5] });
+});
+
+test("a markRead that fails is tried again on the next change", async ({ page }) => {
+  const { live, calls, inbox } = await open(page, { markReadFails: 1 });
+  await live([lead(2, "Hi.")]);
+  await expect.poll(async () => (await calls("markRead")).length).toBe(1);
+  await inbox([lead(2, "Hi."), lead(5, "Next step.")]);
+  await expect.poll(async () => (await calls("markRead")).length).toBe(2);
+  expect((await calls("markRead"))[1].args).toEqual({ messageIds: [2, 5] });
 });
 
 test("the chip names the model a relaunch runs once setup is done", async ({ page }) => {
