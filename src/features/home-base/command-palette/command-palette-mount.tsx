@@ -51,6 +51,7 @@ import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
+import { openForeman } from "@/features/foreman/open-foreman";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
 
@@ -322,6 +323,7 @@ export function CommandPaletteMount() {
       openRoutines: () => openRoutines(),
       openAgents: () => openAgents(),
       openScratchSpace: () => openScratchSpace(),
+      openForeman: () => openForeman(),
       addMachine: () => openMachinesPanel({ mode: "add" }),
     };
   }, [activeOrg, enterTeam]);

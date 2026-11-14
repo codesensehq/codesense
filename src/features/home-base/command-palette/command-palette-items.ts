@@ -40,6 +40,7 @@ export type CommandPaletteSelection =
   | { kind: "account"; userId: number }
   | { kind: "create-team" }
   | { kind: "attach-repo" }
+  | { kind: "open-foreman" }
   | { kind: "open-pane"; panelId: string }
   | { kind: "command"; actionId: string }
   | { kind: "open-shortcuts" }
@@ -62,6 +63,8 @@ export function encodeSelection(sel: CommandPaletteSelection): string {
       return "create-team";
     case "attach-repo":
       return "attach-repo";
+    case "open-foreman":
+      return "open-foreman";
     case "open-pane":
       return `pane${SEP}${sel.panelId}`;
     case "command":
@@ -82,6 +85,7 @@ export function encodeSelection(sel: CommandPaletteSelection): string {
 export function decodeSelection(id: string): CommandPaletteSelection | null {
   if (id === "create-team") return { kind: "create-team" };
   if (id === "attach-repo") return { kind: "attach-repo" };
+  if (id === "open-foreman") return { kind: "open-foreman" };
   if (id === "open-shortcuts") return { kind: "open-shortcuts" };
   if (id === "open-routines") return { kind: "open-routines" };
   if (id === "open-agents") return { kind: "open-agents" };
@@ -247,6 +251,13 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
     sublabel: "action · open what only you see",
     tier: CP_TIER.action,
   });
+  // The Foreman is global: its page lives in the bundled docs, whichever team is open.
+  items.push({
+    id: encodeSelection({ kind: "open-foreman" }),
+    label: "Foreman",
+    sublabel: "action · open the Foreman",
+    tier: CP_TIER.action,
+  });
   if (inputs.canAttach) {
     items.push({
       id: encodeSelection({ kind: "attach-repo" }),
@@ -365,6 +376,7 @@ export interface CommandPaletteHandlers {
   openRoutines: () => void;
   openAgents: () => void;
   openScratchSpace: () => void;
+  openForeman: () => void;
   addMachine: () => void;
 }
 
@@ -401,6 +413,9 @@ export function dispatchSelection(
     case "attach-repo":
       if (attachTargetTeam === null) return false;
       handlers.attachRepo(attachTargetTeam);
+      return true;
+    case "open-foreman":
+      handlers.openForeman();
       return true;
     case "open-pane":
       handlers.openPane(sel.panelId);

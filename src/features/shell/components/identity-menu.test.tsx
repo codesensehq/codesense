@@ -22,6 +22,7 @@ const {
   mockAttach,
   mockOpenScratchSpace,
   mockOpenAgents,
+  mockOpenForeman,
   mockOpenRoutines,
   mockOpenMachines,
   mockOpenDashboards,
@@ -33,6 +34,7 @@ const {
   mockAttach: vi.fn(),
   mockOpenScratchSpace: vi.fn(),
   mockOpenAgents: vi.fn(),
+  mockOpenForeman: vi.fn(),
   mockOpenRoutines: vi.fn(),
   mockOpenMachines: vi.fn(),
   mockOpenDashboards: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock("@/features/scratch-space/scratch-space-virtual-tab", () => ({
   openScratchSpace: mockOpenScratchSpace,
 }));
 vi.mock("@/features/agents/agents-virtual-tab", () => ({ openAgents: mockOpenAgents }));
+vi.mock("@/features/foreman/open-foreman", () => ({ openForeman: mockOpenForeman }));
 vi.mock("@/features/routines/routines-virtual-tab", () => ({ openRoutines: mockOpenRoutines }));
 vi.mock("@/features/dashboard-publishing/dashboards-virtual-tab", () => ({
   openDashboards: mockOpenDashboards,
@@ -352,6 +355,7 @@ describe("IdentityMenu — the menu", () => {
     render(<IdentityMenu />);
     const cases: [string, () => void][] = [
       ["identity-menu-private", () => expect(mockOpenScratchSpace).toHaveBeenCalled()],
+      ["identity-menu-foreman", () => expect(mockOpenForeman).toHaveBeenCalled()],
       ["identity-menu-agents", () => expect(mockOpenAgents).toHaveBeenCalled()],
       ["identity-menu-routines", () => expect(mockOpenRoutines).toHaveBeenCalled()],
       ["identity-menu-machines", () => expect(mockOpenMachines).toHaveBeenCalled()],
