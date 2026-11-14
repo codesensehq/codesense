@@ -79,7 +79,11 @@ pub fn install_app_emitter(app: tauri::AppHandle) {
 /// Usage was stored for these sessions. Does nothing before the app installs its emitter.
 pub(crate) fn ingested<'a>(ids: impl IntoIterator<Item = &'a str>) {
     if let Some(debouncer) = OnceLock::get(&GLOBAL) {
-        Debouncer::note(debouncer, ids.into_iter().map(str::to_owned));
+        let mut owned = Vec::new();
+        for id in ids {
+            Vec::push(&mut owned, str::to_owned(id));
+        }
+        Debouncer::note(debouncer, owned);
     }
 }
 
