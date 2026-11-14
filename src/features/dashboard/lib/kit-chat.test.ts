@@ -91,9 +91,10 @@ const mountOn = (s: ReturnType<typeof setup>, extra: Record<string, unknown> = {
     ...extra,
   });
 const typeAndSend = async (el: HTMLElement, text: string) => {
-  const input = el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!;
+  // By place, not id: a second chat on the page has its own ids.
+  const input = el.querySelector<HTMLTextAreaElement>(".composer textarea")!;
   input.value = text;
-  el.querySelector<HTMLButtonElement>("#sv-send")!.click();
+  el.querySelector<HTMLButtonElement>(".composer .box button")!.click();
   await flush();
 };
 
@@ -103,6 +104,69 @@ beforeEach(() => {
 });
 afterEach(() => {
   document.body.replaceChildren();
+  document.head.querySelector("link[data-codesense-chat]")?.remove();
+});
+
+describe("kit.chat stylesheet", () => {
+  it("keeps every rule inside the chat's own root, so a page's .log and .msg are not touched", () => {
+    const css = readFileSync(join(KIT_DIR, "chat.css"), "utf8");
+    const rules = css.split("\n").filter((line) => line.includes("{"));
+    expect(rules.length).toBeGreaterThan(20);
+    for (const rule of rules)
+      expect(rule, rule).toMatch(/^(\.cs-chat|@keyframes|@media|@container)/);
+  });
+});
+
+describe("kit.chat mounts on one page", () => {
+  const idsIn = (root: ParentNode) => Array.from(root.querySelectorAll("[id]")).map((n) => n.id);
+
+  it("gives two mounts no id in common, and the first keeps the ids pages and tests already use", async () => {
+    const one = setup([lead("idle")]);
+    const two = setup([lead("idle")]);
+    mountOn(one);
+    mountOn(two);
+    await flush();
+    expect(one.el.querySelector("#sv-composer-input")).not.toBeNull();
+    expect(idsIn(two.el).length).toBeGreaterThan(0);
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+    // Each composer describes itself by its own hint.
+    for (const s of [one, two]) {
+      const input = s.el.querySelector("textarea")!;
+      const hint = input.getAttribute("aria-describedby")!;
+      expect(s.el.querySelector(`#${hint}`)).not.toBeNull();
+    }
+  });
+
+  it("frees a mount's ids when it unmounts", async () => {
+    const one = setup([lead("idle")]);
+    const two = setup([lead("idle")]);
+    const first = mountOn(one);
+    mountOn(two);
+    first.unmount();
+    const third = setup([lead("idle")]);
+    mountOn(third);
+    await flush();
+    expect(third.el.querySelector("#sv-composer-input")).not.toBeNull();
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("links the chat stylesheet once per page, and not when the page opts out", () => {
+    const links = () => document.head.querySelectorAll("link[data-codesense-chat]");
+    mountOn(setup([lead("idle")]), { styles: false });
+    expect(links()).toHaveLength(0);
+    mountOn(setup([lead("idle")]));
+    mountOn(setup([lead("idle")]));
+    expect(links()).toHaveLength(1);
+    expect(links()[0]!.getAttribute("href")).toBe("/kit/v1/chat.css");
+  });
+
+  it("marks its root so the stylesheet's rules stay inside the chat", () => {
+    const s = setup([lead("idle")]);
+    mountOn(s);
+    expect(s.el.querySelector(".chatcol.cs-chat")).not.toBeNull();
+  });
 });
 
 describe("kit.chat", () => {
@@ -313,7 +377,7 @@ describe("kit.chat", () => {
       ...extra,
     });
     const placeholder = (el: HTMLElement) =>
-      el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.placeholder;
+      el.querySelector<HTMLTextAreaElement>(".composer textarea")!.placeholder;
 
     it("copy overrides the words it names and keeps the rest", async () => {
       const s = setup([lead("idle")]);
@@ -543,7 +607,7 @@ describe("kit.chat page layout and activity", () => {
     mountOn(s);
     await flush();
     const col = s.el.querySelector(".chatcol")!;
-    expect(col.className).toBe("chatcol");
+    expect(col.className).toBe("chatcol cs-chat");
     expect(col.hasAttribute("data-variant")).toBe(false);
     expect(activityRow(s.el)).toBeNull();
   });
@@ -558,7 +622,7 @@ describe("kit.chat page layout and activity", () => {
     const other = setup([lead("idle")]);
     mountOn(other, { layout: { variant: "wide" } });
     await flush();
-    expect(other.el.querySelector(".chatcol")!.className).toBe("chatcol");
+    expect(other.el.querySelector(".chatcol")!.className).toBe("chatcol cs-chat");
     expect(other.el.querySelector(".chatcol")!.hasAttribute("data-variant")).toBe(false);
   });
 

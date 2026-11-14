@@ -1,0 +1,55 @@
+/* SPDX-License-Identifier: MIT */
+/* kit.chat's stylesheet: the thread, the status rows, the composer and the needs-you cards, read from the kit tokens and kept inside the chat's own root (.cs-chat) so a page's classes of the same names are not touched. chat.js links it once per page. */
+.cs-chat{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;height:100%}
+.cs-chat .src{display:flex;justify-content:center;font-size:var(--cs-text-xs);color:var(--cs-muted-fg);padding:6px 24px 0;flex:none}
+.cs-chat .chat-head{flex:none}
+.cs-chat .log{flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px max(24px,calc((100% - 720px)/2)) 10px;display:flex;flex-direction:column;gap:10px}
+.cs-chat .log:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-2px}
+.cs-chat .log>:first-child{margin-top:auto}
+.cs-chat .log>.status-slot,.cs-chat .log>.src{align-self:stretch}
+.cs-chat .log>.empty{text-align:center;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg{display:flex;flex-direction:column;gap:3px;max-width:min(560px,100%)}
+.cs-chat .msg.lead,.cs-chat .msg.other{align-self:flex-start;align-items:flex-start}
+.cs-chat .msg.you{align-self:flex-end;align-items:flex-end}
+.cs-chat .msg .meta{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg .body{white-space:pre-wrap;overflow-wrap:anywhere;padding:7px 11px;border-radius:var(--cs-radius-lg);background:var(--cs-surface);border:1px solid var(--cs-border)}
+.cs-chat .msg.you .body{background:color-mix(in srgb,var(--cs-accent) 10%,var(--cs-bg))}
+.cs-chat .msg .note,.cs-chat .msg .mark{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg .mark[data-mark=kept]{color:var(--cs-danger)}
+.cs-chat .msg.typing{flex-direction:row;align-items:center;gap:6px}
+.cs-chat .dots{display:inline-flex;gap:4px}
+.cs-chat .dots i{width:6px;height:6px;border-radius:50%;background:var(--cs-muted-fg);animation:cs-chat-dots 1.2s infinite}
+.cs-chat .dots i:nth-child(2){animation-delay:.2s}
+.cs-chat .dots i:nth-child(3){animation-delay:.4s}
+@keyframes cs-chat-dots{0%,80%,100%{opacity:.3}40%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.cs-chat .dots i{animation:none}}
+.cs-chat .status-slot{display:flex;flex-direction:column;gap:8px}
+.cs-chat .status-slot[hidden]{display:none}
+.cs-chat .sys{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-sm);color:var(--cs-fg);padding:6px 10px;border-radius:var(--cs-radius);border:1px solid var(--cs-border);background:var(--cs-surface)}
+.cs-chat .sys.warn{border-color:color-mix(in srgb,var(--cs-warning) 40%,var(--cs-border));background:color-mix(in srgb,var(--cs-warning) 10%,var(--cs-bg))}
+.cs-chat .sys.danger{border-color:color-mix(in srgb,var(--cs-danger) 45%,var(--cs-border));background:color-mix(in srgb,var(--cs-danger) 10%,var(--cs-bg))}
+.cs-chat .sys .code{color:var(--cs-muted-fg)}
+.cs-chat .ico{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.cs-chat .ico.alert{color:var(--cs-danger)}
+.cs-chat .composer{flex:none;height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
+.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:flex;gap:8px;align-items:flex-end;padding:6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+.cs-chat .composer .box:focus-within{border-color:var(--cs-accent)}
+.cs-chat .composer .hint{flex:none;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .composer textarea{flex:1 1 auto;align-self:stretch;resize:none;border:0;outline:0;padding:2px 4px;background:transparent;color:var(--cs-fg)}
+.cs-chat .composer textarea::placeholder{color:var(--cs-muted-fg);opacity:1}
+.cs-chat .composer textarea:disabled{color:var(--cs-muted-fg)}
+.cs-chat .composer .btn{min-width:64px;justify-content:center}
+.cs-chat .card{display:grid;gap:8px;padding:10px 12px;border-radius:var(--cs-radius-lg);border:1px solid var(--cs-border);background:var(--cs-surface);max-width:100%}
+.cs-chat .card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .card-h b{color:var(--cs-fg);font-size:var(--cs-text-sm)}
+.cs-chat .card-h .sp{flex:1}
+.cs-chat .card .body{padding:0;border:0;background:transparent}
+.cs-chat .card .opts{display:flex;flex-wrap:wrap;gap:6px}
+.cs-chat .card .opts .btn{white-space:normal;height:auto;min-height:28px;padding-top:4px;padding-bottom:4px;text-align:left}
+.cs-chat .card .rec{font-weight:400}
+.cs-chat .card .reply{display:flex;gap:6px;align-items:flex-end}
+.cs-chat .card .reply textarea{flex:1 1 auto;resize:vertical;min-height:40px;padding:4px 6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg);color:var(--cs-fg)}
+.cs-chat .card[data-state=answered]{background:var(--cs-bg)}
+.cs-chat .card .chosen{font-size:var(--cs-text-sm);color:var(--cs-fg)}
+.cs-chat .card .sys{margin:0}
+@container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .composer{padding:8px 16px 10px}}
