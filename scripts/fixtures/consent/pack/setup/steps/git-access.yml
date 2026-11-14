@@ -1,0 +1,147 @@
+step_format: 1
+id: git-access
+title: Let agents reach your git host
+summary: >-
+  Agents need to read your repos. You say how they reach your git host, I check it with one
+  read of a repo your team tracks, and only then I save your answer to tools/git-access.md in
+  your team so every agent knows. Nothing is installed and nothing changes on the host.
+needs: [repos]
+probe:
+  - id: repos
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields:
+      org: "orgs[].slug"
+      org_root: "orgs[].orgRoot"
+      team: "orgs[].teams[].name"
+      repo: "orgs[].teams[].sourceRepos[].slug"
+    map: { found: missing, none: missing, unreadable: unknown }
+  - id: note
+    check:
+      tool: read_content_file
+      path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
+    # The step is done by the file it writes, never by the read that gates it (that run's exit
+    # status is no probe outcome): a failed read writes nothing, so this stays unreadable.
+    map: { found: done, none: missing, unreadable: missing }
+ask:
+  text: >-
+    **How should agents reach your git host?** You pick; I never ask which tool to install.
+    To check, I read one repo your team tracks once, with `git ls-remote`, and only if that
+    works I save your answer to `tools/git-access.md` in your team, so every agent knows how to
+    reach it. If it's something else, tell me and I'll pick the closest. Nothing is committed
+    or pushed: the new file waits in your context repo's folder for you to review and commit.
+  options:
+    - { label: The git credentials I already have, act: check-credentials }
+    - { label: The gh CLI, act: check-gh-cli }
+    - { label: A git or GitHub MCP server, act: check-mcp-server }
+    - { label: A token-based tool, act: check-token-tool }
+    - { label: Not now, act: none }
+  recommend: check-credentials
+  free_text: true
+inputs:
+  repo:
+    pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    label: One repo the team tracks, as owner/name, from the repos probe
+    shareable: true
+on_fail:
+  text: >-
+    **Couldn't read {{repo}}.** I checked git access with `git ls-remote` and the host refused
+    it, so nothing was saved to `tools/git-access.md`. Fix the access you chose, or ask an
+    owner for access, then retry.
+  options:
+    - { label: Retry, do: retry }
+    - { label: Copy access request, do: copy }
+  copy: >-
+    Could you give me read access to {{repo}} on your git host? CodeSense reads it with
+    git to set up agents for our team.
+act:
+  - id: check-credentials
+    consent: local-write
+    what: read {{repo}} once with git ls-remote, then save how agents reach your git host
+    where: a terminal tab on this Mac, then tools/git-access.md in your team
+    why: so every agent knows how to reach your repos, checked before it is written
+    run:
+      cmd: "/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/{{repo}}.git HEAD"
+      in: terminal_tab
+    wait: { until: tab_exit, then: verify, timeout: 2m }
+    then: [save-credentials]
+  - id: save-credentials
+    consent: local-write
+    what: save tools/git-access.md in your team
+    where: your team's content folder in the context repo
+    why: so every agent knows how to reach your git host
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
+        content: "# Git access\n\nAgents reach the git host with the git credentials already set up on this Mac (a credential helper or SSH keys). It was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        onCollision: fail
+  - id: check-gh-cli
+    consent: local-write
+    what: read {{repo}} once with git ls-remote, then save how agents reach your git host
+    where: a terminal tab on this Mac, then tools/git-access.md in your team
+    why: so every agent knows how to reach your repos, checked before it is written
+    run:
+      cmd: "/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/{{repo}}.git HEAD"
+      in: terminal_tab
+    wait: { until: tab_exit, then: verify, timeout: 2m }
+    then: [save-gh-cli]
+  - id: save-gh-cli
+    consent: local-write
+    what: save tools/git-access.md in your team
+    where: your team's content folder in the context repo
+    why: so every agent knows how to reach your git host
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
+        content: "# Git access\n\nAgents reach the git host with the GitHub CLI (gh), which git uses for its credentials. It was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        onCollision: fail
+  - id: check-mcp-server
+    consent: local-write
+    what: read {{repo}} once with git ls-remote, then save how agents reach your git host
+    where: a terminal tab on this Mac, then tools/git-access.md in your team
+    why: so every agent knows how to reach your repos, checked before it is written
+    run:
+      cmd: "/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/{{repo}}.git HEAD"
+      in: terminal_tab
+    wait: { until: tab_exit, then: verify, timeout: 2m }
+    then: [save-mcp-server]
+  - id: save-mcp-server
+    consent: local-write
+    what: save tools/git-access.md in your team
+    where: your team's content folder in the context repo
+    why: so every agent knows how to reach your git host
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
+        content: "# Git access\n\nAgents reach the git host through a git or GitHub MCP server. Git itself was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret.\n"
+        onCollision: fail
+  - id: check-token-tool
+    consent: local-write
+    what: read {{repo}} once with git ls-remote, then save how agents reach your git host
+    where: a terminal tab on this Mac, then tools/git-access.md in your team
+    why: so every agent knows how to reach your repos, checked before it is written
+    run:
+      cmd: "/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/{{repo}}.git HEAD"
+      in: terminal_tab
+    wait: { until: tab_exit, then: verify, timeout: 2m }
+    then: [save-token-tool]
+  - id: save-token-tool
+    consent: local-write
+    what: save tools/git-access.md in your team
+    where: your team's content folder in the context repo
+    why: so every agent knows how to reach your git host
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/tools/git-access.md"
+        content: "# Git access\n\nAgents reach the git host with a token-based tool that is set up outside CodeSense. Git itself was checked with one read of a tracked repo (`git ls-remote`). This file holds no secret and names no token.\n"
+        onCollision: fail
+verify: { probe: note, expect: done }
+record:
+  scope: team
+  fields: { created: "tools/git-access.md" }
+  secret: never
+undo: Delete tools/git-access.md from your team's content; nothing else was changed.

@@ -17,11 +17,11 @@
         "role": "assistant",
         "tool_calls": [
           {
-            "name": "mcp__codesense__probe_environment",
+            "name": "mcp__codesense__describe_setup",
             "native_id": "toolu_1",
             "is_error": false,
-            "input": "{\"check\": \"gh_auth\"}",
-            "result": "{\"status\": \"signed_out\"}"
+            "input": "{}",
+            "result": "{\"orgs\": []}"
           }
         ]
       },
@@ -33,7 +33,7 @@
             "name": "mcp__codesense__send_message",
             "native_id": "toolu_2",
             "is_error": false,
-            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Sign in to GitHub?** You sign in in your browser.\\n\\ncard: gh-auth \\u00b7 install-or-sign-in \\u00b7 sign-in=Do it | none=Not now\"}",
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**How should agents reach your git host?**\\n\\ncard: git-access \\u00b7 local-write \\u00b7 check-credentials=The git credentials I already have | none=Not now\"}",
             "result": "{\"status\": \"sent\", \"messageId\": 201}"
           }
         ]
@@ -47,7 +47,7 @@
             "native_id": "toolu_3",
             "is_error": false,
             "input": "{}",
-            "result": "{\"messages\": [{\"messageId\": 202, \"from\": \"human\", \"text\": \"Do it\", \"inReplyTo\": 201}]}"
+            "result": "{\"messages\": [{\"messageId\": 202, \"from\": \"human\", \"text\": \"The git credentials I already have\", \"inReplyTo\": 201}]}"
           }
         ]
       },
@@ -59,7 +59,7 @@
             "name": "mcp__codesense__run_in_terminal_tab",
             "native_id": "toolu_4",
             "is_error": false,
-            "input": "{\"handle\": \"t1\", \"command\": \"gh auth login --hostname github.com --git-protocol https --web\"}",
+            "input": "{\"handle\": \"t1\", \"command\": \"/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/acme/web.git HEAD\"}",
             "result": "{\"submitted\": true}"
           }
         ]
@@ -73,7 +73,7 @@
             "native_id": "toolu_5",
             "is_error": false,
             "input": "{\"handle\": \"t1\"}",
-            "result": "{\"text\": \"Logged in\"}"
+            "result": "{\"text\": \"ok\"}"
           }
         ]
       },
@@ -85,7 +85,7 @@
             "name": "mcp__codesense__run_in_terminal_tab",
             "native_id": "toolu_6",
             "is_error": false,
-            "input": "{\"handle\": \"t1\", \"command\": \"gh auth login --hostname github.com --git-protocol https --web\"}",
+            "input": "{\"handle\": \"t1\", \"command\": \"/usr/bin/env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git ls-remote --exit-code -- https://github.com/acme/web.git HEAD\"}",
             "result": "{\"submitted\": true}"
           }
         ]

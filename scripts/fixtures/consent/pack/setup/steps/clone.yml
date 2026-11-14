@@ -1,0 +1,93 @@
+step_format: 1
+id: clone
+title: Clone your repos
+summary: >-
+  Puts a clone of each tracked repo that has no folder on this Mac in a folder you name, one
+  visible terminal tab per repo, and connects each folder to your team. It uses the git
+  credentials you set up; nothing changes on the host.
+needs: [repos, git-access]
+probe:
+  - id: repos
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields:
+      org: "orgs[].slug"
+      team: "orgs[].teams[].name"
+      repo: "orgs[].teams[].sourceRepos[].slug"
+      attachment: "orgs[].teams[].sourceRepos[].attachment"
+    # One repo without a clone keeps the step open, which is what clone means (the opposite of
+    # source-repos, where tracking a repo is enough): the least-done repo counts.
+    map:
+      { attached: done, missing: missing, unattached: missing, none: missing, unreadable: unknown }
+ask:
+  text: >-
+    **Clone these repos?** For each tracked repo with no folder on this Mac I'll run
+    `git clone -- https://github.com/<owner>/<name>.git <path>` from github.com in its own
+    terminal tab, which you can watch, then connect the folder to your team. It uses the git
+    credentials you already set up, and nothing changes on the host. If git can't find a
+    credential the clone stops; it never asks for one in the tab. If you clone yourself, tell me
+    and I'll check and connect the folders. Nothing is committed or pushed.
+  options:
+    - { label: Do it, act: clone-repo }
+    - { label: I'll run it myself, act: bind-clone }
+    - { label: Not now, act: none }
+  free_text: true
+inputs:
+  repo:
+    {
+      pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      label: A tracked repo as owner/name,
+      shareable: true,
+    }
+  path:
+    { pattern: "^/[^\\n]{1,400}$", label: The clone's own folder on this Mac named for the repo }
+  workspace_id:
+    {
+      pattern: "^[A-Za-z0-9:._/-]{1,120}$",
+      label: The id of the open workspace that shows the clone's tab,
+    }
+on_fail:
+  text: >-
+    **{{repo}}: the clone stopped.** git couldn't read this repo with your git credentials. I
+    read the tab for why. If you don't have access yet, an owner has to add you.
+  options:
+    - { label: Retry, do: retry }
+    - { label: Copy access request, do: copy }
+    - { label: Skip for now, do: skip }
+  copy: >-
+    Could you give me read access to {{repo}} on your git host? CodeSense clones it with git
+    so agents can work in our code.
+act:
+  - id: clone-repo
+    consent: local-write
+    what: clone each listed repo with git clone, then connect its folder to your team
+    where: one terminal tab per repo on this Mac, in the folder you named
+    why: so agents can work in your code
+    verb:
+      tool: clone_repo
+      args:
+        org: "{{probe.repos.org}}"
+        team: "{{probe.repos.team}}"
+        repo: "{{repo}}"
+        path: "{{path}}"
+        workspaceId: "{{workspace_id}}"
+    repeat: 1
+  - id: bind-clone
+    consent: local-write
+    what: connect each clone you made yourself to your team
+    where: the folders you name on this Mac
+    why: so worktrees and terminals find the code
+    verb:
+      tool: attach_source_repo_path
+      args:
+        org: "{{probe.repos.org}}"
+        team: "{{probe.repos.team}}"
+        repo: "{{repo}}"
+        path: "{{path}}"
+    repeat: 10
+verify: { probe: repos, expect: done }
+record:
+  scope: team
+  fields: { created: "clone {{repo}}" }
+  secret: never
+undo: Delete the folder, then remove the repo's binding under Source repos.

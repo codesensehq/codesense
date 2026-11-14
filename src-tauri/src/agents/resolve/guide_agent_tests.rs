@@ -7,9 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs and `set_active_team`. The same
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`
+/// and the git-access and clone steps' three (a tab, its output, the clone verb). The same
 /// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 27] = [
+const PHASE_1: [&str; 30] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -29,6 +30,9 @@ const PHASE_1: [&str; 27] = [
     "add_source_repo",
     "attach_source_repo_path",
     "run_in_terminal_tab",
+    "open_terminal_tab",
+    "read_terminal_tab",
+    "clone_repo",
     "records_create",
     "records_set_fields",
     "create_content_file",
@@ -39,8 +43,9 @@ const PHASE_1: [&str; 27] = [
     "set_active_team",
 ];
 
-/// Phase 1 tools a build may not register yet: the environment probe lands in its own PR.
-const NOT_YET_SERVED: [&str; 1] = ["probe_environment"];
+/// Phase 1 tools a build may not register yet: the environment probe and the clone verb land
+/// in their own PRs.
+const NOT_YET_SERVED: [&str; 2] = ["probe_environment", "clone_repo"];
 
 /// What CodeSense allows every Claude launch before the agent's own list. Accepted for the
 /// guide (Decisions); its command sends every question as a card, never through `ask_user`.

@@ -3,7 +3,7 @@
 // The consent check for the setup agent (ONB-6). The engine never runs a setup step, so
 // "act only after the person's click" is the agent's own rule; this reads a recorded
 // session (`session_read` with its conversation turns) and fails if a setup verb ran
-// without one.
+// without one. A `clone_repo` with `stop: true` needs a live click but spends no use.
 //
 //   node scripts/setup-consent-check.mjs <session-export.json>
 //
@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCardLine } from "./lib/card-line.mjs";
-import { SETUP_VERBS, actAllowances } from "./lib/pack-steps.mjs";
+import { SETUP_VERBS, actAllowances, commandMatches } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
 
@@ -224,12 +224,18 @@ export function checkConsent(
               continue;
             }
             for (const entry of verbs) {
-              const { verb, uses = 1, cmd } = typeof entry === "string" ? { verb: entry } : entry;
+              const {
+                verb,
+                uses = 1,
+                cmd,
+                inputs,
+              } = typeof entry === "string" ? { verb: entry } : entry;
               const had = allowed.get(verb);
               allowed.set(verb, {
                 uses: (had?.uses ?? 0) + uses,
                 used: 0,
                 cmd: had ? undefined : cmd,
+                inputs: had ? undefined : inputs,
                 act: chosen.act,
                 step: card.line.step,
                 click: `the click on ${card.label} sent at turn ${card.turn}`,
@@ -260,6 +266,8 @@ export function checkConsent(
             errors.push(
               `turn ${index}: run_in_terminal_tab sent the key ${input.key}, which no click allows`,
             );
+        } else if (name === "clone_repo" && input.stop === true) {
+          // Stop ends the clone the click started; like Ctrl-C it spends nothing.
         } else if (earlierUnspent(allowed, name)) {
           errors.push(
             `turn ${index}: ${name} was called before ${earlierUnspent(allowed, name)}, which ${entry.click} allows first`,
@@ -286,7 +294,7 @@ export function checkConsent(
             errors.push(
               `turn ${index}: ${name} wrote ${file}, outside the team set_active_team switched to (${switched.team})`,
             );
-          if (entry.cmd !== undefined && input.command !== entry.cmd)
+          if (entry.cmd !== undefined && !commandMatches(entry.cmd, input.command, entry.inputs))
             errors.push(
               `turn ${index}: run_in_terminal_tab ran a command that is not the exact run.cmd of act ${entry.act} in step ${entry.step}`,
             );

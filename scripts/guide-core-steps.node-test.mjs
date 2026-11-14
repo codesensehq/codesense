@@ -11,7 +11,8 @@ import { PACKS_ROOT, buildPack } from "./pack-build.mjs";
 import { PROBE_TOOLS, SETUP_VERBS, stepErrors } from "./lib/pack-steps.mjs";
 
 const PACK = join(PACKS_ROOT, "codesense-guide");
-const IDS = ["context-repo", "team", "product", "source-repos"];
+const BASE = ["context-repo", "team", "product", "source-repos"];
+const IDS = [...BASE, "git-access", "clone"];
 const step = (id) => parse(readFileSync(join(PACK, `setup/steps/${id}.yml`), "utf8"));
 const index = () => parse(readFileSync(join(PACK, "setup/steps/index.yml"), "utf8"));
 const allActs = () => IDS.flatMap((id) => step(id).act.map((act) => ({ id, act })));
@@ -25,6 +26,7 @@ const WRITES = {
   set_active_team: { org: "org", team: "team" },
   add_source_repo: { org: "org", team: "team" },
   attach_source_repo_path: { org: "org", team: "team" },
+  clone_repo: { org: "org", team: "team" },
   create_content_file: { path: "path" },
   set_epic_repos: { epicFilePath: "path" },
 };
@@ -83,8 +85,8 @@ test("a probe reads what its tool returns, with the user's org and team for the 
   assert.deepEqual(ledger.pick, { "rows[].fields.step": "product", "rows[].fields.state": "done" });
 });
 
-test("no core step clones, runs a command, writes outside or skips its card", () => {
-  for (const { id, act } of allActs()) {
+test("no base step clones, runs a command, writes outside or skips its card", () => {
+  for (const { id, act } of allActs().filter((a) => BASE.includes(a.id))) {
     assert.notEqual(act.verb?.tool, "clone_repo", `${id}/${act.id}`);
     assert.ok(!act.run && !act.open_url, `${id}/${act.id} is a verb act`);
     assert.equal(act.consent, "local-write", `${id}/${act.id}`);
@@ -105,7 +107,8 @@ test("each step asks one card, and Not now writes nothing", () => {
         act.some((a) => a.id === option.act),
         `${id}: ${option.label}`,
       );
-    assert.ok(ask.options.length <= 3, `${id} offers at most three buttons`);
+    // git-access offers one button per way to reach the host (frame E), the rest at most three.
+    assert.ok(ask.options.length <= (id === "git-access" ? 5 : 3), `${id} offers few buttons`);
   }
 });
 
@@ -274,6 +277,23 @@ const TABLE = {
       "attach-source-repo-path": ["attach_source_repo_path"],
     },
     rerun: { repos: "unattached" },
+  },
+  // Done by the file it writes, never by the read that gates the write.
+  "git-access": {
+    before: [{}, { note: "unreadable" }, { note: "none" }],
+    after: Object.fromEntries(
+      ["check-credentials", "check-gh-cli", "check-mcp-server", "check-token-tool"].map((a) => [
+        a,
+        { note: "found" },
+      ]),
+    ),
+    rerun: { note: "found" },
+  },
+  // One repo with no clone keeps the step open; a bound clone that is gone is missing again.
+  clone: {
+    before: [{}, { repos: "unattached" }, { repos: "missing" }],
+    after: { "clone-repo": { repos: "attached" }, "bind-clone": { repos: "attached" } },
+    rerun: { repos: "attached" },
   },
 };
 const RANK = ["unknown", "missing", "partial", "done"];
