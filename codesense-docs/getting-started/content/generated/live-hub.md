@@ -1,6 +1,6 @@
 # LiveHub topics
 
-16 built-in topics and 1 dynamic topic family. Row shapes are read from actual producers; Value expressions and dynamic roster/collection state remain explicitly untyped. Topics with untyped fields: sessions, inbox, agentList, records, paneSources, machineStats, runEndorsements, runEvidence, files, stories, agentDefinitions, profile, workspaceConfig, prefs, storyTotals, pins, ui:<slotId>.
+17 built-in topics and 1 dynamic topic family. Row shapes are read from actual producers; Value expressions and dynamic roster/collection state remain explicitly untyped. Topics with untyped fields: sessions, inbox, agentList, records, paneSources, machineStats, runEndorsements, runEvidence, files, stories, agentDefinitions, profile, workspaceConfig, prefs, storyTotals, pins, messageDelivery, ui:<slotId>.
 
 View keys: `all` for non-team grants; `team:{org}/{team}` for a pinned team; `undefined` is the agentList status ordering suffix. For sessions, inbox and agentList, team grants cannot read other teams. Records instead use `records:{scope}:{owner}:{collection}`: private owner is the org; team owner is org/team. Global UI topics `ui:dock`, `theme` always use `all`, including in a team-pinned frame. Other UI topics follow the frame view.
 
@@ -104,6 +104,7 @@ Row shape 2
 | team | untyped (Value) |
 | messageId | untyped (Value) |
 | createdAt | untyped (Value) |
+| toldAtMs | untyped (Value) |
 | message | untyped (Value) |
 | conversation | untyped (Value) |
 
@@ -256,6 +257,19 @@ Row shape 1: untyped (Value)
 | Field | Type / source expression |
 | --- | --- |
 
+
+## messageDelivery
+
+Row shape 1
+
+| Field | Type / source expression |
+| --- | --- |
+| id | untyped (Value) |
+| messageId | untyped (Value) |
+| team | untyped (Value) |
+| to | untyped (Value) |
+| state | untyped (Value) |
+| toldAtMs | untyped (Value) |
 
 ## ui:<slotId>
 

@@ -1255,6 +1255,83 @@ async fn team_hydration_preserves_other_views_loaded_pages_and_replay() {
         .any(|row| row["id"] == "message:acme/active/2" && row["message"]["unread"] == false));
 }
 
+#[tokio::test]
+async fn a_human_message_to_a_session_is_queued_until_its_agent_is_told() {
+    use super::*;
+    use crate::weft::{inbox as ledger, WeftStore};
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(LiveHub::default());
+    listen_sources(app.handle());
+    let host = FootprintHost {
+        dir: tempfile::tempdir().unwrap(),
+        teams: Mutex::new(vec![FootprintHost::team("active")]),
+        discovery_failed: Default::default(),
+        store_failed: Default::default(),
+        committed: Default::default(),
+        presentation_gate: Default::default(),
+    };
+    let store = WeftStore::open(host.path("active")).unwrap();
+    let sent =
+        ledger::inbox_insert(&store, "human", "H2", "hi", None, None, None, None, None).unwrap();
+    // Mail from an agent has no delivery row.
+    ledger::inbox_insert(
+        &store, "worker", "human", "mail", None, None, None, None, None,
+    )
+    .unwrap();
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    let hub = app.state::<LiveHub>();
+    let hub: &LiveHub = &hub;
+    let delivery = |hub: &LiveHub| {
+        hub.model
+            .lock()
+            .unwrap()
+            .projections
+            .snapshot("messageDelivery", "team:acme/active")
+            .unwrap()
+            .snapshot
+    };
+    let rows = delivery(hub);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], format!("delivery:acme/active/{sent}"));
+    assert_eq!(
+        (&rows[0]["messageId"], &rows[0]["to"], &rows[0]["state"]),
+        (&json!(sent), &json!("H2"), &json!("queued"))
+    );
+    assert!(rows[0]["toldAtMs"].is_null());
+
+    let ledger::Reservation::Offer { token, .. } =
+        ledger::inbox_reserve_announcement_at(&store, "H2", "S2", ledger::now_ms(), "run", false)
+            .unwrap()
+    else {
+        panic!("no offer");
+    };
+    let told = ledger::inbox_confirm_told(&store, "S2", &token)
+        .unwrap()
+        .unwrap();
+    assert_eq!(told, vec![sent]);
+    app.emit(
+        inbox_events::INBOX_EVENT,
+        inbox_events::InboxEvent::new(
+            inbox_events::InboxChange::NoticeConfirmed,
+            &FootprintHost::team("active"),
+            told,
+        ),
+    )
+    .unwrap();
+    hub.next_batch().await;
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    let rows = delivery(hub);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["state"], "delivered");
+    assert!(rows[0]["toldAtMs"].is_i64());
+}
+
 #[tokio::test(start_paused = true)]
 async fn stall_deadline_wakes_once_and_activity_rearms_the_single_sleep() {
     use super::*;

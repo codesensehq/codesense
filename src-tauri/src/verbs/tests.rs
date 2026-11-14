@@ -1052,6 +1052,13 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         page.required_capability(&caller("team"), &json!({"topic":"pins"})),
         "inbox:read:team"
     );
+    // Delivery of the human's messages takes the inbox topic's read grant.
+    for (scope, grant) in [("team", "inbox:read:team"), ("private", "inbox:read:all-teams")] {
+        assert_eq!(
+            subscribe.required_capability(&caller(scope), &json!({"topic":"messageDelivery"})),
+            grant
+        );
+    }
     assert_eq!(
         super::dispatcher::action_target(
             &caller("team"),
