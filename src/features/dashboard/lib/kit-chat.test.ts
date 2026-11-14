@@ -42,7 +42,12 @@ const lead = (state: string): Row => ({
 function setup(roster: Row[], thread: CodesenseSdk.ChatRow[] = []) {
   const listeners = new Map<string, Set<() => void>>();
   const emit = (event: string) => listeners.get(event)?.forEach((fn) => fn());
-  const send = vi.fn(async () => ({ status: "sent", messageId: 41 }));
+  const send = vi.fn(
+    async (_handle: string, _text: string): Promise<Record<string, unknown>> => ({
+      status: "sent",
+      messageId: 41,
+    }),
+  );
   const reply = vi.fn(async () => ({ status: "sent" }));
   const transport = {
     launch: vi.fn(async () => ({ sessionId: "s1" })),
@@ -165,6 +170,80 @@ describe("kit.chat", () => {
     await flush();
     expect(s.el.querySelector("[data-card]")).toBeNull();
     expect(s.el.querySelector('[data-mid="9"] .body')!.textContent).toBe(text);
+  });
+
+  it("with no lead running, the first send launches once, a second is held, and it flushes when the lead joins", async () => {
+    const roster: Row[] = [];
+    const s = setup(roster);
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    mountOn(s, {
+      clock: {
+        now: () => 5000,
+        setTimeout: (fn: () => void) => {
+          timers.set(++next, fn);
+          return next;
+        },
+        clearTimeout: (id: number) => timers.delete(id),
+      },
+    });
+    await flush();
+    await typeAndSend(s.el, "first");
+    expect(s.transport.launch).toHaveBeenCalledTimes(1);
+    expect(s.transport.launch).toHaveBeenCalledWith("first");
+    expect(timers.size, "the slow and fail timers run while it starts").toBe(2);
+    await typeAndSend(s.el, "second");
+    expect(s.transport.launch, "no second launch").toHaveBeenCalledTimes(1);
+    expect(s.send).not.toHaveBeenCalled();
+    const marks = () =>
+      [...s.el.querySelectorAll(".msg.you .mark")].map((m) => m.getAttribute("data-mark"));
+    expect(marks()).toEqual(["starting", "held"]);
+    roster.push(lead("idle"));
+    await s.reads.sessions();
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.send).toHaveBeenCalledWith("lead-1", "second");
+    expect(timers.size, "joining stops the timers").toBe(0);
+    expect(marks()).toEqual(["delivered", "delivered"]);
+  });
+
+  it("a send that resolves with a status other than sent keeps the message and offers Retry", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s);
+    await flush();
+    s.send.mockResolvedValueOnce({ status: "invalid", message: "no such session" });
+    await typeAndSend(s.el, "hello");
+    expect(s.el.querySelector(".msg.you .mark")!.getAttribute("data-mark")).toBe("kept");
+    const row = s.el.querySelector('[data-row="send-failed"]')!;
+    expect(row.textContent).toContain("no such session");
+    row.querySelector<HTMLButtonElement>("[data-retry-send]")!.click();
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(2);
+    expect(s.send).toHaveBeenLastCalledWith("lead-1", "hello");
+    expect(s.el.querySelector('[data-row="send-failed"]')).toBeNull();
+    expect(s.el.querySelector(".msg.you .mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
+  it("a card the person answered in the Inbox reads answered, with no option left to press", async () => {
+    const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
+    const s = setup(
+      [lead("idle")],
+      [
+        { messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 },
+        { messageId: 10, from: "human", inReplyTo: 9, text: "Hold", createdAtMs: 2000 },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const card = s.el.querySelector('[data-card="9"]')!;
+    expect(card.getAttribute("data-state")).toBe("answered");
+    expect(card.textContent).toContain("Answered in your Inbox");
+    expect(card.textContent).toContain("Hold");
+    const options = [...card.querySelectorAll<HTMLButtonElement>("[data-ans]")];
+    expect(options.every((b) => b.disabled)).toBe(true);
+    options[0]?.click();
+    await flush();
+    expect(s.reply).not.toHaveBeenCalled();
   });
 
   it("chips send their text like a typed message", async () => {
