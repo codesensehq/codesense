@@ -45,7 +45,7 @@ describe("useForemanMailWaiting", () => {
     await waitFor(() => expect(result.current).toBe(true));
     expect(readRoles).toHaveBeenCalledWith(
       { org: CODESENSE_DOCS_SLUG, team: CODESENSE_DOCS_TEAM },
-      "codesense-foreman",
+      undefined,
       1,
     );
   });

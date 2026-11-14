@@ -52,7 +52,6 @@ import {
   useMissingContextRepos,
 } from "@/features/org/components/missing-context-repos";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
-import { ForemanMailDot } from "@/features/foreman/foreman-mail-dot";
 import { openForeman } from "@/features/foreman/open-foreman";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
@@ -454,7 +453,9 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
           <MessageSquare size={15} strokeWidth={1.75} />
         </MenuLeadIcon>
         <span>Foreman</span>
-        {foremanMail && <ForemanMailDot testId="identity-menu-foreman-dot" />}
+        {foremanMail && (
+          <StatusMark data-testid="identity-menu-foreman-dot" mark="question" size="sm" />
+        )}
       </button>
       <button
         type="button"

@@ -48,8 +48,9 @@ export function resetStartLanding(): void {
  */
 export function openStartLanding(readmePath: string): void {
   // Both landings open in the docs team: wait for a discovery that has loaded it.
+  if (startLandingDone) return;
   const foremanPath = foremanPagePath();
-  if (startLandingDone || !foremanPath) return;
+  if (!foremanPath) return;
   startLandingDone = true;
   const landing = pickStartLanding({
     orgs: useOrgStore.getState().orgs,

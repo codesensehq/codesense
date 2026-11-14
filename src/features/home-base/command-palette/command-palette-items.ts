@@ -257,9 +257,7 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
   items.push({
     id: encodeSelection({ kind: "open-foreman" }),
     label: "Foreman",
-    sublabel: inputs.foremanMailWaiting
-      ? "action · open the Foreman · mail waiting"
-      : "action · open the Foreman",
+    sublabel: `action · open the Foreman${inputs.foremanMailWaiting ? " · mail waiting" : ""}`,
     waiting: inputs.foremanMailWaiting === true,
     tier: CP_TIER.action,
   });
