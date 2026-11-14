@@ -116,7 +116,7 @@ const teamStep = () => ({
       { label: "Not now", act: "none" },
     ],
   },
-  inputs: { team: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$" } },
+  inputs: { team: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", shareable: true } },
   act: [
     {
       id: "create",
@@ -228,9 +228,23 @@ test("a team ledger record may not name or hold a path, username or secret", () 
   const byTemplate = teamStep();
   byTemplate.record.fields = { note: "{{probe.status.account}}" };
   has(check([byTemplate]), "holds a path, a username or a secret");
+  // A team row names an input only when the step marks it shareable (#120 L3): an input can
+  // be a folder or a login whatever its name is.
+  const unmarked = teamStep();
+  delete unmarked.inputs.team.shareable;
+  has(check([unmarked]), "record uses {{team}}, an input not marked shareable");
+  const inVerbOnly = teamStep();
+  delete inVerbOnly.inputs.team.shareable;
+  inVerbOnly.record.fields = { note: "done" };
+  assert.deepEqual(check([inVerbOnly]), []);
+  const disguised = teamStep();
+  disguised.inputs = { team: { pattern: "^[a-z]+$" }, dest: { pattern: "^/.*$" } };
+  disguised.record.fields = { created: "{{dest}}" };
+  has(check([disguised]), "record uses {{dest}}, an input not marked shareable");
   // The same fields are fine in a machine row.
   const machine = teamStep();
   machine.record = { scope: "machine", fields: { clonePath: "{{team}}" }, secret: "never" };
+  delete machine.inputs.team.shareable;
   assert.deepEqual(check([machine]), []);
 });
 
@@ -403,4 +417,59 @@ test("the docs bundle carries the step index, the steps and the ledger schema", 
   const to = pairs.map((p) => p.to);
   assert.ok(to.includes("getting-started/content/guide/setup/steps/index.yml"));
   assert.ok(to.includes("getting-started/content/guide/setup/ledger/setup-ledger.yaml"));
+});
+
+test("then runs more acts on one click: same class, verbs only, no chains", () => {
+  const withThen = () => {
+    const step = teamStep();
+    step.act[0].then = ["schema"];
+    step.act.push({
+      id: "schema",
+      consent: "local-write",
+      what: "write the setup log's schema",
+      where: "your team",
+      why: "so setup can be recorded",
+      verb: { tool: "create_content_file", args: { path: "{{team}}" } },
+    });
+    return step;
+  };
+  assert.deepEqual(check([withThen()]), []);
+  const unknown = withThen();
+  unknown.act[0].then = ["nope"];
+  has(check([unknown]), "act create then-runs unknown act nope");
+  const self = withThen();
+  self.act[0].then = ["create"];
+  has(check([self]), "act create then-runs itself");
+  const mixed = withThen();
+  mixed.act[1].consent = "install-or-sign-in";
+  has(check([mixed]), "act create then-runs schema, which has another consent class");
+  const run = withThen();
+  run.act[1] = { ...run.act[1], verb: undefined, run: { cmd: "echo hi", in: "terminal_tab" } };
+  has(check([run]), "act create then-runs schema, which is not a verb act");
+  const chain = withThen();
+  chain.act[1].then = ["create"];
+  has(check([chain]), "act schema then-runs create, but a then-act cannot chain");
+});
+
+test("repeat lets one click use a verb up to that many times, on a verb act only", () => {
+  const many = teamStep();
+  many.act[0].repeat = 5;
+  assert.deepEqual(check([many]), []);
+  const zero = teamStep();
+  zero.act[0].repeat = 0;
+  assert.ok(check([zero]).length > 0);
+  const tooMany = teamStep();
+  tooMany.act[0].repeat = 11;
+  assert.ok(check([tooMany]).length > 0);
+  const run = teamStep();
+  run.act[0] = {
+    id: "create",
+    consent: "local-write",
+    what: "x",
+    where: "y",
+    why: "z",
+    run: { cmd: "echo hi", in: "terminal_tab" },
+    repeat: 2,
+  };
+  has(check([run]), "act create repeats but has no verb");
 });

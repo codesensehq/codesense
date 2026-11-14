@@ -58,7 +58,7 @@ files:
     sha256: 64e8d67d2dfcbf127787fe10e9145e8d0af29fc071ed531b8ec0f1335d557e5c
     exec: false
   - path: setup/step.schema.json
-    sha256: 94357231037c7eeee981b8e8cb570be9c133318698a49b5ad862b43cef556ca9
+    sha256: 30915e91d46ed88557cfe06cbbc93d4f57c1566a8edfdd269dc593e1e6be1c0e
     exec: false
   - path: setup/steps/index.yml
     sha256: 6b039c8d2bd218cc83d310a5f606160b88d7f6eed928703604b4f41c98a96574

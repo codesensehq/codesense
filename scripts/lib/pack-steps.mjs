@@ -105,6 +105,23 @@ export function stepRuleErrors(step, where) {
       errors.push(`${where}: act ${act.id} is read but calls ${act.verb.tool}, a setup verb`);
   }
 
+  for (const act of acts) {
+    if (act.repeat && !act.verb) errors.push(`${where}: act ${act.id} repeats but has no verb`);
+    for (const id of act.then ?? []) {
+      const next = acts.find((a) => a.id === id);
+      if (id === act.id) errors.push(`${where}: act ${act.id} then-runs itself`);
+      else if (!next) errors.push(`${where}: act ${act.id} then-runs unknown act ${id}`);
+      else if (next.then?.length)
+        errors.push(
+          `${where}: act ${next.id} then-runs ${next.then[0]}, but a then-act cannot chain`,
+        );
+      else if (!next.verb)
+        errors.push(`${where}: act ${act.id} then-runs ${id}, which is not a verb act`);
+      else if (next.consent !== act.consent)
+        errors.push(`${where}: act ${act.id} then-runs ${id}, which has another consent class`);
+    }
+  }
+
   const options = step.ask?.options ?? [];
   for (const option of options)
     if (option.act !== "none" && !actIds.includes(option.act))
@@ -149,6 +166,15 @@ export function stepRuleErrors(step, where) {
 
   if (step.record?.scope === "team")
     for (const [key, value] of Object.entries(step.record.fields ?? {})) {
+      // An input can be a folder or a login whatever it is called, so a team row may name
+      // only an input the step marks shareable.
+      for (const name of templates(value)) {
+        const root = name.split(".")[0];
+        if (inputs.includes(root) && !step.inputs[root].shareable)
+          errors.push(
+            `${where}: record uses {{${name}}}, an input not marked shareable; a team row holds only shareable inputs`,
+          );
+      }
       if (PRIVATE_KEY.test(key))
         errors.push(
           `${where}: a team record field is named ${key}; team rows hold no paths, usernames or secrets`,
