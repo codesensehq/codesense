@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
 const text = (rel) => readFileSync(new URL(rel, pack), "utf8");
@@ -85,10 +86,14 @@ test("the root prompt is the spec, under 2.2k tokens, passed as the agent's syst
 test("the agent allows exactly the Foreman's tools and refuses the rest", () => {
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
-    assert.ok(/^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule), rule);
+    assert.ok(
+      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule) ||
+        rule === GITHUB_PR,
+      rule,
+    );
   }
   const tools = allow.filter((rule) => rule.startsWith("mcp__")).sort();
-  assert.deepEqual(tools, TOOLS.map(mcp).sort());
+  assert.deepEqual(tools, [...TOOLS.map(mcp), GITHUB_PR].sort());
   for (const name of FORBIDDEN) {
     assert.ok(deny.includes(mcp(name)), `${name} is denied`);
     assert.ok(!allow.includes(mcp(name)), `${name} is not allowed`);
@@ -346,10 +351,11 @@ test("the spec carries the home, handoff, wake and layer rules", () => {
     "at most 12 lines",
     "120k context",
     "You never relaunch yourself",
-    "You set no timers",
+    "set no timers",
     "I don't set timers.",
     "never launch a story lead or a specialist",
     "never answer a needs-you card for the person",
+    "they answer on the page",
     "no lead for that sprint is live on any machine",
     "one Foreman per Mac",
   ]) {
@@ -406,14 +412,34 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "`validate_story`",
     "`sprint: backlog`",
     "`planning`",
-    "gh pr create",
-    "With no remote",
+    "open the PR as above, remove the worktree",
+    "with no remote, no push or PR",
     "one command to merge",
     "never touch the canonical clone",
     "Home gets no commit",
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
+});
+
+test("every PR, story or not, goes through the recorded git-access method and never needs gh", () => {
+  // The rule sits on the PR form itself, so it covers a PR outside the story flow too (setup never requires gh).
+  const work = spec.split("## Where you work")[1].split("\n## ")[0];
+  const form = work.split("\n").find((line) => line.startsWith("- a PR"));
+  assert.ok(form, "the allowed forms list a PR form");
+  for (const phrase of [
+    "after `read_content_file` `tools/git-access.md`",
+    '`gh`: `gh pr create --head <branch> --title "<title>" --body "<body>"`',
+    "else never `gh`: GitHub MCP: its PR tool",
+    "any other or none: no PR, name the pushed branch",
+  ]) {
+    assert.ok(form.includes(phrase), `the PR form says: ${phrase}`);
+  }
+  assert.equal(
+    (spec.match(/gh pr create/g) ?? []).length,
+    1,
+    "gh pr create appears only behind the record",
+  );
 });
 
 test("setup: offer once, launch the guide on a yes, resume, and take it back with a Set up: line", () => {
@@ -504,7 +530,6 @@ test("waiting: the chat surface's open needs-you cards only, and its view as a d
     "open cards only",
     `inbox_list {kind:"needs-you", limit:50}`,
     "story id",
-    "The person answers on the page",
     "needs-you view",
     "never a copy",
   ]) {
