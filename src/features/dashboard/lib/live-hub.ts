@@ -12,15 +12,28 @@ import {
   agentReadSessions,
   type SessionListRow,
 } from "@/tauri/commands";
+import { ORG_REGISTRY_CHANGED_EVENT, SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT } from "@/tauri/events";
 import { logger } from "@/shared/lib/logger";
 import { readSharedUiState, writeSharedUiState, watchSharedUiState } from "./shared-ui-state";
 
 // Policy: hidden badge work is bounded independently of visible delivery.
 export const LIVE_HIDDEN_THROTTLE_MS = 2000;
 export const MAX_LIVE_HIDDEN_FRAMES = 4;
-type BadgeDelivery = { badge?: "live"; owner?: string };
+type BadgeDelivery = {
+  badge?: "live";
+  owner?: string;
+  /** What the frame's grant allows, so it is told only changes it could read. */
+  grants?: readonly string[];
+};
+/** `setupState()` reads every org on this Mac, so it takes the machine-wide grant. */
+const SETUP_READ_GRANT = "machines:read";
 
 const RUN_REVIEW_TOPICS = ["runEndorsements", "runEvidence"] as const;
+/** One setup write's native events (a registry commit, then a checkout bind after its
+ *  reconcile) can be this far apart; the page hears once they have been quiet this long. */
+const SETUP_CHANGED_SETTLE_MS = 500;
+/** A longer run of setup events still tells the page within this long of its first event. */
+const SETUP_CHANGED_MAX_WAIT_MS = 2000;
 export type RunReviewTopic = (typeof RUN_REVIEW_TOPICS)[number];
 const isRunReviewTopic = (topic: string) =>
   (RUN_REVIEW_TOPICS as readonly string[]).includes(topic);
@@ -87,6 +100,7 @@ type Dependencies = {
 };
 type Frame = {
   viewKey: string;
+  grants: readonly string[];
   liveBadge: boolean;
   hiddenLive: boolean;
   shownOrder: number;
@@ -183,7 +197,7 @@ export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
         Number(b.kind === "dir") - Number(a.kind === "dir") ||
         String(a.name).localeCompare(String(b.name), undefined, { numeric: true }),
     );
-  if (topic === "agentList" || topic === "records")
+  if (topic === "agentList" || topic === "records" || topic === "pins")
     return rows.sort(
       (a, b) => Number(a.order ?? 0) - Number(b.order ?? 0) || a.id.localeCompare(b.id),
     );
@@ -243,6 +257,8 @@ export class LiveHub {
   private ready: Promise<void> | null = null;
   private joinedSessionsRead?: Promise<SessionListRow[]>;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private setupFirstAt: number | null = null;
   private uiTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private uiWrites = new Map<string, Promise<unknown>>();
   constructor(private deps: Dependencies) {}
@@ -336,12 +352,37 @@ export class LiveHub {
       this.listen(event, ({ payload }) => {
         for (const each of Array.isArray(type) ? type : [type]) this.invalidate(each, payload);
       });
+    // Any change to orgs, teams or source repos (creating or deleting a team, attaching a
+    // context repo, adding a source repo) raises one or more of these; a burst folds into one
+    // page event.
+    for (const event of [
+      ORG_REGISTRY_CHANGED_EVENT,
+      "context-attachments-changed",
+      SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT,
+    ])
+      this.listen(event, () => this.setupChanged());
     if (this.deps.watchPasteTarget) {
       const off = this.deps.watchPasteTarget(() => this.invalidate("paste-target-changed"));
       this.unlisteners.push(Promise.resolve(off));
     }
     this.ready = Promise.all(this.unlisteners).then(() => {});
     return this.ready;
+  }
+  /** Tells every page the setup (orgs, teams, source repos) changed, once the burst of
+   *  native events has settled; a page rereads `setupState()`. */
+  private setupChanged() {
+    const now = Date.now();
+    this.setupFirstAt ??= now;
+    if (this.setupTimer) clearTimeout(this.setupTimer);
+    const wait = Math.min(
+      SETUP_CHANGED_SETTLE_MS,
+      this.setupFirstAt + SETUP_CHANGED_MAX_WAIT_MS - now,
+    );
+    this.setupTimer = setTimeout(() => {
+      this.setupTimer = null;
+      this.setupFirstAt = null;
+      this.invalidate("setup-changed");
+    }, wait);
   }
   /** Posts a payloadless (or context/inbox) change nudge to every frame; a hidden frame
    *  holds it until shown, since consumers must reread. */
@@ -355,6 +396,7 @@ export class LiveHub {
     };
     const changes = type === "inbox-changed" ? inboxChangesOf(payload) : [];
     for (const frame of this.frames.values()) {
+      if (type === "setup-changed" && !frame.grants.includes(SETUP_READ_GRANT)) continue;
       // A change that named only other teams' rows tells a team frame nothing.
       if (changes.length && !deliverable(frame, { ...message, changes })) continue;
       if (!frame.visible) {
@@ -468,6 +510,7 @@ export class LiveHub {
       `${delivery.owner ? delivery.owner + ":" : ""}${id}:${key}`;
     const frame: Frame = {
       viewKey,
+      grants: delivery.grants ?? [],
       liveBadge: delivery.badge === "live",
       hiddenLive: false,
       shownOrder: ++this.shownOrder,
@@ -680,10 +723,11 @@ export class LiveHub {
       /** Moves the frame's subscriptions to a new view key (a re-bound grant) and asks the
        *  page to resync every topic it reads. The synchronous handoff rotates the page's
        *  token after keys advance and before any new-scope notifications are posted. */
-      rekey: (next: string, beforeResync?: () => void) => {
+      rekey: (next: string, beforeResync?: () => void, grants?: readonly string[]) => {
         if (frame.disposed) return;
         frame.generation++;
         frame.viewKey = next;
+        if (grants) frame.grants = grants;
         frame.resync.clear();
         frame.pending = [];
         const filesToResync: string[] = [];
@@ -1113,6 +1157,7 @@ export class LiveHub {
   dispose() {
     for (const off of this.unlisteners) void off.then((fn) => fn()).catch(() => {});
     if (this.timer) clearTimeout(this.timer);
+    if (this.setupTimer) clearTimeout(this.setupTimer);
     for (const timer of this.uiTimers.values()) clearTimeout(timer);
     for (const frame of this.frames.values()) {
       if (frame.hiddenTimer) clearTimeout(frame.hiddenTimer);

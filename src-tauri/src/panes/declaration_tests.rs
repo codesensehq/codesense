@@ -122,6 +122,17 @@ fn commands_meta_accepts_entity_encoded_json() {
 }
 
 #[test]
+fn commands_meta_decodes_numeric_references_but_only_the_attribute_named_set() {
+    let html = r#"<meta name="codesense:commands" content="[{&#34;id&#34;:&#x22;next&#x22;,&quot;label&quot;:&quot;Don&#x27;t &#38; go &apos;&quot;,&quot;scope&quot;:&quot;slot-focused&quot;}]">"#;
+    let entry = discover(html, None);
+    assert_eq!(entry["status"], "ready", "{entry}");
+    assert_eq!(
+        entry["declaration"]["commands"][0]["label"],
+        "Don't & go &apos;"
+    );
+}
+
+#[test]
 fn invalid_commands_reject_the_dashboard_with_a_plain_reason() {
     let command = |body: &str| format!(r#"<meta name="codesense:commands" content='[{body}]'>"#);
     for (html, reason) in [

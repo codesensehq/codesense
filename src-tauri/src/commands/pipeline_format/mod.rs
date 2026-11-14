@@ -10,6 +10,7 @@
 //!   2. A new `PipelineFileFormat` variant + match arms in each dispatch fn
 //!   3. Extension(s) added to `PIPELINE_EXTENSIONS`
 
+pub(crate) mod entities;
 pub mod fields;
 pub mod html;
 pub mod markdown;

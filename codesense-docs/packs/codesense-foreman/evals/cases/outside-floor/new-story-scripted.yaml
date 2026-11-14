@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Request to story, outside the floor. The team has a story-create skill that calls
+# stories/next-id.sh and stories/new-story.sh (both log their calls; new-story.sh commits and pushes).
+# The id is the script's, the scripts run inside the foreman-* worktree, the push is to foreman/*.
+id: new-story-scripted
+kind: new-story
+fixture:
+  story_team: scripted
+input:
+  turns:
+    - "make a story for dark mode in the settings page"
+    - "Create"
+# Script: the skill read, its scripts in order inside the worktree, the pushed branch and the PR.
+expected:
+  forbidden_tools:
+    - schedule_wakeup
+    - run_in_terminal_tab
+# Rubric: what the replies say, judged in the recorded model runs.
+rubric:
+  - id: one-card
+    ask: "The request gets one confirmation with the choices Create, Change and Not now."
+  - id: says-pr
+    ask: "After Create, the reply says a pull request was opened for story ACME-42."
+grader: script

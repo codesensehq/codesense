@@ -1,0 +1,4 @@
+id: two
+name: Two
+runtime: codex
+args: [-s, danger-full-access, -a, never]

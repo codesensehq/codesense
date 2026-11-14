@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# The handoff contract, outside the floor. With a planted foreman-x worktree and a live child,
+# "Hand off now (test)" gets the handoff message, then signal_done.
+id: handoff
+fixture:
+  handoff: true
+input:
+  turns:
+    - "Hand off now (test)"
+# Script: a message to the person, then signal_done, and no launch. Never the wording.
+expected:
+  forbidden_tools:
+    - open_workspace
+    - schedule_wakeup
+# Rubric: what the handoff says, judged in the recorded model runs.
+rubric:
+  - id: prefix
+    ask: "The handoff message starts with `Foreman handoff:`."
+  - id: short
+    ask: "The handoff message is at most 12 lines."
+  - id: lists-worktree
+    ask: "It lists the open worktree foreman-x."
+  - id: lists-child
+    ask: "It lists the live child it launched by its handle, session-child-1."
+grader: script

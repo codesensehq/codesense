@@ -344,6 +344,7 @@ const SESSION_TOOLS: &[&str] = &[
     "send_message",
     "reply",
     "react",
+    "pin",
     "read_messages",
     "who_am_i",
     "post_agent_message",
@@ -1034,6 +1035,7 @@ mod tests {
             "routine_delete",
             "routine_publish_result",
             "feedback_send",
+            "pin",
         ];
         for tool in added {
             assert!(

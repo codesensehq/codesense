@@ -1,0 +1,30 @@
+pack_format: 1
+id: pack-b
+name: pack-b
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+license: MIT
+parts:
+  - id: setup-skill
+    kind: skill
+    source: commands/b.md
+    targets: [claude]
+    name: setup-b
+setup_steps: ["setup/steps/*.yml"]
+files:
+  - path: .claude/skills/setup-b/SKILL.md
+    sha256: 91775f8c9f23bc4b214d6d1e404ca76e3c93ed1f40f430731bc8c56f333fe787
+    exec: false
+  - path: CHANGELOG.md
+    sha256: 08af173c77d5f653708931410c5ba1102a0eb2c44406ce6d7c6f55be0380f8ee
+    exec: false
+  - path: LICENSE
+    sha256: 78ccf3c3f93a5edd22317674793f47d6f233ae4ffaf3d04c3bcbc2c064c71120
+    exec: false
+  - path: commands/b.md
+    sha256: 91775f8c9f23bc4b214d6d1e404ca76e3c93ed1f40f430731bc8c56f333fe787
+    exec: false
+  - path: setup/steps/access.yml
+    sha256: 687cd156c1eb609121afd1803f5a0f38df6b90dcb0e4625f1a2b00cc2328665c
+    exec: false

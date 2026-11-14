@@ -1,0 +1,9 @@
+pack_format: 1
+id: bad-source-missing
+name: bad-source-missing
+version: 0.1.0
+publisher: fixtures
+summary: A fixture pack.
+license: MIT
+parts:
+  - { id: s, kind: skill, source: nope.md, targets: [claude] }

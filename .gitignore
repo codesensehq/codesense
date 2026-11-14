@@ -77,6 +77,8 @@ version.json
 
 # The bundled CodeSense docs context repo ships team skills under `.claude/`.
 !codesense-docs/**/.claude/
+# Pack-build fixtures hold a built `.claude/skills` copy and a hook fixture.
+!scripts/fixtures/packs/**/.claude/
 # Generated at build time by scripts/build-codesense-docs.mjs (src-tauri/build.rs).
 src-tauri/resources/codesense-docs.tar.gz
 # Docs data generated at build time (src-tauri/build.rs, pnpm gen:docs). Not committed, so

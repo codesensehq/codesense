@@ -423,6 +423,206 @@ declare namespace CodesenseSdk {
         }
     );
 
+  /** One row of a chat thread: an inbox row. */
+  type ChatRow = Record<string, unknown> & { messageId: string | number };
+  /** The verbs a chat sends through; the page supplies them (so a test can fake them). */
+  interface ChatTransport {
+    /** Starts the peer with a first prompt; resolves with the launched session. */
+    launch(prompt: string): Promise<{ sessionId?: string; promptDelivered?: boolean } | void>;
+    send(handle: string, text: string): Promise<unknown>;
+    /** Answers one needs-you card by its message id. */
+    reply(messageId: string | number, text: string): Promise<unknown>;
+    stop(handle: string): Promise<unknown>;
+    gotoAgent(sessionId: string): Promise<unknown>;
+    /** Streamed reply text, when the host offers it; null or absent otherwise. */
+    stream?: ((listener: (chunk: { messageId: string | number; text: string }) => void) => () => void) | null;
+    threadOf(sessionId: string): Promise<ChatRow[]>;
+    roleThread(): Promise<ChatRow[]>;
+  }
+  /** The page's live reads: the roster, the inbox, activity and a session's usage. */
+  interface ChatReads {
+    on(event: "sessions" | "inbox" | "activity", listener: () => void): () => void;
+    sessions(): Promise<unknown>;
+    latestSessions(): Array<Record<string, unknown>>;
+    usage(args: { sessionId: string }): Promise<unknown>;
+  }
+  /** A parsed needs-you card: the question and its options, the peer's pick first. */
+  interface ChatCard {
+    question: string;
+    options: string[];
+    pick: string | null;
+    reason: string | null;
+  }
+  /** A message's trailing `Next:` line: the text above it and the suggested prompts. */
+  interface ChatNext {
+    text: string;
+    chips: string[];
+  }
+  /** One of the four consent classes a card line names. */
+  type ChatConsent = "read" | "local-write" | "install-or-sign-in" | "external-write";
+  interface ChatCardAct {
+    /** The act's id; `none` is the decline. */
+    act: string;
+    /** The button's label, and the text a click sends. */
+    label: string;
+  }
+  /** A card line: the message above it, the step, the consent class and the acts (one button each). */
+  interface ChatCardLine {
+    text: string;
+    step: string;
+    consent: ChatConsent;
+    acts: ChatCardAct[];
+  }
+  /** A roster row of the chat's peer, as far as the marks rule reads it. */
+  interface ChatLeadRow {
+    state?: string;
+    unread?: number;
+    mailNotice?: string | null;
+    notifiedAt?: string | null;
+    [key: string]: unknown;
+  }
+  /** A thread row as the card rule reads it. */
+  interface ChatThreadRow {
+    messageId?: string | number;
+    from?: string;
+    inReplyTo?: string | number | null;
+    text?: string;
+    createdAtMs?: number;
+    [key: string]: unknown;
+  }
+  /** What the marks rule needs to know about one sent message. */
+  interface ChatMarkInput {
+    sentAt: number;
+    busyAtSend: boolean;
+    lead: ChatLeadRow | null | undefined;
+    newestLeadAt?: number;
+  }
+  /** Who the chat talks to: rows of the roster, what its thread reads, and where a message goes while it is away. */
+  interface ChatTarget {
+    rows(sessions: Array<Record<string, unknown>>): Array<Record<string, unknown>>;
+    read(peers: Array<Record<string, unknown>>, transport: ChatTransport): Promise<ChatRow[][]>;
+    queue: string | null;
+    follow: boolean;
+    leadName(row: Record<string, unknown>): string;
+    /** The live row, for presence and for the row a send goes to. Default: the first row that has not exited (for a send, the first that can be joined). */
+    pick?(peers: Array<Record<string, unknown>>): Record<string, unknown> | null;
+    /** More handles whose messages are the peer's side of the thread (an older peer's). */
+    handles?(peers: Array<Record<string, unknown>>): string[];
+    /** The mailboxes the thread reads, one read each (`transport.threadOf(id)`, plus the role queue), instead of `read`. A source that fails never hides the rest: the thread shows an unread or a stale row with Retry. */
+    sources?(peers: Array<Record<string, unknown>>): string[];
+    /** A launch binds to the row its result names (a result that names only a handle too), and no other row takes its prompt. */
+    bindLaunched?: boolean;
+    /** A failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order. */
+    keepUnsent?: boolean;
+  }
+  /** A header or head slot's paint: nodes are replaced only when sig changes. */
+  interface ChatPaint {
+    sig: string;
+    nodes: Node[];
+  }
+  interface ChatMountOptions {
+    transport: ChatTransport;
+    reads: ChatReads;
+    /** The peer: its roster rows, its thread, and where a message waits. Default: the rows of `storyId` and `leadRole`. */
+    target?: ChatTarget;
+    storyId?: string | null;
+    leadRole?: string | null;
+    /** The words and the rows above the log. `source` is the plain line shown when there is no `head`. */
+    layout?: {
+      head?(state: ChatState): ChatPaint;
+      source?: string;
+      composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string };
+      composerRows?: string;
+      composerLabel?: string;
+      logLabel?: string;
+      empty?: string;
+      autofocus?: boolean;
+      /** `'page'` marks the column (`data-variant="page"`, class `page`) for a full-page layout. Anything else is the story chat's layout. */
+      variant?: "page";
+    };
+    /** Inline needs-you cards: `parse` replaces the built-in parser; `false` shows those rows as messages. */
+    cards?: { parse?(text: string): ChatCard | null; consent?: boolean } | false;
+    /** The peer's controls, painted into the page's own header element. */
+    headerSlot?: { slot: HTMLElement; render(state: ChatState): ChatPaint };
+    /** The page's own words over the chat's, one level deep: a section it names keeps the keys it leaves out. */
+    copy?: Record<string, unknown>;
+    /** One-tap messages above the composer. */
+    chips?: Array<{ label: string; text: string; /** A pencil beside the chip puts its text in the composer instead of sending it. */ edit?: boolean }>;
+    /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
+    next?: boolean | { edit?: boolean };
+    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
+    activity?: boolean | { text?(state: ChatState): string | null | undefined };
+    /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
+    timers?: { slowMs: number; failMs: number };
+    /** Builds the launch prompt from the first message. Default: the text itself. */
+    card?(text: string): string;
+    done?: boolean;
+  }
+  /** What a layout or header callback sees. */
+  interface ChatState {
+    lead: Record<string, unknown> | null;
+    fail(what: string, text: string): void;
+    clear(what: string): void;
+  }
+  interface ChatHandle {
+    unmount(): void;
+    controls(): { launch: boolean; focus: boolean; stop: boolean; done: boolean };
+    launchLead(): Promise<unknown>;
+    focusLead(): Promise<unknown>;
+    stopLead(): Promise<unknown>;
+    loaded(): Promise<unknown>;
+    /** Reads the thread again; `onlyNew` reads only the sources not read yet (with `target.sources`). */
+    refresh(onlyNew?: boolean): Promise<void>;
+    /** Sends a message from another control the way a typed one goes; false while the composer is off. */
+    post(text: string): boolean;
+    /** With `target.sources`: some current source has never been read (its history is unknown, not empty). False without sources. */
+    threadFailed(): boolean;
+    /** With `target.sources`: the first read is done and no current source that never answered is still being read. True without sources. */
+    threadSettled(): boolean;
+    thread(): ChatRow[];
+    setDone(value: boolean): void;
+    subscribe(listener: () => void): () => void;
+    [member: string]: unknown;
+  }
+  /** `/kit/v1/chat.js`'s `kit.chat`. The marks rule and the card parser (`core`) are DOM-free: `/kit/v1/chat-core.js` is the same code as an ES module. */
+  interface KitChat {
+    mount(element: HTMLElement, options: ChatMountOptions): ChatHandle;
+    /** Keeps a chat log at the newest message while you are at the bottom. `win` is the window whose resize and timers it uses; `reset()` re-pins after the log is rebuilt. */
+    pinToBottom(
+      log: HTMLElement,
+      options?: { settle?: boolean; win?: Window },
+    ): { onContentChanged(): void; release(): void; reset(): void };
+    core: {
+      /** Only an idle lead takes a message at once; anything else holds it. */
+      isBusy(lead: ChatLeadRow | null | undefined): boolean;
+      /** Queued or Delivered for one sent message. */
+      deliveryMark(input: ChatMarkInput): "queued" | "delivered";
+      /** A mark rule that latches Delivered per message key: a later change in the lead never un-delivers it. */
+      createMarkLatch(): (key: string | number, input: ChatMarkInput) => "queued" | "delivered";
+      /** A needs-you message read as buttons, or null when it is not in the card format. */
+      parseCard(text: unknown): ChatCard | null;
+      /** The trailing `Next:` line of a message as chips (one to four), or null when it does not end with one. */
+      parseNext(text: unknown): ChatNext | null;
+      /** The four consent classes, in the contract's order. */
+      CONSENT_CLASSES: readonly ChatConsent[];
+      /** `card: <step> · <class> · <act>=<label> | <act>=<label>`, the line that ends a card's text. Throws when it would not parse back. */
+      formatCardLine(line: { step: string; consent: ChatConsent; acts: readonly ChatCardAct[] }): string;
+      /** The card line that ends a message, with the text above it, or null when the last line is not one. */
+      parseCardLine(text: unknown): ChatCardLine | null;
+      /** The person's own row replying to the card, from whichever place sent it. */
+      cardAnswer(
+        cardId: string | number,
+        thread: readonly ChatThreadRow[] | null | undefined,
+      ): { text: string; at: number } | null;
+    };
+    thread: {
+      mergeThread(...lists: unknown[]): ChatRow[];
+      sideOf(row: ChatRow, leadHandles: Set<string>): "you" | "lead" | "other";
+      newestFrom(rows: ChatRow[], leadHandles: Set<string>): number;
+      rowsOf(answer: unknown): ChatRow[];
+    };
+  }
+
   interface VirtualList<Row extends HubRow = HubRow> {
     /** Replace local rows, retaining unchanged keyed nodes. */
     setRows(rows: readonly Row[]): void;
@@ -771,6 +971,12 @@ declare namespace CodesenseSdk {
       stop(): void;
     };
   }
+  interface KitRuntime {
+    id: string;
+    version: string | null;
+    /** False for Hermes: listed, never chosen for the person. */
+    autoPick: boolean;
+  }
   interface Kit extends KitCore {
     stageRail(role: "not_started" | "active" | "review" | "blocked" | "done" | null | undefined, ready?: boolean): HTMLSpanElement;
     /** `size` is 6, 7 (default) or 8; `still` draws the mark without its motion. */
@@ -792,6 +998,8 @@ declare namespace CodesenseSdk {
     stageGroupOf(story: NavStory): string;
     /** The nav's name order (numeric, case-insensitive); a sort comparator. */
     compareNavNames(a: string, b: string): number;
+    /** The agent CLIs installed on this Mac (from `getDependencyStatus`, so the page needs the `machines:read` grant): `options.lastUsed` first, then Claude, Codex, OpenCode, then any other (Hermes last). `pick` is the id to start with, or null; Hermes is never picked. `resolving` is true while the app is still looking for a CLI (first launch): show a checking state then, not "no CLI", and call again. */
+    runtimes(options?: { lastUsed?: string }): Promise<{ list: KitRuntime[]; pick: string | null; resolving: boolean }>;
     /** The createEditor export of /kit/v1/editor.js (loaded separately as an ES module). */
     createEditor?: (element: HTMLElement, options?: KitEditorOptions) => KitEditor;
     readonly version: string;
@@ -818,6 +1026,8 @@ declare namespace CodesenseSdk {
     virtualList?: <Row extends HubRow = HubRow>(
       options: VirtualListOptions<Row>,
     ) => VirtualList<Row>;
+    /** `/kit/v1/chat.js`, when the page loads it (after kit.js): the one chat. */
+    chat?: KitChat;
     [helper: string]: unknown;
   }
 
@@ -1100,14 +1310,23 @@ declare namespace CodesenseSdk {
     }): Promise<unknown>;
     /** spawn · launch · confirmable · MCP twin open_workspace */
     openWorkspace(args?: {
+      agent?: string;
       headed?: boolean;
       initialPrompt?: string;
+      mode?: string;
+      model?: string;
+      role?: string;
       sessionMode?: "new" | "focus";
       storyId?: string;
       target?: {
-        kind?: "story" | "epic" | "branch" | "dir";
+        createWorktree?: boolean;
+        kind?: "story" | "epic" | "branch" | "dir" | "team-workspace";
+        name?: string;
+        org?: string;
         path?: string;
         storyId?: string;
+        team?: string;
+        worktree?: string;
         [key: string]: unknown;
       };
       [key: string]: unknown;
@@ -1119,6 +1338,145 @@ declare namespace CodesenseSdk {
       topic: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    pin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      preview?: {
+        chart?: {
+          kind: "segments";
+          label: string;
+          segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+          [key: string]: unknown;
+        } | {
+          kind: "progress";
+          label: string;
+          percent: number;
+          [key: string]: unknown;
+        } | {
+          kind: "stack";
+          label: string;
+          parts: Array<{
+            label: string;
+            value: number;
+            [key: string]: unknown;
+          }>;
+          [key: string]: unknown;
+        };
+        lines?: string[];
+        shortName?: string;
+        status?: "on-track" | "running" | "needs-you" | "not-updating";
+        unit?: string;
+        value?: string;
+      };
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:read:team */
+    pins(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** send · inbox:write · confirmable · MCP twin send_message */
     postMessage(args?: {
       team?: Record<string, unknown>;
@@ -1363,6 +1721,62 @@ declare namespace CodesenseSdk {
       undo?: boolean;
       window?: [number, number];
     }): Promise<unknown>;
+    /** metadata · inbox:write */
+    reorderPins(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** send · inbox:write · confirmable · MCP twin reply */
     replyAsHuman(args?: {
       messageId?: number;
@@ -1501,6 +1915,8 @@ declare namespace CodesenseSdk {
     }): Promise<unknown>;
     /** read · repo:read · MCP twin describe_setup */
     setup(args?: Record<string, unknown>): Promise<unknown>;
+    /** read · machines:read · MCP twin describe_setup */
+    setupState(args?: Record<string, unknown>): Promise<unknown>;
     /** read · sessions:read */
     showMenu(args: {
       anchorId?: string;
@@ -1599,6 +2015,62 @@ declare namespace CodesenseSdk {
       [key: string]: unknown;
     }): Promise<{
       unarchived: number;
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    unpin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
       [key: string]: unknown;
     }>;
     /** read · sessions:read */

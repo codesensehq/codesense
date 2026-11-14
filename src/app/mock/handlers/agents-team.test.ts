@@ -9,6 +9,7 @@ import {
   agentTeamInboxHandlers,
   agentTeamsOrgHandlers,
   agentTeamSessions,
+  HEADLESS_HANDLE,
   SECOND_ORG_SLUG,
   SECOND_TEAM_KEY,
   SECOND_TEAM_STATUSES,
@@ -176,5 +177,16 @@ describe("the team worlds' subagents", () => {
       expect(sessions.has(a.session)).toBe(true);
       expect(a.observed).toBe(true);
     }
+  });
+});
+
+describe("agent team mock: the headless fixture", () => {
+  it("adds one running headless run only when asked for", () => {
+    const handles = (search: string) => agentTeamSessions(search).map((r) => r.handle);
+    expect(handles("?agents=team")).not.toContain(HEADLESS_HANDLE);
+    const run = agentTeamSessions("?agents=team&headless=1").find(
+      (r) => r.handle === HEADLESS_HANDLE,
+    );
+    expect(run).toMatchObject({ kind: "headless", alive: true, status: "running" });
   });
 });

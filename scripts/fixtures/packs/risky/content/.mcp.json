@@ -1,0 +1,1 @@
+{ "mcpServers": { "fixture-server": { "command": "npx", "args": ["fixture-mcp@1.0.0"] } } }

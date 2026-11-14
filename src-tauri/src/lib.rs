@@ -85,6 +85,9 @@ mod memory_metrics;
 mod menu;
 mod models;
 mod operations;
+/// The pack format: `pack.yml` and `packs.lock.yml` models, their validation and
+/// derived risk facts.
+pub mod packs;
 mod panes;
 #[cfg(feature = "bench-support")]
 pub mod perf_support;
@@ -818,7 +821,7 @@ pub fn run() {
             app.manage(commands::deps::DependencyManager::resolve());
             commands::deps::start_dep_watching(app.handle().clone());
             // SW-OB-12: if the cheap startup fast-path missed the bundled agent,
-            // resolve it via a login-shell PATH probe on a background thread so
+            // resolve it (and gh) via a login-shell PATH probe on a background thread so
             // `.setup()` (and first paint) never blocks. Emits `dep-status-changed`
             // on completion; the frontend gate stays on the splash while resolving.
             commands::deps::spawn_agent_background_resolve(app.handle().clone());
@@ -1279,6 +1282,8 @@ pub fn run() {
             commands::agent_inbox::list_inbox_messages,
             commands::agent_inbox::reply_as_human,
             commands::agent_inbox::react_as_human,
+            commands::agent_inbox::pins::agent_pins,
+            commands::agent_inbox::pins::agent_pins_prepare_view,
             commands::agent_inbox::inbox_reply_recipient,
             commands::agent_inbox::mark_inbox_message_read,
             commands::agent_inbox::mark_inbox_messages_read,
@@ -1291,6 +1296,7 @@ pub fn run() {
             commands::agent_inbox::set_human_status,
             commands::agent_inbox::inbox_attachment_status,
             commands::agent_inbox::load_inbox_media,
+            commands::agent_inbox::read_inbox_media,
             commands::agent_inbox::trigger_hydrate_from_inbox,
             live_hub::live_hub_subscribe,
             live_hub::agent_definitions::agent_definitions_prepare,
@@ -1318,6 +1324,7 @@ pub fn run() {
             commands::data_read_model::run_read_work_product,
             commands::data_read_model::session_read_usage,
             commands::data_read_model::session_read,
+            commands::data_read_model::setup_state,
             commands::data_read_model::why_line,
             commands::data_read_model::open_diff_read,
             commands::data_read_model::setup,

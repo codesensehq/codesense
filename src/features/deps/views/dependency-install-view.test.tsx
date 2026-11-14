@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 // is a guidance gate offering a Re-check that re-runs detection off the main thread.
 let mockRecheckResult: DependencyStatus = {
   git: { available: false, path: null, version: null },
+  gh: { available: false, path: null, version: null, resolving: false },
   agents: {},
 };
 let mockCltResult: { status: string; message?: string } = { status: "triggered" };
@@ -36,16 +37,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const gitMissing: DependencyStatus = {
   git: { available: false, path: null, version: null },
+  gh: { available: false, path: null, version: null, resolving: false },
   agents: {},
 };
 
 const gitBelowFloor: DependencyStatus = {
   git: { available: false, path: "/usr/bin/git", version: "2.39.3" },
+  gh: { available: false, path: null, version: null, resolving: false },
   agents: {},
 };
 
 const gitReady: DependencyStatus = {
   git: { available: true, path: "/usr/bin/git", version: "2.51.0" },
+  gh: { available: true, path: "/opt/homebrew/bin/gh", version: "2.50.0", resolving: false },
   agents: {},
 };
 

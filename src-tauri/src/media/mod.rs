@@ -344,20 +344,42 @@ fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?
         .join("inbox-media"))
 }
-pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
-    if sha.len() != 64
-        || !sha
+/// Whether `sha` names a cache file: 64 lowercase hex digits.
+pub(crate) fn valid_sha(sha: &str) -> bool {
+    sha.len() == 64
+        && sha
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
+}
+/// The cached image `sha` among a message's `attachments`, if it has one: the only
+/// image the inbox serves for that message (the `/media/v1` route and the app
+/// window's `read_inbox_media` both ask this).
+pub(crate) fn cached_attachment<'a>(
+    attachments: &'a [Attachment],
+    sha: &str,
+) -> Option<&'a Attachment> {
+    attachments
+        .iter()
+        .find(|a| a.state == "cached" && a.sha256.as_deref() == Some(sha))
+}
+pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
+    if !valid_sha(sha) {
         return Err("invalid media hash".into());
     }
-    let path = dir.join(sha);
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
-        let _ =
-            file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
+    // Only a regular file within the fetch cap: the cache is app-owned, but the read
+    // stays bounded whatever sits under the hash name. One handle is checked, read and
+    // touched, so the file can't be swapped between the check and the read.
+    let file = crate::agents::content_reader::open_no_follow(&dir.join(sha))
+        .map_err(|_| "media unavailable".to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
+        return Err("media unavailable".into());
     }
+    let bytes = read_limited(&file)?;
+    if bytes.len() > MAX_BYTES {
+        return Err("media unavailable".into());
+    }
+    let _ = file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
     Ok(bytes)
 }
 fn store_bytes(dir: &Path, bytes: &[u8], a: &mut Attachment) -> Result<(), Failure> {

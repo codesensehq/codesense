@@ -121,7 +121,18 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
                 "set_pack_enabled",
                 // The avatar list's default face pack.
                 "default_pack",
+                // The read-only validator for the pack folder format (`pack.yml`).
+                "pack_validate",
+                "PackValidateParams",
+                "pack_validate_request",
             ],
+        ),
+        // Classifies the same tool's identity needs.
+        ("src-tauri/src/mcp/identity_guard.rs", &["pack_validate"]),
+        // Proves the same tool's caller scope.
+        (
+            "src-tauri/src/mcp/handler/caller_scope_tests.rs",
+            &["pack_validate_request"],
         ),
         // The avatar list's default face pack, on the wire and in its mock.
         ("src/tauri/commands.ts", &["default_pack"]),
@@ -154,6 +165,9 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
         "src-tauri/src/agents/retired_names_guard.rs",
         "src-tauri/src/routines/boundary_guard.rs",
     ];
+    // The pack format of the docs repo's `packs/` folders (`pack.yml`, `packs.lock.yml`) is a
+    // different thing from the retired pack system, so its module may use pack names.
+    const PACK_FORMAT_DIR: &str = "src-tauri/src/packs/";
     // The seams proving a stale team lock file is ignored have to write one.
     const STALE_LOCK_SEAMS: &[&str] = &[
         "src-tauri/src/agents/resolve/tests.rs",
@@ -215,7 +229,11 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
             .extension()
             .is_some_and(|e| e == "rs" || e == "ts" || e == "tsx");
         let file = rel(&path);
-        if !is_code || EXEMPT.contains(&file.as_str()) || file.contains("avatar") {
+        if !is_code
+            || EXEMPT.contains(&file.as_str())
+            || file.starts_with(PACK_FORMAT_DIR)
+            || file.contains("avatar")
+        {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
