@@ -8,11 +8,13 @@ import {
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
-import { AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
+import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
+import { runBridgeCommand } from "@/features/dashboard/components/html-bridge";
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
 
 vi.mock("@tauri-apps/api/core", async (original) => ({
@@ -52,6 +54,12 @@ vi.mock("./group-chat", async (orig) => ({
       <button onClick={p.onBack}>Back to the inbox</button>
     </div>
   ),
+}));
+
+const openFullView = vi.hoisted(() => vi.fn());
+vi.mock("../lib/agent-full-view", async (orig) => ({
+  ...(await orig<typeof import("../lib/agent-full-view")>()),
+  openAgentFullView: openFullView,
 }));
 
 import { ChatOverlay } from "./chat-overlay";
@@ -152,7 +160,18 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
   return utils;
 }
 
+const AGENT_PAGE = "pages/agent.html";
+/** The registry's view of the team: `agent_page` is what teams.yml declares (absent ⇒ no page). */
+function declareTeam(agentPage?: string) {
+  useOrgStore.setState({
+    orgs: [
+      { slug: "acme", teams: [{ name: "widgets", source_repos: [], agent_page: agentPage }] },
+    ] as never,
+  });
+}
+
 beforeEach(() => {
+  declareTeam(AGENT_PAGE);
   clearInboxDrafts();
   vi.clearAllMocks();
   events.clear();
@@ -266,15 +285,66 @@ describe("ChatOverlay", () => {
     expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
   });
 
-  it("Full view opens the agent's conversation in the Inbox", async () => {
+  it("Full view opens the team's declared agent page for its session, in the agent's team", async () => {
     await renderOverlay(420, 700);
     fireEvent.click(screen.getByRole("button", { name: "Full view" }));
-    expect(opened).toHaveBeenCalledWith(
-      expect.objectContaining({
-        surface: "inbox",
-        intent: expect.objectContaining({ conversation: LEAD, org: "acme", team: "widgets" }),
-      }),
-    );
+    expect(openFullView).toHaveBeenCalledWith({
+      org: "acme",
+      team: "widgets",
+      handle: LEAD,
+      page: AGENT_PAGE,
+    });
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("with no agent page declared there is no Full view button, and no error", async () => {
+    declareTeam(undefined);
+    await renderOverlay(420, 700);
+    expect(screen.queryByRole("button", { name: "Full view" })).toBeNull();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+  });
+
+  it("a message the page sends to the agent's handle appears in the overlay's thread for the same session", async () => {
+    // A keyed store like the engine's: the page's `sendAsHuman({to: handle})` lands under the session that handle names,
+    // and the overlay reads its thread by that session id, so the two meet only if the handle resolves to the overlay's session.
+    const store = new Map<string, ConversationMessage[]>([[SESSION, [...MESSAGES]]]);
+    const handleToSession = new Map([[LEAD, SESSION]]);
+    api.loadSessionInbox.mockImplementation(async (key: string) => ({
+      dto: { handle: LEAD, roles: [], messages: store.get(key) ?? [] },
+      source: "live",
+    }));
+    const sends: { to: string; text: string }[] = [];
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "send_inbox_as_human") {
+        const { to, text } = args as { to: string; text: string };
+        sends.push({ to, text });
+        const session = handleToSession.get(to);
+        if (session) store.get(session)?.push(msg(5, "human", to, text));
+        return { status: "sent", messageId: 5 };
+      }
+      return cmd === "agent_pins"
+        ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
+        : undefined;
+    });
+    await renderOverlay(420, 700);
+    expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION);
+
+    // The page's own transport: the bridge verb, with the handle the overlay's agent is known by.
+    await runBridgeCommand("sendAsHuman", { to: LEAD, text: "sent from the agent page", ...TEAM });
+    expect(sends).toEqual([{ to: LEAD, text: "sent from the agent page" }]);
+
+    api.loadSessionInbox.mockClear();
+    await act(async () => {
+      events.get(AGENT_INBOX_CHANGED_EVENT)?.({ payload: null });
+    });
+    expect(await screen.findByText("sent from the agent page")).toBeInTheDocument();
+    // The reload is keyed by the overlay's session id, and the thread it read is the one whose handle is what the page sent to.
+    const keys = api.loadSessionInbox.mock.calls.map((call) => call[0]);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(new Set(keys)).toEqual(new Set([SESSION]));
+    const read = await api.loadSessionInbox.mock.results.at(-1)!.value;
+    expect(read.dto.handle).toBe(LEAD);
+    expect(sends[0]!.to).toBe(read.dto.handle);
   });
 
   it("Terminal hands the tab back to the terminal, and names the key that brings the chat back", async () => {
