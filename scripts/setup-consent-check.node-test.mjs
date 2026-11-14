@@ -214,6 +214,22 @@ test("a card is a needs-you message: the same card line in an update opens nothi
   assert.equal(errors.length, 1);
 });
 
+test("a card line in a message with no kind opens nothing, and a typed label is no click for it", () => {
+  const plain = call(
+    `${P}send_message`,
+    { to: "human", text: `Creating the team.\n\n${TEAM}` },
+    { messageId: 1 },
+  );
+  const typed = call(
+    `${P}read_messages`,
+    {},
+    { messages: [{ messageId: 2, from: "human", text: "Create web", inReplyTo: null }] },
+  );
+  const { errors, cards } = checkConsent(session([plain], [typed], [verb()]));
+  assert.equal(cards, 0);
+  assert.equal(errors.length, 1);
+});
+
 test("a free-text chat message is not a click once replies are threaded", () => {
   const chat = call(
     `${P}read_messages`,
