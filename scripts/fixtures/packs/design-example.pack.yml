@@ -1,5 +1,6 @@
 # A full example pack.yml (a recipe with agents, content, external parts and a seed). Comma-bearing
-# titles are quoted, since a bare comma splits a flow mapping.
+# titles are quoted, since a bare comma splits a flow mapping. Schema-only: the preset names parts
+# this file doesn't declare and the pack ships no files, so the validator refuses it as a pack.
 pack_format: 1
 id: codesense-team # [a-z0-9-], unique in the catalog
 name: CodeSense team pack
@@ -8,7 +9,7 @@ publisher: codesense # only catalog packs signed by the CodeSense key may say co
 summary: The agent team we build CodeSense with. Compatible with BMad Method 6 and Impeccable.
 for: Solo developers and small teams shipping software with Claude Code or Codex.
 homepage: https://codesense.ai/packs/codesense-team
-source: https://github.com/<org>/codesense-pack-team # decision D2
+source: https://github.com/<org>/codesense-pack-team
 source_commit: <40-hex> # written by the pack build; never a short SHA
 license: MIT # covers every bundled file; the bundle rule refuses anything else
 requires:

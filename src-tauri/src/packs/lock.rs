@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! `packs.lock.yml` (`lock_format: 1`), written into the target team by the installer
-//! (a later story). This story only defines and exports the shape. Plain `//` comments
-//! only on the schema types: a doc comment becomes a `description` in the JSON Schema.
+//! `packs.lock.yml` (`lock_format: 1`), written into the target team by the installer.
+//! This module defines and exports the shape; the lock writer comes later. Plain `//`
+//! comments only on the schema types: a doc comment becomes a `description` in the JSON
+//! Schema.
 
 use serde::{Deserialize, Serialize};
 
-use super::manifest::ExternalMethod;
+use super::manifest::{ExternalMethod, Follow};
 
 pub const LOCK_FORMAT: u32 = 1;
 
@@ -57,13 +58,13 @@ pub enum LockSourceKind {
     Folder,
 }
 
+// The lock is committed to the team's repo, so a folder source records no local path:
+// where the folder was on one machine stays on that machine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct LockSource {
     pub kind: LockSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -99,7 +100,21 @@ pub struct LockSeed {
 pub struct LockLicense {
     pub spdx: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<String>,
+    pub class: Option<LicenseClass>,
+    // The license detector's confidence, 0 to 1; below 0.9 the class is unrecognized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+// The license classes the install preview badges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LicenseClass {
+    OpenSource,
+    Copyleft,
+    NoLicense,
+    Unrecognized,
+    Blocked,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -124,7 +139,7 @@ pub struct LockExternal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub follow: Option<String>,
+    pub follow: Option<Follow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<LockLicense>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

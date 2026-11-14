@@ -4,7 +4,7 @@
 //! types by `docs_schemas::export_model_schemas`, never from a second field list.
 //!
 //! Validation (paths, caps, hashes, the parts graph) is `validate`; the risk facts derived
-//! from a pack's files are `risk`. Staging, install and the lock writer belong to later stories.
+//! from a pack's files are `risk`. Staging, install and the lock writer come later.
 
 pub mod lock;
 pub mod manifest;
