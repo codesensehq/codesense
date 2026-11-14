@@ -6,7 +6,7 @@
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
 //  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the peer's current step while it runs, else Working…).
-//  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message).
+//  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
 //  next: true|{edit}: the lead's trailing `Next:` line (chat-core parseNext) becomes chips after its newest message and is left out of the message's text; edit adds each chip's pencil. Off by default.
 //  copy: the page's own words over CHAT_COPY, one level deep (a section it names keeps the keys it leaves out).
@@ -25,7 +25,7 @@ import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
-import {cardAnswer,createMarkLatch,parseCard,parseNext} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
@@ -52,7 +52,7 @@ const storyTarget=(storyId,leadRole)=>({
 });
 const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
 export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],next=false,activity=false,copy:words=null}){
- const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,copy=words?mergeCopy(words):CHAT_COPY;
+ const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
  // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
  const cardState=new Map(),drafts=new Map();
  let refocusCard=null;
@@ -141,12 +141,14 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  // An inline card for a needs-you message from the lead: open, pending, error or answered (here, or in the Inbox, which the thread tells us).
  function cardEntry(row){
-  const id=row.messageId,local=cardState.get(id),remote=cardAnswer(id,thread),text=row.text||row.summary||'',parsed=parseOf(text);
+  // With cards.consent on, a card line ending the text (chat-core parseCardLine) is hidden and gives the card's buttons, class and step; a text without one is parsed as before.
+  const id=row.messageId,local=cardState.get(id),remote=cardAnswer(id,thread),said=row.text||row.summary||'',line=consentOn?parseCardLine(said):null,text=line?line.text:said;
+  const parsed=line?{question:line.text,options:line.acts.map(item=>item.label),pick:null,reason:null,primary:(line.acts.find(item=>item.act!=='none')||{}).label||null}:parseOf(text);
   const state=local&&local.phase==='answered'?'answered':remote?'answered':local?local.phase:'open';
   const answer=state!=='answered'?null:local&&local.phase==='answered'?{text:local.text,at:local.at,where:'here'}:{text:remote.text,at:remote.at,where:'inbox'};
   const failure=state==='error'?local.failure:null;
-  return {t:row.createdAtMs||0,id:'m'+id,sig:['c',id,text,state,answer&&answer.text,answer&&answer.where,failure,row.createdAtMs].join('|'),
-   make:()=>cardNode({lead:target.leadName(row),id,text,parsed,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
+  return {t:row.createdAtMs||0,id:'m'+id,sig:['c',id,said,state,answer&&answer.text,answer&&answer.where,failure,row.createdAtMs].join('|'),
+   make:()=>cardNode({lead:target.leadName(row),id,text,parsed,meta:line,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
  }
  // A sent message is Queued or Delivered by chat-core's rule over the lead's row now; the others are the launch machine's own marks.
  const deliveryOf=createMarkLatch();
