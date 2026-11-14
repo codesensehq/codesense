@@ -24,22 +24,42 @@ function block(text, from) {
   throw new Error(`unclosed block at ${from}`);
 }
 
-/** Each `#[serde(rename_all = "camelCase")]` struct in `source`: its fields and their types. */
+/** The attribute and doc lines directly above the item that starts at `at`. */
+function attributesBefore(source, at) {
+  const lines = source.slice(0, at).split("\n");
+  lines.pop(); // the partial line the item starts on
+  const above = [];
+  while (/^\s*(?:#\[|\/\/\/)/.test(lines.at(-1) ?? "")) above.unshift(lines.pop());
+  return above.join("\n");
+}
+
+/**
+ * Each `pub struct` in `source`: its fields and their types. Field names are camel-cased only
+ * when the struct says `rename_all = "camelCase"`; `serde` attributes that move or drop a field
+ * (`rename`, `skip`, `flatten`) are refused, because this reader would then list the wrong paths.
+ */
 function structs(source) {
   const found = {};
   for (const m of source.matchAll(/pub struct (\w+)\s*\{/g)) {
     const body = block(source, m.index);
-    assert.ok(!/serde\(\s*rename\s*=/.test(body), `${m[1]} renames a field; read it here`);
-    found[m[1]] = [...body.matchAll(/pub (\w+):\s*([^,\n]+),/g)].map(([, name, type]) => ({
-      name: camel(name),
+    assert.ok(
+      !/serde\(\s*(?:rename\s*=|skip\b|flatten\b)/.test(body),
+      `${m[1]} renames, skips or flattens a field; read it here`,
+    );
+    const attrs = attributesBefore(source, m.index);
+    const rename = /rename_all\s*=\s*"(\w+)"/.exec(attrs)?.[1];
+    const fields = [...body.matchAll(/pub (\w+):\s*([^,\n]+),/g)].map(([, name, type]) => ({
+      name: rename === "camelCase" ? camel(name) : name,
       type: type.trim(),
     }));
+    found[m[1]] = Object.assign(fields, { rename });
   }
   return found;
 }
 
 /** Every field path a struct serialises, in the registry's `a[].b` form. */
 function paths(all, name, prefix = "") {
+  assert.equal(all[name].rename, "camelCase", `${name} is reached but not rename_all camelCase`);
   return all[name].flatMap(({ name: field, type }) => {
     const list = /^Vec<(\w+)>$/.exec(type);
     const inner = list?.[1] ?? /^(?:Option<)?(\w+)>?$/.exec(type)?.[1];
@@ -86,6 +106,30 @@ test("describe_setup: the drift check reads the real structs, and would catch a 
     assert.ok(!known.has(stale), stale);
 });
 
+test("the drift check refuses a struct it would misread", () => {
+  const plant = (attrs, field = "pub a_b: String,") =>
+    `${attrs}\npub struct Planted {\n    ${field}\n}\n`;
+  const camelAttr = '#[serde(rename_all = "camelCase")]';
+  assert.deepEqual(
+    paths(structs(plant(camelAttr)), "Planted"),
+    ["aB"],
+    "rename_all camelCase is honoured",
+  );
+  assert.throws(() => paths(structs(plant("#[derive(Serialize)]")), "Planted"), /camelCase/);
+  assert.throws(() => paths(structs(plant('#[serde(rename_all = "snake_case")]')), "Planted"));
+  for (const attr of ["#[serde(skip)]", "#[serde(flatten)]", "#[serde(skip, default)]"])
+    assert.throws(
+      () => structs(plant(camelAttr, `${attr}\n    pub a_b: String,`)),
+      /renames, skips or flattens/,
+      attr,
+    );
+  assert.doesNotThrow(() =>
+    structs(
+      plant(camelAttr, '#[serde(skip_serializing_if = "Option::is_none")]\n    pub a_b: String,'),
+    ),
+  );
+});
+
 test("list_source_repos: every registry field is a key its handler writes", () => {
   const handler = rust("mcp/handler.rs");
   const keys = jsonKeys(
@@ -118,4 +162,20 @@ test("the source-repos step maps every attachment state describe_setup reports",
   assert.equal(probe.yields.attachment, "orgs[].teams[].sourceRepos[].attachment");
   for (const v of variants) assert.ok(probe.map[v], `source-repos maps ${v}`);
   assert.equal(probe.map.attached, "done", "a bound clone is a done step on a re-run");
+  assert.equal(probe.map.unattached, "done", "a tracked repo is done: adding records, not binds");
+  assert.equal(probe.map.missing, "partial", "a lost clone still surfaces");
+  assert.equal(s.verify.expect, "done");
+});
+
+test("the source-repos step verifies done after each of its own acts, so a re-run skips it", () => {
+  const s = parse(
+    readFileSync(join(PACKS_ROOT, "codesense-guide/setup/steps/source-repos.yml"), "utf8"),
+  );
+  const { map } = s.probe.find((p) => p.id === s.verify.probe);
+  // "Add them" tracks by url and binds nothing; "Bind my clone" binds a path.
+  const add = s.act.find((a) => a.id === "add-source-repo").verb.args;
+  assert.ok(add.url && !add.path, "add-source-repo tracks without binding");
+  const after = { "add-source-repo": "unattached", "attach-source-repo-path": "attached" };
+  for (const [act, attachment] of Object.entries(after))
+    assert.equal(map[attachment], s.verify.expect, `${act} leaves the step ${map[attachment]}`);
 });
