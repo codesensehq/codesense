@@ -37,7 +37,7 @@ impl CostRollup {
         if matches!(self.models.len(), 0) || self.models.values().any(|(_, unpriced)| *unpriced) {
             return None;
         }
-        Some(self.priced())
+        Some(Self::priced(self))
     }
 
     /// The sum of the rows that have a price, whether or not other rows have none.

@@ -46,7 +46,7 @@ impl Debouncer {
     pub(crate) fn note(&self, ids: impl IntoIterator<Item = String>) {
         let mut pending = lock(&self.pending);
         pending.ids.extend(ids);
-        if pending.armed || pending.ids.is_empty() {
+        if pending.armed || BTreeSet::is_empty(&pending.ids) {
             return;
         }
         pending.armed = true;

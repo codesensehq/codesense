@@ -186,7 +186,7 @@ pub(crate) fn assemble(
     }
     // The priced sum, with `unpricedModels` naming what it leaves out (as `session_usage` does);
     // null only when nothing has a price.
-    let cost = if report.sessions.first().is_none() || (!unpriced_models.is_empty() && unpriced_models.len() >= models.len()) {
+    let cost = if report.sessions.first().is_none() || (!BTreeSet::is_empty(&unpriced_models) && unpriced_models.len() >= models.len()) {
         None
     } else {
         Some(half.priced_usd)
@@ -194,8 +194,8 @@ pub(crate) fn assemble(
     let mut unavailable = BTreeMap::new();
     if report.sessions.first().is_none() {
         unavailable.insert("usage", "no usage has been reported for this session yet".to_owned());
-    } else if !unpriced_models.is_empty() {
-        let why = if cost.is_some() {
+    } else if !BTreeSet::is_empty(&unpriced_models) {
+        let why = if Option::is_some(&cost) {
             "costUsd is the priced part only: a model of this session has no rate"
         } else {
             "a model of this session has no rate"
