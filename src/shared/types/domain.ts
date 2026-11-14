@@ -94,6 +94,10 @@ export interface Team {
    *  root. Mirrors the Rust `Team.agent_page` (`teams.yml` `agent_page:`). Absent ⇒ the team has
    *  no agent page and its agents show no Full view. */
   agent_page?: string | null;
+  /** The page a story file (an `.md` of type story, bug or spike) opens in; relative to the team's
+   *  content root. Mirrors the Rust `Team.story_page` (`teams.yml` `story_page:`). Absent ⇒ such a
+   *  file opens as markdown. */
+  story_page?: string | null;
 }
 
 // Per-org config flags, mirroring Rust `OrgConfigFlags` (serialized from

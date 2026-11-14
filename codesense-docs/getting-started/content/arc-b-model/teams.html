@@ -171,6 +171,16 @@
           it the team's agents show no Full view button.
         </p>
         <p>
+          <code>story_page</code> is optional as well: the page a story file opens in. An
+          <code>.md</code> file whose front matter says <code>type: story</code>,
+          <code>bug</code> or <code>spike</code> opens that page, relative to the same
+          <code>content/</code> folder, in its own live tab, with the file's path named in the
+          URL fragment (<code>#story=&lt;path&gt;</code>); opening it again focuses the tab. It
+          follows the same path rules as <code>landing_page</code>. You set it by editing
+          <code>teams.yml</code>. Without it such a file opens as markdown, with a line saying
+          why.
+        </p>
+        <p>
           You don't edit <code>teams.yml</code> for this. Right-click one of the team's own
           files, in the left nav or on its tab, and choose
           <strong>Set as team starter page</strong>; the page shows a small house in the

@@ -1375,6 +1375,7 @@ fn apply_create_team(
         parent_team: None,
         landing_page: None,
         agent_page: None,
+        story_page: None,
     });
     let teams_bytes = serde_yaml::to_string(&teams)
         .map_err(|e| RegistryEditError::Parse(format!("serialize teams.yml: {e}")))?

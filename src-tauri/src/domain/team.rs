@@ -44,6 +44,11 @@ pub struct Team {
     /// Set via `RawTeamEntry::into_domain`, which drops a path that would leave the team's content.
     #[serde(default)]
     pub agent_page: Option<String>,
+    /// The team's story page: the page a `type: story` file opens in, relative to its content root
+    /// (`teams.yml` `story_page:`). `None` ⇒ the team has none and such a file opens as markdown.
+    /// Set via `RawTeamEntry::into_domain`, which drops a path that would leave the team's content.
+    #[serde(default)]
+    pub story_page: Option<String>,
 }
 
 impl Team {
@@ -74,6 +79,7 @@ impl Team {
             is_personal: false,
             landing_page: None,
             agent_page: None,
+            story_page: None,
         })
     }
 

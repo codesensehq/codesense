@@ -100,6 +100,28 @@ function story(dir: string, [id, title, status, dependsOn]: Story): StoryRef {
   };
 }
 
+/** What the demo's files say when read: a story's front matter, the story page, a README linking a story. */
+export const DEMO_STORY_PAGE = "dashboards/story.html";
+function demoFileText(path: string): string | null {
+  // The tree's story rows sit under `ROOT` and its doc rows under the active team's content: both
+  // end in `/content/<rel>`.
+  const at = path.lastIndexOf("/content/");
+  if (at < 0) return null;
+  const rel = path.slice(at + "/content/".length);
+  if (rel === DEMO_STORY_PAGE) {
+    return '<!doctype html><title>Story page</title><body><h1 id="story-page">Story page</h1></body>';
+  }
+  // Each epic's README links its first story, relative to itself.
+  const epic = EPICS.find(({ dir }) => rel === `${dir}/README.md`);
+  if (epic) return `# ${epic.dir}\n\nStart with [the first story](${epic.stories[0]![0]}.md).\n`;
+  if (rel === "README.md") return "# Team\n\nNothing here yet.\n";
+  for (const { dir, stories } of EPICS) {
+    const hit = stories.find(([id]) => `${dir}/${id}.md` === rel);
+    if (hit) return `---\ntype: story\ntitle: ${hit[1]}\n---\n# ${hit[1]}\n`;
+  }
+  return null;
+}
+
 /** The demo's team content, by content-relative path, for the agent-context want set. */
 export function leftNavDemoTeamFiles(): Record<string, number> {
   const files: Record<string, number> = {};
@@ -301,8 +323,13 @@ export function leftNavDemoHandlers(
     }
   };
   const list = base.dashboard_list_sessions;
+  const readBase = base.read_file;
   const hub = agentListHub(events, leftNavDemoListWorld());
   return {
+    read_file: (args) => {
+      const text = demoFileText(String(args.path ?? ""));
+      return text ?? readBase?.(args);
+    },
     live_hub_agent_list_read: (args) => hub.snapshot(String(args.topic), String(args.viewKey)),
     scan_pipeline_tree: (args) => leftNavDemoTree(String(args.teamContentPath).replace(/\/+$/, "")),
     dashboard_list_sessions: (args) => {
