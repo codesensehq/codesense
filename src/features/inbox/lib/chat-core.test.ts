@@ -8,6 +8,7 @@ import {
   cardAnswer,
   createMarkLatch,
   deliveryMark,
+  pinTitleOf,
   formatCardLine,
   isBusy,
   parseCard,
@@ -412,5 +413,22 @@ describe("the consent card line", () => {
 
   it("a card that is only the line has no body text", () => {
     expect(parseCardLine("card: a · read · x=Go")?.text).toBe("");
+  });
+});
+
+describe("pinTitleOf (DOM-free, so the kit and the app name pins the same)", () => {
+  it("an HTML message: summary, <title>, first heading, then who sent it; entities read, tags dropped", () => {
+    const html = (text: string, summary?: string) => ({ text, contentType: "html", summary });
+    expect(pinTitleOf(html("<title>T</title>", "Plan"), "Lead")).toBe("Plan");
+    expect(pinTitleOf(html("<title> Q&amp;A  board </title>"), "Lead")).toBe("Q&A board");
+    expect(pinTitleOf(html("<h2 class='x'>Spend <b>today</b> &lt;3</h2>"), "Lead")).toBe(
+      "Spend today <3",
+    );
+    expect(pinTitleOf(html("<p>none</p>"), "Story lead")).toBe("Dashboard from Story lead");
+  });
+
+  it("any other message: summary, else its first sentence, else who sent it", () => {
+    expect(pinTitleOf({ text: "Ship it. Then tag." }, "Lead")).toBe("Ship it.");
+    expect(pinTitleOf({ text: " " }, "Lead")).toBe("Message from Lead");
   });
 });

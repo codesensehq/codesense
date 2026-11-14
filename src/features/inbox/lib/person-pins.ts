@@ -7,9 +7,9 @@ import {
   PIN_CAP,
   pinCapLabel,
   pinCapNote,
-  pinFirstSentence,
   pinFirstWords,
   pinLiveText,
+  pinTitleOf as coreTitle,
   pinWho,
 } from "./chat-core";
 
@@ -19,32 +19,13 @@ type Said = { text: string; contentType?: string | null; summary?: string | null
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
-/** Tags dropped and entities read, as a heading or title shows: text only. */
-function plainOf(markup: string): string {
-  const doc = new DOMParser().parseFromString(`<body>${markup}</body>`, "text/html");
-  return squash(doc.body.textContent ?? "");
-}
-
-function htmlTitle(markup: string): string | null {
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(markup);
-  if (title && plainOf(title[1]!)) return plainOf(title[1]!);
-  for (const heading of markup.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
-    const text = plainOf(heading[2]!);
-    if (text) return text;
-  }
-  return null;
-}
-
 /**
- * What a pin of this message is called. An HTML message: its summary, then its `<title>`,
- * then its first heading, then "Dashboard from <sender>"; never its markup. Any other
- * message: its summary, else its first sentence.
+ * What a pin of this message is called (chat-core's rule, so the kit says the same). An HTML
+ * message: its summary, then its `<title>`, then its first heading, then "Dashboard from
+ * <sender>"; never its markup. Any other message: its summary, else its first sentence.
  */
 export function pinTitleOf(m: Said, sender: string): string {
-  const summary = m.summary?.trim();
-  if (summary) return summary;
-  if (m.contentType === "html") return htmlTitle(m.text) ?? `Dashboard from ${sender}`;
-  return pinFirstSentence(m.text) || `Message from ${sender}`;
+  return coreTitle(m, sender);
 }
 
 /** A plain message's pin preview: its title, then the rest of the message, quoted. */

@@ -22,7 +22,10 @@ export function useThreadPins(
   const human = view.me === HUMAN && !view.self;
   const session = human && !isRoleKey(key) ? sessions?.find((s) => s.handle === key) : undefined;
   const agentId = session?.agent ?? null;
-  const team = agentId ? (messages.at(-1)?.team ?? view.fallbackTeam ?? null) : null;
+  // The thread lives in the store of the team the session was launched in.
+  const team = agentId
+    ? (session?.team ?? messages.at(-1)?.team ?? view.fallbackTeam ?? null)
+    : null;
   const storyId = session?.story ?? null;
   const { pins, apply } = useAgentPins(team, agentId, storyId);
   return usePersonPins({

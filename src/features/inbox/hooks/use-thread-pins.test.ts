@@ -47,6 +47,22 @@ describe("Inbox pins: only where the conversation maps to one agent thread", () 
     );
   });
 
+  it("pins into the session's own team, not the team of the newest message", async () => {
+    const other = { org: "acme", team: "frontend" };
+    h.sessions = [
+      {
+        handle: "BUG-2#lead",
+        agent: "acme/frontend/dev",
+        story: "BUG-2",
+        team: other,
+      } as SessionListRow,
+    ];
+    renderHook(() => useThreadPins("BUG-2#lead", [said(1, "BUG-2#lead")], view(HUMAN)));
+    await waitFor(() =>
+      expect(h.agentPins).toHaveBeenCalledWith(other, "acme/frontend/dev", "BUG-2", { op: "read" }),
+    );
+  });
+
   it("has no Pin for a role, a session from no saved agent, an unknown party, or an agent's own view", () => {
     h.sessions = [{ handle: "adhoc", story: "BUG-1" } as SessionListRow];
     for (const [key, v] of [

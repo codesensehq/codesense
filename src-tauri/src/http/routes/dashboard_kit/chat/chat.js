@@ -27,7 +27,7 @@ import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinFirstSentence,pinLiveText,pinWho} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinTitleOf,pinWho} from './chat-core.js';
 import {cardNode} from './card.js';
 const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
@@ -98,7 +98,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const pinLive=onPin?h('div',{class:'pin-live',role:'status','aria-live':'polite'}):null;
  const pinList=()=>(onPin&&typeof onPin.pins==='function'&&onPin.pins())||[];
  const pinName=by=>onPin&&typeof onPin.name==='function'?onPin.name(by):by;
- const pinTitle=item=>pinFirstSentence(item.text)||item.who;
+ // A pin is named as its message (chat-core's rule): an HTML one by its summary, title or heading, never its markup.
+ const pinTitle=item=>pinTitleOf({text:item.said||item.text,contentType:item.contentType,summary:item.summary},item.who);
+ const capNoteOn=item=>{const text=pinCapNote(pinList(),pinName);pinState.note={mid:item.id,kind:'cap',text};pinLive.textContent=text;};
  async function pinChange(item,action){
   if(pinState.busy!==null)return;
   pinState.busy=item.id;pinState.refocus=item.id;render();
@@ -107,14 +109,18 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    const done=action==='pin'?'pinned':action==='unpin'?'unpinned':'restored';
    pinLive.textContent=pinLiveText(done,pinTitle(item),(list||pinList()).length);
    pinState.note=action==='unpin'?{mid:item.id,kind:'undo',item}:null;
-  }catch{pinState.note={mid:item.id,kind:action==='unpin'?'unpin-failed':'failed',item,action};}
+  }catch(error){
+   // An Undo the engine refuses because the list filled meanwhile says so, as a Pin at the cap does; a retry could not succeed.
+   if(action==='restore'&&/at most \d+ pins/.test(String(error&&error.message||error)))capNoteOn(item);
+   else pinState.note={mid:item.id,kind:action==='unpin'?'unpin-failed':'failed',item,action};
+  }
   // The button flips where it was clicked and keeps focus, so Unpin is one key away.
   pinState.busy=null;pinState.refocus=item.id;render();
  }
  function pinToggle(item){
   const pins=pinList(),pinned=pins.some(p=>p.messageId===item.id);
   if(pinned)return pinChange(item,'unpin');
-  if(pins.length>=PIN_CAP){const text=pinCapNote(pins,pinName);pinState.note={mid:item.id,kind:'cap',text};pinLive.textContent=text;pinState.refocus=item.id;render();return;}
+  if(pins.length>=PIN_CAP){capNoteOn(item);pinState.refocus=item.id;render();return;}
   return pinChange(item,'pin');
  }
  // A message's Pin, its tag and its note; the signature changes when any of them does, so the bubble is rebuilt only then.
@@ -129,7 +135,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    const tag=pin?h('div',{class:'pin-tag'},pinCopy.by(pinWho(pin.pinnedBy,pinName))):null;
    let foot=null;
    if(note&&note.kind==='cap')foot=h('div',{class:'pin-note',role:'note'},h('span',{},note.text),h('button',{type:'button',class:'btn sm',onclick:()=>{pinState.note=null;render();if(typeof onPin.showPins==='function')onPin.showPins();}},pinCopy.showPins));
-   else if(note&&note.kind==='undo')foot=h('div',{class:'pin-note',role:'note'},h('span',{},pinCopy.unpinned),h('button',{type:'button',class:'btn sm',onclick:()=>pinChange(note.item,'restore')},pinCopy.undo));
+   else if(note&&note.kind==='undo')foot=h('div',{class:'pin-note',role:'note'},h('span',{},pinCopy.unpinned),h('button',{type:'button',class:'btn sm',onclick:()=>{if(pinList().length>=PIN_CAP){capNoteOn(note.item);render();}else pinChange(note.item,'restore');}},pinCopy.undo));
    else if(note)foot=h('div',{class:'pin-note danger',role:'alert'},h('span',{},note.kind==='unpin-failed'?pinCopy.unpinFailed:pinCopy.failed),h('button',{type:'button',class:'btn sm',onclick:()=>pinChange(note.item,note.kind==='unpin-failed'?'unpin':note.action||'pin')},pinCopy.tryAgain));
    return {acts,tag,foot,pinned:Boolean(pin)};
   };
@@ -264,7 +270,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    // With next on, a lead message's Next line is the chips, not part of the text; a message that is only that line shows nothing.
    const said=row.text||row.summary||'',shown=nextOpt&&side==='lead'&&row.text?(parseNext(row.text)||{text:said}).text:said;
    if(nextOpt&&side==='lead'&&row.text&&!shown)continue;
-   const item={id:row.messageId,text:shown,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},info=faceInfo(row,side,who);
+   const item={id:row.messageId,text:shown,said,contentType:row.contentType,summary:row.summary,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},info=faceInfo(row,side,who);
    item.pin=pinParts(item);
    entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark,item.pin?item.pin.sig:''].join('|'),make:()=>bubble(item,side),
     run:faces?{key:side==='you'?'you':side+'|'+(row.from||''),info,make:(first,info)=>bubble(item,side,first,info)}:null});

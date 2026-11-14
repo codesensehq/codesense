@@ -115,3 +115,19 @@ export function pinCapNote(pins,nameOf){
 export function pinFirstWords(text,words=4){const all=squashSpace(text).split(' ');return all.length<=words?all.join(' '):`${all.slice(0,words).join(' ')}…`;}
 // What the polite live region says after a pin, an unpin or an Undo.
 export function pinLiveText(done,title,count){const verb=done==='pinned'?'Pinned':done==='unpinned'?'Unpinned':'Restored';return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;}
+// A message's text with its tags dropped and its entities read, as a heading or title shows it: no DOM, so the kit and the app name pins the same way.
+const ENTITIES={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
+function plainText(markup){return squashSpace(String(markup||'').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,code)=>{if(code[0]==='#'){const n=code[1].toLowerCase()==='x'?parseInt(code.slice(2),16):parseInt(code.slice(1),10);return Number.isFinite(n)?String.fromCodePoint(n):all;}const named=ENTITIES[code.toLowerCase()];return named===undefined?all:named;}));}
+// What a pin of this message is called. An HTML message: its summary, then its <title>, then its first heading, then "Dashboard from <sender>"; never its markup. Any other message: its summary, else its first sentence, else "Message from <sender>".
+export function pinTitleOf(m,sender){
+ const summary=squashSpace(m&&m.summary);
+ if(summary)return summary;
+ const text=String((m&&m.text)||'');
+ if(m&&m.contentType==='html'){
+  const title=/<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+  if(title&&plainText(title[1]))return plainText(title[1]);
+  for(const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)){const name=plainText(heading[2]);if(name)return name;}
+  return `Dashboard from ${sender}`;
+ }
+ return pinFirstSentence(text)||`Message from ${sender}`;
+}

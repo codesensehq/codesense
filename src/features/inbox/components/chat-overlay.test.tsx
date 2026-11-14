@@ -659,6 +659,34 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(screen.getByTestId("chat-overlay-pin-4")).not.toHaveAttribute("data-new");
   });
 
+  it("an Undo refused because the agent filled the list since says so with the cap note, not Try again", async () => {
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    fireEvent.click(pinOf(3));
+    const undo = await within(row(3)).findByRole("button", { name: "Undo" });
+    // Meanwhile the agent pins two more: the list is at the cap.
+    held.push(
+      { messageId: 2, position: 1, pinnedBy: LEAD, pinnedAtMs: NOW },
+      { messageId: 4, position: 2, pinnedBy: LEAD, pinnedAtMs: NOW },
+    );
+    act(() =>
+      listeners
+        .get(AGENT_PINS_CHANGED_EVENT)
+        ?.forEach((h) =>
+          h({ payload: { ...TEAM, agentId: "builtin/claude", storyId: "BUG-142" } }),
+        ),
+    );
+    await screen.findByTestId("chat-overlay-pin-4");
+    fireEvent.click(undo);
+    const note = await within(row(3)).findByRole("note");
+    expect(note).toHaveTextContent(
+      "3 of 3 pinned (3 by Login timeout lead). Unpin one to pin this.",
+    );
+    expect(within(note).getByRole("button", { name: "Show pins" })).toBeInTheDocument();
+    expect(within(row(3)).queryByRole("alert")).toBeNull();
+    expect(ops()).toEqual([["unpin", 3]]);
+  });
+
   it("a pin that fails keeps its state and offers Try again", async () => {
     await renderOverlay(420, 700);
     await screen.findByTestId("chat-overlay-pin-3");

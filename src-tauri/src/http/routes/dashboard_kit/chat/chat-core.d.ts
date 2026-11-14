@@ -100,3 +100,8 @@ export function pinLiveText(
   title: string,
   count: number,
 ): string;
+/** What a pin of this message is called: an HTML message by its summary, `<title>`, first heading, else "Dashboard from <sender>"; any other by its summary, else its first sentence. */
+export function pinTitleOf(
+  m: { text?: string | null; contentType?: string | null; summary?: string | null },
+  sender: string,
+): string;

@@ -18,6 +18,7 @@ export {
   pinFirstSentence,
   pinFirstWords,
   pinLiveText,
+  pinTitleOf,
   pinWho,
   type ChatCard,
   type ChatCardAct,

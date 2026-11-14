@@ -204,6 +204,32 @@
     const verb = done === "pinned" ? "Pinned" : done === "unpinned" ? "Unpinned" : "Restored";
     return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;
   }
+  var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  function plainText(markup) {
+    return squashSpace(String(markup || "").replace(/<[^>]*>/g, " ").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
+      if (code[0] === "#") {
+        const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+        return Number.isFinite(n) ? String.fromCodePoint(n) : all;
+      }
+      const named = ENTITIES[code.toLowerCase()];
+      return named === void 0 ? all : named;
+    }));
+  }
+  function pinTitleOf(m, sender) {
+    const summary = squashSpace(m && m.summary);
+    if (summary) return summary;
+    const text = String(m && m.text || "");
+    if (m && m.contentType === "html") {
+      const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+      if (title && plainText(title[1])) return plainText(title[1]);
+      for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+        const name = plainText(heading[2]);
+        if (name) return name;
+      }
+      return `Dashboard from ${sender}`;
+    }
+    return pinFirstSentence(text) || `Message from ${sender}`;
+  }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
   var parseFailure = (error) => {
@@ -787,7 +813,12 @@
     const pinLive = onPin ? h("div", { class: "pin-live", role: "status", "aria-live": "polite" }) : null;
     const pinList = () => onPin && typeof onPin.pins === "function" && onPin.pins() || [];
     const pinName = (by) => onPin && typeof onPin.name === "function" ? onPin.name(by) : by;
-    const pinTitle = (item) => pinFirstSentence(item.text) || item.who;
+    const pinTitle = (item) => pinTitleOf({ text: item.said || item.text, contentType: item.contentType, summary: item.summary }, item.who);
+    const capNoteOn = (item) => {
+      const text = pinCapNote(pinList(), pinName);
+      pinState.note = { mid: item.id, kind: "cap", text };
+      pinLive.textContent = text;
+    };
     async function pinChange(item, action) {
       if (pinState.busy !== null) return;
       pinState.busy = item.id;
@@ -798,8 +829,9 @@
         const done2 = action === "pin" ? "pinned" : action === "unpin" ? "unpinned" : "restored";
         pinLive.textContent = pinLiveText(done2, pinTitle(item), (list || pinList()).length);
         pinState.note = action === "unpin" ? { mid: item.id, kind: "undo", item } : null;
-      } catch {
-        pinState.note = { mid: item.id, kind: action === "unpin" ? "unpin-failed" : "failed", item, action };
+      } catch (error) {
+        if (action === "restore" && /at most \d+ pins/.test(String(error && error.message || error))) capNoteOn(item);
+        else pinState.note = { mid: item.id, kind: action === "unpin" ? "unpin-failed" : "failed", item, action };
       }
       pinState.busy = null;
       pinState.refocus = item.id;
@@ -809,9 +841,7 @@
       const pins = pinList(), pinned = pins.some((p) => p.messageId === item.id);
       if (pinned) return pinChange(item, "unpin");
       if (pins.length >= PIN_CAP) {
-        const text = pinCapNote(pins, pinName);
-        pinState.note = { mid: item.id, kind: "cap", text };
-        pinLive.textContent = text;
+        capNoteOn(item);
         pinState.refocus = item.id;
         render();
         return;
@@ -833,7 +863,12 @@
           render();
           if (typeof onPin.showPins === "function") onPin.showPins();
         } }, pinCopy.showPins));
-        else if (note && note.kind === "undo") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, pinCopy.unpinned), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, "restore") }, pinCopy.undo));
+        else if (note && note.kind === "undo") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, pinCopy.unpinned), h("button", { type: "button", class: "btn sm", onclick: () => {
+          if (pinList().length >= PIN_CAP) {
+            capNoteOn(note.item);
+            render();
+          } else pinChange(note.item, "restore");
+        } }, pinCopy.undo));
         else if (note) foot = h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, note.kind === "unpin-failed" ? pinCopy.unpinFailed : pinCopy.failed), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, note.kind === "unpin-failed" ? "unpin" : note.action || "pin") }, pinCopy.tryAgain));
         return { acts, tag, foot, pinned: Boolean(pin2) };
       };
@@ -1047,7 +1082,7 @@
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
         const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
         if (nextOpt && side === "lead" && row.text && !shown) continue;
-        const item = { id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        const item = { id: row.messageId, text: shown, said, contentType: row.contentType, summary: row.summary, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
         item.pin = pinParts(item);
         entries.push({
           t: row.createdAtMs || 0,
@@ -1266,6 +1301,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

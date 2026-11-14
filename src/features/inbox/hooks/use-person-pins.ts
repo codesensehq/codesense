@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { agentPins, type AgentPin, type InboxTeam } from "@/tauri/commands";
 
@@ -90,6 +90,9 @@ export function usePersonPins({
     };
   }, [fresh]);
   const byId = useMemo(() => new Map(pins.map((p) => [p.messageId, p])), [pins]);
+  // The list as it stands when an async call settles, for the note a refused Undo shows.
+  const pinsRef = useRef(pins);
+  pinsRef.current = pins;
   const thread = team && agentId ? { team, agentId, storyId } : null;
 
   const call = useCallback(
@@ -110,7 +113,18 @@ export function usePersonPins({
         setNote(op === "unpin" ? { mid, kind: "undo", message: m } : null);
         setFresh(op === "unpin" ? null : messageId);
         return true;
-      } catch {
+      } catch (error) {
+        // An Undo refused because the list filled meanwhile says so, as a Pin at the cap
+        // does: a retry could not succeed.
+        if (
+          op === "restore" &&
+          /at most \d+ pins/.test(String((error as Error)?.message ?? error))
+        ) {
+          const text = capNote(pinsRef.current, labelOf);
+          setNote({ mid, kind: "cap", text });
+          setLive(text);
+          return false;
+        }
         const kind =
           op === "unpin" ? "unpin-failed" : op === "restore" ? "restore-failed" : "pin-failed";
         setNote({ mid, kind, message: m });
@@ -152,6 +166,12 @@ export function usePersonPins({
     },
     undo() {
       if (note?.kind !== "undo" || busy) return;
+      if (full) {
+        const text = capNote(pins, labelOf);
+        setNote({ mid: note.mid, kind: "cap", text });
+        setLive(text);
+        return;
+      }
       void call(note.message, "restore", note.message.id);
     },
     retry() {

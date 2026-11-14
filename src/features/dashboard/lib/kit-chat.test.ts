@@ -264,6 +264,7 @@ describe("kit.chat", () => {
       "pinFirstSentence",
       "pinFirstWords",
       "pinLiveText",
+      "pinTitleOf",
       "pinWho",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
@@ -1436,6 +1437,51 @@ describe("kit.chat onPin: the person pins a message", () => {
       ["restore", 6],
     ]);
     expect(row(6).querySelector(".pin-note")).toBeNull();
+  });
+
+  it("an Undo refused because the list filled since shows the cap note, not Try again", async () => {
+    const { onPin, row, pinOf } = await mountPins([{ messageId: 6, pinnedBy: "lead-1" }]);
+    pinOf(6).click();
+    await flush();
+    // The agent pins three meanwhile; the page's list is at the cap.
+    const full = [1, 2, 3].map((messageId) => ({ messageId, pinnedBy: "lead-1" }));
+    onPin.pins = () => full;
+    row(6).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+    await flush();
+    const note = row(6).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("3 of 3 pinned (3 by Story lead). Unpin one to pin this.");
+    expect(note.querySelector("button")!.textContent).toBe("Show pins");
+    expect(row(6).querySelector('[role="alert"]')).toBeNull();
+    expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
+  });
+
+  it("names an HTML message by its title, not its markup, in the live region", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    let pins: Pin[] = [];
+    mountOn(s, {
+      onPin: {
+        pins: () => pins,
+        change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+      },
+    });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+    await flush();
+    expect(s.el.querySelector(".pin-live")!.textContent).toBe(
+      'Pinned "Merge board". 1 of 3 pinned.',
+    );
   });
 
   it("a pin that fails keeps its state and offers Try again", async () => {

@@ -644,6 +644,8 @@ declare namespace CodesenseSdk {
       pinFirstWords(text: string, words?: number): string;
       /** What the polite live region says after a pin, an unpin or an Undo. */
       pinLiveText(done: "pinned" | "unpinned" | "restored", title: string, count: number): string;
+      /** What a pin of this message is called: an HTML message by its summary, `<title>`, first heading, else "Dashboard from <sender>"; any other by its summary, else its first sentence. */
+      pinTitleOf(m: { text?: string | null; contentType?: string | null; summary?: string | null }, sender: string): string;
     };
     thread: {
       mergeThread(...lists: unknown[]): ChatRow[];
