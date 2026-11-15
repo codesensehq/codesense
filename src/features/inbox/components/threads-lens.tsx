@@ -794,7 +794,9 @@ export function Bubble({
       <div className="bub">
         {pins && !html && (
           <div className="ibx-acts" role="group" aria-label="Message actions">
-            <PinButton pins={pins} m={m} />
+            {/* The row is hidden by opacity, so outside the chat's roving thread (which holds every
+                Pin but the stop's) its Pin is out of the Tab order, as it was hidden. */}
+            <PinButton pins={pins} m={m} tabStop={roving} />
           </div>
         )}
         <MessageBody m={m} liveDashboards={me === HUMAN && !view.self} />
