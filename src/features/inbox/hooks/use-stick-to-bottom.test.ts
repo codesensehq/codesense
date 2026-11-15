@@ -66,6 +66,22 @@ describe("useStickToBottom", () => {
     expect(el.scrollTop).toBe(478);
   });
 
+  it("unpins a reader who scrolls up in 1 px steps (a slow trackpad), so new content doesn't pull them back", () => {
+    const height = { value: 900 };
+    const el = scroller(height);
+    renderHook(() => useStickToBottom({ current: el }, "t1", 1));
+    // The browser clamps the pinned list to its last screenful.
+    el.scrollTop = 800;
+    el.dispatchEvent(new Event("scroll"));
+    for (let i = 0; i < 60; i++) {
+      el.scrollTop -= 1;
+      el.dispatchEvent(new Event("scroll"));
+    }
+    height.value = 1200;
+    observers.at(-1)!.cb();
+    expect(el.scrollTop).toBe(740);
+  });
+
   it("leaves a reader who scrolled up where they are when content grows", () => {
     const height = { value: 300 };
     const el = scroller(height);
