@@ -569,10 +569,12 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/prose.js
+  var SKIP = /^(?:`{3,}|~{3,}|\|)/;
+  var plain = (line) => line.replace(/^(?:>\s*)+/, "").replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/`/g, "").trim();
   function lastSentence(text) {
-    const line = String(text || "").split("\n").map((part) => part.trim()).filter(Boolean).pop() || "";
-    const sentences = line.match(/[^.!?]+(?:[.!?]+|$)/g) || [line];
-    return sentences[sentences.length - 1].trim();
+    const lines = String(text || "").split("\n").map((part) => part.trim()).filter((part) => part && !SKIP.test(part)).map(plain).filter(Boolean);
+    const sentences = (lines.pop() || "").split(/(?<=[.!?])\s+/).filter(Boolean);
+    return sentences.length ? sentences[sentences.length - 1] : "";
   }
   function createProse({ win, clock, render }) {
     let sid = null, off = null, now = null;
@@ -924,6 +926,7 @@
       if (target2) transport.gotoAgent(target2);
     };
     const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
+    const actFoot = activity ? h("div", { class: "act-foot" }) : null, actCache = /* @__PURE__ */ new Map();
     const pinCopy = copy.pin || CHAT_COPY.pin, pinState = { note: null, busy: null, refocus: null };
     const pinLive = onPin ? h("div", { class: "pin-live", role: "status", "aria-live": "polite" }) : null;
     const pinList = () => onPin && typeof onPin.pins === "function" && onPin.pins() || [];
@@ -1028,7 +1031,7 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
-    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, pinLive, chipsBox, composer.region));
+    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, actFoot, pinLive, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -1160,7 +1163,7 @@
     const prose = activity ? createProse({ win, clock, render: () => render() }) : null;
     let proseRow = null;
     function proseItem(said) {
-      if (!proseRow) proseRow = h("div", { class: "act", "data-row": "activity" }, face("working", copy.row.working), h("span", { class: "sr", role: "status", "aria-live": "polite" }, copy.row.working), h("span", { class: "prose", "aria-live": "off" }));
+      if (!proseRow) proseRow = h("div", { class: "act", "data-row": "activity" }, face("working", copy.row.working), h("span", { class: "sr", role: "status", "aria-live": "polite" }, copy.row.working), h("span", { class: "prose" }));
       const line = proseRow.querySelector(".prose");
       line.textContent = said.line;
       line.title = said.text;
@@ -1280,8 +1283,9 @@
       const here = state();
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
-      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
+      if (actFoot) reconcile(actFoot, actCache, act ? [act] : []);
       paintChips();
       pin.onContentChanged();
       if (pinState.refocus !== null) {

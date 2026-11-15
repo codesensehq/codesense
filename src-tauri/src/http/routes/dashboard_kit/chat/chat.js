@@ -98,6 +98,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
  const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
+ // The working row (activity) sits at the thread's foot, after the log and outside its live region.
+ const actFoot=activity?h('div',{class:'act-foot'}):null,actCache=new Map();
  // onPin: the person pins a message into its agent thread, through the page: {pins() -> [{messageId, pinnedBy}], change(action 'pin'|'unpin'|'restore', messageId) -> the new list (rejects on failure), subscribe?(fn) -> off, showPins?(), name?(pinnedBy)}.
  // The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. An unpin offers Undo until the next pin, unpin or Esc. No timers.
  const pinCopy=copy.pin||CHAT_COPY.pin,pinState={note:null,busy:null,refocus:null};
@@ -162,7 +164,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
- el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,pinLive,chipsBox,composer.region));
+ el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,actFoot,pinLive,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
@@ -243,11 +245,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles()),delivery:deliveryRow(item.messageId)});
  }
  // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the live lead's prose, else the peer's current step while it runs.
- // The prose row is one node whose line is updated in place. The log is a live region, so the line turns announcing off for itself (each chunk is not read out); the row's status says Working… once.
+ // The working row sits at the thread's foot, after the log: outside its live region, so a line it shows is never read out with the row. The prose row is one node whose line
+ // is updated in place, and its status says Working… once.
  const prose=activity?createProse({win,clock,render:()=>render()}):null;
  let proseRow=null;
  function proseItem(said){
-  if(!proseRow)proseRow=h('div',{class:'act','data-row':'activity'},face('working',copy.row.working),h('span',{class:'sr',role:'status','aria-live':'polite'},copy.row.working),h('span',{class:'prose','aria-live':'off'}));
+  if(!proseRow)proseRow=h('div',{class:'act','data-row':'activity'},face('working',copy.row.working),h('span',{class:'sr',role:'status','aria-live':'polite'},copy.row.working),h('span',{class:'prose'}));
   const line=proseRow.querySelector('.prose');
   line.textContent=said.line;line.title=said.text;
   return {id:'activity',node:proseRow};
@@ -346,8 +349,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const here=state();
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
-  const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
+  if(actFoot)reconcile(actFoot,actCache,act?[act]:[]);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
