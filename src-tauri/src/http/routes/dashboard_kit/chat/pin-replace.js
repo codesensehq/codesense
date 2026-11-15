@@ -7,10 +7,10 @@
 import {h} from './dom.js';
 import {timeLabel} from './copy.js';
 import {PIN_CAP,PIN_REPLACE_FAILED,PIN_ROOM_NOW,PIN_UNDO_FULL,PIN_UNDO_GONE,pinChooserHeading,pinListChangeText,pinLiveText,pinNewRowText,pinPinnedAtLine,pinPinnedMeanwhileText,pinReplacedText,pinWho} from './chat-core.js';
-const ALERT_NS='http://www.w3.org/2000/svg';
+const GLYPH_NS='http://www.w3.org/2000/svg';
 // Your own pin is drawn as the pins strip draws it: a quote, or a dashboard's name.
 const OWN_PATH={quote:'M3 6h4v4l-2 3M9 6h4v4l-2 3',name:'M2 3h12v10H2zM2 7h12M7 7v6'};
-function ownGlyph(kind){const svg=document.createElementNS(ALERT_NS,'svg'),path=document.createElementNS(ALERT_NS,'path');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');path.setAttribute('d',OWN_PATH[kind]);svg.append(path);return svg;}
+function ownGlyph(kind){const svg=document.createElementNS(GLYPH_NS,'svg'),path=document.createElementNS(GLYPH_NS,'path');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');path.setAttribute('d',OWN_PATH[kind]);svg.append(path);return svg;}
 /**
  * state is chat.js's pin state ({note, busy, refocus}); live is its polite live region. list() is the thread's pins, nameOf names an agent, titleOf(pin) names a pin as the page's pins do,
  * ownOf(pin) is how a pin with no preview is drawn ('quote'|'name'), idOf(mid) is the chooser's element id, and pinNow(item) pins a message with the room a pin that left made.

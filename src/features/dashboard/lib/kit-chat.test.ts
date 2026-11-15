@@ -312,6 +312,28 @@ describe("kit.chat", () => {
     ]);
   });
 
+  // Some hosts concatenate the chat modules into one script scope, so a top-level name may be declared only once.
+  it("declares each top-level name in one module only", () => {
+    const modules = readdirSync(join(KIT_DIR, "chat"))
+      .filter((f) => f.endsWith(".js") && f !== "index.js")
+      .map((file) => ({ file, text: readFileSync(join(KIT_DIR, "chat", file), "utf8") }));
+    // Joined into one script, a second const, let or class of a name is a parse error, wherever it sits in a declaration.
+    const joined = modules
+      .map(({ text }) => text.replace(/^import\b.*$/gm, "").replace(/^export\s+/gm, ""))
+      .join("\n");
+    expect(() => new Function(joined)).not.toThrow();
+    // A second function of a name parses, so those are counted line by line.
+    const owners = new Map<string, string[]>();
+    for (const { file, text } of modules) {
+      for (const [, name] of text.matchAll(
+        /^(?:export\s+)?(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm,
+      )) {
+        owners.set(name, [...new Set([...(owners.get(name) ?? []), file])]);
+      }
+    }
+    expect([...owners].filter(([, files]) => files.length > 1)).toEqual([]);
+  });
+
   it("does not replace a chat that is already there", () => {
     const first = kitOf().chat;
     new Function(CHAT_JS)();

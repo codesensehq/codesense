@@ -1547,6 +1547,11 @@ export interface RoleQueue {
     from: string;
     fromName: string | null;
     excerpt: string;
+    /** The messageId it answers (the card a reply is for); null for none. */
+    inReplyTo: number | null;
+    /** The message, up to 4000 characters, for an open delivery; null once acknowledged. */
+    text: string | null;
+    textTruncated: boolean;
     createdAtMs: number;
     firstClaimedAtMs: number | null;
     claimOwner: string | null;
