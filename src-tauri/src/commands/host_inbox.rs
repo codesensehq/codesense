@@ -553,22 +553,22 @@ fn on_waiter(app: &AppHandle, machine: &str, state: &InboxWaiterState) {
         HostInboxes::changed(&inboxes, machine, state);
     }
     let _ = app.emit("sessions-waiter-changed", ());
+    let session = state.session.as_str();
     if !state.waiting {
-        refusal_ended(state.session.as_str());
+        refusal_ended(session);
     }
     // Only a tab of this app's on that machine is offered its mail.
-    if state.waiting && tab_machine(app, state.session.as_str()).as_deref() == Some(machine) {
+    if state.waiting && tab_machine(app, session).as_deref() == Some(machine) {
         // A launched agent whose waiter armed is at its prompt or mid-turn: one that never
         // reported a turn reads idle, not unknown.
         if let Some(launch) = app.try_state::<DashboardLaunchState>() {
-            let session = state.session.as_str();
             if DashboardLaunchState::handle_for_session(&launch, session).is_some()
                 || launch.remote_handle_for_session(session).is_some()
             {
                 launch.turns().record_ready(session);
             }
         }
-        let (app, session) = (app.clone(), state.session.as_str().to_string());
+        let (app, session) = (app.clone(), session.to_string());
         tauri::async_runtime::spawn(async move { offer(&app, &session, Offer::New, 0).await });
     }
 }
