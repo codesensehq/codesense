@@ -55,7 +55,8 @@ jobs:
 
   mock-layout:
     name: Mock layout specs
-    runs-on: ubuntu-latest
+    # Playwright's browsers support Ubuntu 24.04, not the newer image ubuntu-latest names.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
