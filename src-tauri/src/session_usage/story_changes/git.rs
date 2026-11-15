@@ -1073,7 +1073,9 @@ fn read_notes(
                                 reason = Some(crate::attribution::ranges::OBJECTS_NOT_LOCAL);
                                 break;
                             }
-                            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                            Err(error)
+                                if git2::Error::code(&error) == git2::ErrorCode::NotFound =>
+                            {}
                             Err(_) => {
                                 reason = Some("git-ai note unavailable locally");
                                 break;
@@ -1083,7 +1085,7 @@ fn read_notes(
                     let ids = note
                         .and_then(|note| {
                             crate::attribution::authorship::Authorship::parse(
-                                note.message().unwrap_or_default(),
+                                git2::Note::message(&note).unwrap_or_default(),
                             )
                             .ok()
                         })

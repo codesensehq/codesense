@@ -27,7 +27,8 @@ pub(crate) struct Drain {
 pub(crate) const NOTES_REFS: [&str; 2] = [super::managed::NOTES_REF, "ai"];
 
 pub(crate) fn is_missing_object(error: &git2::Error) -> bool {
-    error.code() == git2::ErrorCode::NotFound && error.class() == git2::ErrorClass::Odb
+    git2::Error::code(error) == git2::ErrorCode::NotFound
+        && git2::Error::class(error) == git2::ErrorClass::Odb
 }
 
 /// How long a drain may wait, in seconds.
@@ -189,16 +190,22 @@ impl GitAiSource {
             .map_err(|error| AttributionError::Git(error.to_string()))?;
         let oid = git2::Oid::from_str(commit)
             .map_err(|error| AttributionError::Git(error.to_string()))?;
-        if repository.find_object(oid, None).is_err() {
+        if git2::Repository::find_object(&repository, oid, None).is_err() {
             return Err(AttributionError::ObjectsNotLocal);
         }
         for notes_ref in NOTES_REFS {
-            match repository.find_note(Some(&format!("refs/notes/{notes_ref}")), oid) {
-                Ok(note) => return Ok(Some(note.message().unwrap_or_default().to_owned())),
+            match git2::Repository::find_note(
+                &repository,
+                Some(&format!("refs/notes/{notes_ref}")),
+                oid,
+            ) {
+                Ok(note) => {
+                    return Ok(Some(git2::Note::message(&note).unwrap_or_default().to_owned()))
+                }
                 Err(error) if is_missing_object(&error) => {
                     return Err(AttributionError::ObjectsNotLocal)
                 }
-                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
                 Err(error) => return Err(AttributionError::Git(error.to_string())),
             }
         }

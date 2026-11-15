@@ -497,12 +497,12 @@ fn own_note_key(repo_path: &Path, commit: &str) -> Result<Option<String>, String
     let repo = git2::Repository::open(repo_path).map_err(|error| error.to_string())?;
     let oid = git2::Oid::from_str(commit).map_err(|error| error.to_string())?;
     for name in super::git_ai::NOTES_REFS {
-        match repo.find_note(Some(&format!("refs/notes/{name}")), oid) {
-            Ok(note) => return Ok(Some(format!("{name}={}", note.id()))),
+        match git2::Repository::find_note(&repo, Some(&format!("refs/notes/{name}")), oid) {
+            Ok(note) => return Ok(Some(format!("{name}={}", git2::Note::id(&note)))),
             Err(error) if super::git_ai::is_missing_object(&error) => {
                 return Err(AttributionError::ObjectsNotLocal.to_string())
             }
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }
     }
