@@ -53,6 +53,19 @@ describe("useStickToBottom", () => {
     expect(el.scrollTop).toBe(340);
   });
 
+  it("stays pinned when a layout change fires a scroll event without the reader moving (cards drawn above a reopened list)", () => {
+    const height = { value: 300 };
+    const el = scroller(height);
+    renderHook(() => useStickToBottom({ current: el }, "t1", 1));
+    expect(el.scrollTop).toBe(300);
+    // The box above the list grew and the list got shorter: the browser fires a scroll event
+    // with scrollTop unchanged, now well past "near the bottom", before the resize settles it.
+    height.value = 478;
+    el.dispatchEvent(new Event("scroll"));
+    observers.at(-1)!.cb();
+    expect(el.scrollTop).toBe(478);
+  });
+
   it("leaves a reader who scrolled up where they are when content grows", () => {
     const height = { value: 300 };
     const el = scroller(height);
