@@ -258,7 +258,7 @@ impl Watched {
         let offset = start_offset(&path);
         Watched {
             tail: Tail::at(path, offset),
-            stream: Stream::default(),
+            stream: Default::default(),
         }
     }
 

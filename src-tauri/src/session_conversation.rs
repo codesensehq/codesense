@@ -159,15 +159,14 @@ fn reader_of(cli: AgentCli) -> LogReader {
 
 /// The interactive session log of a local Claude session, found as the capture finds it (its
 /// record's native id and config home): what the assistant-prose stream (`session_text`) tails.
-/// `None` for another CLI, a session with no record or native id yet, or no log on this Mac.
+/// `None` for a CLI whose log is another format, a session with no record or native id yet, or no
+/// log on this Mac.
 pub(crate) fn claude_session_log(session_id: &str) -> Option<PathBuf> {
     let store = UsageStore::open(&crate::session_usage::store_path().ok()?).ok()?;
     let record = store.read_session_record(session_id).ok()??;
     let cli = record.cli.as_deref()?.parse::<AgentCli>().ok()?;
-    if cli != AgentCli::Claude {
-        return None;
-    }
-    let (Some(locate), Some(_)) = reader_of(cli) else {
+    let (Some(locate), Some(agent_cli::TranscriptFormat::AnthropicSessionJsonl)) = reader_of(cli)
+    else {
         return None;
     };
     let native = record.native_session_id.as_deref()?;
