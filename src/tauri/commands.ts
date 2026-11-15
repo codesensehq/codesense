@@ -1176,7 +1176,7 @@ export type PinResult =
       agentId: string;
       storyId: string;
       pins: AgentPin[];
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
     }
   | { status: "invalid"; message: string };
 
@@ -1185,8 +1185,11 @@ export type AgentPinsOp =
   | { op: "read" }
   | { op: "pin"; messageId: number; position?: number; preview?: AgentPinPreview }
   | { op: "unpin"; messageId: number }
-  /** The Undo of an unpin: the pin comes back as it was. */
-  | { op: "restore"; messageId: number }
+  /** The Undo of an unpin: the pin comes back as it was. With `replacing`, the Undo of a
+   *  replace: that pin goes, in the same step. */
+  | { op: "restore"; messageId: number; replacing?: number }
+  /** Pin `messageId` in place of the shown pin `replaces`, in one step (at the cap). */
+  | { op: "replace"; messageId: number; replaces: number }
   | { op: "reorder"; messageIds: number[] };
 
 /** The human reads or changes an agent thread's pin list in `team`'s store. */
@@ -1205,6 +1208,8 @@ export const agentPins = (
     position: "position" in call ? (call.position ?? null) : null,
     messageIds: "messageIds" in call ? call.messageIds : null,
     preview: "preview" in call ? (call.preview ?? null) : null,
+    replaces: "replaces" in call ? call.replaces : null,
+    replacing: "replacing" in call ? (call.replacing ?? null) : null,
   });
 
 /** Prepare the `pins` live view of an agent thread for a page's subscription. */

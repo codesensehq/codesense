@@ -129,7 +129,7 @@ pub fn args_schema(name: &str) -> Value {
         "getWorkspaceStatus" => json!({"storyId":string()}),
         "commands.register" => json!({"ids":{"type":"array","items":string()}}),
         "commands.run" => json!({"id":string(),"args":{}}),
-        "pins" | "pin" | "unpin" | "restorePin" | "reorderPins" => {
+        "pins" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins" => {
             let id = json!({"type":"integer","minimum":1,"maximum":9_007_199_254_740_991_i64});
             let mut thread =
                 json!({"agentId":string(),"storyId":string(),"org":string(),"team":string()});
@@ -139,7 +139,15 @@ pub fn args_schema(name: &str) -> Value {
                     thread["position"] = json!({"type":"integer","minimum":0});
                     thread["preview"] = pin_preview_schema();
                 }
-                "unpin" | "restorePin" => thread["messageId"] = id,
+                "unpin" => thread["messageId"] = id,
+                "restorePin" => {
+                    thread["messageId"] = id.clone();
+                    thread["replacing"] = id;
+                }
+                "replacePin" => {
+                    thread["messageId"] = id.clone();
+                    thread["replaces"] = id;
+                }
                 "reorderPins" => thread["messageIds"] = json!({"type":"array","items":id}),
                 _ => {}
             }
@@ -177,6 +185,7 @@ pub fn args_schema(name: &str) -> Value {
         "commands.run" => &["id"],
         "pins" => &["agentId"],
         "pin" | "unpin" | "restorePin" => &["agentId", "messageId"],
+        "replacePin" => &["agentId", "messageId", "replaces"],
         "reorderPins" => &["agentId", "messageIds"],
         _ => &[],
     };
@@ -252,10 +261,10 @@ pub fn result_schema(name: &str) -> Value {
         "commands.register" => {
             json!({"type":"object","properties":{"active":{"type":"array","items":{"type":"string"}}},"required":["active"]})
         }
-        "pins" | "pin" | "unpin" | "restorePin" | "reorderPins" => {
+        "pins" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins" => {
             let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
             json!({"oneOf":[
-                {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","restored","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
+                {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","restored","replaced","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
                 {"type":"object","properties":{"status":{"const":"invalid"},"message":{"type":"string"}},"required":["status","message"]}
             ]})
         }

@@ -641,6 +641,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position"
   },
   {
+    "name": "replacePin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin"
+  },
+  {
     "name": "replyAsHuman",
     "class": "send",
     "grant": "inbox:write",

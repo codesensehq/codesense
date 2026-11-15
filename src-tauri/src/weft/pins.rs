@@ -194,6 +194,8 @@ pub enum PinOutcome {
     Unchanged,
     /// An unpinned pin came back as it was (see [`pin_restore`]).
     Restored,
+    /// A new pin took a pin's place in one step (see [`pin_replace`]).
+    Replaced,
 }
 
 fn invalid(msg: &str) -> super::sqlite::WvWriteError {
@@ -370,6 +372,87 @@ pub fn pin_remove(
     Ok(PinOutcome::Unpinned)
 }
 
+/// Pin message `message_id` into `thread` in place of the shown pin `replaces`, in one
+/// step: `replaces` is unpinned softly (so [`pin_restore_replacing`] can bring it back as
+/// it was) and the new pin takes its place, so nothing else moves. It works at
+/// [`PIN_CAP`], since the list's length doesn't change. Refused, changing nothing, when
+/// `replaces` is no longer a shown pin (the list moved on), when the message is already
+/// pinned, unknown, archived or withdrawn, or when `pinned_by` is blank.
+pub fn pin_replace(
+    store: &WeftStore,
+    thread: &ThreadKey,
+    message_id: i64,
+    replaces: i64,
+    pinned_by: &str,
+) -> WvWriteResult<PinOutcome> {
+    let pinned_by = pinned_by.trim();
+    if str::is_empty(pinned_by) {
+        return Err(invalid("pinned_by is blank"));
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut conn = WeftStore::conn(store)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let live = tx
+        .query_row(
+            "SELECT 1 FROM wv_inbox WHERE id = ?1 AND archived_at IS NULL AND withdrawn_at IS NULL",
+            params![message_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !live {
+        return Err(invalid(&format!("no message {message_id}")));
+    }
+    let (mut order, gone) = ordered(&tx, thread)?;
+    if order.contains(&message_id) {
+        return Err(invalid(&format!("message {message_id} is already pinned")));
+    }
+    let Some(at) = Iterator::position(&mut order.iter(), |id| *id == replaces) else {
+        return Err(invalid(&format!(
+            "message {replaces} is no longer pinned here; the list changed"
+        )));
+    };
+    let old: i64 = tx.query_row(
+        "SELECT id FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 AND message_id = ?3",
+        params![thread.agent_id, thread.story_id, replaces],
+        |r| r.get(0),
+    )?;
+    rusqlite::Connection::execute(
+        &tx,
+        "UPDATE wv_pins SET removed_at = ?2 WHERE id = ?1",
+        params![old, now],
+    )?;
+    write_audit_public(&tx, PINS, "mutate", old)?;
+    // A message unpinned earlier keeps its row (for a restore); pinning it again is a new
+    // pin, so the row starts over.
+    rusqlite::Connection::execute(
+        &tx,
+        "DELETE FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 AND message_id = ?3 \
+         AND removed_at IS NOT NULL",
+        params![thread.agent_id, thread.story_id, message_id],
+    )?;
+    rusqlite::Connection::execute(
+        &tx,
+        "INSERT INTO wv_pins \
+         (agent_id, story_id, message_id, position, pinned_by, created_at, preview, preview_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL)",
+        params![
+            thread.agent_id,
+            thread.story_id,
+            message_id,
+            at as i64,
+            pinned_by,
+            now
+        ],
+    )?;
+    write_audit_public(&tx, PINS, "append", tx.last_insert_rowid())?;
+    order[at] = message_id;
+    order.extend(gone);
+    renumber(&tx, thread, &order)?;
+    rusqlite::Transaction::commit(tx)?;
+    Ok(PinOutcome::Replaced)
+}
+
 /// Bring back message `message_id`'s unpinned pin in `thread` as it was: who pinned it,
 /// when, its preview, and its place in the list (the end when the list is shorter now).
 /// The Undo of an unpin. A pin that is live is `Unchanged`; a message never pinned here,
@@ -378,6 +461,28 @@ pub fn pin_restore(
     store: &WeftStore,
     thread: &ThreadKey,
     message_id: i64,
+) -> WvWriteResult<PinOutcome> {
+    restore(store, thread, message_id, None)
+}
+
+/// The Undo of [`pin_replace`], in one step: the pin `replacing` (the one that took
+/// `message_id`'s place) is unpinned, and `message_id`'s pin comes back as it was, in its
+/// place. When `replacing` has already gone, only the restore happens. Refused, changing
+/// nothing, as [`pin_restore`] is, including when the list has no room for it.
+pub fn pin_restore_replacing(
+    store: &WeftStore,
+    thread: &ThreadKey,
+    message_id: i64,
+    replacing: i64,
+) -> WvWriteResult<PinOutcome> {
+    restore(store, thread, message_id, Some(replacing))
+}
+
+fn restore(
+    store: &WeftStore,
+    thread: &ThreadKey,
+    message_id: i64,
+    replacing: Option<i64>,
 ) -> WvWriteResult<PinOutcome> {
     let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -402,13 +507,34 @@ pub fn pin_restore(
     if !live {
         return Err(invalid(&format!("no message {message_id}")));
     }
+    // The pin that took this one's place goes first, in the same step, if it is still there.
+    if let Some(replacing) = replacing {
+        let now = chrono::Utc::now().timestamp_millis();
+        let new: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 \
+                 AND message_id = ?3 AND removed_at IS NULL",
+                params![thread.agent_id, thread.story_id, replacing],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(new) = new {
+            rusqlite::Connection::execute(
+                &tx,
+                "UPDATE wv_pins SET removed_at = ?2 WHERE id = ?1",
+                params![new, now],
+            )?;
+            write_audit_public(&tx, PINS, "mutate", new)?;
+        }
+    }
     let (mut order, gone) = ordered(&tx, thread)?;
     if order.len() >= PIN_CAP {
         return Err(invalid(&format!(
             "a thread holds at most {PIN_CAP} pins; unpin one first"
         )));
     }
-    tx.execute(
+    rusqlite::Connection::execute(
+        &tx,
         "UPDATE wv_pins SET removed_at = NULL WHERE id = ?1",
         params![id],
     )?;
@@ -713,6 +839,87 @@ mod tests {
         assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unpinned);
         assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unchanged);
         assert_eq!(pin_threads_for(&store, &[a]).unwrap(), vec![t.clone()]);
+    }
+
+    fn full_thread(store: &WeftStore, t: &ThreadKey) -> (i64, i64, i64) {
+        let (a, b, c) = (message(store), message(store), message(store));
+        let preview = PinPreview {
+            short_name: Some("Tests".into()),
+            ..Default::default()
+        };
+        pin_add(store, t, a, "agent-a", None, None).unwrap();
+        pin_add(store, t, b, "agent-a", None, Some(&preview)).unwrap();
+        pin_add(store, t, c, "human", None, None).unwrap();
+        (a, b, c)
+    }
+
+    #[test]
+    fn replace_takes_the_old_pins_place_at_the_cap_and_undo_puts_both_back_as_they_were() {
+        let (_d, store) = open_temp();
+        let t = thread(Some("DEMO-1"));
+        let (a, b, c) = full_thread(&store, &t);
+        let before = row_times(&store, &t, b);
+        let d = message(&store);
+        assert_eq!(
+            pin_replace(&store, &t, d, b, "human").unwrap(),
+            PinOutcome::Replaced
+        );
+        // The new pin is in the old one's place; nothing else moved, and the list stays full.
+        assert_eq!(ids(&store, &t), vec![a, d, c]);
+        assert_eq!(row_times(&store, &t, d).0, "human");
+        // One Undo: the new pin goes and the old one comes back as it was, in its place.
+        assert_eq!(
+            pin_restore_replacing(&store, &t, b, d).unwrap(),
+            PinOutcome::Restored
+        );
+        assert_eq!(ids(&store, &t), vec![a, b, c]);
+        assert_eq!(row_times(&store, &t, b), before);
+        let restored = pins_list(&store, &t).unwrap().remove(1);
+        assert_eq!(
+            restored.preview.and_then(|p| p.short_name),
+            Some("Tests".to_string())
+        );
+    }
+
+    #[test]
+    fn replace_is_refused_and_changes_nothing_when_the_list_moved_on() {
+        let (_d, store) = open_temp();
+        let t = thread(None);
+        let (a, b, c) = full_thread(&store, &t);
+        let d = message(&store);
+        // The pin the person chose left before the swap: refused, nothing changed.
+        pin_remove(&store, &t, b).unwrap();
+        assert!(pin_replace(&store, &t, d, b, "human").is_err());
+        assert_eq!(ids(&store, &t), vec![a, c]);
+        // A message already pinned is never pinned twice, and the one it would replace stays.
+        assert!(pin_replace(&store, &t, c, a, "human").is_err());
+        assert_eq!(ids(&store, &t), vec![a, c]);
+        // An unknown message, and a blank pinner, are refused too.
+        assert!(pin_replace(&store, &t, 9_999, a, "human").is_err());
+        assert!(pin_replace(&store, &t, d, a, " ").is_err());
+        assert_eq!(ids(&store, &t), vec![a, c]);
+    }
+
+    #[test]
+    fn undo_of_a_replace_restores_the_old_pin_while_there_is_room_and_never_past_the_cap() {
+        let (_d, store) = open_temp();
+        let t = thread(None);
+        let (a, b, c) = full_thread(&store, &t);
+        let (d, e) = (message(&store), message(&store));
+        pin_replace(&store, &t, d, b, "human").unwrap();
+        // The agent took the new pin off and filled the list again: Undo can't fit the old
+        // one back, so it is refused and the list stays as the agent left it.
+        pin_remove(&store, &t, d).unwrap();
+        pin_add(&store, &t, e, "agent-a", None, None).unwrap();
+        assert!(pin_restore_replacing(&store, &t, b, d).is_err());
+        assert_eq!(ids(&store, &t), vec![a, c, e]);
+        // With room again, the old pin comes back in its place though the new one is gone.
+        pin_remove(&store, &t, e).unwrap();
+        assert_eq!(
+            pin_restore_replacing(&store, &t, b, d).unwrap(),
+            PinOutcome::Restored
+        );
+        assert_eq!(ids(&store, &t), vec![a, b, c]);
     }
 
     #[test]

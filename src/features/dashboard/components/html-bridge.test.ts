@@ -335,6 +335,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "records.setFields",
       "records.write",
       "reorderPins",
+      "replacePin",
       "replyAsHuman",
       "restorePin",
       "roles",
@@ -2045,6 +2046,44 @@ describe("agents read model verbs", () => {
       runBridgeCommand("restorePin", { ...thread, messageId: "7" }, DOC),
     ).rejects.toThrow(/messageId/);
     expect(METADATA_ACTION_VERBS).toContain("restorePin");
+  });
+
+  it("replacePin hands the engine a replace in the chosen pin's place, and restorePin with replacing its undo", async () => {
+    mockAgentPins.mockReset();
+    mockAgentPins.mockResolvedValue({
+      status: "pins",
+      org: "acme",
+      team: "default",
+      agentId: "acme/default/dev",
+      storyId: "DEMO-1",
+      pins: [{ messageId: 9, position: 0 }],
+      outcome: "replaced",
+    });
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    const done = (await runBridgeCommand(
+      "replacePin",
+      { ...thread, messageId: 9, replaces: 7 },
+      DOC,
+    )) as { outcome: string };
+    expect(done.outcome).toBe("replaced");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "replace",
+      messageId: 9,
+      replaces: 7,
+    });
+    await runBridgeCommand("restorePin", { ...thread, messageId: 7, replacing: 9 }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "restore",
+      messageId: 7,
+      replacing: 9,
+    });
+    await expect(runBridgeCommand("replacePin", { ...thread, messageId: 9 }, DOC)).rejects.toThrow(
+      /replaces/,
+    );
+    await expect(
+      runBridgeCommand("restorePin", { ...thread, messageId: 7, replacing: "9" }, DOC),
+    ).rejects.toThrow(/replacing/);
+    expect(METADATA_ACTION_VERBS).toContain("replacePin");
   });
 
   it("refuses a pins call with no thread, a bad message id or a bad position", async () => {

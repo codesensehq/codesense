@@ -402,3 +402,95 @@ async fn the_person_restores_an_unpinned_pin_as_it_was_and_the_restore_fires_onc
         other => panic!("expected invalid, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn the_person_replaces_a_pin_at_the_cap_and_one_undo_puts_both_back_each_firing_once() {
+    let fake = FakeHost::new();
+    let story = Some("DEMO-1");
+    let mut held = vec![];
+    for text in ["view a", "view b", "view c"] {
+        let id = mail(&fake, "S1", "human", text).await;
+        human(
+            &fake,
+            story,
+            PinOp::Pin {
+                message_id: id,
+                position: None,
+                preview: None,
+            },
+        )
+        .await;
+        held.push(id);
+    }
+    let (a, b, c) = (held[0], held[1], held[2]);
+    let d = mail(&fake, "S1", "human", "view d").await;
+    let before = fake.pin_events().len();
+    let replaced = human(
+        &fake,
+        story,
+        PinOp::Replace {
+            message_id: d,
+            replaces: b,
+        },
+    )
+    .await;
+    assert_eq!(outcome(&replaced), Some(PinOutcome::Replaced));
+    assert_eq!(
+        listed(&replaced),
+        vec![a, d, c],
+        "in the replaced pin's place"
+    );
+    assert_eq!(fake.pin_events().len(), before + 1, "one change");
+    let undone = human(
+        &fake,
+        story,
+        PinOp::RestoreReplacing {
+            message_id: b,
+            replacing: d,
+        },
+    )
+    .await;
+    assert_eq!(outcome(&undone), Some(PinOutcome::Restored));
+    assert_eq!(listed(&undone), vec![a, b, c]);
+    assert_eq!(fake.pin_events().len(), before + 2, "one change");
+}
+
+#[tokio::test]
+async fn a_replace_of_a_pin_that_left_is_refused_names_the_list_and_fires_nothing() {
+    let fake = FakeHost::new();
+    let story = Some("DEMO-1");
+    let a = mail(&fake, "S1", "human", "view a").await;
+    let b = mail(&fake, "S1", "human", "view b").await;
+    for id in [a, b] {
+        human(
+            &fake,
+            story,
+            PinOp::Pin {
+                message_id: id,
+                position: None,
+                preview: None,
+            },
+        )
+        .await;
+    }
+    human(&fake, story, PinOp::Unpin { message_id: b }).await;
+    let d = mail(&fake, "S1", "human", "view d").await;
+    let before = fake.pin_events().len();
+    match human(
+        &fake,
+        story,
+        PinOp::Replace {
+            message_id: d,
+            replaces: b,
+        },
+    )
+    .await
+    {
+        PinResult::Invalid { message } => {
+            assert!(message.contains("the list changed"), "{message}");
+            assert!(message.contains("Pinned now"), "{message}");
+        }
+        other => panic!("expected invalid, got {other:?}"),
+    }
+    assert_eq!(fake.pin_events().len(), before);
+}

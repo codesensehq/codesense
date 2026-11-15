@@ -1020,6 +1020,7 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         ("pin", Class::Metadata, "inbox:write", Some("pin")),
         ("unpin", Class::Metadata, "inbox:write", Some("pin")),
         ("restorePin", Class::Metadata, "inbox:write", Some("pin")),
+        ("replacePin", Class::Metadata, "inbox:write", None),
         ("reorderPins", Class::Metadata, "inbox:write", None),
     ] {
         let verb = registry.get(name).expect(name);

@@ -343,7 +343,14 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         verb: "restorePin",
         tier: "metadata",
         args: "{agentId: string, storyId?: string, messageId: number}",
-        purpose: "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
+        purpose: "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). With replacing (the pin a replacePin put in its place), the Undo of that replace: the replacing pin goes in the same step, if it is still there. Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "replacePin",
+        tier: "metadata",
+        args: "{agentId: string, storyId?: string, messageId: number, replaces: number}",
+        purpose: "At the cap, pin a message of the page's team in place of the shown pin replaces, in one step: that pin is kept aside (restorePin with replacing undoes this) and the new pin takes its place, so nothing else moves. Requires inbox:write. Resolves the list as pin does, with outcome 'replaced'; `{status:'invalid', message}`, changing nothing, when replaces is no longer a shown pin (the list changed), the message is already pinned, or it is unknown, archived or withdrawn. An agent's pin tool still refuses a fourth pin.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {

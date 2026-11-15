@@ -117,9 +117,35 @@ pub(crate) enum PinOp {
     Restore {
         message_id: i64,
     },
+    /// Pin `message_id` in place of the shown pin `replaces`, in one step: the person
+    /// pins at the cap by choosing which pin to replace.
+    Replace {
+        message_id: i64,
+        replaces: i64,
+    },
+    /// The Undo of a replace, in one step: `replacing` goes and `message_id` comes back as
+    /// it was, in its place.
+    RestoreReplacing {
+        message_id: i64,
+        replacing: i64,
+    },
     Reorder {
         message_ids: Vec<i64>,
     },
+}
+
+/// A refusal that names the thread's pins now, so whoever asked can see what changed.
+fn refused_with_list(
+    store: &crate::weft::store::WeftStore,
+    thread: &ThreadKey,
+    reason: &str,
+) -> Result<String, WvWriteError> {
+    let held = pins::pins_list(store, thread)?
+        .iter()
+        .map(pin_label)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!("{reason}. Pinned now: {held}"))
 }
 
 /// Run `op` on `thread`'s list in the store at `own`, as `by`. A session (`party`) pins
@@ -177,16 +203,31 @@ async fn pins_in(
                     match pins::pin_restore(store, &thread, message_id) {
                         Ok(done) => (Some(done), done != PinOutcome::Unchanged),
                         Err(WvWriteError::Invalid(reason)) => {
-                            let held = pins::pins_list(store, &thread)?
-                                .iter()
-                                .map(pin_label)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            return Ok(Err(format!("{}. Pinned now: {held}", reason.0)));
+                            return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
                         }
                         Err(other) => return Err(other),
                     }
                 }
+                PinOp::Replace {
+                    message_id,
+                    replaces,
+                } => match pins::pin_replace(store, &thread, message_id, replaces, &by) {
+                    Ok(done) => (Some(done), true),
+                    Err(WvWriteError::Invalid(reason)) => {
+                        return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
+                    }
+                    Err(other) => return Err(other),
+                },
+                PinOp::RestoreReplacing {
+                    message_id,
+                    replacing,
+                } => match pins::pin_restore_replacing(store, &thread, message_id, replacing) {
+                    Ok(done) => (Some(done), done != PinOutcome::Unchanged),
+                    Err(WvWriteError::Invalid(reason)) => {
+                        return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
+                    }
+                    Err(other) => return Err(other),
+                },
                 PinOp::Reorder { message_ids } => {
                     pins::pins_reorder(store, &thread, &message_ids)?;
                     (None, true)
@@ -292,7 +333,8 @@ pub(crate) async fn pin_request<'a>(
 }
 
 /// The person's pins verbs, one Tauri command: `op` is `read`, `pin`, `unpin`,
-/// `restore` (the Undo of an unpin) or `reorder`.
+/// `restore` (the Undo of an unpin, or of a replace with `replacing`), `replace` (pin in
+/// place of `replaces`) or `reorder`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_pins(
@@ -305,6 +347,8 @@ pub async fn agent_pins(
     position: Option<u32>,
     message_ids: Option<Vec<i64>>,
     preview: Option<PinPreview>,
+    replaces: Option<i64>,
+    replacing: Option<i64>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
     let op = match &*op {
@@ -317,8 +361,18 @@ pub async fn agent_pins(
         "unpin" => PinOp::Unpin {
             message_id: need_id()?,
         },
-        "restore" => PinOp::Restore {
+        "restore" => match replacing {
+            Some(replacing) => PinOp::RestoreReplacing {
+                message_id: need_id()?,
+                replacing,
+            },
+            None => PinOp::Restore {
+                message_id: need_id()?,
+            },
+        },
+        "replace" => PinOp::Replace {
             message_id: need_id()?,
+            replaces: replaces.ok_or("replace needs replaces")?,
         },
         "reorder" => PinOp::Reorder {
             message_ids: message_ids.ok_or("reorder needs messageIds")?,
