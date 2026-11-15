@@ -256,6 +256,12 @@ export function ChatOverlay({
   // the chat's place.
   const pinShape = opened && tall ? "line" : layout.pins;
   const sheetInPlace = opened !== null && !tall;
+  // In the chat's place the sheet leaves the composer: the person can still write (the
+  // design: "the composer stays"), the room's as the chat's. A read that failed or is loading
+  // has no composer to keep.
+  const composerOnly = sheetInPlace && Boolean(data);
+  // A small or short pane: the one-row composer.
+  const compact = layout.width === "XS" || layout.height === "short";
 
   // The team's own agent page (teams.yml `agent_page:`); a team without one has no Full view.
   const agentPage = useOrgStore((state) =>
@@ -323,7 +329,14 @@ export function ChatOverlay({
         style={{ ...style, fontSize: layout.textPx }}
         onKeyDown={(e) => {
           const t = e.target as HTMLElement;
-          if (e.key !== "Escape" || e.defaultPrevented || t.matches("input, textarea")) return;
+          if (e.key !== "Escape") return;
+          // From the composer (which leaves the box on Escape), it also closes an open pin when
+          // there is no draft to lose.
+          if (t.matches("input, textarea")) {
+            if (opened && (t as HTMLTextAreaElement).value === "") closePin();
+            return;
+          }
+          if (e.defaultPrevented) return;
           e.preventDefault();
           if (opened) closePin();
           else if (groupShown) setGroup((g) => ({ ...g, shown: false }));
@@ -431,8 +444,10 @@ export function ChatOverlay({
             </div>
           </section>
         )}
-        {error && data && <StaleNotice error={error} onRetry={() => void reload()} />}
-        {!sheetInPlace && (
+        {error && data && (
+          <StaleNotice error={error} onRetry={() => void reload()} what="the chat" />
+        )}
+        {(!sheetInPlace || composerOnly) && (
           // Keyed by session: no draft or recipient carries into another session's chat.
           <div className="ibx-body ibx-ov-chat" key={sessionId}>
             {error && !data ? (
@@ -446,6 +461,7 @@ export function ChatOverlay({
                 focusRequest={group.focus}
                 visible={visible}
                 human
+                threadHidden={composerOnly}
               />
             ) : (
               <Conversation
@@ -453,12 +469,14 @@ export function ChatOverlay({
                 request={null}
                 defaultTo={handle}
                 quick
+                compact={compact}
+                threadHidden={composerOnly}
                 marks={marks}
                 pins={personPins}
+                // The placeholder and the route hint already say where a message goes.
                 empty={
                   <div className="ibx-empty" data-testid="chat-overlay-empty">
                     <strong>No messages yet</strong>
-                    What you send lands in {name}&apos;s inbox.
                   </div>
                 }
               />

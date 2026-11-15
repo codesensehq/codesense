@@ -1142,7 +1142,7 @@
   padding: 2px 0;
 }
 .ibx-box textarea::placeholder {
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
 }
 .ibx .ibx-send {
   display: flex;
@@ -1447,6 +1447,18 @@
   color: var(--ibx-fg);
   font: 12px var(--ibx-mono);
 }
+/* Kept mounted while a pin takes the thread's place (its stick-to-bottom wiring stays). */
+.ibx-scrollwrap[hidden],
+.ibx-group-pane .ibx-th-head[hidden] {
+  display: none;
+}
+/* The room's log, a box only to be hidden: in the room's flex column it lays out as the log. */
+.ibx-group-log {
+  display: contents;
+}
+.ibx-group-log[hidden] {
+  display: none;
+}
 /* A scroller with a "Jump to latest" pill over its foot (the Mailspool log, a conversation). */
 .ibx-scrollwrap {
   position: relative;
@@ -1456,8 +1468,8 @@
   flex-direction: column;
 }
 .ibx-msgs:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 1px var(--ibx-accent-line);
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: -2px;
 }
 @keyframes ibx-rise {
   from {
@@ -1995,7 +2007,19 @@
   gap: 10px;
   min-width: 0;
   font-size: 11px;
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
+}
+/* The one-row composer of a small or short pane: the design's 4/6 px padding, and no footer
+   unless a failure has something to say. */
+.ibx-comp.quick.compact {
+  padding: 4px 6px;
+  gap: 4px;
+}
+.ibx-comp.quick.compact .ibx-box {
+  padding: 2px 4px 2px 8px;
+}
+.ibx-comp.quick.compact .ibx-comp-foot:empty {
+  display: none;
 }
 /* A long hint truncates (its title holds it whole) and a failure wraps: neither pushes the keys
    out of the footer. */
@@ -2006,7 +2030,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
 }
 .ibx-comp-keys {
   flex: none;
@@ -2014,7 +2038,7 @@
   white-space: nowrap;
 }
 .ibx-comp-keys kbd {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 13px;
   padding: 0 3px;
   margin: 0 2px 0 6px;

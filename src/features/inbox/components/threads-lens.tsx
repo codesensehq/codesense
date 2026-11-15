@@ -533,6 +533,8 @@ export function Conversation({
   empty = null,
   marks,
   pins = null,
+  threadHidden = false,
+  compact = false,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -546,6 +548,11 @@ export function Conversation({
   marks?: (m: ConversationMessage) => DeliveryMark | null;
   /** The person's pins of this conversation's agent thread: each message gets a Pin. */
   pins?: PersonPins | null;
+  /** Something else takes the messages' place (a pin opened on a short pane): only the
+   *  composer is drawn, so the person can still write. */
+  threadHidden?: boolean;
+  /** The quick composer's one-row form, for a small or short pane. */
+  compact?: boolean;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -567,11 +574,21 @@ export function Conversation({
     if (lastOwn !== null && lastOwn !== sentFrom.current) jump();
     sentFrom.current = lastOwn;
   }, [lastOwn, jump]);
+  // Shown again after something took its place (a hidden scroller can lose its place): back at
+  // the newest message when it was following, as it would have stayed.
+  const hiddenBefore = useRef(threadHidden);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    if (threadHidden && !hiddenBefore.current) following.current = !away;
+    if (!threadHidden && hiddenBefore.current && following.current) jump();
+    hiddenBefore.current = threadHidden;
+  }, [threadHidden, away, jump]);
 
   const heads = dayHeads(thread.messages);
   return (
     <>
-      <div className="ibx-scrollwrap">
+      {/* Kept mounted while something takes its place, so the scroller keeps its wiring. */}
+      <div className="ibx-scrollwrap" hidden={threadHidden}>
         <div
           className="ibx-msgs"
           ref={scroller}
@@ -626,7 +643,13 @@ export function Conversation({
       </div>
       {pins && <PinLive pins={pins} />}
       <ArrivalsNote note={arrivals} />
-      <Composer defaultTo={defaultTo} scope={thread.key} request={request} quick={quick} />
+      <Composer
+        defaultTo={defaultTo}
+        scope={thread.key}
+        request={request}
+        quick={quick}
+        compact={compact}
+      />
     </>
   );
 }
