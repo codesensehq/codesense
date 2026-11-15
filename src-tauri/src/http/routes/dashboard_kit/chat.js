@@ -23,7 +23,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", stale: (time) => `Couldn't refresh · ${time}` },
+    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -786,6 +786,7 @@
     let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
     const streams = /* @__PURE__ */ new Map(), watched = /* @__PURE__ */ new Set(), listeners = /* @__PURE__ */ new Set(), cache = /* @__PURE__ */ new Map();
     const fails = /* @__PURE__ */ new Map();
+    let threadRead = false;
     const wrapped = { launch: async (prompt) => {
       const result = await transport.launch(prompt);
       if (result && result.sessionId) launchSessionId = result.sessionId;
@@ -948,18 +949,19 @@
     };
     const alertRow = (kind, why, code, ...extra) => h("div", { class: "sys danger", role: "alert", "data-row": kind }, alertIcon(), h("span", { class: "why" }, why), code ? h("code", { class: "code" }, code) : null, ...extra);
     const statusCache = /* @__PURE__ */ new Map();
+    const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
+      readThread();
+    } }, copy.row.retry);
     const readRows = () => {
       if (!sources) return [];
-      const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
-        readThread();
-      } }, copy.row.retry), stale = sources.staleAt();
+      const stale = sources.staleAt();
       if (sources.failedNow()) return [{ id: "unread", sig: "u", make: () => alertRow("unread", copy.row.unread, "", retry()) }];
       return stale === null ? [] : [{ id: "stale", sig: "st|" + stale, make: () => h("div", { class: "sys warn", role: "status", "data-row": "stale" }, h("span", {}, copy.row.stale(timeLabel(stale))), retry()) }];
     };
     function statusItems() {
       const state2 = launch.state, p = presence(), on = Boolean(terminalTarget()), out = [...readRows()];
       for (const [what, text] of fails) out.push({ id: "fail-" + what, sig: "x|" + what + "|" + text, make: () => {
-        const row = alertRow("act-failed", text, "");
+        const row = alertRow("act-failed", text, "", what === "thread" ? retry() : null);
         row.setAttribute("data-fail", what);
         return row;
       } });
@@ -1150,7 +1152,7 @@
       const here = state();
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
-      const act = activityItem(), want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
       paintChips();
       pin.onContentChanged();
@@ -1170,8 +1172,8 @@
       }
       if (refocus && launch.state !== "starting" && launch.state !== "slow") {
         refocus = false;
-        const retry = status.querySelector("[data-retry]");
-        if (retry && (!el.ownerDocument.activeElement || el.ownerDocument.activeElement === el.ownerDocument.body || el.ownerDocument.activeElement === status)) retry.focus();
+        const retry2 = status.querySelector("[data-retry]");
+        if (retry2 && (!el.ownerDocument.activeElement || el.ownerDocument.activeElement === el.ownerDocument.body || el.ownerDocument.activeElement === status)) retry2.focus();
       }
       composer.update({ placeholder: p.placeholder, disabled: isDone, ...layout.composer ? layout.composer(here) : {} });
       for (const fn of listeners) fn();
@@ -1184,8 +1186,15 @@
         render();
       }));
     }
+    function emptyItems() {
+      if (!layout.empty || thread.length || launch.messages.length) return [];
+      if (fails.has("thread") || sources && sources.failedNow()) return [];
+      if (!threadRead || sources && !sources.settled()) return [{ id: "loading", sig: "l", make: () => h("div", { class: "empty", role: "status", "data-row": "loading" }, copy.row.loading) }];
+      return [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }];
+    }
     function took(next2) {
       thread = next2;
+      threadRead = true;
       if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
       for (const row of thread) streams.delete(row.messageId);
       if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;

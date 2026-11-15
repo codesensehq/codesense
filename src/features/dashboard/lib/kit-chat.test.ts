@@ -485,6 +485,46 @@ describe("kit.chat", () => {
     const placeholder = (el: HTMLElement) =>
       el.querySelector<HTMLTextAreaElement>(".composer textarea")!.placeholder;
 
+    it("says the empty copy only once the thread has read empty: a held read says it is loading, a failed one its failure with Retry", async () => {
+      let release!: (lists: Row[][]) => void;
+      const held = setup([lead("idle")]);
+      mountOn(held, {
+        target: target({ read: () => new Promise<Row[][]>((resolve) => (release = resolve)) }),
+        layout: { empty: "No messages yet" },
+      });
+      await flush();
+      expect(held.el.textContent).not.toContain("No messages yet");
+      expect(held.el.querySelector('[data-row="loading"]')?.textContent).toBe(
+        "Loading the conversation…",
+      );
+      release([[]]);
+      await flush();
+      expect(held.el.textContent).toContain("No messages yet");
+      expect(held.el.querySelector('[data-row="loading"]')).toBeNull();
+
+      let fail = true;
+      const failed = setup([lead("idle")]);
+      mountOn(failed, {
+        target: target({
+          read: async (peers: Row[], transport: any) => {
+            if (fail) throw new Error("denied: grant");
+            return Promise.all(peers.map((row) => transport.threadOf(row.sessionId)));
+          },
+        }),
+        layout: { empty: "No messages yet" },
+      });
+      await flush();
+      expect(failed.el.textContent).not.toContain("No messages yet");
+      expect(failed.el.querySelector('[data-row="loading"]')).toBeNull();
+      const alert = failed.el.querySelector<HTMLElement>('[data-fail="thread"]')!;
+      expect(alert).toHaveTextContent("denied: grant");
+      fail = false;
+      alert.querySelector<HTMLButtonElement>("[data-thread-retry]")!.click();
+      await flush();
+      expect(failed.el.querySelector('[data-fail="thread"]')).toBeNull();
+      expect(failed.el.textContent).toContain("No messages yet");
+    });
+
     it("copy overrides the words it names and keeps the rest", async () => {
       const s = setup([lead("idle")]);
       mountOn(s, {
