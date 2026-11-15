@@ -75,7 +75,6 @@
           ]
         }
       },
-      "required": [],
       "type": "object"
     },
     "FileEntry": {
@@ -115,7 +114,6 @@
           ]
         }
       },
-      "required": [],
       "type": "object"
     },
     "McpRequirement": {
@@ -593,7 +591,6 @@
           "type": "array"
         }
       },
-      "required": [],
       "type": "object"
     },
     "Setting": {

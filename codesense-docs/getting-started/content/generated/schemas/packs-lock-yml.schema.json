@@ -165,7 +165,6 @@
           "type": "array"
         }
       },
-      "required": [],
       "type": "object"
     },
     "LockRoutine": {
