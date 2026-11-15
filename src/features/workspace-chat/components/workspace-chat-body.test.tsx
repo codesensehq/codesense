@@ -26,6 +26,43 @@ function chatMsg(id: number, overrides: Partial<WorkspaceChatMessage> = {}): Wor
 }
 
 describe("WorkspaceChatBody", () => {
+  it("hidden while something takes its place, it comes back at its newest message when it was following", () => {
+    const messages = Array.from({ length: 30 }, (_, i) => chatMsg(i + 1));
+    const view = render(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
+    );
+    const body = screen.getByTestId("workspace-chat-body");
+    Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => 1000 });
+    body.scrollTop = 1000;
+    view.rerender(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" hidden />,
+    );
+    // A hidden scroller can lose its place.
+    body.scrollTop = 0;
+    view.rerender(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
+    );
+    expect(screen.getByTestId("workspace-chat-body")).toBe(body);
+    expect(body.scrollTop).toBe(1000);
+  });
+
+  it("hidden while the reader had scrolled up, it comes back where they were", () => {
+    const messages = Array.from({ length: 30 }, (_, i) => chatMsg(i + 1));
+    const view = render(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
+    );
+    const body = screen.getByTestId("workspace-chat-body");
+    Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => 1000 });
+    body.scrollTop = 200;
+    view.rerender(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" hidden />,
+    );
+    view.rerender(
+      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
+    );
+    expect(body.scrollTop).toBe(200);
+  });
+
   it("shows loading feedback until the first chat read completes", () => {
     render(<WorkspaceChatBody messages={null} loading error={null} density="b" />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading chat…");

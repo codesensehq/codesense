@@ -28,6 +28,9 @@ export interface WorkspaceChatBodyProps {
   density: ChatDensity;
   /** HUMAN sentinel override — defaults to `"human"`. Tests inject a stub. */
   humanSentinel?: string;
+  /** Something else takes the log's place (a pin opened on a short pane). The log stays
+   *  mounted, and when it shows again it is back at its newest message if it was following. */
+  hidden?: boolean;
 }
 
 /** Group runs of consecutive messages by the same `from` so the renderer
@@ -68,6 +71,7 @@ export function WorkspaceChatBody({
   unreadExclude,
   unreadLabel,
   identify,
+  hidden = false,
 }: WorkspaceChatBodyProps): React.JSX.Element {
   const annotated = useMemo(() => annotateMessages(messages ?? []), [messages]);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -95,6 +99,18 @@ export function WorkspaceChatBody({
       el.scrollTop = el.scrollHeight;
     }
   }, [annotated, messages]);
+
+  // Hidden, the log can lose its place: shown again, it goes back to the tail if it was
+  // following when it was hidden, and leaves a reader who had scrolled up where they were.
+  const hiddenBefore = useRef(hidden);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (el && hidden && !hiddenBefore.current)
+      following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (el && !hidden && hiddenBefore.current && following.current) el.scrollTop = el.scrollHeight;
+    hiddenBefore.current = hidden;
+  }, [hidden]);
 
   // A workspace swap (`messages` back to null) resets the first-paint latch so
   // the NEXT populate re-anchors to the tail.

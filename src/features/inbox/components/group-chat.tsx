@@ -266,6 +266,7 @@ export function GroupChatPane({
             loading={chat.loading}
             error={chat.error}
             density="b"
+            hidden={threadHidden}
             emptyState={
               <div className="wc-newchat">
                 <strong>New chat</strong>
