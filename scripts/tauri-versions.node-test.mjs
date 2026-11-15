@@ -38,9 +38,7 @@ function npmVersions() {
   const root = parse(read("pnpm-lock.yaml")).importers["."];
   const deps = { ...root.dependencies, ...root.devDependencies };
   return Object.fromEntries(
-    Object.entries(deps)
-      .filter(([name]) => crateFor(name))
-      .map(([name, entry]) => [name, String(entry.version).split("(")[0]]),
+    Object.entries(deps).map(([name, entry]) => [name, String(entry.version).split("(")[0]]),
   );
 }
 
