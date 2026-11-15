@@ -620,6 +620,11 @@ describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () 
       "aria-pressed",
       "false",
     );
+    // and it looks it: the pressed style follows what is shown, not the preference
+    expect(within(group).getByRole("button", { name: "Source" }).className).toContain("bg-primary");
+    expect(within(group).getByRole("button", { name: "Side by side" }).className).not.toContain(
+      "bg-primary",
+    );
   });
 
   it("while the diff is still loading it shows the reading skeleton, not the final Source line", () => {
