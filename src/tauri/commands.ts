@@ -5235,10 +5235,6 @@ export const sourceRemoteListFiles = (machineId: string, handle: string, limit?:
 export const sourceRemoteChangeset = (machineId: string, handle: string, baseRef?: string) =>
   invoke<PublishFile[]>("source_remote_changeset", { machineId, handle, baseRef });
 
-/** DESIGN-remote-source.md §4.1 — per-file redline for a remote worktree file,
- *  computed against the same merge-base baseline as {@link sourceRemoteChangeset}.
- *  Byte-identical shape to {@link sourceFileRedline}. Routed via
- *  {@link sourceRedline} — do not call directly. */
 /** A raster file's Before | After bytes in a REMOTE source worktree, read by the machine's
  *  Git at the working tree against the same baseline as {@link sourceRemoteFileRedline}.
  *  A side whose bytes aren't a raster image is refused; one past the cap carries none. */
@@ -5257,6 +5253,10 @@ export const sourceRemoteImageSides = (
     baseRef,
   });
 
+/** DESIGN-remote-source.md §4.1 — per-file redline for a remote worktree file,
+ *  computed against the same merge-base baseline as {@link sourceRemoteChangeset}.
+ *  Byte-identical shape to {@link sourceFileRedline}. Routed via
+ *  {@link sourceRedline} — do not call directly. */
 export const sourceRemoteFileRedline = (
   machineId: string,
   handle: string,
