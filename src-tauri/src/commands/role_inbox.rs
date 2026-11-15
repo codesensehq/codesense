@@ -676,7 +676,7 @@ mod tests {
 
         // A headless run is listed while it runs; one the list no longer holds has ended.
         let rows = vec![row(
-            "routine:team/wf-reply@1",
+            "routine:team/nightly@1",
             "headless-1000-7",
             SessionState::Running,
         )];
@@ -702,7 +702,7 @@ mod tests {
         let td = tempfile::TempDir::new().unwrap();
         // RI-2-ALLOW: a test, no UI thread.
         let store = WeftStore::open(td.path().join("weft.sqlite3")).unwrap();
-        let role = "story-lead:DEMO-1";
+        let role = "reviewer";
         let shared = |session: &str| role_inbox::RegisterOptions {
             session_id: Some(session.into()),
             exclusive: false,
