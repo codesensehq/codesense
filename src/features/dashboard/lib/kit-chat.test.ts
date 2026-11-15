@@ -369,7 +369,10 @@ describe("kit.chat", () => {
     mountOn(s, { cards: false });
     await flush();
     expect(s.el.querySelector("[data-card]")).toBeNull();
-    expect(s.el.querySelector('[data-mid="9"] .body')!.textContent).toBe(text);
+    // as a message, its backticked options are drawn as code (the inline subset)
+    const body = s.el.querySelector('[data-mid="9"] .body')!;
+    expect(body.textContent).toBe(text.replace(/`/g, ""));
+    expect([...body.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["Ship", "Hold"]);
   });
 
   it("with no lead running, the first send launches once, a second is held, and it flushes when the lead joins", async () => {
@@ -949,7 +952,8 @@ describe("kit.chat suggestion chips from the Next line", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".chips")).toBeNull();
-    expect(bodies(s.el)).toEqual([NEXT]);
+    // the line stays in the message, its backticked chips drawn as code (the inline subset)
+    expect(bodies(s.el)).toEqual([NEXT.replace(/`/g, "")]);
   });
 
   it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {
