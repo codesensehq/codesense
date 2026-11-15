@@ -540,6 +540,92 @@ describe("a parked display matches the reference (I4)", () => {
     },
   );
 
+  it("a display parked inside the alternate screen replays to the same buffer", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    const steps = paneSteps(loadPtylog("codex-tui"));
+    const cut = Math.floor(steps.length / 2);
+    const play = (part: typeof steps) => {
+      for (const step of part) {
+        if (step.kind === "output") fake.server.produce("s1", step.data);
+        else m.requestResize("s1", step.cols, step.rows);
+      }
+    };
+    play(steps.slice(0, cut));
+    expect((await dumped(m, "s1")).activeBuffer).toBe("alternate");
+    m.detach("s1", target);
+    play(steps.slice(cut));
+    await vi.advanceTimersByTimeAsync(5000);
+    m.attach("s1", target, { focus: false });
+    expect(bufferOf(await dumped(m, "s1"))).toEqual(references.get("codex-tui"));
+  });
+
+  it("answers a terminal query that arrives while parked, before the next show", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    m.detach("s1", target);
+    transport.writePty.mockClear();
+    fake.server.produce("s1", "before\r\n\x1b[6n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(transport.writePty).toHaveBeenCalledWith(
+      "s1",
+      // eslint-disable-next-line no-control-regex
+      expect.stringMatching(/^\x1b\[\d+;\d+R$/),
+    );
+    const replies = transport.writePty.mock.calls.length;
+    m.attach("s1", target, { focus: false });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(transport.writePty.mock.calls).toHaveLength(replies);
+  });
+
+  it("counts the output a parked display holds in the memory estimate", async () => {
+    const m = newManager();
+    await open(m);
+    const before = m.memory().estimatedBytes;
+    fake.server.produce("s1", "y".repeat(10_000));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(m.memory().estimatedBytes).toBe(before + 20_000);
+  });
+
+  it("a display lent to the quick view parses while a hidden lender waits", async () => {
+    const m = newManager();
+    await open(m);
+    const [tab, popup] = [slot(), slot()];
+    m.attach("s1", tab, { focus: false, visible: false });
+    m.attach("s1", popup, { focus: false, borrow: true });
+    expect(m.holdsVisible("s1")).toBe(false);
+    const writes = vi.spyOn(m.terminal("s1")!, "write");
+    fake.server.produce("s1", "live in the quick view\r\n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(writes).toHaveBeenCalled();
+    expect((await dumped(m, "s1")).lines[0]).toBe("live in the quick view");
+  });
+
+  it("a parked ring that overflows releases the display; the show rebuilds it to the same buffer", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    const first = m.terminal("s1")!;
+    m.detach("s1", target);
+    const line = `${"x".repeat(999)}\r\n`;
+    for (let i = 0; i < 2200; i++) fake.server.produce("s1", line);
+    fake.server.produce("s1", "END\r\n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(m.terminal("s1")).toBeNull();
+    m.attach("s1", target, { focus: false });
+    for (let i = 0; i < 500 && !m.terminal("s1"); i++) await vi.advanceTimersByTimeAsync(10);
+    const dump = await dumped(m, "s1");
+    expect(m.terminal("s1")).not.toBe(first);
+    expect(dump.lines.filter((l) => l === "END")).toHaveLength(1);
+    expect(dump.lines.at(-1)).toBe("");
+    expect(dump.appliedSeq).toBe(fake.server.seqOf("s1"));
+  });
+
   it("does not parse parked output and catches up when shown", async () => {
     let writes = 0;
     const m = newManager({

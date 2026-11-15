@@ -421,11 +421,23 @@ describe("every surface change is a slot move", () => {
     act(() => s().setActiveTerminalTab(TEAM, "shell", A));
     await flush();
     // Codex and Claude are both hidden while the rest of their output streams.
-    const writes = vi.spyOn(terminalManager.terminal("codex")!, "write");
+    const spies = ["codex", "claude"].map((id) => ({
+      id,
+      writes: vi.spyOn(terminalManager.terminal(id)!, "write"),
+    }));
     for (let i = 1; i < CHUNKS; i++) feed(i);
     await act(async () => new Promise((r) => setTimeout(r, 900)));
-    // A parked terminal parses nothing; its output waits for the show.
-    expect(writes).not.toHaveBeenCalled();
+    // A parked terminal parses nothing, except a chunk that asks the terminal a
+    // question (the program waits on the answer): that one is written at once.
+    // eslint-disable-next-line no-control-regex
+    const asks = /\x1b\[[?>=]?[0-9;]*(?:n|c|\$p)|\x1b\[\?u|\x1b\]1[01];\?/;
+    for (const { id, writes } of spies) {
+      const steps = feeds[id].slice(1).flat();
+      const queries = steps.filter((step) => step.kind === "output" && asks.test(step.data)).length;
+      const resizes = steps.filter((step) => step.kind === "resize").length;
+      // Every question drains what is held: one write, and one more before each resize.
+      expect(writes.mock.calls.length, id).toBeLessThanOrEqual(queries * (1 + resizes));
+    }
     // Each tab replays its parked output when it is shown.
     for (const tab of ["codex", "claude"]) {
       act(() => s().setActiveTerminalTab(TEAM, tab, A));

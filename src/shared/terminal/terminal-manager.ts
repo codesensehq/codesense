@@ -4,8 +4,11 @@
  * created once and kept alive — visible or parked — until its tab closes, the
  * process restarts in place, or a reconnect loses its stream. React renders
  * slots (`terminal-slot.tsx`); showing a terminal moves its existing element
- * into a slot, hiding moves it to a parking container. Nothing is rebuilt,
- * replayed, reset or refitted on a show.
+ * into a slot, hiding moves it to a parking container. A parked display parses
+ * nothing: its output and resizes wait in a bounded ring and are written, in
+ * order, on the next show (a ring that overflows evicts the display, and the
+ * show rebuilds it from the host). Nothing else is rebuilt, reset or refitted
+ * on a show.
  *
  * Every display is built one way: from the host emulator's snapshot of its
  * session, at the size the snapshot was taken, then the stream from there
@@ -399,6 +402,8 @@ interface Display {
   readonly keys: TerminalKeyHandler;
   readonly coalescer: PtyWriteBuffer;
   readonly parkedOutput: PtyOutputRing;
+  /** Not on screen: output waits in `parkedOutput`. Only `notifyShown` flips it. */
+  parked: boolean;
   readonly queue: QueueItem[];
   readonly disposables: IDisposable[];
   readonly releaseInstance: () => void;
@@ -408,7 +413,6 @@ interface Display {
   appliedResizeGen: number;
   /** The seq the coalesced (not yet queued) output ends at. */
   pendingSeqEnd: number;
-  parkedSeqEnd: number;
   /** Writes of recorded output in flight: xterm's answers to the queries they
    *  hold are stale and never reach the PTY. */
   replayDepth: number;
@@ -508,7 +512,20 @@ export interface TerminalManagerDeps {
 }
 
 const leakedDisplays: unknown[] = [];
-const PARKED_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
+const PARKED_OUTPUT_MAX_CHARS = 2 * 1024 * 1024;
+/** Bytes per UTF-16 code unit of parked output, for the memory estimate. */
+const PARKED_BYTES_PER_CHAR = 2;
+
+/** A parked chunk a program waits on a reply to: DSR/CPR (`CSI [?] n n`), device
+ *  attributes (`CSI … c`), DECRQM (`CSI … $ p`), kitty keyboard (`CSI ? u`) and
+ *  the OSC 10/11 colour queries. */
+// eslint-disable-next-line no-control-regex
+const TERMINAL_QUERY = /\x1b\[[?>=]?[0-9;]*(?:n|c|\$p)|\x1b\[\?u|\x1b\]1[01];\?/;
+
+/** A display's estimate: its buffer plus the output it holds while parked. */
+function displayBytes(d: Display): number {
+  return estimatedBytes(d.term) + d.parkedOutput.size() * PARKED_BYTES_PER_CHAR;
+}
 
 /** A display's buffer estimate: `cols × lines × 12` of its normal buffer. */
 function estimatedBytes(term: Terminal): number {
@@ -767,18 +784,20 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     )
       return;
     if (item.kind === "resized") {
-      if (!holdsVisible(entry)) {
-        d.parkedOutput.resize(item.cols, item.rows, item.resizeGen);
+      if (d.parked) {
+        if (d.parkedOutput.resize(item.cols, item.rows, item.resizeGen)) dropParked(entry);
         return;
       }
       enqueue(d, { kind: "resize", cols: item.cols, rows: item.rows, resizeGen: item.resizeGen });
       return;
     }
     d.pendingSeqEnd = item.seq;
-    if (!holdsVisible(entry)) {
-      d.parkedSeqEnd = item.seq;
-      d.parkedOutput.append(item.data, item.seq);
+    if (d.parked) {
+      const overflowed = d.parkedOutput.append(item.data, item.seq);
       notify(entry, (l) => l.output?.(item.data));
+      if (overflowed) dropParked(entry);
+      // A program waiting on a reply gets it now, not on the next show.
+      else if (TERMINAL_QUERY.test(item.data)) writeParked(entry, d);
       return;
     }
     d.coalescer.append(item.data);
@@ -830,7 +849,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       for (const d of [entry.display, entry.outgoing?.display]) {
         if (!d) continue;
         displays++;
-        bytes += estimatedBytes(d.term);
+        bytes += displayBytes(d);
       }
     }
     return { displays, estimatedBytes: bytes };
@@ -843,7 +862,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     const oldest = [...sessions.values()].filter(evictable).sort((a, b) => a.lastSeen - b.lastSeen);
     for (const entry of oldest) {
       if (displays <= maxDisplays && bytes <= maxBytes) break;
-      bytes -= estimatedBytes(entry.display!.term);
+      bytes -= displayBytes(entry.display!);
       displays--;
       evict(entry);
     }
@@ -913,40 +932,51 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     return shown(entry);
   }
 
+  /** Write what a parked display held, in order, through the normal pipeline. */
+  function writeParked(entry: SessionEntry, d: Display): void {
+    const parked = d.parkedOutput.drain();
+    if (parked.overflowed) {
+      reconnect(entry);
+      return;
+    }
+    for (const item of parked.events) {
+      if (item.kind === "output") {
+        d.pendingSeqEnd = item.seqEnd;
+        d.coalescer.append(item.data);
+      } else {
+        enqueue(d, {
+          kind: "resize",
+          cols: item.cols,
+          rows: item.rows,
+          resizeGen: item.resizeGen,
+        });
+      }
+    }
+    d.coalescer.flush();
+  }
+
+  /** The parked ring overflowed: release the display, so the next show rebuilds it
+   *  from the host. One that cannot be evicted now (a restore is in flight) keeps
+   *  the overflow and reconnects on its show. */
+  function dropParked(entry: SessionEntry): void {
+    if (evictable(entry)) evict(entry);
+  }
+
   /** Tell the session's watchers when whether it is on screen changed. */
   function notifyShown(entry: SessionEntry): void {
     const now = sessions.get(entry.sessionId) === entry && holdsVisible(entry);
     const d = entry.display;
     if (d) {
-      if (now) {
-        const parked = d.parkedOutput.drain();
-        if (parked.overflowed) {
-          d.parkedSeqEnd = 0;
-          reconnect(entry);
-        } else {
-          for (const item of parked.events) {
-            if (item.kind === "output") {
-              d.pendingSeqEnd = item.seqEnd;
-              d.coalescer.append(item.data);
-            } else {
-              enqueue(d, {
-                kind: "resize",
-                cols: item.cols,
-                rows: item.rows,
-                resizeGen: item.resizeGen,
-              });
-            }
-          }
-          d.parkedSeqEnd = 0;
-        }
-      } else {
+      const onScreen = sessions.get(entry.sessionId) === entry && shown(entry);
+      if (onScreen && d.parked) {
+        d.parked = false;
+        writeParked(entry, d);
+      } else if (!onScreen && !d.parked) {
+        d.parked = true;
         const pending = d.coalescer.take();
-        if (pending) {
-          d.parkedSeqEnd = d.pendingSeqEnd;
-          d.parkedOutput.append(pending, d.pendingSeqEnd);
-        }
-        d.term.options.cursorBlink = false;
+        if (pending && d.parkedOutput.append(pending, d.pendingSeqEnd)) dropParked(entry);
       }
+      if (!onScreen) d.term.options.cursorBlink = false;
     }
     watchLenders();
     if (now === entry.heardShown) return;
@@ -1076,7 +1106,8 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           return;
         enqueue(display, { kind: "output", data, seqEnd: display.pendingSeqEnd, replay: false });
       }),
-      parkedOutput: createPtyOutputRing(PARKED_OUTPUT_MAX_BYTES),
+      parkedOutput: createPtyOutputRing(PARKED_OUTPUT_MAX_CHARS),
+      parked: !shown(entry),
       queue: [],
       disposables: [],
       releaseInstance: acquireInstance("webglTerminal"),
@@ -1085,13 +1116,12 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       appliedSeq: 0,
       appliedResizeGen: snapshot.resize_gen,
       pendingSeqEnd: 0,
-      parkedSeqEnd: 0,
       replayDepth: 0,
       frozen: false,
       disposed: false,
     };
     host.addEventListener("focusin", () => {
-      if (holdsVisible(entry) && entry.display === display) term.options.cursorBlink = true;
+      if (!display.parked && entry.display === display) term.options.cursorBlink = true;
     });
     host.addEventListener("focusout", () => {
       term.options.cursorBlink = false;

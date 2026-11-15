@@ -14,8 +14,12 @@ export interface PtyWriteBuffer {
 }
 
 export interface PtyOutputRing {
+  /** Whether the ring overflowed: its events are gone and the caller must rebuild. */
   append(data: string, seqEnd: number): boolean;
-  resize(cols: number, rows: number, resizeGen: number): void;
+  /** Whether the ring overflowed. */
+  resize(cols: number, rows: number, resizeGen: number): boolean;
+  /** UTF-16 code units held. */
+  size(): number;
   drain(): { events: PtyOutputEvent[]; overflowed: boolean };
   clear(): void;
 }
@@ -24,9 +28,10 @@ export type PtyOutputEvent =
   | { kind: "output"; data: string; seqEnd: number }
   | { kind: "resize"; cols: number; rows: number; resizeGen: number };
 
-/** Keep a bounded UTF-8 tail while a terminal is parked. */
-export function createPtyOutputRing(maxBytes: number): PtyOutputRing {
-  const encoder = new TextEncoder();
+/** Hold a parked terminal's output and resizes, in order, up to `maxChars`
+ *  UTF-16 code units; past that the ring drops everything and reports
+ *  overflow, and the display is rebuilt from the host on its next show. */
+export function createPtyOutputRing(maxChars: number): PtyOutputRing {
   let events: PtyOutputEvent[] = [];
   let bytes = 0;
   let overflowed = false;
@@ -34,9 +39,8 @@ export function createPtyOutputRing(maxBytes: number): PtyOutputRing {
   return {
     append(data, seqEnd) {
       if (overflowed) return true;
-      const chunk = encoder.encode(data);
-      if (chunk.byteLength === 0) return false;
-      if (chunk.byteLength > maxBytes || bytes + chunk.byteLength > maxBytes) {
+      if (data.length === 0) return false;
+      if (bytes + data.length > maxChars) {
         overflowed = true;
         events = [];
         bytes = 0;
@@ -47,18 +51,20 @@ export function createPtyOutputRing(maxBytes: number): PtyOutputRing {
         last.data += data;
         last.seqEnd = seqEnd;
       } else events.push({ kind: "output", data, seqEnd });
-      bytes += chunk.byteLength;
+      bytes += data.length;
       return false;
     },
     resize(cols, rows, resizeGen) {
-      if (overflowed) return;
+      if (overflowed) return true;
       events.push({ kind: "resize", cols, rows, resizeGen });
       if (events.length > 1024) {
         overflowed = true;
         events = [];
         bytes = 0;
       }
+      return overflowed;
     },
+    size: () => bytes,
     drain() {
       const result = { events, overflowed };
       events = [];

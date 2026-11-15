@@ -112,6 +112,16 @@ describe("createPtyWriteBuffer", () => {
     expect(ring.drain()).toEqual({ events: [], overflowed: true });
   });
 
+  it("reports what it holds, and overflows on resizes alone", () => {
+    const ring = createPtyOutputRing(100);
+    ring.append("abc", 3);
+    expect(ring.size()).toBe(3);
+    for (let i = 0; i < 1023; i++) expect(ring.resize(80, 24, i)).toBe(false);
+    expect(ring.resize(80, 24, 1023)).toBe(true);
+    expect(ring.drain()).toEqual({ events: [], overflowed: true });
+    expect(ring.size()).toBe(0);
+  });
+
   it("separate instances do not share buffer state", () => {
     const callbacks: (() => void)[] = [];
     vi.stubGlobal("requestAnimationFrame", (cb: () => void) => {

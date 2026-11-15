@@ -139,7 +139,9 @@ useAgentListProjectionStore.subscribe((state, previous) => {
   const recordOutput = useAgentStateStore.getState().recordOutput;
   const previousBySession = new Map<string, AgentSessionRow>();
   for (const row of previous.sessions ?? []) {
-    if (row.sessionId) previousBySession.set(row.sessionId, row);
+    if (row.sessionId && !previousBySession.has(row.sessionId)) {
+      previousBySession.set(row.sessionId, row);
+    }
   }
   for (const row of state.sessions ?? []) {
     if (!row.sessionId) continue;
