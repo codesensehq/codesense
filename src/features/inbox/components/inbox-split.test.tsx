@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
+import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
 import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -147,6 +147,39 @@ describe("InboxSplit", () => {
       expect(rail).toHaveAttribute("data-session-id", "sess-1");
       act(() => closeAgentInboxRail("sess-1"));
       expect(screen.queryByTestId("chat-overlay")).toBeNull();
+      expect(mounts).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(REMOTE_LAUNCH_CLIS)(
+    "opens a remote %s session's chat on its tab, known from its host's activity",
+    async (cli) => {
+      // No process on this Mac: a remote tab's agent is known from its host's activity snapshot.
+      useAgentStateStore.setState({ processAgentBySession: {} });
+      useAgentStateStore.getState().recordActivity(
+        {
+          session: TAB.sessionId,
+          identity: { hostBootId: "box", sessionIncarnation: "shell", invocationId: "agent" },
+          revision: 1,
+          turnGeneration: 0,
+          provider: cli as never,
+          state: "idle",
+          observed: true,
+          limited: false,
+          exit: null,
+          asks: [],
+        },
+        0,
+      );
+      render(
+        <InboxSplit tab={TAB} teamKey="o:t">
+          <Terminal />
+        </InboxSplit>,
+      );
+      act(() => openAgentInboxRail(TAB.sessionId));
+      const rail = await screen.findByTestId("chat-overlay");
+      expect(rail).toBeVisible();
+      expect(rail).toHaveAttribute("data-session-id", TAB.sessionId);
       expect(mounts).toHaveBeenCalledTimes(1);
     },
   );

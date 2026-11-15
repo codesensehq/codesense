@@ -773,6 +773,98 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
+  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex]";
+  var HELD = "data-roving-tabindex";
+  var ROW = "[data-mid]";
+  function setControl(el, on) {
+    if (on && el.hasAttribute(HELD)) {
+      const was = el.getAttribute(HELD);
+      el.removeAttribute(HELD);
+      if (was === "") el.removeAttribute("tabindex");
+      else el.setAttribute("tabindex", was);
+    } else if (!on && !el.hasAttribute(HELD)) {
+      el.setAttribute(HELD, el.getAttribute("tabindex") ?? "");
+      el.setAttribute("tabindex", "-1");
+    }
+  }
+  function applyTo(node, active) {
+    const rows = node.matches(ROW) ? [node, ...node.querySelectorAll(ROW)] : node.querySelectorAll(ROW);
+    for (const row of rows) {
+      row.tabIndex = row.dataset.mid === active ? 0 : -1;
+      if (!row.hasAttribute("role")) row.setAttribute("role", "article");
+    }
+    const controls = node.matches(FOCUSABLE) && !node.matches(ROW) ? [node] : [];
+    for (const el of [...controls, ...node.querySelectorAll(FOCUSABLE)]) {
+      if (el.matches(ROW)) continue;
+      const row = el.closest(ROW);
+      if (row) setControl(el, row.dataset.mid === active);
+    }
+  }
+  function rovingThread(log) {
+    let picked = null, active = null;
+    const keys = () => [...log.querySelectorAll(ROW)].map((row) => row.dataset.mid);
+    const focused = () => {
+      const at = log.ownerDocument.activeElement, row = at && log.contains(at) && at.closest(ROW);
+      return row ? row.dataset.mid : null;
+    };
+    function refresh(held = null) {
+      const all = keys();
+      const next = picked !== null && all.includes(picked) ? picked : all.length ? all[all.length - 1] : null;
+      log.tabIndex = all.length ? -1 : 0;
+      if (next !== active) {
+        active = next;
+        applyTo(log, active);
+      }
+      if (held === null || active === null || log.contains(log.ownerDocument.activeElement)) return;
+      const row = log.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+      if (!row) return;
+      applyTo(row, active);
+      row.focus({ preventScroll: true });
+    }
+    const watch = new MutationObserver((changes) => {
+      for (const change of changes) for (const node of change.addedNodes) if (node.nodeType === 1) applyTo(node, active);
+    });
+    watch.observe(log, { childList: true, subtree: true });
+    function moveTo(key) {
+      if (key === void 0) return;
+      picked = key;
+      refresh();
+      const row = log.querySelector(`[data-mid="${CSS.escape(key)}"]`);
+      if (!row) return;
+      row.focus({ preventScroll: true });
+      if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+    const onKeyDown = (event) => {
+      const row = event.target;
+      if (!row.matches || !row.matches(ROW) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const all = keys(), at = all.indexOf(row.dataset.mid);
+      if (at < 0) return;
+      const to = event.key === "ArrowUp" ? Math.max(0, at - 1) : event.key === "ArrowDown" ? Math.min(all.length - 1, at + 1) : event.key === "Home" ? 0 : event.key === "End" ? all.length - 1 : null;
+      if (to === null) return;
+      event.preventDefault();
+      moveTo(all[to]);
+    };
+    const onFocusIn = (event) => {
+      const row = event.target.closest && event.target.closest(ROW);
+      if (row && log.contains(row) && row.dataset.mid !== active) {
+        picked = row.dataset.mid;
+        refresh();
+      }
+    };
+    log.addEventListener("keydown", onKeyDown);
+    log.addEventListener("focusin", onFocusIn);
+    return {
+      focused,
+      refresh,
+      release() {
+        watch.disconnect();
+        log.removeEventListener("keydown", onKeyDown);
+        log.removeEventListener("focusin", onFocusIn);
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/pin-replace.js
   var ALERT_NS = "http://www.w3.org/2000/svg";
   var OWN_PATH = { quote: "M3 6h4v4l-2 3M9 6h4v4l-2 3", name: "M2 3h12v10H2zM2 7h12M7 7v6" };
@@ -1228,6 +1320,7 @@
       }
     });
     const pin = pinToBottom(log, { win });
+    const roving = rovingThread(log);
     const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
     const composer = createComposer({ ids, onSend: (text) => {
       awaitBase = leadCount();
@@ -1502,7 +1595,9 @@
       if (replacer) replacer.sync();
       const inChooser = replacer ? replacer.within() : false;
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const held = roving.focused();
       reconcile(log, cache, want);
+      roving.refresh(held);
       paintChips();
       pin.onContentChanged();
       if (pinState.refocus !== null) {
@@ -1623,6 +1718,7 @@
         gone = true;
         offs.forEach((off) => off && off());
         pin.release();
+        roving.release();
         if (replacer) replacer.release();
         mountSlot.release();
         if (sendOpt) detach();
