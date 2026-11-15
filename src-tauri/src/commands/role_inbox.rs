@@ -509,7 +509,7 @@ type Liveness = std::sync::Arc<dyn Fn(&str) -> role_inbox::SessionLiveness + Sen
 /// run calls it at teardown, so its claims go back to the queue for the live holders
 /// instead of waiting for the renewer's next tick or their expiry.
 pub(crate) async fn release_session_roles(app: &tauri::AppHandle, session: &str) {
-    let session = session.to_string();
+    let session = String::from(session);
     renew_noted_stores(
         app,
         std::sync::Arc::new(move |id: &str| {
