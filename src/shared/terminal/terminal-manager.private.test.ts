@@ -207,7 +207,7 @@ describe("a private-account session whose authority retires", () => {
       privateAuthorityEpoch: "501",
     });
     retirePrivate();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(retired).toHaveBeenCalledOnce();
     expect(manager.terminal("private")).toBeNull();
@@ -216,12 +216,12 @@ describe("a private-account session whose authority retires", () => {
     expect(document.body.textContent).not.toContain("PRIVATE_QUEUED");
 
     fake.server.produce("local", "still local");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(200);
     expect(text("local")).toBe("still local");
 
     // The next show builds a fresh display, with none of the retired bytes.
     await until(manager.ensure("private", OPTS));
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(200);
     expect(manager.terminal("private")!.element).not.toBe(element);
     expect(text("private")).not.toContain("PRIVATE_QUEUED");
   });
@@ -253,7 +253,7 @@ describe("a private-account session whose authority retires", () => {
       seq: 5,
       privateAuthorityEpoch: "501",
     });
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(200);
     expect(text("private")).toBe("owned");
   });
 });
