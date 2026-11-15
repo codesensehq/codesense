@@ -191,6 +191,16 @@ const ruleOf = (selector: string) => {
 };
 
 describe("ChatOverlay contrast and focus (inbox.css)", () => {
+  it("draws a failed pins read as one muted line, with a Retry that has the 2 px accent focus ring", () => {
+    const failed = ruleOf(".ibx-ov-pins.ibx-ov-pins-failed");
+    expect(failed).toContain("display: flex");
+    expect(failed).toContain("color: var(--ibx-mfg)");
+    expect(ruleOf(".ibx-ov-pins-retry")).toContain("color: var(--ibx-accent)");
+    expect(ruleOf(".ibx-ov-pins-retry:focus-visible")).toContain(
+      "outline: 2px solid var(--ibx-accent)",
+    );
+  });
+
   it("draws the composer's hint, placeholder and key words in the muted ink that reads at 4.5:1", () => {
     expect(ruleOf(".ibx-box textarea::placeholder")).toContain("color: var(--ibx-mfg)");
     expect(ruleOf(".ibx-comp-foot")).toContain("color: var(--ibx-mfg)");
