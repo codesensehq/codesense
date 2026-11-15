@@ -1086,6 +1086,36 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     }
   });
 
+  it("names the active message's block once a thread drawn hidden is shown and focus comes into it", async () => {
+    let shown = false;
+    // Drawn hidden, a block measures 0 (it fits); shown, it scrolls.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return shown && this.matches("pre") ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [...MESSAGES, msg(9, LEAD, "human", "Here:\n\n```\nlong line of code\n```")],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      expect(code).not.toHaveAttribute("role");
+      shown = true;
+      act(() => newest.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("measures only the active message's blocks, and names an older one's when focus moves into it", async () => {
     const BLOCK = "pre, .inbox-table-scroll";
     const measured: Element[] = [];
