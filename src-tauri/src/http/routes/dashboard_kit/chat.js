@@ -246,8 +246,10 @@
   var firstJoinable = (list) => list.find(joinable) || null;
   function createLaunch({ transport, clock, storyId, leadRole, timers, card, onChange = () => {
   }, rowsOf: rowsOf2 = (sessions) => leadRowsOf(sessions, storyId, leadRole), queue = null, pickLive = firstJoinable, bindLaunched = false, keepUnsent = false }) {
-    let promptItems = /* @__PURE__ */ new Set(), state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Map();
-    const messages = [], outbox = [], peerRows = () => rowsOf2(rows), emit = () => onChange();
+    let promptItems = /* @__PURE__ */ new Set(), launchedId = null, inflight = 0, listener = onChange, state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Map();
+    const messages = [], outbox = [], peerRows = () => rowsOf2(rows), emit = () => {
+      if (listener) listener();
+    };
     const identity = (row) => row.sessionId || row.handle;
     const rank = (row) => (staleDead.has(identity(row)) ? 2 : 0) + (row.state === "exited" ? 1 : 0);
     const launchedIn = (list) => {
@@ -284,7 +286,9 @@
       });
       sendFailure = null;
       emit();
+      inflight++;
       return enqueue(() => transport.send(handle, texts(list))).then((result) => {
+        inflight--;
         if (result && result.status !== void 0 && result.status !== "sent") {
           list.forEach((item) => {
             item.mark = "kept";
@@ -296,6 +300,7 @@
         if (result && result.messageId !== void 0) for (const item of list) item.messageId = result.messageId;
         emit();
       }, (error) => {
+        inflight--;
         list.forEach((item) => {
           item.mark = "kept";
         });
@@ -399,6 +404,7 @@
       return enqueue(() => Promise.resolve().then(() => transport.launch(card(texts(list))))).then((result) => {
         if (mine !== seq) return;
         launchResult = result || {};
+        if (launchResult.sessionId) launchedId = launchResult.sessionId;
         settled = true;
         if (!inspect()) {
           if (!stuck) startTimers();
@@ -433,8 +439,23 @@
       hasHeld: () => outbox.length > 0 || hasKept(),
       // Some message a failed launch or send kept (keepUnsent): it was not sent, which the unload warning says rather than "still waiting".
       hasKept,
+      // The send state still has work: a launch starting or failed, a held, kept or in-flight message. The one predicate a hidden page keeps listening for (send-state.js).
+      unsettled: () => starting() || state === "failed" || outbox.length > 0 || messages.some((item) => item.mark === "kept") || inflight > 0,
       launchedRow,
       launchedIn,
+      // The session the launch opened (its result's id, or the launched row's once a handle-only result binds): Show terminal's target after a failed start.
+      sessionId() {
+        const row = bindLaunched ? launchedRow() : null;
+        if (row) launchedId = row.sessionId;
+        return launchedId;
+      },
+      // The one change listener: a mounted chat's render. Replaces the previous one (onChange is the first); detach() leaves none, so a hidden page's launch changes without painting.
+      attach(fn) {
+        listener = fn;
+        return () => {
+          if (listener === fn) listener = null;
+        };
+      },
       // Enter or Send. Typing, focus and Shift+Enter never reach here.
       send(text) {
         const item = { id: ++ids, text, mark: null, sentAt: clock.now() };
@@ -487,6 +508,62 @@
       dispose() {
         seq++;
         clearTimers();
+      }
+    };
+  }
+
+  // src-tauri/src/http/routes/dashboard_kit/chat/send-state.js
+  var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
+  var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
+  function createSendState({ transport, reads, clock = systemClock(), timers = DEFAULT_TIMERS, card = (text) => text, target, storyId = null, leadRole = null, win = window, copy: words = null }) {
+    const copy = words ? mergeCopy(words) : CHAT_COPY;
+    let attached = null, feed = null, ended = false;
+    const stopFeed = () => {
+      if (feed) {
+        feed();
+        feed = null;
+      }
+    };
+    const sync = () => {
+      if (attached || ended) return;
+      if (launch.unsettled()) {
+        if (!feed) feed = reads.on("sessions", () => launch.rows(reads.latestSessions()));
+      } else stopFeed();
+    };
+    const launch = createLaunch({ transport, clock, storyId, leadRole, timers, card, onChange: sync, rowsOf: target.rows, queue: target.queue, pickLive: target.pick, bindLaunched: target.bindLaunched, keepUnsent: target.keepUnsent });
+    const cards = /* @__PURE__ */ new Map();
+    const onUnload = (event) => {
+      if (launch.hasHeld()) {
+        const text = launch.hasKept() ? copy.unloadKept : copy.unload;
+        event.preventDefault();
+        event.returnValue = text;
+        return text;
+      }
+    };
+    win.addEventListener("beforeunload", onUnload);
+    return {
+      launch,
+      cards,
+      unsettled: () => launch.unsettled(),
+      // The mounted chat's render takes the launch's changes; the returned detach hands them back to the state, which keeps listening only while it has work.
+      attach(render) {
+        stopFeed();
+        attached = render;
+        launch.attach(render);
+        return () => {
+          if (attached !== render) return;
+          attached = null;
+          launch.attach(sync);
+          sync();
+        };
+      },
+      dispose() {
+        ended = true;
+        attached = null;
+        stopFeed();
+        launch.attach(null);
+        launch.dispose();
+        win.removeEventListener("beforeunload", onUnload);
       }
     };
   }
@@ -716,7 +793,6 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
-  var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
   var initialsOf = (name) => {
     const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
     return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
@@ -776,23 +852,17 @@
     follow: false,
     leadName: () => CHAT_COPY.lead
   });
-  var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null }) {
+  var targetOf = ({ target = null, storyId = null, leadRole = null }) => target || storyTarget(storyId, leadRole);
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, send: sendOpt = null }) {
     const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
     if (styles) linkChatStyles(win.document);
-    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
-    const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
+    const target = targetOf({ target: own, storyId, leadRole }), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
+    const send = sendOpt || createSendState({ transport, reads, clock, timers, card, target, storyId, leadRole, win, copy: words }), launch = send.launch, cardState = send.cards, drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
-    let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
+    let gone = false, started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
     const streams = /* @__PURE__ */ new Map(), watched = /* @__PURE__ */ new Set(), listeners = /* @__PURE__ */ new Set(), cache = /* @__PURE__ */ new Map();
     const fails = /* @__PURE__ */ new Map();
     let threadRead = false;
-    const wrapped = { launch: async (prompt) => {
-      const result = await transport.launch(prompt);
-      if (result && result.sessionId) launchSessionId = result.sessionId;
-      return result;
-    }, send: (handle, text) => transport.send(handle, text) };
-    const launch = createLaunch({ transport: wrapped, clock, storyId, leadRole, timers, card, onChange: () => render(), rowsOf: target.rows, queue: target.queue, pickLive: target.pick, bindLaunched: target.bindLaunched, keepUnsent: target.keepUnsent });
     const live = () => {
       const own2 = target.bindLaunched ? launch.launchedIn(rows) : null;
       return joinable(own2) ? own2 : (target.pick || liveOf)(target.rows(rows));
@@ -805,7 +875,7 @@
     };
     const presence = () => presenceOf(live(), { launch: { state: launch.state, failure: launch.failure, stuck: launch.stuck }, runningSince, done: isDone }, copy);
     const launchedFirst = () => launch.stuck || launch.state === "failed" && launch.failure.kind === "exited";
-    const terminalTarget = () => launchedFirst() && launchSessionId || live() && live().sessionId || launchSessionId || null;
+    const terminalTarget = () => launchedFirst() && launch.sessionId() || live() && live().sessionId || launch.sessionId() || null;
     const showTerminal = () => {
       const target2 = terminalTarget();
       if (target2) transport.gotoAgent(target2);
@@ -1133,13 +1203,8 @@
       return entries;
     }
     const awaiting = () => awaitBase !== null && leadCount() <= awaitBase && (launch.state === "joined" || Boolean(live() && live().state === "running"));
-    function noteLaunched() {
-      if (!target.bindLaunched) return;
-      const row = launch.launchedRow();
-      if (row) launchSessionId = row.sessionId;
-    }
     function render() {
-      noteLaunched();
+      if (gone) return;
       const p = presence();
       if (launch.state === "joined" && joinedAt === null) {
         joinedAt = clock.now();
@@ -1243,6 +1308,7 @@
         started = true;
       } else render();
     }
+    const detach = send.attach(render);
     const offs = [reads.on("sessions", () => onRows(reads.latestSessions())), reads.on("inbox", () => {
       readThread();
     }), reads.on("activity", () => render())];
@@ -1252,15 +1318,6 @@
       streams.set(chunk.messageId, (streams.get(chunk.messageId) || "") + chunk.text);
       render();
     }));
-    const onUnload = (event) => {
-      if (launch.hasHeld()) {
-        const text = launch.hasKept() ? copy.unloadKept : copy.unload;
-        event.preventDefault();
-        event.returnValue = text;
-        return text;
-      }
-    };
-    win.addEventListener("beforeunload", onUnload);
     render();
     if (layout.autofocus !== false) composer.input.focus();
     if (sources) {
@@ -1283,11 +1340,12 @@
     readRoster();
     return {
       unmount() {
+        gone = true;
         offs.forEach((off) => off && off());
         pin.release();
         mountSlot.release();
-        launch.dispose();
-        win.removeEventListener("beforeunload", onUnload);
+        if (sendOpt) detach();
+        else send.dispose();
         el.replaceChildren();
       },
       // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
@@ -1329,6 +1387,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

@@ -23,8 +23,8 @@ const firstJoinable=list=>list.find(joinable)||null;
 //  bindLaunched: the launch binds to the row its result names (a result that names only a handle too), a launched row that can be joined is the send target, and while it is listed and cannot be joined no other row takes its prompt.
 //  keepUnsent: a failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order; hasKept() says some were not sent.
 export function createLaunch({transport,clock,storyId,leadRole,timers,card,onChange=()=>{},rowsOf=sessions=>leadRowsOf(sessions,storyId,leadRole),queue=null,pickLive=firstJoinable,bindLaunched=false,keepUnsent=false}){
- let promptItems=new Set(),state='idle',failure=null,sendFailure=null,rows=[],launchResult=null,settled=false,stuck=false,seq=0,ids=0,chain=Promise.resolve(),slowTimer=null,failTimer=null,staleDead=new Map();
- const messages=[],outbox=[],peerRows=()=>rowsOf(rows),emit=()=>onChange();
+ let promptItems=new Set(),launchedId=null,inflight=0,listener=onChange,state='idle',failure=null,sendFailure=null,rows=[],launchResult=null,settled=false,stuck=false,seq=0,ids=0,chain=Promise.resolve(),slowTimer=null,failTimer=null,staleDead=new Map();
+ const messages=[],outbox=[],peerRows=()=>rowsOf(rows),emit=()=>{if(listener)listener();};
  // A launch result may name the session, or only its handle (a team workspace open answers {handle}): either finds the row. One rule serves the join, the death check and Show terminal.
  const identity=row=>row.sessionId||row.handle;
  // A handle-only result can match an earlier session's row on the same handle too: the row not in staleDead wins, then one that has not exited.
@@ -48,11 +48,13 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
   // busyAtSend is read once, here: the Queued/Delivered rule (chat-core) asks whether the lead was busy when the message went.
   const busy=handle===queue||isBusy(peerRows().find(row=>row.handle===handle));list.forEach(item=>{item.mark='sent';item.busyAtSend=busy;});sendFailure=null;emit();
   // The id sendAsHuman returns is how a bubble is matched to its inbox row later; a failed send keeps the message, with a Retry.
+  inflight++;
   return enqueue(()=>transport.send(handle,texts(list))).then(result=>{
+   inflight--;
    // A resolved status other than 'sent' (for example 'invalid') is a failure too.
    if(result&&result.status!==undefined&&result.status!=='sent'){list.forEach(item=>{item.mark='kept';});sendFailure={kind:'other',code:String(result.status),why:result.message||String(result.status)};emit();return;}
    if(result&&result.messageId!==undefined)for(const item of list)item.messageId=result.messageId;emit();
-  },error=>{list.forEach(item=>{item.mark='kept';});sendFailure=parseFailure(error);emit();});
+  },error=>{inflight--;list.forEach(item=>{item.mark='kept';});sendFailure=parseFailure(error);emit();});
  };
  function fail(next){clearTimers();stuck=false;state='failed';failure=next;if(keepUnsent)outbox.splice(0);messages.forEach(item=>{if(item.mark==='starting'||(keepUnsent&&item.mark==='held'))item.mark='kept';});emit();}
  function startTimers(){
@@ -102,7 +104,7 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
   staleDead=new Map(peerRows().filter(died).map(row=>[identity(row),row.handle]));
   list.forEach(item=>{item.mark='starting';});emit();
   return enqueue(()=>Promise.resolve().then(()=>transport.launch(card(texts(list))))).then(result=>{
-   if(mine!==seq)return;launchResult=result||{};settled=true;
+   if(mine!==seq)return;launchResult=result||{};if(launchResult.sessionId)launchedId=launchResult.sessionId;settled=true;
    if(!inspect()){if(!stuck)startTimers();emit();}
   },error=>{if(mine!==seq)return;settled=true;fail(parseFailure(error));});
  }
@@ -112,7 +114,13 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
   hasHeld:()=>outbox.length>0||hasKept(),
   // Some message a failed launch or send kept (keepUnsent): it was not sent, which the unload warning says rather than "still waiting".
   hasKept,
+  // The send state still has work: a launch starting or failed, a held, kept or in-flight message. The one predicate a hidden page keeps listening for (send-state.js).
+  unsettled:()=>starting()||state==='failed'||outbox.length>0||messages.some(item=>item.mark==='kept')||inflight>0,
   launchedRow,launchedIn,
+  // The session the launch opened (its result's id, or the launched row's once a handle-only result binds): Show terminal's target after a failed start.
+  sessionId(){const row=bindLaunched?launchedRow():null;if(row)launchedId=row.sessionId;return launchedId;},
+  // The one change listener: a mounted chat's render. Replaces the previous one (onChange is the first); detach() leaves none, so a hidden page's launch changes without painting.
+  attach(fn){listener=fn;return ()=>{if(listener===fn)listener=null;};},
   // Enter or Send. Typing, focus and Shift+Enter never reach here.
   send(text){
    const item={id:++ids,text,mark:null,sentAt:clock.now()};messages.push(item);
