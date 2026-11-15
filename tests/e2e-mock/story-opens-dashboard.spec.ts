@@ -150,9 +150,9 @@ async function openAgentChat(page: Page) {
       set: (v: Internals) => {
         const orig = v.invoke.bind(v);
         v.invoke = (cmd, args) =>
-          cmd === "list_session_inbox"
+          cmd === "list_session_inbox" || cmd === "list_thread_inbox"
             ? Promise.resolve({
-                handle: String(args?.handle ?? "x"),
+                handle: String(args?.handle ?? args?.session ?? "x"),
                 roles: [],
                 messages: [
                   message(1, `${DOCS}/26-agent-inbox/AID-4.md`),

@@ -12,9 +12,9 @@ test("the agent chat overlay respects reduced motion in its conversation and com
       set: (next) => {
         const invoke = next.invoke.bind(next);
         next.invoke = (command: string, args: any) =>
-          command === "list_session_inbox"
+          command === "list_session_inbox" || command === "list_thread_inbox"
             ? Promise.resolve({
-                handle: args.handle,
+                handle: args.handle ?? args.session,
                 roles: [],
                 messages: [
                   {
