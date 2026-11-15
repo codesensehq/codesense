@@ -1804,7 +1804,7 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
       await flush();
     };
     const s = setup([lead("idle")], THREAD);
-    mountOn(s, { onPin });
+    const chat = mountOn(s, { onPin });
     await flush();
     const row = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"]`)!;
     const pinOf = (id: number) => row(id).querySelector<HTMLButtonElement>(".pin-b")!;
@@ -1815,7 +1815,7 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     const live = () => s.el.querySelector(".pin-live")!.textContent;
     const key = (el: HTMLElement, k: string) =>
       el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
-    return { s, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
+    return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
 
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
@@ -1922,6 +1922,33 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     expect(row(5).querySelector(".pin-note")).toBeNull();
     expect(document.activeElement).toBe(pinOf(5));
     expect(pinOf(5).getAttribute("aria-label")).toBe("Pin, replacing one (3 of 3 pinned)");
+  });
+
+  it("while a replace is on its way, focus stays on the row that was chosen", async () => {
+    let settle!: (pins: Pin[]) => void;
+    const { pinOf, chooser, choice, key } = await mountReplace(
+      FULL,
+      () => new Promise<Pin[]>((resolve) => (settle = resolve)),
+    );
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    // the busy render redraws the message; the chooser and its current row keep focus
+    expect(chooser()!.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(choice(1));
+    settle(FULL.map((p) => (p.messageId === 1 ? { messageId: 5, pinnedBy: "human" } : p)));
+    await flush();
+    expect(chooser()).toBeNull();
+  });
+
+  it("unmounting with the chooser open takes the page's mark off its pin", async () => {
+    const { chat, onPin, pinOf } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(onPin.mark).toHaveBeenLastCalledWith(1);
+    chat.unmount();
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
   });
 
   it("a pin the agent swaps in while it's open is New: the change line takes focus, and it must be chosen twice", async () => {
