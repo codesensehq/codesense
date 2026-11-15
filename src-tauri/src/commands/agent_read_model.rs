@@ -1303,8 +1303,8 @@ pub(crate) async fn session_inbox(
 pub(crate) struct ThreadInboxDto {
     pub agent_id: String,
     pub story_id: String,
-    /// The seat the read was asked for, else the thread's newest running session, else
-    /// its newest recorded one; empty for a thread with no session.
+    /// The seat the read was asked for, else the thread's last listed seat (a listed session
+    /// that has not ended), else its newest recorded session; empty for a thread with none.
     pub handle: String,
     /// The handles whose mail the read holds.
     pub sessions: Vec<String>,
@@ -1313,10 +1313,12 @@ pub(crate) struct ThreadInboxDto {
 }
 
 /// [`ThreadInboxDto`] for saved agent `agent_id` (any revision) and story `story_id`
-/// (empty: launched with no story). `seat`, a handle or tab session id of the thread
-/// that runs now, leaves out the thread's other running sessions: two seats of one saved
-/// agent on one story share a thread, and neither is the other's conversation. A seat
-/// that has ended (or is not the thread's) leaves no one out. A view: it marks nothing read.
+/// (empty: launched with no story). `seat`, a handle or tab session id of the thread, leaves
+/// out the thread's other seats while it is one itself ([`KnownSession::is_seat`]: listed
+/// and not ended, an offline or startup-stuck one included): two seats of one saved agent
+/// on one story share a thread, and neither is the other's conversation. A seat that has
+/// ended (exited, crashed) or is not the thread's leaves no one out. A view: it marks
+/// nothing read.
 pub(crate) async fn thread_inbox(
     host: &dyn InboxHost,
     agent_id: &str,
@@ -1326,25 +1328,28 @@ pub(crate) async fn thread_inbox(
     let thread = crate::weft::pins::ThreadKey::new(agent_id, Some(story_id))
         .map_err(|e| e.to_string())?;
     let sessions = host.sessions().await?;
-    // The roster's sessions launched on this thread.
-    let mut members: Vec<KnownSession> = Vec::new();
-    for known in sessions.iter() {
-        let Some((agent, story)) = host.launch_thread(&known.handle).await else {
-            continue;
-        };
-        let key = crate::weft::pins::ThreadKey::new(&agent, story.as_deref()).ok();
-        if key.as_ref() == Some(&thread) {
-            members.push(known.clone());
-        }
-    }
+    // The roster's sessions launched on this thread, from one read of the launch registry.
+    let listed: Vec<String> = sessions.iter().map(|known| known.handle.clone()).collect();
+    let launched = host.launch_threads(&listed).await;
+    let members: Vec<KnownSession> = sessions
+        .iter()
+        .zip(launched)
+        .filter(|(_, launch)| {
+            launch.as_ref().is_some_and(|(agent, story)| {
+                crate::weft::pins::ThreadKey::new(agent, story.as_deref()).ok().as_ref()
+                    == Some(&thread)
+            })
+        })
+        .map(|(known, _)| known.clone())
+        .collect();
     let recorded = host.thread_sessions(&thread).await?;
     let member = |handle: &str| members.iter().any(|m| m.handle == handle);
     let own = seat
         .and_then(|seat| sessions.find(seat))
-        .filter(|row| row.running && member(&row.handle))
+        .filter(|row| row.is_seat() && member(&row.handle))
         .cloned();
     let others: Vec<&KnownSession> = match &own {
-        Some(own) => members.iter().filter(|m| m.running && m.handle != own.handle).collect(),
+        Some(own) => members.iter().filter(|m| m.is_seat() && m.handle != own.handle).collect(),
         None => Vec::new(),
     };
     let left_out = |id: &str| {
@@ -1385,7 +1390,14 @@ pub(crate) async fn thread_inbox(
     let handle = own
         .as_ref()
         .map(|own| own.handle.clone())
-        .or_else(|| members.iter().rev().find(|m| m.running).map(|m| m.handle.clone()))
+        .or_else(|| members.iter().rev().find(|m| m.is_seat()).map(|m| m.handle.clone()))
+        .or_else(|| {
+            recorded
+                .iter()
+                .rev()
+                .filter_map(|row| row.handle.clone())
+                .find(|recorded| handles.contains(recorded))
+        })
         .or_else(|| handles.last().cloned())
         .unwrap_or_default();
     let also = match handle.as_str() {

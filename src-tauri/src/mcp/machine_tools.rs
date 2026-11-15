@@ -911,6 +911,7 @@ mod tests {
             expiring: false,
             session: Some(session.into()),
             failed: false,
+            crashed: false,
         };
         let rows = vec![
             row("SW-1#lead", "pty-lead", SessionState::Idle),

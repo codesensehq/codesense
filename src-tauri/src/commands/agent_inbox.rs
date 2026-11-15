@@ -230,6 +230,17 @@ pub(crate) trait InboxHost: Send + Sync {
     }
     /// The pin list of `thread` in `team`'s store changed.
     fn pins_changed(&self, _team: &LaunchTeam, _thread: &crate::weft::pins::ThreadKey) {}
+    /// The saved agent and story each of `handles` was launched with, as [`launch_thread`]
+    /// answers, in one read of the launch registry.
+    ///
+    /// [`launch_thread`]: InboxHost::launch_thread
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        let mut out = Vec::with_capacity(handles.len());
+        for handle in handles {
+            out.push(self.launch_thread(handle).await);
+        }
+        out
+    }
     /// Every session the usage store recorded for `thread` (its saved agent, any revision,
     /// and its story), ended ones included, oldest first. Default none.
     async fn thread_sessions(
@@ -250,6 +261,19 @@ pub(crate) struct KnownSession {
     pub name: String,
     /// It runs now: not exited, and its machine is connected.
     pub running: bool,
+    /// It has ended: exited, or its agent crashed. A session on an offline machine, or stuck
+    /// at a startup prompt, has not: it is still the seat it was (see [`KnownSession::is_seat`]).
+    pub ended: bool,
+}
+
+impl KnownSession {
+    /// The seat rule a thread's reads share with the story view's agent pages: a session is a
+    /// seat of its thread while it is listed and has not ended. Two seats of one saved agent on
+    /// one story share a thread, and neither reads the other's conversation; an ended one's
+    /// mail belongs to every seat after it.
+    pub(crate) fn is_seat(&self) -> bool {
+        !self.ended
+    }
 }
 
 /// The sessions one inbox call resolves its addresses and names against.
@@ -289,6 +313,7 @@ impl From<&crate::mcp::session_list::SessionListRow> for KnownSession {
             session: row.session.clone(),
             name: row.display_name.clone(),
             running: crate::mcp::identity_tools::is_running(row.state),
+            ended: row.state == crate::mcp::session_list::SessionState::Exited || row.crashed,
         }
     }
 }
@@ -2925,6 +2950,21 @@ impl InboxHost for AppInboxHost {
             .snapshot();
         let row = Iterator::find(&mut rows.iter(), |row| row.handle == handle)?;
         registry_thread(row)
+    }
+
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        use tauri::Manager;
+        let Some(launch) = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()
+        else {
+            return vec![None; handles.len()];
+        };
+        let rows = launch.snapshot();
+        handles
+            .iter()
+            .map(|handle| rows.iter().find(|row| &row.handle == handle).and_then(registry_thread))
+            .collect()
     }
 
     async fn thread_sessions(
