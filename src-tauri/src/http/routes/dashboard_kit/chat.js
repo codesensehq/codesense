@@ -787,9 +787,7 @@
   function createComposer({ ids = idsOf(1), onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
     const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
     const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
-    const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(String(navigator.platform || navigator.userAgent || ""));
-    const keys = h("span", { class: "keys", "aria-hidden": "true" }, mac ? "⌘↵" : "Ctrl↵");
-    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, h("div", { class: "box-foot" }, h("div", { class: "hint", id: ids.hint }, hint), keys, send)));
+    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, h("div", { class: "box-foot" }, h("div", { class: "hint", id: ids.hint }, hint), send)));
     let pending = false, disabled = false;
     const setPending = (on) => {
       pending = on;
