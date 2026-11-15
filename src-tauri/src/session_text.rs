@@ -147,11 +147,11 @@ impl Tail {
         };
         let rest = self.partial.split_off(last_newline + 1);
         let complete = std::mem::replace(&mut self.partial, rest);
-        Ok(complete
+        let lines = complete
             .split(|b| *b == b'\n')
             .filter(|line| line.first().is_some())
-            .map(|line| redact_secrets(&String::from_utf8_lossy(line)))
-            .collect())
+            .map(|line| redact_secrets(&String::from_utf8_lossy(line)));
+        Ok(Iterator::collect(lines))
     }
 }
 
@@ -394,19 +394,22 @@ pub fn watch(session_id: &str) -> Result<(), String> {
     let path = session_log_path(session_id)?;
     let watched = Watched::new(path.clone());
     let owner = session_id.to_owned();
-    let file_watch = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+    let started = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
             pump(&owner);
         }
     })
     .and_then(|mut w| {
         notify::Watcher::watch(&mut w, &path, notify::RecursiveMode::NonRecursive).map(|_| w)
-    })
-    .map_err(|e| {
-        let shown = std::path::Path::display(&path);
-        log::warn!(target: "session_text", "no file watch on {shown}: {e}");
-    })
-    .ok();
+    });
+    let file_watch = match started {
+        Ok(w) => Some(w),
+        Err(e) => {
+            let shown = std::path::Path::display(&path);
+            log::warn!(target: "session_text", "no file watch on {shown}: {e}");
+            None
+        }
+    };
     let entry = Entry {
         watched,
         watchers: 1,

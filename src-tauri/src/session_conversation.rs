@@ -162,9 +162,18 @@ fn reader_of(cli: AgentCli) -> LogReader {
 /// `None` for a CLI whose log is another format, a session with no record or native id yet, or no
 /// log on this Mac.
 pub(crate) fn claude_session_log(session_id: &str) -> Option<PathBuf> {
-    let store = UsageStore::open(&crate::session_usage::store_path().ok()?).ok()?;
-    let record = store.read_session_record(session_id).ok()??;
-    let cli = record.cli.as_deref()?.parse::<AgentCli>().ok()?;
+    let Ok(store_path) = crate::session_usage::store_path() else {
+        return None;
+    };
+    let Ok(store) = UsageStore::open(&store_path) else {
+        return None;
+    };
+    let Ok(Some(record)) = store.read_session_record(session_id) else {
+        return None;
+    };
+    let Ok(cli) = record.cli.as_deref()?.parse::<AgentCli>() else {
+        return None;
+    };
     let (Some(locate), Some(agent_cli::TranscriptFormat::AnthropicSessionJsonl)) = reader_of(cli)
     else {
         return None;
