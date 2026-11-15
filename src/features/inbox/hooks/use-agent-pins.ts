@@ -17,7 +17,12 @@ export function useAgentPins(
   team: InboxTeam | null,
   agentId: string | null,
   storyId: string | null,
-): { pins: AgentPin[]; error: string | null } {
+): {
+  pins: AgentPin[];
+  error: string | null;
+  /** Show the list a pin call returned at once; the change event re-reads it anyway. */
+  apply: (pins: AgentPin[]) => void;
+} {
   // The thread's name: a result for an older thread is never shown under a newer one.
   const key =
     team && agentId ? JSON.stringify([team.org, team.team, agentId, storyId ?? ""]) : null;
@@ -54,6 +59,14 @@ export function useAgentPins(
     return () => void sub.then(safeUnlisten).catch(() => {});
   }, [key, reload]);
 
+  const apply = useCallback(
+    (pins: AgentPin[]) => {
+      if (!key) return;
+      ++seq.current;
+      setState({ key, pins, error: null });
+    },
+    [key],
+  );
   const current = state && state.key === key ? state : null;
-  return { pins: current?.pins ?? NO_PINS, error: current?.error ?? null };
+  return { pins: current?.pins ?? NO_PINS, error: current?.error ?? null, apply };
 }

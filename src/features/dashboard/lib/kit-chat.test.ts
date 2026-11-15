@@ -250,6 +250,7 @@ describe("kit.chat", () => {
     expect(Object.keys(kitOf().chat).sort()).toEqual(["core", "mount", "pinToBottom", "thread"]);
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
       "CONSENT_CLASSES",
+      "PIN_CAP",
       "cardAnswer",
       "createMarkLatch",
       "deliveryMark",
@@ -258,6 +259,13 @@ describe("kit.chat", () => {
       "parseCard",
       "parseCardLine",
       "parseNext",
+      "pinCapLabel",
+      "pinCapNote",
+      "pinFirstSentence",
+      "pinFirstWords",
+      "pinLiveText",
+      "pinTitleOf",
+      "pinWho",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
       "mergeThread",
@@ -1357,5 +1365,175 @@ describe("kit.chat faces", () => {
       "start",
       "cont",
     ]);
+  });
+});
+
+describe("kit.chat onPin: the person pins a message", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  const THREAD = [
+    said(5, "Merge plan: squash onto main. Then tag it."),
+    said(6, "Review is clean."),
+  ];
+  type Pin = { messageId: number; pinnedBy: string };
+
+  async function mountPins(start: Pin[], change?: (action: string, id: number) => Promise<Pin[]>) {
+    let pins = start;
+    const subs = new Set<() => void>();
+    const onPin = {
+      pins: () => pins,
+      // The page owns the list: what a change resolves is what the next read returns.
+      change: vi.fn(async (action: string, id: number) => {
+        const next = change
+          ? await change(action, id)
+          : action === "unpin"
+            ? pins.filter((p) => p.messageId !== id)
+            : [...pins, { messageId: id, pinnedBy: "human" }];
+        pins = next;
+        return next;
+      }),
+      subscribe: (fn: () => void) => (subs.add(fn), () => subs.delete(fn)),
+      showPins: vi.fn(),
+      name: (by: string) => (by === "lead-1" ? "Story lead" : by),
+    };
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s, { onPin });
+    await flush();
+    const row = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"]`)!;
+    const pinOf = (id: number) => row(id).querySelector<HTMLButtonElement>(".pin-b")!;
+    const live = () => s.el.querySelector(".pin-live")!.textContent;
+    return { s, onPin, row, pinOf, live };
+  }
+
+  it("draws a Pin on each message; a click pins it, keeps focus, tags it and says so", async () => {
+    const { onPin, row, pinOf, live } = await mountPins([]);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin");
+    pinOf(5).focus();
+    pinOf(5).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("pin", 5);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(row(5).querySelector(".pin-tag")!.textContent).toBe("Pinned by you");
+    expect(row(5).classList.contains("pinned")).toBe(true);
+    expect(live()).toBe('Pinned "Merge plan: squash onto…". 1 of 3 pinned.');
+  });
+
+  it("at the cap every Pin is dimmed ahead of time; a click names whose pins fill it, and nothing is replaced", async () => {
+    const full = [1, 2, 3].map((messageId) => ({ messageId, pinnedBy: "lead-1" }));
+    const { s, onPin, row, pinOf } = await mountPins(full);
+    expect(pinOf(5).getAttribute("aria-disabled")).toBe("true");
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin (3 of 3 pinned)");
+    pinOf(5).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    const note = row(5).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("3 of 3 pinned (3 by Story lead). Unpin one to pin this.");
+    (note.querySelector("button") as HTMLButtonElement).click();
+    expect(onPin.showPins).toHaveBeenCalled();
+    pinOf(5).click();
+    await flush();
+    s.el
+      .querySelector(".log")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flush();
+    expect(row(5).querySelector(".pin-note")).toBeNull();
+  });
+
+  it("an unpin offers Undo, which restores the pin as it was", async () => {
+    const { onPin, row, pinOf } = await mountPins([{ messageId: 6, pinnedBy: "lead-1" }]);
+    expect(row(6).querySelector(".pin-tag")!.textContent).toBe("Pinned by Story lead");
+    pinOf(6).click();
+    await flush();
+    const undo = row(6).querySelector<HTMLButtonElement>(".pin-note button")!;
+    expect(undo.textContent).toBe("Undo");
+    undo.click();
+    await flush();
+    expect(onPin.change.mock.calls).toEqual([
+      ["unpin", 6],
+      ["restore", 6],
+    ]);
+    expect(row(6).querySelector(".pin-note")).toBeNull();
+  });
+
+  it("an Undo refused because the list filled since shows the cap note, not Try again", async () => {
+    const { onPin, row, pinOf } = await mountPins([{ messageId: 6, pinnedBy: "lead-1" }]);
+    pinOf(6).click();
+    await flush();
+    // The agent pins three meanwhile; the page's list is at the cap.
+    const full = [1, 2, 3].map((messageId) => ({ messageId, pinnedBy: "lead-1" }));
+    onPin.pins = () => full;
+    row(6).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+    await flush();
+    const note = row(6).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("3 of 3 pinned (3 by Story lead). Unpin one to pin this.");
+    expect(note.querySelector("button")!.textContent).toBe("Show pins");
+    expect(row(6).querySelector('[role="alert"]')).toBeNull();
+    expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
+  });
+
+  it("names an HTML message by its title, not its markup, in the live region", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    let pins: Pin[] = [];
+    mountOn(s, {
+      onPin: {
+        pins: () => pins,
+        change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+      },
+    });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+    await flush();
+    expect(s.el.querySelector(".pin-live")!.textContent).toBe(
+      'Pinned "Merge board". 1 of 3 pinned.',
+    );
+  });
+
+  it("a pin that fails keeps its state and offers Try again", async () => {
+    let fail = true;
+    const { onPin, row, pinOf } = await mountPins([], async (_a, id) => {
+      if (fail) {
+        fail = false;
+        throw new Error("offline");
+      }
+      return [{ messageId: id, pinnedBy: "human" }];
+    });
+    pinOf(5).click();
+    await flush();
+    const alert = row(5).querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain(
+      "Couldn't pin. Try again. If it keeps failing, reload the page.",
+    );
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin");
+    (alert.querySelector("button") as HTMLButtonElement).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledTimes(2);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+  });
+
+  it("without onPin a message has no Pin", async () => {
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".pin-b")).toBeNull();
   });
 });

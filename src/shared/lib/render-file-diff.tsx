@@ -40,6 +40,13 @@ import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-fi
  * binary, one-sided, and the large-diff gate). It fetches nothing.
  */
 
+/** Why a raster image's sides aren't drawn here: the switch's tooltip and the Source line. */
+export const IMAGE_UNAVAILABLE = {
+  tooLarge: "Over the 8 MB limit for drawing here",
+  failed: "Couldn't read the image",
+  remote: "Images in a remote worktree aren't drawn yet",
+} as const;
+
 /** Diff bodies narrower than this show one side at a time. */
 export const SIDE_BY_SIDE_MIN_WIDTH = 900;
 
@@ -77,6 +84,8 @@ export interface FileDiffSides {
   rendered?: RenderedSides;
   /** Off Files: a raster image side's bytes (base64), where the surface holds them. */
   imageBytes?: { before?: string; after?: string };
+  /** Off Files: a raster image's bytes still being read, or why they won't draw here. */
+  imageState?: { kind: "reading" } | { kind: "unavailable"; reason: string };
 }
 
 export interface FileDiffPrefs {
@@ -205,8 +214,11 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
           title={unavailable?.[value]}
           onClick={() => onChange(value)}
           className={cn(
-            "px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-50",
-            mode === value ? "bg-accent font-medium" : "enabled:hover:bg-accent/60",
+            // The ring is drawn inside the button: the group's overflow-hidden would clip it.
+            "px-2 py-0.5 focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
+            mode === value
+              ? "bg-primary font-medium text-primary-foreground"
+              : "enabled:hover:bg-accent/60",
           )}
         >
           {label}
@@ -277,8 +289,10 @@ function SideToggle({
           aria-pressed={picked === side}
           onClick={() => onPick(side)}
           className={cn(
-            "px-2 py-0.5",
-            picked === side ? "bg-accent font-medium" : "hover:bg-accent/60",
+            "px-2 py-0.5 focus-visible:outline-offset-[-2px]",
+            picked === side
+              ? "bg-primary font-medium text-primary-foreground"
+              : "hover:bg-accent/60",
           )}
         >
           {sideLabel(sides, side)}
@@ -300,6 +314,7 @@ function DiffStrip<K extends FileDiffKind>({
   showSwitch,
   sideToggle,
   filePath,
+  unavailableModes,
 }: {
   sides: FileDiffSides;
   kind: K;
@@ -309,14 +324,17 @@ function DiffStrip<K extends FileDiffKind>({
   showSwitch: boolean;
   sideToggle?: ReactNode;
   filePath: string;
+  /** Modes that can't apply here, each with its reason (the switch shows it as a tooltip). */
+  unavailableModes?: Partial<Record<FileDiffModes[K], string>>;
 }) {
   const onModeChange = showSwitch ? prefs.onModeChange : undefined;
   const unavailable =
-    kind === "code" && !isStructuralLanguage(detectLanguageId(filePath))
+    unavailableModes ??
+    (kind === "code" && !isStructuralLanguage(detectLanguageId(filePath))
       ? ({ structural: "No structural diff for this language" } as Partial<
           Record<FileDiffModes[K], string>
         >)
-      : undefined;
+      : undefined);
   if (!onModeChange && !sideToggle) return null;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
@@ -476,13 +494,26 @@ function SideBySide({
   );
 }
 
-function CodeSkeleton({ prefix }: { prefix: string }) {
+/** The body while a side is read: it pulses only where motion is welcome, and says so to a
+ *  screen reader (or to everyone, `shown`). */
+function CodeSkeleton({
+  prefix,
+  label = "Loading the diff",
+  shown = false,
+}: {
+  prefix: string;
+  label?: string;
+  shown?: boolean;
+}) {
   return (
     <div
-      aria-hidden
       data-testid={`${prefix}-code-skeleton`}
-      className="h-full w-full animate-pulse rounded bg-muted/40"
-    />
+      className="flex h-full w-full items-center justify-center rounded bg-muted/40 motion-safe:animate-pulse"
+    >
+      <span role="status" className={shown ? "text-xs text-muted-foreground" : "sr-only"}>
+        {label}
+      </span>
+    </div>
   );
 }
 
@@ -676,14 +707,29 @@ function RenderedFileDiff({
   const frame = useFrameState(filePath);
   const prefix = prefs.testIdPrefix ?? "file-diff";
   const rendered = sides.rendered;
+  // Off Files a raster image draws from the bytes the surface reads: while they are read it
+  // says so, and when they won't draw here Side by side stays in the switch with the reason.
+  const raster = !rendered && fileType === "image" && !rendersFromText(filePath);
+  const reading = raster && sides.imageState?.kind === "reading";
+  const cannotDraw =
+    raster && sides.imageState?.kind === "unavailable" ? sides.imageState.reason : null;
   // Off Files the sides are drawn from what the surface holds; a type it can't
   // draw that way (a raster image it has no bytes for) has Source only.
-  const renderable = !!rendered || rendersInline(filePath, sides, state);
+  const renderable = !!rendered || reading || rendersInline(filePath, sides, state);
   const mode = renderable ? prefs.modes.html : "source";
   const layout = sideLayout(sides, frame.width);
 
   let body: ReactNode;
-  if (mode === "source") {
+  if (mode === "source" && raster) {
+    // One line for an image's Source mode, whichever surface shows it.
+    body = (
+      <OverlayCenteredState testId={`${prefix}-image-source`}>
+        An image has no text diff. {cannotDraw ? `${cannotDraw}.` : "Side by side compares it."}
+      </OverlayCenteredState>
+    );
+  } else if (reading) {
+    body = <CodeSkeleton prefix={prefix} label="Reading the image…" shown />;
+  } else if (mode === "source") {
     body = (
       <SourceBody
         filePath={filePath}
@@ -752,13 +798,14 @@ function RenderedFileDiff({
         )
       }
       strip={
-        renderable ? (
+        renderable || cannotDraw ? (
           <DiffStrip
             sides={sides}
             kind="html"
             mode={mode}
             prefs={prefs}
             filePath={filePath}
+            unavailableModes={cannotDraw ? { "side-by-side": cannotDraw } : undefined}
             showSwitch
             sideToggle={
               showToggle && (
@@ -784,6 +831,16 @@ function RenderedFileDiff({
   );
 }
 
+/** Whether `text` is an Excalidraw scene's JSON: an object, not just any text. */
+function isScene(text: string): boolean {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 /** A side off Files, from the surface's own text or bytes: nothing it can load
  *  reaches past that side's content. */
 function InlineRenderedSide({
@@ -797,7 +854,16 @@ function InlineRenderedSide({
 }) {
   const text = (side === "before" ? sides.before : sides.after) ?? "";
   const label = sideLabel(sides, side);
-  if (getViewerFileType(filePath) === "excalidraw")
+  if (getViewerFileType(filePath) === "excalidraw") {
+    // A scene that won't parse would draw as a blank canvas next to a good side: say so.
+    if (!isScene(text))
+      return (
+        <OverlayCenteredState testId="excalidraw-unreadable">
+          <span role="alert">
+            Couldn&apos;t read this side&apos;s drawing: it isn&apos;t valid JSON.
+          </span>
+        </OverlayCenteredState>
+      );
     return (
       <ExcalidrawViewer
         key={side}
@@ -807,6 +873,7 @@ function InlineRenderedSide({
         readOnly
       />
     );
+  }
   if (rendersFromText(filePath)) return <SideFrame key={side} html={text} title={label} />;
   return (
     <SideImage key={side} base64={sides.imageBytes?.[side] ?? ""} filePath={filePath} alt={label} />

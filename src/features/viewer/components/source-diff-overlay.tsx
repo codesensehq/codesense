@@ -50,9 +50,9 @@ import {
   renderFileDiff,
   rendersFromText,
   rendersInline,
-  type FileDiffSides,
   type FileDiffState,
 } from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { useTabSourceRepo } from "@/features/viewer/hooks/use-tab-source-repo";
 import { useSessionCwd } from "../hooks/use-session-cwd";
@@ -78,7 +78,7 @@ import {
   useSourceDiffBase,
   useSourceFileRedline,
 } from "../lib/use-source-diff";
-import { useSourceImageSides } from "../lib/use-source-image-sides";
+import { useSourceImageSides, type SourceImageSides } from "../lib/use-source-image-sides";
 import { comparisonLabel, effectiveBaseRef } from "../lib/source-diff-base";
 import { useRepoWorktreeWatch } from "../lib/use-repo-worktree-watch";
 import { useRemoteWatchNonce } from "../lib/use-remote-worktree-watch";
@@ -428,7 +428,7 @@ export function SourceDiffOverlay({
     baseRef,
     liveNonce + refreshNonce,
   );
-  const imageBytes = useSourceImageSides(
+  const imageSides = useSourceImageSides(
     changesetKey,
     null,
     paneFile,
@@ -1187,13 +1187,14 @@ export function SourceDiffOverlay({
                 </>
               )}
               {paneFile != null &&
-                drawsPages(paneFile, selected?.status, redline?.binary, imageBytes) && (
+                drawsPages(paneFile, selected?.status, redline?.binary, imageSides) && (
                   <>
                     <FileDiffModeSwitch
                       kind="html"
                       mode={fileDiffModes.html}
                       onChange={(m) => setFileDiffMode("html", m)}
                       testId={`source-diff-html-mode-${ws.id}`}
+                      unavailable={sideBySideUnavailable(imageSides)}
                     />
                     <Divider />
                   </>
@@ -1305,7 +1306,7 @@ export function SourceDiffOverlay({
               badges={selected?.badges}
               before={redline?.before ?? null}
               after={redline?.after ?? null}
-              imageBytes={imageBytes}
+              imageSides={imageSides}
               inline={inline}
               wordWrap={wordWrap}
               expandAll={expandAll}
@@ -1480,17 +1481,29 @@ function DiffCodeControls({
   );
 }
 
-/** Whether a file's diff can draw rendered pages here (so its view options offer
- *  Side by side | Source): an HTML, SVG or Excalidraw file read as text, or a raster
- *  image whose bytes this surface holds for every present side. */
+/** Whether a file's diff offers Side by side | Source in its view options: an HTML, SVG or
+ *  Excalidraw file read as text, or a raster image (drawn from its bytes, being read, or
+ *  with Side by side disabled and its reason). */
 function drawsPages(
   path: string,
   status: PublishFile["status"] | undefined,
   binary: boolean | undefined,
-  imageBytes: FileDiffSides["imageBytes"],
+  imageSides: SourceImageSides,
 ): boolean {
+  if (isRasterImage(path) && imageSides.imageState) return true;
   const state: FileDiffState = { kind: binary ? "binary" : "ready" };
-  return rendersInline(path, { before: "", after: "", status, imageBytes }, state);
+  return rendersInline(
+    path,
+    { before: "", after: "", status, imageBytes: imageSides.imageBytes },
+    state,
+  );
+}
+
+/** Side by side, disabled with its reason, for a raster image whose sides won't draw here. */
+function sideBySideUnavailable(imageSides: SourceImageSides) {
+  return imageSides.imageState?.kind === "unavailable"
+    ? { "side-by-side": imageSides.imageState.reason }
+    : undefined;
 }
 
 /** Whether a file's diff is the code diff the code controls drive: any
@@ -1519,7 +1532,7 @@ export function SourceDiffPane({
   badges,
   before,
   after,
-  imageBytes,
+  imageSides = {},
   error,
   inline,
   wordWrap,
@@ -1534,7 +1547,7 @@ export function SourceDiffPane({
   status: PublishFile["status"];
   /** A raster image's sides, base64, where this surface read them: its rendered
    *  Before | After draws from these. */
-  imageBytes?: FileDiffSides["imageBytes"];
+  imageSides?: SourceImageSides;
   /** The file's classification badges — a `mode` badge explains an identical
    *  before/after. */
   badges?: PublishFile["badges"];
@@ -1566,12 +1579,13 @@ export function SourceDiffPane({
     />
   );
   if (binary) {
-    // A raster image whose bytes were read draws its rendered Before | After.
-    if (!drawsPages(filePath, status, binary, imageBytes)) return binaryNote;
+    // A raster image goes through the dispatch: drawn from its bytes, read, or with its
+    // reason; any other binary file is the binary note.
+    if (!isRasterImage(filePath)) return binaryNote;
     return renderFileDiff({
       fileType: getViewerFileType(filePath),
       filePath,
-      sides: { before: "", after: "", status, imageBytes },
+      sides: { before: "", after: "", status, ...imageSides },
       state: { kind: "binary" },
       prefs: { modes, testIdPrefix: "source-diff", binary: binaryNote },
     });
@@ -1700,7 +1714,7 @@ function CommitDetailPane({
     selected?.renamedFrom,
   );
   const redline = sha === null ? workingRedline.redline : commitRedline.redline;
-  const imageBytes = useSourceImageSides(
+  const imageSides = useSourceImageSides(
     effectiveCwd,
     sha,
     selectedFile,
@@ -1735,12 +1749,13 @@ function CommitDetailPane({
               />
             )}
             {selectedFile &&
-              drawsPages(selectedFile, selected?.status, redline?.binary, imageBytes) && (
+              drawsPages(selectedFile, selected?.status, redline?.binary, imageSides) && (
                 <FileDiffModeSwitch
                   kind="html"
                   mode={fileDiffModes.html}
                   onChange={(m) => setFileDiffMode("html", m)}
                   testId={`commit-diff-html-mode-${ws.id}`}
+                  unavailable={sideBySideUnavailable(imageSides)}
                 />
               )}
             {redline != null &&
@@ -1811,7 +1826,7 @@ function CommitDetailPane({
             badges={selected?.badges}
             before={redline?.before ?? null}
             after={redline?.after ?? null}
-            imageBytes={imageBytes}
+            imageSides={imageSides}
             inline={inline}
             wordWrap={wordWrap}
             expandAll={expandAll}

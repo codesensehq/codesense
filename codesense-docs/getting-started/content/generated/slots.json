@@ -167,8 +167,8 @@
   "sources": {
     "src/features/shell/right-pane/right-pane-layout.ts": "9abfb5c7ff615ef7a28ff2e775180ba164532e169f9bce6107370edd694c37ed",
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
-    "src-tauri/src/verbs/registry.generated.json": "310e811b0f9d6b78714b7036820fe6709f52b3ff4b1dc0700393f51b7a86bb01",
-    "src-tauri/src/verbs/registry.rs": "b4c1f8d5104427c6a1cb963700f255be45dc331c1090c13450799cf0dea5349e",
+    "src-tauri/src/verbs/registry.generated.json": "646d254e80a7ada97e0261cb1ecda42c12a775f9f06e140f5b32cb4c2b4f5f7e",
+    "src-tauri/src/verbs/registry.rs": "208cdc9cb4152027f433116abf23a0b273ca44c1aba6f9bc2b08bd763c0974db",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src/features/shell/slots/slot-registry.ts": "04d43882738717691cbdf28c9365b84f0abb07cb72383c36f2babac21807378d"

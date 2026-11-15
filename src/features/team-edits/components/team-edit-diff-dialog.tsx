@@ -11,6 +11,7 @@ import {
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
 import {
+  IMAGE_UNAVAILABLE,
   renderFileDiff,
   rendersInline,
   type FileDiffSides,
@@ -123,13 +124,15 @@ function diffHeight(team: Side | null, mine: Side | null, body: "code" | "prose"
   return `min(60vh, ${px}px)`;
 }
 
+const BINARY_NOTE = "Not a text file: no line-by-line view.";
+
 function sideNote(side: Side | null, which: "team" | "workspace"): string | null {
   if (!side) return null;
   if ("missing" in side)
     return which === "team"
       ? "The team has no copy of this file."
       : "This workspace no longer has the file.";
-  if ("binary" in side) return "Not a text file: no line-by-line view.";
+  if ("binary" in side) return BINARY_NOTE;
   if ("error" in side)
     return `Couldn't read the ${which === "team" ? "team's" : "workspace's"} copy: ${side.error}`;
   return null;
@@ -168,7 +171,13 @@ export function TeamEditDiffDialog({
   }, [workspace, file]);
 
   const ready = team !== null && mine !== null;
-  const notes = [sideNote(team, "team"), sideNote(mine, "workspace")].filter(Boolean);
+  // A raster image reads as binary only past the size cap; the diff says that in its one
+  // image line, so it gets no separate binary note.
+  const raster = !!file && isRasterImage(file.path);
+  const tooLarge = raster && [team, mine].some((side) => !!side && "binary" in side);
+  const notes = [sideNote(team, "team"), sideNote(mine, "workspace")]
+    .filter((note) => !(raster && note === BINARY_NOTE))
+    .filter(Boolean);
   const conflict = file?.kind === "conflict";
   const teamLabel = conflict ? "Team's version now" : "Team's version";
   const mineLabel = `${workspace.name}\u2019s version`;
@@ -179,6 +188,9 @@ export function TeamEditDiffDialog({
     beforeLabel: teamLabel,
     afterLabel: mineLabel,
     imageBytes: { before: sideBytes(team), after: sideBytes(mine) },
+    ...(tooLarge
+      ? { imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.tooLarge } }
+      : {}),
   };
   const state = ready ? diffState(team, mine) : null;
   // Rendered markdown is one column (the redline) or labels its own panes (side

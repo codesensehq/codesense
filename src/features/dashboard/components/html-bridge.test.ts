@@ -336,6 +336,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "records.write",
       "reorderPins",
       "replyAsHuman",
+      "restorePin",
       "roles",
       "routeToContext",
       "routine",
@@ -2018,6 +2019,32 @@ describe("agents read model verbs", () => {
     });
     expect(METADATA_ACTION_VERBS).toEqual(expect.arrayContaining(["pin", "unpin", "reorderPins"]));
     expect(READ_VERBS).toContain("pins");
+  });
+
+  it("restorePin hands the engine a restore of that message in the doc's team", async () => {
+    mockAgentPins.mockReset();
+    mockAgentPins.mockResolvedValue({
+      status: "pins",
+      org: "acme",
+      team: "default",
+      agentId: "acme/default/dev",
+      storyId: "DEMO-1",
+      pins: [{ messageId: 7, position: 0 }],
+      outcome: "restored",
+    });
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    const done = (await runBridgeCommand("restorePin", { ...thread, messageId: 7 }, DOC)) as {
+      outcome: string;
+    };
+    expect(done.outcome).toBe("restored");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "restore",
+      messageId: 7,
+    });
+    await expect(
+      runBridgeCommand("restorePin", { ...thread, messageId: "7" }, DOC),
+    ).rejects.toThrow(/messageId/);
+    expect(METADATA_ACTION_VERBS).toContain("restorePin");
   });
 
   it("refuses a pins call with no thread, a bad message id or a bad position", async () => {

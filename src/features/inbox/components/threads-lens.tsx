@@ -28,6 +28,10 @@ import {
 import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
 import type { DeliveryMark } from "../lib/delivery-marks";
+import type { PersonPins } from "../hooks/use-person-pins";
+import { useThreadPins } from "../hooks/use-thread-pins";
+import { pinTitleOf } from "../lib/person-pins";
+import { PinButton, PinFoot, PinLive } from "./person-pin";
 
 import { GroupRow, GroupChatPane, groupKey, type GroupRoom } from "./group-chat";
 /** The latest message `key` sent, which a Reply to them answers. */
@@ -461,6 +465,7 @@ function ThreadPane({
       ? "you, the human"
       : [stateLabel(p.state), p.agent, machineLabel(p)].filter(Boolean).join(" · ");
   const self = selfOf(view);
+  const pins = useThreadPins(k, thread.messages, view);
   return (
     <>
       <div className="ibx-th-head">
@@ -507,6 +512,7 @@ function ThreadPane({
         thread={thread}
         request={request}
         defaultTo={defaultRecipient(k, self, held, thread.messages)}
+        pins={pins}
       />
     </>
   );
@@ -526,6 +532,7 @@ export function Conversation({
   newFrom = null,
   empty = null,
   marks,
+  pins = null,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -537,6 +544,8 @@ export function Conversation({
   empty?: React.ReactNode;
   /** Queued or Delivered for a message the person sent (null: no mark). */
   marks?: (m: ConversationMessage) => DeliveryMark | null;
+  /** The person's pins of this conversation's agent thread: each message gets a Pin. */
+  pins?: PersonPins | null;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -571,6 +580,17 @@ export function Conversation({
           role="region"
           aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
           data-testid="ibx-msgs"
+          // Esc closes a pin note and ends an Undo.
+          onKeyDown={
+            pins
+              ? (e) => {
+                  if (e.key === "Escape" && pins.note) {
+                    e.stopPropagation();
+                    pins.dismiss();
+                  }
+                }
+              : undefined
+          }
         >
           {thread.messages.length === 0 && empty}
           {thread.messages.map((m, i) => {
@@ -589,6 +609,7 @@ export function Conversation({
                   plain={quick}
                   grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
                   mark={marks?.(m) ?? null}
+                  pins={pins}
                 />
               </Fragment>
             );
@@ -603,6 +624,7 @@ export function Conversation({
           }}
         />
       </div>
+      {pins && <PinLive pins={pins} />}
       <ArrivalsNote note={arrivals} />
       <Composer defaultTo={defaultTo} scope={thread.key} request={request} quick={quick} />
     </>
@@ -624,8 +646,11 @@ export function Bubble({
   plain = false,
   grouped = false,
   mark = null,
+  pins = null,
 }: {
   m: ConversationMessage;
+  /** The person's pins: a Pin in the message's action row, or an HTML message's title bar. */
+  pins?: PersonPins | null;
   /** Queued or Delivered, for a message the person sent. */
   mark?: DeliveryMark | null;
   /** Follows the sender's previous message closely: no sender and time of its own (how it came
@@ -642,7 +667,16 @@ export function Bubble({
   const senderRole = heldRoles(sender)[0] ?? null;
   const queuedHere =
     !!m.toRole && held.includes(m.toRole) && (!m.delivery || m.delivery.state === "pending");
-  const cls = ["ibx-m", out ? "out" : "in", term ? "term" : "", grouped ? "grouped" : ""]
+  const pinned = pins ? pins.stateOf(m).pinnedBy !== null : false;
+  const html = m.contentType === "html";
+  const [tapped, setTapped] = useState(false);
+  const cls = [
+    "ibx-m",
+    out ? "out" : "in",
+    term ? "term" : "",
+    grouped ? "grouped" : "",
+    pinned ? "pinned" : "",
+  ]
     .filter(Boolean)
     .join(" ");
   // A grouped message drops who and when, but keeps every mark its line would carry.
@@ -650,7 +684,13 @@ export function Bubble({
   const claim = claimBadge(m, dir);
   const meta = !grouped || term || repliesTo !== null || claim !== null || mark !== null;
   return (
-    <div className={cls} data-mid={msgKey(m)}>
+    <div
+      className={cls}
+      data-mid={msgKey(m)}
+      data-tapped={tapped || undefined}
+      // On touch the action row shows on a tap, as hover shows it for a pointer.
+      onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
+    >
       {meta && (
         <div className="meta">
           {grouped ? null : plain ? (
@@ -687,9 +727,23 @@ export function Bubble({
           <RepliesVia to={repliesTo} dir={dir} team={m.team} />
         </div>
       )}
+      {pins && html && (
+        // An HTML message is a framed card: its title bar is its action row, always shown.
+        <div className="ibx-dm-bar" data-testid="ibx-dm-bar">
+          <span className="ibx-dm-name">{pinTitleOf(m, labelOf(dir, m.from))}</span>
+          <span className="ibx-dm-kind">Dashboard</span>
+          <PinButton pins={pins} m={m} />
+        </div>
+      )}
       <div className="bub">
+        {pins && !html && (
+          <div className="ibx-acts" role="group" aria-label="Message actions">
+            <PinButton pins={pins} m={m} />
+          </div>
+        )}
         <MessageBody m={m} liveDashboards={me === HUMAN && !view.self} />
       </div>
+      {pins && <PinFoot pins={pins} m={m} />}
       {plain ? null : queuedHere ? (
         <div className="ibx-rto">
           <span>Reading does not claim it. An agent holding #{m.toRole} claims it.</span>

@@ -1501,6 +1501,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
     );
   },
+  // The Undo of an unpin: the pin comes back as it was (who pinned it, when, its preview).
+  restorePin: async (args, ctx) => {
+    const a = argObject(args, "restorePin");
+    const { agentId, storyId } = pinThread(a, "restorePin");
+    const id = messageId(a.messageId, "restorePin");
+    return inboxWrite(ctx, "restorePin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "restore", messageId: id }),
+    );
+  },
   reorderPins: async (args, ctx) => {
     const a = argObject(args, "reorderPins");
     const { agentId, storyId } = pinThread(a, "reorderPins");

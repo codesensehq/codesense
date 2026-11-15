@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
-import { renderFileDiff, type FileDiffSides } from "@/shared/lib/render-file-diff";
+import {
+  IMAGE_UNAVAILABLE,
+  renderFileDiff,
+  type FileDiffSides,
+} from "@/shared/lib/render-file-diff";
 import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { createIntentReader } from "../../../../src-tauri/assets/dashboards/story-trail/intent-reader.mjs";
@@ -59,8 +63,10 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
   // at the same revision with the same revalidation, once per opened read.
   const [images, setImages] = useState<{
     of: OpenDiffRead;
-    bytes: FileDiffSides["imageBytes"];
+    sides: Pick<FileDiffSides, "imageBytes" | "imageState">;
   } | null>(null);
+  const wantsImages =
+    result?.status === "opened" && result.redline.binary && isRasterImage(params.path);
   useEffect(() => {
     if (result?.status !== "opened" || !result.redline.binary || !isRasterImage(params.path))
       return;
@@ -70,22 +76,39 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
     readOpenDiffImages(target).then(
       (read) => {
         if (cancelled) return;
+        const unavailable = (reason: string) => ({
+          imageState: { kind: "unavailable" as const, reason },
+        });
         const sides =
-          read.status === "opened" && !read.images.tooLarge
-            ? {
-                ...(read.images.before != null ? { before: read.images.before } : {}),
-                ...(read.images.after != null ? { after: read.images.after } : {}),
-              }
-            : undefined;
-        setImages({ of: result, bytes: sides });
+          read.status !== "opened"
+            ? unavailable(IMAGE_UNAVAILABLE.failed)
+            : read.images.tooLarge
+              ? unavailable(IMAGE_UNAVAILABLE.tooLarge)
+              : {
+                  imageBytes: {
+                    ...(read.images.before != null ? { before: read.images.before } : {}),
+                    ...(read.images.after != null ? { after: read.images.after } : {}),
+                  },
+                };
+        setImages({ of: result, sides });
       },
-      () => !cancelled && setImages({ of: result, bytes: undefined }),
+      () =>
+        !cancelled &&
+        setImages({
+          of: result,
+          sides: { imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.failed } },
+        }),
     );
     return () => {
       cancelled = true;
     };
   }, [result, params]);
-  const imageBytes = images?.of === result ? images.bytes : undefined;
+  // While the bytes are read the tab says so, never the final binary state.
+  const imageSides: Pick<FileDiffSides, "imageBytes" | "imageState"> = !wantsImages
+    ? {}
+    : images?.of === result
+      ? images.sides
+      : { imageState: { kind: "reading" } };
   const retry = () => readerRef.current?.intent({ read: true });
   const openWorkspace = async () => {
     try {
@@ -166,7 +189,7 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
               before: result.redline.before,
               after: result.redline.after,
               status: result.redline.status,
-              imageBytes,
+              ...imageSides,
             },
             state: result.redline.binary ? { kind: "binary" } : { kind: "ready" },
             prefs: {

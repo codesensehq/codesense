@@ -174,4 +174,29 @@ describe("SideImage", () => {
     unmount();
     expect(revoked).toEqual(["blob:side-1"]);
   });
+
+  it("captions the side with its size in pixels once drawn, and its file size", () => {
+    stubBlobUrls();
+    const bytes = "x".repeat(3000);
+    const { container, getByTestId } = render(
+      <SideImage base64={btoa(bytes)} filePath="art/logo.png" alt="After" />,
+    );
+    const img = container.querySelector("img")!;
+    Object.defineProperty(img, "naturalWidth", { value: 1280 });
+    Object.defineProperty(img, "naturalHeight", { value: 800 });
+    fireEvent.load(img);
+    expect(getByTestId("side-image-caption")).toHaveTextContent("1280 × 800 · 2.9 KB");
+  });
+
+  it("a side that won't decode says so, with no broken-image glyph", () => {
+    stubBlobUrls();
+    const { container, getByRole } = render(
+      <SideImage base64={btoa("not a png")} filePath="art/logo.png" alt="Before" />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+    expect(getByRole("alert")).toHaveTextContent(
+      "Couldn't draw this side: the bytes aren't a readable PNG.",
+    );
+  });
 });

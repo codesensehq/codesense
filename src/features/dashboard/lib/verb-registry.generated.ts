@@ -651,6 +651,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "restorePin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
+    "presentationOnlyReason": null
+  },
+  {
     "name": "roles",
     "class": "read",
     "grant": "inbox:read:team",
