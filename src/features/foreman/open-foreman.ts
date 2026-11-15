@@ -22,6 +22,17 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 /** The role the Foreman reads its mail from. */
 export const FOREMAN_ROLE = "codesense-foreman";
 
+/** The saved agent the Foreman runs as: what a session is known as the Foreman's by (a live
+ *  Foreman has no role, and a display name is never matched). */
+export const FOREMAN_AGENT = "foreman-claude";
+
+/** Whether `agent`, a saved agent id (bare or qualified, with or without `@revision`), is the
+ *  Foreman's: the page's own rule (`runsAny` in its identity module). */
+export function isForemanAgent(agent: string | null | undefined): boolean {
+  const id = agent?.split("@")[0]?.trim();
+  return !!id && (id === FOREMAN_AGENT || id.endsWith(`/${FOREMAN_AGENT}`));
+}
+
 function foremanPagePath(): string | null {
   const docs = useOrgStore.getState().orgs.find((o) => o.slug === CODESENSE_DOCS_SLUG);
   return docs ? `${docs.org_root.replace(/\/+$/, "")}/${CODESENSE_DOCS_FOREMAN_PAGE}` : null;

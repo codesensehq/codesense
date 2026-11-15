@@ -2,6 +2,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, SquareTerminal, X } from "lucide-react";
 
+import { isForemanAgent, openForeman } from "@/features/foreman/open-foreman";
+import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-thread";
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
@@ -105,6 +107,15 @@ export function ChatOverlay({
   // Queued or Delivered on what you send here, by the kit's rule: each message's own
   // messageDelivery row where the host pushes it, else the lead's sessions() row.
   const lead = sessions?.find((s) => s.handle === handle) ?? null;
+  // The thread is the saved agent and story the session was launched with, as the engine keys
+  // it: the launch's agent, else the one its tab says it runs.
+  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
+  const pinStory = row?.story ?? lead?.story ?? null;
+  // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too), the same
+  // pins (the page's team) and its one tab as the full view.
+  const foreman = isForemanAgent(pinAgent);
+  const thread = useForemanThread(foreman && handle ? handle : null, conversation);
+  const pinTeam = foreman ? FOREMAN_TEAM : (team ?? home);
   const delivery = useMessageDelivery(team ?? home);
   const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
   if (tracked.chatKey !== chatKey) setTracked({ chatKey, tracker: createDeliveryTracker() });
@@ -199,16 +210,12 @@ export function ChatOverlay({
     return () => cancelAnimationFrame(frame);
   }, [groupRequest, groupHandled, loaded, roomKnown, hasRoom, sessionId]);
 
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it: the launch's agent, else the one its tab says it runs.
-  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
-  const pinStory = row?.story ?? lead?.story ?? null;
   const {
     pins,
     error: pinsError,
     apply,
     retry: retryPins,
-  } = useAgentPins(team ?? home, pinAgent, pinStory);
+  } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
   // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
   const pinTitle = (id: number) => {
@@ -236,7 +243,7 @@ export function ChatOverlay({
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
   // The person pins this chat's messages into the same thread: Show pins goes to the strip.
   const personPins = usePersonPins({
-    team: team ?? home,
+    team: pinTeam,
     agentId: pinAgent,
     storyId: pinStory,
     pins,
@@ -403,12 +410,14 @@ export function ChatOverlay({
               toTerminal,
               keyHint ? `Terminal (${keyHint} brings the chat back)` : "Terminal",
             )}
-            {agentPage &&
-              team &&
-              handle &&
-              button("Full view", Maximize2, () =>
-                openAgentFullView({ org: team.org, team: team.team, handle, page: agentPage }),
-              )}
+            {foreman
+              ? button("Full view", Maximize2, openForeman)
+              : agentPage &&
+                team &&
+                handle &&
+                button("Full view", Maximize2, () =>
+                  openAgentFullView({ org: team.org, team: team.team, handle, page: agentPage }),
+                )}
           </div>
           {layout.head === "two-line" && statusWord && (
             <div className="ibx-ov-now">
@@ -507,7 +516,7 @@ export function ChatOverlay({
               />
             ) : (
               <Conversation
-                thread={{ key: handle, messages: conversation }}
+                thread={{ key: handle, messages: thread }}
                 request={null}
                 defaultTo={handle}
                 quick

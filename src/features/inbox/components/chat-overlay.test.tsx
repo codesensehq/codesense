@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, fireEvent, render, screen, waitFor, within } from "@/test-utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -19,6 +19,9 @@ import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/eve
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
 import { runBridgeCommand } from "@/features/dashboard/components/html-bridge";
+import { liveHub } from "@/features/dashboard/lib/live-hub";
+import { FOREMAN_AGENT, isForemanAgent } from "@/features/foreman/open-foreman";
+import { FOREMAN_HISTORY } from "@/features/foreman/use-foreman-thread";
 import { useInboxSessionsStore } from "../hooks/use-inbox-sessions";
 import { msgKey } from "../model";
 
@@ -1497,5 +1500,196 @@ describe("ChatOverlay: the person pins a message", () => {
     const chip = await screen.findByTestId("chat-overlay-pin-5");
     expect(chip).toHaveTextContent("Merge board");
     expect(chip).not.toHaveTextContent("<");
+  });
+});
+
+describe("ChatOverlay for the Foreman", () => {
+  const DOCS_ROOT = "/ctx/codesense-docs";
+  const DOCS_TEAM = { org: "codesense/docs", team: "getting-started" };
+  const FOREMAN = "_worker/codesense/docs/getting-started/foreman";
+  const EARLIER = "_worker/codesense/docs/getting-started/foreman-2";
+  const FOREMAN_SESSION = "sess-foreman";
+  const FOREMAN_AGENT_ID = "codesense/docs/getting-started/foreman-claude";
+  const fm = (id: number, from: string, to: string, text: string, at: number) =>
+    msg(id, from, to, text, { team: DOCS_TEAM, fromName: "Foreman", createdAtMs: at });
+  const EARLIER_MAIL = [
+    fm(1, EARLIER, "human", "Hello from the earlier Foreman.", NOW - 3_600_000),
+  ];
+  const LIVE_MAIL = [fm(2, FOREMAN, "human", "Hello from the live Foreman.", NOW - 60_000)];
+  // The Foreman page's shared UI state (`ui:foreman`): its sender set, newest first.
+  let senders: string[];
+  const realWatch = liveHub.watch.bind(liveHub);
+
+  function foremanSetup(store: Map<string, ConversationMessage[]>) {
+    // The docs team declares no agent_page: the Foreman's Full view comes from openForeman.
+    useOrgStore.setState({
+      orgs: [
+        {
+          slug: DOCS_TEAM.org,
+          org_root: DOCS_ROOT,
+          teams: [{ name: DOCS_TEAM.team, source_repos: [] }],
+        },
+      ] as never,
+    });
+    useAgentListProjectionStore.setState({
+      sessions: [
+        {
+          handle: FOREMAN,
+          sessionId: FOREMAN_SESSION,
+          kind: "claude",
+          alive: true,
+          displayName: "Foreman",
+          agentRevision: `${FOREMAN_AGENT_ID}@4`,
+          story: null,
+          role: null,
+          startedAtMs: NOW - 5 * 60_000,
+        } as unknown as AgentSessionRow,
+      ],
+    });
+    useAgentStateStore.setState({
+      processAgentBySession: { [FOREMAN_SESSION]: "claude" },
+    } as never);
+    api.loadSessionInbox.mockImplementation(async (key: string) => {
+      const handle = key === FOREMAN_SESSION ? FOREMAN : key;
+      return {
+        dto: { handle, roles: [], messages: [...(store.get(handle) ?? [])] },
+        source: "live",
+      };
+    });
+    vi.spyOn(liveHub, "watch").mockImplementation((topic, viewKey, callback, options) => {
+      if (topic !== "ui:foreman") return realWatch(topic, viewKey, callback, options);
+      expect(viewKey).toBe(`team:${DOCS_TEAM.org}/${DOCS_TEAM.team}`);
+      callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders }] } as never);
+      return () => {};
+    });
+  }
+
+  async function renderForeman() {
+    render(
+      <ChatOverlay
+        tabId="tab-fm"
+        sessionId={FOREMAN_SESSION}
+        teamKey={`${DOCS_TEAM.org}:${DOCS_TEAM.team}`}
+        composeRequest={0}
+        size={{ width: 420, height: 700 }}
+        placement="dock"
+      />,
+    );
+    await screen.findByText("Hello from the live Foreman.");
+  }
+
+  beforeEach(() => {
+    senders = [FOREMAN, EARLIER];
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("knows the Foreman by its saved agent, never its name", () => {
+    expect(isForemanAgent(FOREMAN_AGENT_ID)).toBe(true);
+    expect(isForemanAgent(`${FOREMAN_AGENT_ID}@4`)).toBe(true);
+    expect(isForemanAgent(FOREMAN_AGENT)).toBe(true);
+    expect(isForemanAgent("acme/widgets/not-foreman-claude")).toBe(false);
+    expect(isForemanAgent("Foreman")).toBe(false);
+    expect(isForemanAgent(null)).toBe(false);
+  });
+
+  it("shows the page's thread: the earlier Foreman sessions' messages, then the live one's, oldest first", async () => {
+    foremanSetup(
+      new Map([
+        [FOREMAN, LIVE_MAIL],
+        [EARLIER, EARLIER_MAIL],
+      ]),
+    );
+    await renderForeman();
+    await screen.findByText("Hello from the earlier Foreman.");
+    const shown = Array.from(screen.getByTestId("ibx-msgs").querySelectorAll(".ibx-m"));
+    expect(shown.map((m) => m.textContent)).toEqual([
+      expect.stringContaining("Hello from the earlier Foreman."),
+      expect.stringContaining("Hello from the live Foreman."),
+    ]);
+    expect(api.loadSessionInbox).toHaveBeenCalledWith(EARLIER);
+  });
+
+  it("reads no more earlier sessions than the page keeps in its thread", async () => {
+    senders = [FOREMAN, ...Array.from({ length: 8 }, (_, i) => `${EARLIER}-${i}`)];
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    await waitFor(() =>
+      expect(api.loadSessionInbox).toHaveBeenCalledWith(senders[FOREMAN_HISTORY - 1]),
+    );
+    expect(api.loadSessionInbox).not.toHaveBeenCalledWith(senders[FOREMAN_HISTORY]);
+  });
+
+  it("reads the pins the page reads: the docs team, the Foreman's agent, no story", async () => {
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    const pinReads = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === "agent_pins")
+        .map(([, args]) => {
+          const a = args as { team: unknown; agentId: string; storyId: string | null };
+          // The engine keys a thread by the saved agent before `@` and the story ("" for none).
+          return { team: a.team, agent: a.agentId.split("@")[0], story: a.storyId ?? "" };
+        });
+    await waitFor(() => expect(pinReads()).toHaveLength(1));
+    const overlay = pinReads()[0];
+    expect(overlay).toEqual({ team: DOCS_TEAM, agent: FOREMAN_AGENT_ID, story: "" });
+
+    // The page's shared read (agent/bridge.js `pins`): the Foreman's row's agent, no story, in its frame's team.
+    vi.mocked(invoke).mockClear();
+    await runBridgeCommand(
+      "pins",
+      { agentId: FOREMAN_AGENT_ID },
+      {
+        frameGrant: {
+          frameId: "f-1",
+          principal: "human",
+          dashboard: "foreman",
+          slot: "centre",
+          team: DOCS_TEAM,
+          scope: "team",
+        },
+      },
+    );
+    expect(pinReads()).toEqual([overlay]);
+  });
+
+  it("opens the one Foreman tab from Full view, though the docs team declares no agent page", async () => {
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    fireEvent.click(screen.getByRole("button", { name: "Full view" }));
+    expect(openFile).toHaveBeenCalledWith(
+      { ...DOCS_TEAM, path: `${DOCS_ROOT}/getting-started/content/foreman/index.html` },
+      { newTab: true },
+    );
+    expect(openFullView).not.toHaveBeenCalled();
+  });
+
+  it("a send in the overlay goes to the live Foreman, shows in its thread, and is a handle the page's thread reads", async () => {
+    const store = new Map([
+      [FOREMAN, [...LIVE_MAIL]],
+      [EARLIER, EARLIER_MAIL],
+    ]);
+    foremanSetup(store);
+    api.sendAsHuman.mockImplementation(async (_team: unknown, to: string, text: string) => {
+      store.get(to)?.push(fm(3, "human", to, text, Date.now()));
+      return { status: "sent", messageId: 3 };
+    });
+    await renderForeman();
+    const box = composerBox();
+    fireEvent.change(box, { target: { value: "What needs me?" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(api.sendAsHuman).toHaveBeenCalled());
+    const to = api.sendAsHuman.mock.calls[0]![1] as string;
+    expect(to).toBe(FOREMAN);
+    await act(async () => {
+      listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null }));
+    });
+    const shown = await screen.findAllByText("What needs me?");
+    expect(shown.length).toBeGreaterThan(0);
+    // The page's thread reads its newest senders' inboxes (src/foreman/session.js `sources`): the send's handle is one.
+    expect(senders.slice(0, FOREMAN_HISTORY)).toContain(to);
   });
 });
