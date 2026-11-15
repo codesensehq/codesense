@@ -40,10 +40,12 @@ function avatarOf(info){
  return h('span',{class:'cs-avatar',title:info.name},initialsOf(info.name));
 }
 // An image that fails to load (a dead src) is swapped for the face kit.avatar draws, or the initials without it, so the run never shows a broken image.
+// The face sits beside the meta line, which already names the sender, so it is hidden from assistive tech (its initials or alt would read the name twice).
+const unspoken=node=>{node.setAttribute('aria-hidden','true');return node;};
 function faceNode(info){
- if(!info.src)return avatarOf(info);
- const img=h('img',{src:info.src,alt:info.name}),wrap=h('span',{class:'cs-avatar',title:info.name},img);
- img.addEventListener('error',()=>{const next=avatarOf(info);if(wrap.parentNode)wrap.replaceWith(next);else wrap.replaceChildren(next);},{once:true});
+ if(!info.src)return unspoken(avatarOf(info));
+ const img=h('img',{src:info.src,alt:''}),wrap=unspoken(h('span',{class:'cs-avatar',title:info.name},img));
+ img.addEventListener('error',()=>{const next=unspoken(avatarOf(info));if(wrap.parentNode)wrap.replaceWith(next);else wrap.replaceChildren(next);},{once:true});
  return wrap;
 }
 const face=(state,label)=>h('span',{class:'av','aria-hidden':'true','data-face':state,'data-label':label});
@@ -163,11 +165,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
- // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar. Unset, first is true and info null, so the node is what it always was.
+ // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar beside it. Unset, first is true and info null, so the node is what it always was.
+ const whoLine=(info,meta)=>info?h('div',{class:'who'},faceNode(info),meta):meta;
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null;
   return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-   first?h('div',{class:'meta'},...(info?[faceNode(info)]:[]),`${info&&info.label||item.who} · ${timeLabel(item.at)}`):null,pin?pin.acts:null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+   first?whoLine(info,h('div',{class:'meta'},`${info&&info.label||item.who} · ${timeLabel(item.at)}`)):null,pin?pin.acts:null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
  };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
