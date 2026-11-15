@@ -7,6 +7,13 @@ import { expect, test, type Page } from "@playwright/test";
  * call in-process, so the real app's host reads are not part of these numbers.
  *
  * Opt-in, never a CI gate: `MEASURE_OVERLAY_OPEN=1 npm run test:e2e:mock -- chat-overlay-open-time`.
+ * That run uses the mock config's dev server: unbundled modules and React's development build,
+ * which read pessimistic, most of all under the 4x throttle. For the numbers an open-time bar is
+ * judged on, measure a production build of the mock instead:
+ *   npx vite build --mode mock
+ *   npx vite preview --mode mock --port 5320
+ *   BASE_URL=http://localhost:5320 MEASURE_OVERLAY_OPEN=1 npm run test:e2e:mock -- chat-overlay-open-time
+ * (with `BASE_URL` set, the config starts no server of its own).
  * `MEASURE_RUNS` (default 10) sets the runs per CPU rate. Each run is a fresh page load: its
  * first open is the cold one, and a second open after closing it is the warm one. Runs repeat
  * at 1x and with the CPU throttled 4x (Chromium's `Emulation.setCPUThrottlingRate`, from
@@ -17,9 +24,9 @@ import { expect, test, type Page } from "@playwright/test";
  *  - `ready`: the first frame where the newest message is drawn and the composer's text box is
  *    enabled;
  *  - `inView`: the first frame where, as well, the newest message lies inside the message list's
- *    view (the open-time bar's "newest message visible"). Watched for `IN_VIEW_CAP_MS` (times the
- *    CPU rate); a run
- *    where it never happens records null and the gap (px) still left below the list's edge.
+ *    view (the open-time bar's "newest message visible"). Watched for `IN_VIEW_CAP_MS` times the
+ *    CPU rate; a run where it never happens records null and the gap (px) still left below the
+ *    list's edge.
  * Results (each sample, median and p90 in ms) go to the console and to the test's attachments.
  */
 
