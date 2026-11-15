@@ -22,13 +22,13 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: f252396353ffb0abea725a640b16c966260ead8d3273493abf26f0bb37ad1eab
+    sha256: 9277edcf467292f3bc2bc8acc0146b52ea66777c71202a3d13f2939e4991401b
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: f252396353ffb0abea725a640b16c966260ead8d3273493abf26f0bb37ad1eab
+    sha256: 9277edcf467292f3bc2bc8acc0146b52ea66777c71202a3d13f2939e4991401b
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: f252396353ffb0abea725a640b16c966260ead8d3273493abf26f0bb37ad1eab
+    sha256: 9277edcf467292f3bc2bc8acc0146b52ea66777c71202a3d13f2939e4991401b
     exec: false
   - path: CHANGELOG.md
     sha256: 938e4e8b502275881a6617f2ea96bfa7dc695f435bf83cc84108c73d53362236
@@ -46,10 +46,10 @@ files:
     sha256: 07fa5e9ee0fcd4e687e07d11ac9a9fb0edd41122dc36f07f48174c456d088fc2
     exec: false
   - path: commands/codesense-setup.md
-    sha256: f252396353ffb0abea725a640b16c966260ead8d3273493abf26f0bb37ad1eab
+    sha256: 9277edcf467292f3bc2bc8acc0146b52ea66777c71202a3d13f2939e4991401b
     exec: false
   - path: content/guide/core-steps.md
-    sha256: a4f408d982701fbd4bb00ca67e9fe3a3e8fd0fc989e9b3350b82e961e7d9e825
+    sha256: 2330e3a2d7fd30a68307ea497b04ef07886b5d7ff7f1f6802c527823b0f002be
     exec: false
   - path: content/guide/handoff.md
     sha256: 8edd11d84975a5a8fd1f2d46be21ef1f36c128ad18df41318b8a3465fcde0ff5
@@ -69,11 +69,14 @@ files:
   - path: setup/steps/context-repo.yml
     sha256: 02d11a3b909b6eec6085124a0a4fdfe867a43a874f106f8d116388144cd16b53
     exec: false
+  - path: setup/steps/first-story.yml
+    sha256: bf134a3678c609175b670d897d582989e553895c74f99ef08361843321895162
+    exec: false
   - path: setup/steps/git-access.yml
     sha256: 3a977ffe75939e9e55343f550eb929e3e5d36ad282b29a4f5723624986db1eff
     exec: false
   - path: setup/steps/index.yml
-    sha256: 817ff2768a587a98169758ee90fc3876b2ffbd7442e6bc2f77954ff3b2671ee6
+    sha256: 1df77cd618d912cbe61fc7594800fb12cf4ed2cd6a49600c7564551eb7d8d808
     exec: false
   - path: setup/steps/product.yml
     sha256: c8b5a916a7bf37e99a5cc438ef4046f4e296d37783ea12cb070e1207d3f874fb

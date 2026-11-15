@@ -1,0 +1,66 @@
+{
+  "conversation": {
+    "turns": [
+      {
+        "index": 1,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "input": "{}",
+            "result": "{\"data\": {\"orgs\": [{\"slug\": \"codesense/docs\", \"orgRoot\": \"orgs/codesense-docs\", \"teams\": [{\"name\": \"getting-started\", \"archived\": false, \"sourceRepos\": []}]}, {\"slug\": \"acme/context\", \"orgRoot\": \"orgs/acme-context\", \"teams\": [{\"name\": \"web\", \"archived\": false, \"sourceRepos\": [{\"slug\": \"acme/web\"}]}]}]}}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "input": "{\"to\": \"human\", \"kind\": \"needs-you\", \"text\": \"**Start your first story?**\\n\\ncard: first-story \\u00b7 local-write \\u00b7 create-story=Do it | none=Not now\"}",
+            "result": "{\"status\": \"sent\", \"messageId\": 501}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "input": "{}",
+            "result": "{\"messages\": [{\"messageId\": 502, \"from\": \"human\", \"text\": \"Do it\", \"inReplyTo\": 501}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__validate_story",
+            "input": "{\"path\": \"orgs/acme-context/web/content/stories/ACME-1.md\", \"content\": \"---\\ntype: story\\nstatus: todo\\nstory_id: ACME-1\\nsource_repo: acme/web\\n---\\n\\n# Fix the login bug\\n\\n## Purpose\\n\\nFix the login bug\\n\"}",
+            "result": "{\"valid\": true, \"findings\": []}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_content_file",
+            "input": "{\"path\": \"orgs/acme-context/web/content/stories/ACME-1.md\", \"content\": \"---\\ntype: story\\nstatus: todo\\nstory_id: ACME-1\\nsource_repo: acme/web\\n---\\n\\n# Fix the login bug\\n\\n## Purpose\\n\\nFix the login bug\\n\", \"onCollision\": \"fail\"}",
+            "result": "{\"status\": \"ok\"}"
+          }
+        ]
+      },
+      {
+        "index": 6,
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__open_workspace",
+            "input": "{\"story_id\": \"ACME-1\", \"org\": \"acme/context\", \"team\": \"web\"}",
+            "result": "{\"status\": \"opened\"}"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -483,6 +483,14 @@ export function checkConsent(
             errors.push(
               `turn ${index}: ${name} wrote ${file}, outside the content folder of ${teams.map(nameOf).join(" or ")}`,
             );
+          // A story file names the repo it is about, and that repo is one the team tracks.
+          const story =
+            name === "create_content_file" && /^---\n[\s\S]*?\n---/.exec(input.content ?? "");
+          const sourceRepo = story && /^source_repo:\s*(\S+)\s*$/m.exec(story[0])?.[1];
+          if (sourceRepo && !teams.some((t) => t.repos.includes(sourceRepo)))
+            errors.push(
+              `turn ${index}: ${name} wrote a story with source_repo ${sourceRepo}, which ${teams.map(nameOf).join(" or ") || "no team"} does not track`,
+            );
           if (entry.content !== undefined && input.content !== entry.content)
             errors.push(
               `turn ${index}: ${name} wrote content that is not the exact content of act ${entry.act} in step ${entry.step}`,

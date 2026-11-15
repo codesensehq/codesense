@@ -196,7 +196,7 @@ test("the command opens with the root rules: reply, Next:, cards in the card lin
     /`Sources:`/,
   ])
     assert.match(rules, rule);
-  assert.ok(text.length < 4500, `${text.length} bytes`);
+  assert.ok(text.length < 4700, `${text.length} bytes`);
 });
 
 test("the old example recipe is gone and exactly one skill has the name", () => {
