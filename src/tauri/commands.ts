@@ -1431,6 +1431,13 @@ export interface SessionProgress {
 
 export const agentReadSessions = () => invoke<SessionListRow[]>("agent_read_sessions");
 
+/** Start hearing a session's assistant prose (the `session-text` event); counted per watcher. */
+export const sessionTextWatch = (sessionId: string) =>
+  invoke<void>("session_text_watch", { sessionId });
+/** Stop hearing a session's prose. */
+export const sessionTextUnwatch = (sessionId: string) =>
+  invoke<void>("session_text_unwatch", { sessionId });
+
 /** A saved Agent as `agent_get` returns it, with the sessions running it. */
 export interface AgentWithInstances {
   id: string;

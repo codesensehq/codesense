@@ -12,6 +12,7 @@ mod commands;
 mod queue_roles;
 pub mod records;
 mod session_conversation;
+mod session_text;
 mod session_usage;
 pub mod verbs;
 
@@ -1025,6 +1026,7 @@ pub fn run() {
             agents::events::install_app_emitter(app.handle().clone());
             // A stored usage call tells pages showing that agent's record to reread it.
             session_usage::ingest_notice::install_app_emitter(app.handle().clone());
+            session_text::install_app_emitter(app.handle().clone());
             // Routines run on their own scheduler thread and their own agent-done intake. The
             // intake offers each finished session to routines first, then to its registered
             // consumers; they register before it starts so none misses an early signal.
@@ -1460,6 +1462,8 @@ pub fn run() {
             commands::git_sync::source_commit_changeset,
             commands::git_sync::source_commit_file_redline,
             commands::git_sync::source_image_sides,
+            commands::session_text::session_text_watch,
+            commands::session_text::session_text_unwatch,
             // SLW-WD-4: app-side bridge to WD-3's route/un-route verbs (the "→ context"
             // affordance in the source-diff overlay). Shares one orchestration with the
             // MCP `#[tool]`s.
