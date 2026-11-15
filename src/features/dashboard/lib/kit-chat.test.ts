@@ -932,11 +932,36 @@ describe("kit.chat activity: the live lead's prose from onSessionText", () => {
     expect(line.getAttribute("title")).toBe(
       "Reading the diff.\nNow the tests pass. Writing the summary.",
     );
-    // each chunk is not announced: the log is a live region, so the line turns it off for itself; the row's status says Working… once
-    expect(line.closest("[aria-live]")!.getAttribute("aria-live")).toBe("off");
+    // each chunk is not announced: the row sits outside the log's live region, at the thread's foot, and its status says Working… once
+    expect(line.closest("[aria-live]")).toBeNull();
+    expect(row.closest(".log")).toBeNull();
+    expect(s.el.querySelector(".log")!.nextElementSibling!.contains(row)).toBe(true);
     expect(row.querySelector('[role="status"]')!.textContent).toBe("Working…");
     await say("s1", prose("Opening the PR."));
     expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe("Opening the PR.");
+  });
+
+  it.each([
+    ["a file name", "Now editing src/chat/prose.js", "Now editing src/chat/prose.js"],
+    ["a version", "Read the notes. Bumping to 0.159.3", "Bumping to 0.159.3"],
+    [
+      "a URL",
+      "See https://example.com/docs/a.html for it",
+      "See https://example.com/docs/a.html for it",
+    ],
+    ["a mid-token ?", "Checked the ?raw=1 path", "Checked the ?raw=1 path"],
+    ["a list item", "Done so far:\n- Updated the `docs` page", "Updated the docs page"],
+    ["a heading", "## Next step", "Next step"],
+    ["a quote", "> Ship it when green.", "Ship it when green."],
+    ["a closing fence", "Here it is:\n```", "Here it is:"],
+    ["a table", "The results:\n| a | b |\n|---|---|\n| 1 | 2 |", "The results:"],
+  ])("the line reads as a sentence: %s", async (_kind, text, line) => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose(text));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe(line);
   });
 
   it("clears on the turn's final message and on the lead's next message in the thread", async () => {
