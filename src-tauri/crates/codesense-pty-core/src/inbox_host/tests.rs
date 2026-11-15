@@ -517,6 +517,7 @@ fn each_fate_is_reported_by_its_own_event() {
         session: PtySessionId::new("S1"),
         waiting: true,
         grace_ms: None,
+        held: None,
     };
     assert_eq!(Fate::of(TerminalDomainEvent::InboxWaiter { state }), None);
 }
@@ -803,4 +804,80 @@ fn a_notice_held_by_a_cap_logs_its_reason() {
             .any(|(event, reason)| event == "held" && reason == "hold: day cap reached")
     });
     assert!(outlet.told().is_empty());
+}
+
+/// A notice reads held only once its gate outlasts one cycle (fixed clock), is logged and
+/// reported once, and a new gate starts its own cycle.
+#[test]
+fn a_notice_held_past_one_cycle_reads_held_with_its_gate() {
+    let (inbox, _outlet) = new();
+    let cycle = Duration::from_secs(60);
+    *lock(&inbox.cycle) = Cycle(cycle);
+    let t0 = Instant::now();
+    let tools = || Some("tools".to_string());
+    assert_eq!(inbox.track_gate("S1", tools(), t0), None);
+    assert_eq!(inbox.track_gate("S1", tools(), t0 + cycle / 2), None);
+    assert_eq!(inbox.held_at("S1", t0 + cycle / 2), None, "within a cycle");
+    assert_eq!(
+        inbox.track_gate("S1", tools(), t0 + cycle),
+        Some(GateChange::Held("tools".into()))
+    );
+    assert_eq!(
+        inbox.track_gate("S1", tools(), t0 + cycle * 2),
+        None,
+        "once"
+    );
+    assert_eq!(
+        inbox.held_at("S1", t0 + cycle * 2),
+        Some(HeldNotice {
+            gate: "tools".into(),
+            held_ms: 120_000,
+        })
+    );
+    let undecided = Some("hold: undecided".to_string());
+    assert_eq!(
+        inbox.track_gate("S1", undecided.clone(), t0 + cycle * 2),
+        Some(GateChange::Lifted)
+    );
+    assert_eq!(inbox.held_at("S1", t0 + cycle * 2), None);
+    assert_eq!(
+        inbox.track_gate("S1", undecided, t0 + cycle * 3),
+        Some(GateChange::Held("hold: undecided".into()))
+    );
+    assert_eq!(
+        inbox.track_gate("S1", None, t0 + cycle * 3),
+        Some(GateChange::Lifted)
+    );
+    assert_eq!(inbox.held_at("S1", t0 + cycle * 4), None);
+}
+
+/// A waiter's held notice is reported with its gate, and no longer once it is handed.
+#[test]
+fn a_held_notice_is_reported_with_its_gate_until_it_is_handed() {
+    let (inbox, outlet) = new();
+    *lock(&inbox.cycle) = Cycle(Duration::from_millis(50));
+    inbox.require_wake_holds();
+    let (served, helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "You have 1 new message.".into(), "t1".into());
+    let gate = |state: &InboxWaiterState| state.held.as_ref().map(|held| held.gate.clone());
+    until(|| {
+        lock(&outlet.states)
+            .iter()
+            .any(|state| gate(state).as_deref() == Some("hold: undecided"))
+    });
+    assert_eq!(gate(&inbox.state("S1")).as_deref(), Some("hold: undecided"));
+    inbox.set_wake_holds(
+        1,
+        vec![WakeHold {
+            session: "S1".into(),
+            reason: None,
+        }],
+    );
+    assert_eq!(next(&helper), "mail t1");
+    assert_eq!(next(&helper), "You have 1 new message.");
+    printed(&helper, "t1");
+    served.join().unwrap();
+    assert_eq!(inbox.state("S1").held, None);
+    assert_eq!(lock(&outlet.states).last().and_then(gate), None);
 }

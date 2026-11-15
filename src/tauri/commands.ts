@@ -1399,13 +1399,18 @@ export interface SessionListRow {
   /** RFC 3339 time of its oldest unread message, or null. */
   oldestUnreadAt: string | null;
   /** Whether its agent was told about that unread mail by its inbox notice: told
-   *  (all of it; told is not read), pending (newer mail not announced yet), or null
+   *  (all of it; told is not read), pending (newer mail not announced yet), held (that
+   *  notice is held back from its waiter past one notice cycle; see `held`), or null
    *  with none unread. */
-  mailNotice?: "told" | "pending" | null;
+  mailNotice?: "told" | "pending" | "held" | null;
   /** RFC 3339 time its agent was last told about its mail, or null. */
   notifiedAt?: string | null;
   /** Whether new mail wakes its agent at once (an inbox waiter is armed). */
   inboxWaiter?: boolean | "unknown";
+  /** The notice held back from its waiter past one notice cycle: what holds it
+   *  (`hold: <reason>`, `hold: undecided` or `tools`) and since when (epoch ms). Absent
+   *  when nothing holds one back. */
+  held?: { gate: string; sinceMs: number };
   /** How many of its agent's subagents run now; absent at none. `state` stays the
    *  agent's own. */
   subagents?: number;

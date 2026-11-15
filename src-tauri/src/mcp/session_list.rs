@@ -82,8 +82,9 @@ pub(crate) struct SessionListRow {
     pub oldest_unread_at: Option<String>,
     /// Whether its agent was told about that mail by its inbox waiter: `told` when it
     /// was told about all of it, `pending` when newer
-    /// mail has not been announced yet; null with none unread. Told is not read: the
-    /// agent decides when to read.
+    /// mail has not been announced yet, `held` when that notice is held back from its
+    /// waiter past one notice cycle (see `held`); null with none unread. Told is not
+    /// read: the agent decides when to read.
     pub mail_notice: Option<MailNotice>,
     /// When its agent was last told about its mail (RFC 3339), or null.
     pub notified_at: Option<String>,
@@ -98,6 +99,12 @@ pub(crate) struct SessionListRow {
     /// tells it about its mail. `"unknown"` for a tab on a machine that is not connected
     /// now.
     pub inbox_waiter: InboxWaiter,
+    /// The notice its waiting waiter has had held back for more than one notice cycle,
+    /// `{gate, sinceMs}`: what holds it (`hold: <reason>` for a wake hold, `hold:
+    /// undecided` before one is decided, `tools` while its agent lacks its CodeSense
+    /// tools) and since when (epoch ms). Omitted when nothing holds a notice back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldNotice>,
     /// Its latest `signal_progress` ({phase, step?, total?, note?, atMs}), when it
     /// reported any: where in its task it says it is.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,6 +179,14 @@ pub(crate) fn with_unread(
             _ => MailNotice::Pending,
         });
         row.notified_at = told.and_then(|told| rfc3339(told.at_ms));
+        mark_held(row);
+    }
+}
+
+/// A row's pending notice held back from its waiter reads `held`.
+pub(crate) fn mark_held(row: &mut SessionListRow) {
+    if row.held.is_some() && row.mail_notice == Some(MailNotice::Pending) {
+        row.mail_notice = Some(MailNotice::Held);
     }
 }
 
@@ -183,6 +198,18 @@ pub(crate) enum MailNotice {
     Told,
     /// Newer mail has not been announced yet.
     Pending,
+    /// Newer mail's notice is held back from its waiter past one notice cycle.
+    Held,
+}
+
+/// A notice held back from a session's waiter past one notice cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeldNotice {
+    /// What holds it.
+    pub gate: String,
+    /// Since when it is held (epoch ms).
+    pub since_ms: u64,
 }
 
 /// Whether a session's agent has an inbox waiter: `true`, `false`, or `"unknown"` while
@@ -219,6 +246,15 @@ impl Serialize for InboxWaiter {
 pub(crate) fn with_inbox_waiters(rows: &mut [SessionListRow], armed: impl Fn(&str) -> InboxWaiter) {
     for row in rows {
         row.inbox_waiter = armed(&row.handle);
+    }
+}
+
+/// Fill each row's `held` notice from `held` (keyed by handle); its pending mail then
+/// reads `held`.
+pub(crate) fn with_held(rows: &mut [SessionListRow], held: impl Fn(&str) -> Option<HeldNotice>) {
+    for row in rows {
+        row.held = held(&row.handle);
+        mark_held(row);
     }
 }
 
@@ -447,6 +483,7 @@ pub(crate) fn session_list_rows_with_tabs(
                 notified_at: None,
                 subagents,
                 inbox_waiter: Default::default(),
+                held: None,
                 progress: None,
                 launch_telemetry: None,
                 release_qualified: None,
@@ -773,6 +810,81 @@ mod tests {
         assert!(row("none")["notifiedAt"].is_null());
         // A tab on a machine that is not connected: neither armed nor not.
         assert_eq!(row("none")["inboxWaiter"], "unknown");
+    }
+
+    #[test]
+    fn pending_mail_whose_notice_its_host_holds_back_reads_held_with_its_gate() {
+        use crate::commands::dashboard_launch::LaunchTeam;
+        let state = crate::commands::dashboard_launch::DashboardLaunchState::new(3);
+        for (handle, session) in [("held", "s-held"), ("told", "s-told"), ("quiet", "s-quiet")] {
+            state.register(handle, session, Some("codesense"));
+        }
+        let rows = state
+            .snapshot()
+            .into_iter()
+            .map(|e| crate::commands::dashboard_launch::session_row(e, true))
+            .collect();
+        let mut listed = session_list_rows_with_tabs(rows, |_| None, None, |_| None);
+        let mail =
+            |through: Option<i64>, session: &str| crate::commands::agent_inbox::SessionUnread {
+                count: 1,
+                oldest_at_ms: Some(1),
+                newest_id: Some(9),
+                team: LaunchTeam {
+                    org: "acme".into(),
+                    team: "default".into(),
+                },
+                announced: through.map(|through_id| crate::commands::agent_inbox::Announced {
+                    through_id,
+                    at_ms: 1,
+                    session: session.to_string(),
+                }),
+            };
+        let unread = crate::commands::agent_inbox::UnreadByHandle {
+            found: std::collections::HashMap::from([
+                ("held".to_string(), mail(None, "s-held")),
+                ("told".to_string(), mail(Some(9), "s-told")),
+            ]),
+            failed: Default::default(),
+        };
+        // Either overlay may land first.
+        with_held(&mut listed, |handle| {
+            (handle != "none").then(|| HeldNotice {
+                gate: "tools".into(),
+                since_ms: 1_790_000_000_000,
+            })
+        });
+        with_unread(&mut listed, &unread);
+        let json = serde_json::to_value(&listed).unwrap();
+        let row = |handle: &str| {
+            json.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["handle"] == handle)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(row("held")["mailNotice"], "held");
+        assert_eq!(
+            row("held")["held"],
+            serde_json::json!({"gate": "tools", "sinceMs": 1_790_000_000_000u64})
+        );
+        // Told mail stays told; a held notice with no unread mail of its own (role mail)
+        // still shows its gate.
+        assert_eq!(row("told")["mailNotice"], "told");
+        assert!(row("quiet")["mailNotice"].is_null());
+        assert_eq!(row("quiet")["held"]["gate"], "tools");
+        with_held(&mut listed, |_| None);
+        with_unread(&mut listed, &unread);
+        let json = serde_json::to_value(&listed).unwrap();
+        let held = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["handle"] == "held")
+            .unwrap();
+        assert_eq!(held["mailNotice"], "pending");
+        assert!(held.get("held").is_none(), "omitted: {held}");
     }
 
     #[test]
