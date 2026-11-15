@@ -202,7 +202,12 @@ export function ChatOverlay({
   // it: the launch's agent, else the one its tab says it runs.
   const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
   const pinStory = row?.story ?? lead?.story ?? null;
-  const { pins, apply } = useAgentPins(team ?? home, pinAgent, pinStory);
+  const {
+    pins,
+    error: pinsError,
+    apply,
+    retry: retryPins,
+  } = useAgentPins(team ?? home, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
   // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
   const pinTitle = (id: number) => {
@@ -359,6 +364,20 @@ export function ChatOverlay({
           )}
           {layout.record === "own-line" && record}
         </header>
+        {pinsError && pins.length === 0 && (
+          <div
+            className="ibx-ov-pins ibx-ov-pins-failed"
+            data-shape={pinShape}
+            role="alert"
+            data-testid="chat-overlay-pins-failed"
+          >
+            <span>Couldn't read pins</span>
+            <span aria-hidden>·</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={retryPins}>
+              Retry
+            </button>
+          </div>
+        )}
         {pins.length > 0 && (
           <div
             className="ibx-ov-pins"

@@ -294,7 +294,7 @@ describe("ChatOverlay", () => {
   });
 
   it("draws each pin as its preview: short name and value; a stopped pin says since when", async () => {
-    await renderOverlay(250, 250);
+    await renderOverlay(300, 700);
     const qa = await screen.findByTestId("chat-overlay-pin-3");
     expect(qa).toHaveTextContent("QA");
     expect(qa).toHaveTextContent("5 of 5");
@@ -302,6 +302,50 @@ describe("ChatOverlay", () => {
     const tests = screen.getByTestId("chat-overlay-pin-1");
     expect(tests).toHaveAttribute("data-status", "stopped");
     expect(tests).toHaveTextContent("stopped 14:05");
+  });
+
+  it("a stopped pin in the one-line strip says stopped without its time, so it keeps to one row", async () => {
+    await renderOverlay(250, 250);
+    const tests = await screen.findByTestId("chat-overlay-pin-1");
+    expect(screen.getByTestId("chat-overlay")).toHaveAttribute("data-pins", "line");
+    expect(tests).toHaveTextContent("stopped");
+    expect(tests).not.toHaveTextContent("14:05");
+  });
+
+  it.each([
+    ["on-track", "on track"],
+    ["running", "running"],
+    ["needs-you", "needs you"],
+  ] as const)(
+    "names a %s pin's status in words, not by its dot's colour alone",
+    async (status, word) => {
+      const pins = [{ ...PINS[0]!, preview: { ...PINS[0]!.preview, status } }];
+      vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+        cmd === "agent_pins"
+          ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins }
+          : undefined,
+      );
+      await renderOverlay(640, 480);
+      const pin = await screen.findByTestId("chat-overlay-pin-3");
+      expect(pin).toHaveAccessibleName(expect.stringContaining(word));
+    },
+  );
+
+  it("a pins read that fails says so in the strip, and Retry reads them again", async () => {
+    let fail = true;
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== "agent_pins") return undefined;
+      if (fail) throw new Error("store locked");
+      return { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS };
+    });
+    await renderOverlay(640, 480);
+    const line = await screen.findByTestId("chat-overlay-pins-failed");
+    expect(line).toHaveTextContent("Couldn't read pins");
+    expect(line).toHaveAttribute("role", "alert");
+    fail = false;
+    fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("chat-overlay-pin-3")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-overlay-pins-failed")).toBeNull();
   });
 
   it("puts the status word ahead of the record line in a narrow one-line head", async () => {

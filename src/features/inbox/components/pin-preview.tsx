@@ -2,7 +2,7 @@
 import { forwardRef } from "react";
 import { LayoutDashboard, Quote } from "lucide-react";
 
-import type { AgentPin, AgentPinChart } from "@/tauri/commands";
+import type { AgentPin, AgentPinChart, AgentPinStatus } from "@/tauri/commands";
 
 import type { OverlayPinShape } from "../lib/overlay-layout";
 
@@ -16,6 +16,14 @@ const hhmm = (ms: number) => {
 
 /** A pin whose view stopped answering keeps its last values, greyed, and says since when. */
 export const pinStopped = (pin: AgentPin) => pin.preview?.status === "not-updating";
+
+/** The status the dot's colour shows, in words for a screen reader. A stopped pin says it in
+ *  its visible text instead. */
+const STATUS_WORD: Partial<Record<AgentPinStatus, string>> = {
+  "on-track": "on track",
+  running: "running",
+  "needs-you": "needs you",
+};
 
 function Chart({ chart }: { chart: AgentPinChart }) {
   if (chart.kind === "progress")
@@ -108,7 +116,14 @@ export const PinPreview = forwardRef<
   const stopped = pinStopped(pin);
   const name = p.shortName || title;
   const lines = (p.lines ?? []).slice(0, shape === "tiles" && tall ? 2 : LINES[shape]);
-  const since = stopped && pin.previewAtMs ? `stopped ${hhmm(pin.previewAtMs)}` : null;
+  // The one-line strip says only "stopped", so the chip keeps to one row; the time is in the
+  // other shapes and the sheet.
+  const since = !stopped
+    ? null
+    : shape === "line" || !pin.previewAtMs
+      ? "stopped"
+      : `stopped ${hhmm(pin.previewAtMs)}`;
+  const statusWord = !stopped && p.status ? STATUS_WORD[p.status] : undefined;
   return (
     <button
       ref={ref}
@@ -123,6 +138,7 @@ export const PinPreview = forwardRef<
     >
       <span className="ibx-pk-d" aria-hidden />
       <span className="ibx-pk-t">{name}</span>
+      {statusWord && <span className="sr-only">, {statusWord},</span>}
       {newWord}
       {p.value && (
         <span className="ibx-pk-v">
