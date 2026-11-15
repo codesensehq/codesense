@@ -1077,6 +1077,66 @@ it("closing a shared private HTML path retires only the owning team's frame", as
   }
 });
 
+// A story md tab shows its team's story page, a live frame whose document is the page, not the md:
+// closing the tab retires that frame as closing an html tab does, and an md tab with no live page
+// stays kept alive.
+it("closing a story md tab retires the live page it shows; a plain md tab stays kept alive", async () => {
+  const story = "/ctx/acme/plans/content/stories/one.md";
+  const plain = "/ctx/acme/plans/content/notes.md";
+  useViewerStore.setState({
+    openTabs: {
+      [key]: [
+        { path: story, name: "one.md" },
+        { path: plain, name: "notes.md" },
+        // A tab that stays open: closing the last tab clears the keep-alive list altogether.
+        { path: "/ctx/acme/plans/content/stays.md", name: "stays.md" },
+      ],
+    },
+    activeTab: { [key]: plain },
+  });
+  const view = render(
+    <TooltipProvider>
+      <TeamWorkspaceView teamKey={key} />
+    </TooltipProvider>,
+  );
+  // Both viewers are mounted: the plain md was shown first, then the story md.
+  await waitFor(() =>
+    expect(view.container.querySelector(`[data-viewer-path="${plain}"]`)).not.toBeNull(),
+  );
+  act(() => useViewerStore.setState({ activeTab: { [key]: story } }));
+  await waitFor(() =>
+    expect(view.container.querySelector(`[data-viewer-path="${story}"]`)).not.toBeNull(),
+  );
+  // The frame's element: a stand-in node inside the story md's viewer (a real iframe would load).
+  const element = document.createElement("div") as unknown as HTMLIFrameElement;
+  view.container.querySelector(`[data-viewer-path="${story}"]`)!.appendChild(element);
+  const post = vi.fn();
+  const off = registerFrame({
+    frameId: "story-page",
+    dashboard: "/ctx/acme/plans/content/pages/story.html",
+    teamKey: key,
+    documentPath: "/ctx/acme/plans/content/pages/story.html",
+    slotId: "centre",
+    element,
+    post,
+    hide: vi.fn(),
+  });
+  try {
+    act(() => useViewerStore.getState().closeTab(key, "", story, { user: true }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0][0].type).toBe("codesense:flush");
+    // The story md's viewer goes with the flush; the plain md, closed, stays kept alive.
+    await waitFor(() =>
+      expect(view.container.querySelector(`[data-viewer-path="${story}"]`)).toBeNull(),
+    );
+    act(() => useViewerStore.getState().closeTab(key, "", plain, { user: true }));
+    expect(view.container.querySelector(`[data-viewer-path="${plain}"]`)).not.toBeNull();
+  } finally {
+    view.unmount();
+    off();
+  }
+});
+
 it("keeps a dirty retained team's publications out of B's stories subscription after switching and later A updates", async () => {
   const { LiveHub } = await import("@/features/dashboard/lib/live-hub");
   const { buildTree, buildStoryRef } =
