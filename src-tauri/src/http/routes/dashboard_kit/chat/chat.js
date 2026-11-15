@@ -166,8 +166,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
  // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar beside it. Unset, first is true and info null, so the node is what it always was.
- // A face name the line doesn't show (a person's name beside a role word) is said once before it, as a sighted reader gets it from the face; the visible line is unchanged.
- const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),info.name!==who?h('span',{class:'sr'},`${info.name}, `):null,meta):meta;
+ // A face name the line doesn't show (a person's name beside a role word) is said once before it, as a sighted reader gets it from the face; one that holds the line's name (an emoji before it, another case) adds nothing. The visible line is unchanged.
+ const holds=(name,who)=>String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
+ const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),holds(info.name,who)?null:h('span',{class:'sr'},`${info.name}, `),meta):meta;
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
   return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},

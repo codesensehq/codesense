@@ -1002,7 +1002,8 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), info.name !== who ? h("span", { class: "sr" }, `${info.name}, `) : null, meta) : meta;
+    const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
+    const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
       return h(
