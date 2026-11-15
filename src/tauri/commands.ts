@@ -1513,6 +1513,9 @@ export interface InboxQuery {
   before?: number;
   scope?: InboxScope;
   agentId?: string;
+  /** With `agentId`: that saved agent's thread on this story (empty: launched with none),
+   *  every session of it, ended ones included; `sessionId` then names the seat. */
+  storyId?: string;
   sessionId?: string;
   role?: string;
   /** Only messages of this kind, applied before `limit`. */

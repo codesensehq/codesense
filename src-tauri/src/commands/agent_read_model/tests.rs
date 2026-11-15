@@ -2774,3 +2774,36 @@ async fn a_thread_with_no_story_reads_its_recorded_predecessor_and_names_its_new
     // No session listed: the newest recorded one names the thread.
     assert_eq!(view.handle, "H-old");
 }
+
+#[tokio::test]
+async fn the_inbox_with_a_story_reads_the_agents_thread_in_its_team_with_the_session_as_seat() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    let design = host.store("design");
+    let old = insert(&default, "H0", HUMAN, "the ended predecessor", None);
+    let one = insert(&default, "H1", HUMAN, "seat one", None);
+    insert(&default, "H3", HUMAN, "seat three", None);
+    insert(&default, "H2", HUMAN, "not this thread", None);
+    // Another team's mail stays in its team: the inbox reads one team.
+    insert(&design, "H1", HUMAN, "in design", None);
+    thread_of(&host, &[("H1", "1"), ("H3", "1")], &[("S0", "H0"), ("S1", "H1"), ("S3", "H3")]);
+    let read = |story: Option<&str>, session: Option<&str>| {
+        let query = InboxQuery {
+            agent_id: Some(format!("{REVIEWER}@7")),
+            story_id: story.map(str::to_owned),
+            session_id: session.map(str::to_owned),
+            ..Default::default()
+        };
+        let host = host.clone();
+        async move { inbox(&*host, &team("default"), &query, &listed()).await.unwrap() }
+    };
+    let seat = read(Some("STORY-1"), Some("S1")).await;
+    assert_eq!(ids(&seat), vec![one, old]);
+    // No seat: the whole thread.
+    assert_eq!(read(Some("STORY-1"), None).await.messages.len(), 3);
+    // A thread with no session reads nothing, not every message in scope.
+    assert!(read(Some("STORY-2"), None).await.messages.is_empty());
+    // Without a story, agentId keeps its meaning: the agent's role inbox and running instances.
+    let agent = read(None, None).await;
+    assert!(!ids(&agent).contains(&old));
+}
