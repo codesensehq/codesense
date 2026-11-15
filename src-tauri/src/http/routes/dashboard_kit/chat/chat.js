@@ -29,7 +29,8 @@ import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinTitleOf,pinWho} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,pinTitleOf,pinWho} from './chat-core.js';
+import {createPinReplace} from './pin-replace.js';
 import {cardNode} from './card.js';
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
 // A sender's avatar for the faces option: an image by src, else kit.avatar (a face ref or initials from the name); a page without kit.avatar gets the initials in a plain span.
@@ -108,6 +109,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const capNoteOn=item=>{const text=pinCapNote(pinList(),pinName);pinState.note={mid:item.id,kind:'cap',text};pinLive.textContent=text;};
  async function pinChange(item,action){
   if(pinState.busy!==null)return;
+  if(replacer)replacer.closeFor(item.id);
   pinState.busy=item.id;pinState.refocus=item.id;render();
   try{
    const list=await onPin.change(action,item.id);
@@ -125,24 +127,33 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  function pinToggle(item){
   const pins=pinList(),pinned=pins.some(p=>p.messageId===item.id);
   if(pinned)return pinChange(item,'unpin');
-  if(pins.length>=PIN_CAP){capNoteOn(item);pinState.refocus=item.id;render();return;}
+  if(pins.length>=PIN_CAP){if(replacer)return replacer.toggle(item);capNoteOn(item);pinState.refocus=item.id;render();return;}
   return pinChange(item,'pin');
  }
+ // onPin.replace: at the cap, Pin… opens a chooser of which pin to replace, under the message (pin-replace.js). A pin is named as the page's pins name it (onPin.title), else by its
+ // preview's name, else as its message; one with no preview is the person's own, drawn as a quote or, for an HTML message, a dashboard.
+ const threadRow=id=>thread.find(row=>row.messageId===id);
+ const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const row=threadRow(pin.messageId);return row?pinTitleOf(row,row.fromName||row.from||''):String(pin.messageId);};
+ const chooserId=mid=>`${ids.status}-pin-chooser-${mid}`;
+ const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const row=threadRow(pin.messageId);return row&&row.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
  // A message's Pin, its tag and its note; the signature changes when any of them does, so the bubble is rebuilt only then.
  function pinParts(item){
   if(!onPin||item.id===undefined||item.id===null)return null;
   const pins=pinList(),pin=pins.find(p=>p.messageId===item.id),atCap=!pin&&pins.length>=PIN_CAP,note=pinState.note&&pinState.note.mid===item.id?pinState.note:null;
-  const label=pin?pinCopy.unpin:atCap?`${pinCopy.pin} (${pinCapLabel(pins.length)})`:pinCopy.pin,busy=pinState.busy===item.id;
-  const sig=['p',pin?pin.pinnedBy:'',atCap,busy,note?note.kind+(note.text||''):''].join(':');
+  // An open chooser stays when a pin leaves and there's room: it offers a plain Pin.
+  const more=Boolean(atCap&&replacer),choosing=Boolean(replacer&&replacer.isOpen(item.id));
+  const label=pin?pinCopy.unpin:more?pinReplaceLabel(pins.length):atCap?`${pinCopy.pin} (${pinCapLabel(pins.length)})`:pinCopy.pin,busy=pinState.busy===item.id;
+  const sig=['p',pin?pin.pinnedBy:'',atCap,busy,note?note.kind+(note.text||''):'',more?pins.length:'',choosing].join(':');
   const make=()=>{
-   const button=h('button',{type:'button',class:'pin-b','aria-label':label,'aria-pressed':pin?'true':'false','aria-disabled':atCap||busy?'true':null,title:label,'data-pin':pin?'pinned':atCap?'cap':'pin','data-pin-mid':String(item.id),onclick:()=>pinToggle(item)},pin?pinCopy.unpin:pinCopy.pin);
+   const button=h('button',{type:'button',class:'pin-b','aria-label':label,'aria-pressed':pin?'true':'false','aria-disabled':(atCap&&!more)||busy?'true':null,'aria-expanded':more||choosing?String(choosing):null,'aria-controls':choosing?chooserId(item.id):null,title:label,'data-pin':pin?'pinned':atCap?'cap':'pin','data-pin-mid':String(item.id),onclick:()=>pinToggle(item)},
+    pin?pinCopy.unpin:more?[pinCopy.pinMore,h('span',{class:'pin-cap','aria-hidden':'true'},String(pins.length))]:pinCopy.pin);
    const acts=h('div',{class:'pin-acts',role:'group','aria-label':pinCopy.actions},button);
    const tag=pin?h('div',{class:'pin-tag'},pinCopy.by(pinWho(pin.pinnedBy,pinName))):null;
-   let foot=null;
-   if(note&&note.kind==='cap')foot=h('div',{class:'pin-note',role:'note'},h('span',{},note.text),h('button',{type:'button',class:'btn sm',onclick:()=>{pinState.note=null;render();if(typeof onPin.showPins==='function')onPin.showPins();}},pinCopy.showPins));
+   let foot=replacer&&note?replacer.foot(note):null;
+   if(foot);else if(note&&note.kind==='cap')foot=h('div',{class:'pin-note',role:'note'},h('span',{},note.text),h('button',{type:'button',class:'btn sm',onclick:()=>{pinState.note=null;render();if(typeof onPin.showPins==='function')onPin.showPins();}},pinCopy.showPins));
    else if(note&&note.kind==='undo')foot=h('div',{class:'pin-note',role:'note'},h('span',{},pinCopy.unpinned),h('button',{type:'button',class:'btn sm',onclick:()=>{if(pinList().length>=PIN_CAP){capNoteOn(note.item);render();}else pinChange(note.item,'restore');}},pinCopy.undo));
    else if(note)foot=h('div',{class:'pin-note danger',role:'alert'},h('span',{},note.kind==='unpin-failed'?pinCopy.unpinFailed:pinCopy.failed),h('button',{type:'button',class:'btn sm',onclick:()=>pinChange(note.item,note.kind==='unpin-failed'?'unpin':note.action||'pin')},pinCopy.tryAgain));
-   return {acts,tag,foot,pinned:Boolean(pin)};
+   return {acts,tag,foot:[choosing?replacer.node(item):null,foot],pinned:Boolean(pin)};
   };
   return {sig,make};
  }
@@ -332,12 +343,14 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const here=state();
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
+  if(replacer)replacer.sync();
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
   if(pinState.refocus!==null){const pinButton=log.querySelector(`.pin-b[data-pin-mid="${pinState.refocus}"]`);if(pinButton){pinButton.focus();pinState.refocus=null;}}
+  if(replacer)replacer.after();
   if(refocusCard!==null){const done=log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);if(done){done.focus();refocusCard=null;}}
   if(refocus&&launch.state!=='starting'&&launch.state!=='slow'){refocus=false;const retry=status.querySelector('[data-retry]');if(retry&&(!el.ownerDocument.activeElement||el.ownerDocument.activeElement===el.ownerDocument.body||el.ownerDocument.activeElement===status))retry.focus();}
   composer.update({placeholder:p.placeholder,disabled:isDone,...(layout.composer?layout.composer(here):{})});

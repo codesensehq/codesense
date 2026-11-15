@@ -5,12 +5,23 @@
 
 import {
   PIN_CAP,
+  PIN_REPLACE_FAILED,
+  PIN_ROOM_NOW,
+  PIN_UNDO_FULL,
+  PIN_UNDO_GONE,
   pinCapLabel,
   pinCapNote,
   pinFirstWords,
   pinLiveText,
   pinTitleOf as coreTitle,
   pinWho,
+  pinChooserHeading,
+  pinListChangeText,
+  pinNewRowText,
+  pinPinnedAtLine,
+  pinPinnedMeanwhileText,
+  pinReplaceLabel,
+  pinReplacedText,
 } from "./chat-core";
 
 export { PIN_CAP };
@@ -48,33 +59,26 @@ export const firstWords = pinFirstWords;
 export const liveText = pinLiveText;
 
 // ── At the cap: Pin… asks which pin to replace ─────────────────────────────────
-// The overlay's words for the chooser. They move into chat-core with the kit's half of it, so
-// the kit's chat says the same.
+// The chooser's words are chat-core's, so the kit's chat says the same.
 
 /** Pin…'s accessible name and tooltip at the cap. */
-export const replaceLabel = (count: number) => `Pin, replacing one (${pinCapLabel(count)})`;
+export const replaceLabel = pinReplaceLabel;
 /** The chooser's heading, which names its group. */
-export const chooserHeading = (count: number) =>
-  `Replace a pin with this message · ${pinCapLabel(count)}`;
+export const chooserHeading = pinChooserHeading;
 /** A row's line: who pinned it, and when (the pin, not the message). */
-export const pinnedAtLine = (who: string, at: string) => `Pinned by ${who} at ${at}`;
-/** "your" for the person, else the agent's name with 's. */
-const whose = (who: string) => (who === "you" ? "your" : `${who}'s`);
+export const pinnedAtLine = pinPinnedAtLine;
 /** The note and live line after a replace. */
-export const replacedText = (who: string, title: string) =>
-  `Replaced ${whose(who)} pin “${title}”.`;
+export const replacedText = pinReplacedText;
 /** A row the agent added while the chooser was open, before the person arrives on it. */
-export const newRowText = (title: string) => `“${title}” is new. Choose it again to replace it.`;
+export const newRowText = pinNewRowText;
 /** What changed in the list while the chooser was open. */
-export const listChangeText = (added: string[], left: string[]) =>
-  [...added.map((t) => `“${t}” is new.`), ...left.map((t) => `“${t}” left the list.`)].join(" ");
+export const listChangeText = pinListChangeText;
 /** A replace that failed. */
-export const REPLACE_FAILED = "Couldn't replace. Nothing changed.";
+export const REPLACE_FAILED = PIN_REPLACE_FAILED;
 /** The chooser when a pin left and there's room. */
-export const ROOM_NOW = "There's room now.";
+export const ROOM_NOW = PIN_ROOM_NOW;
 /** The agent pinned this message while the chooser was open. */
-export const pinnedMeanwhileText = (who: string) =>
-  `${who} pinned this message. Nothing was replaced.`;
+export const pinnedMeanwhileText = pinPinnedMeanwhileText;
 /** An Undo of a replace that can't happen any more, and why. */
-export const UNDO_FULL = "Can't undo: the list is full again.";
-export const UNDO_GONE = "Can't undo: that message was archived or withdrawn.";
+export const UNDO_FULL = PIN_UNDO_FULL;
+export const UNDO_GONE = PIN_UNDO_GONE;
