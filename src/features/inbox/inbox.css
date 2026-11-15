@@ -2467,7 +2467,7 @@ button.ibx-media-open {
   position: absolute;
   right: 1px;
   bottom: 0;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1;
   font-weight: 700;
 }
@@ -2730,7 +2730,7 @@ button.ibx-media-open {
    still accent wash and the word New instead. Both clear on the next click or key press. */
 .ibx-pk-new {
   display: none;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--ibx-accent-ink);
 }

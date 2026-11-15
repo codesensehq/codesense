@@ -227,6 +227,10 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("sets the cap count on Pin… and a fresh pin's New at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-ov .ibx-pin-cap")).toContain("font-size: 11px");
+    expect(ruleOf(".ibx-pk-new")).toContain("font-size: 11px");
+  });
   it("sets the Pinned by tag at the 11 px meta floor", () => {
     expect(ruleOf(".ibx-pin-tag")).toContain("font-size: 11px");
   });
