@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { ConversationMessage } from "../api";
 import type { InboxView } from "../components/inbox-view-context";
+import { pinTitleOf } from "../lib/person-pins";
 import { HUMAN, isRoleKey, labelOf } from "../model";
 import { useAgentPins } from "./use-agent-pins";
 import { useInboxSessions } from "./use-inbox-sessions";
@@ -36,6 +37,12 @@ export function useThreadPins(
     apply,
     sender: (m) => labelOf(view.dir, m.from),
     labelOf: (from) => labelOf(view.dir, from),
+    // A pin is named as the agent's chat names it: its short name, else its message's title.
+    titleOf: (p) => {
+      if (p.preview?.shortName) return p.preview.shortName;
+      const m = messages.find((x) => x.id === p.messageId);
+      return m ? pinTitleOf(m, labelOf(view.dir, m.from)) : `Pin ${p.messageId}`;
+    },
     onShowPins: () => view.goTo(key),
   });
 }

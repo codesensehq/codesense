@@ -80,10 +80,23 @@ export const PinPreview = forwardRef<
     /** Just pinned: it drops in and glows once, or with reduced motion keeps a still wash
      *  and the word New, until the next click or key press. */
     fresh?: boolean;
+    /** The pin the open chooser's current row would replace: marked, and said. */
+    replacing?: boolean;
   }
->(function PinPreview({ pin, shape, title, tall, open, onOpen, own = null, fresh = false }, ref) {
-  const isNew = fresh ? { "data-new": "true" } : {};
-  const newWord = fresh ? <span className="ibx-pk-new">New</span> : null;
+>(function PinPreview(
+  { pin, shape, title, tall, open, onOpen, own = null, fresh = false, replacing = false },
+  ref,
+) {
+  const isNew = {
+    ...(fresh ? { "data-new": "true" } : {}),
+    ...(replacing ? { "data-replacing": "true" } : {}),
+  };
+  const newWord = (
+    <>
+      {fresh && <span className="ibx-pk-new">New</span>}
+      {replacing && <span className="sr-only">, will be replaced</span>}
+    </>
+  );
   if (!pin.preview && own) {
     const Glyph = own.kind === "quote" ? Quote : LayoutDashboard;
     return (

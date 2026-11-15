@@ -4,35 +4,92 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentPins, type AgentPin, type InboxTeam } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
-import { msgKey } from "../model";
-import { PIN_CAP, capLabel, capNote, liveText, pinTitleOf, whoPinned } from "../lib/person-pins";
+import { formatClock, msgKey } from "../model";
+import {
+  PIN_CAP,
+  REPLACE_FAILED,
+  ROOM_NOW,
+  UNDO_FULL,
+  UNDO_GONE,
+  capNote,
+  chooserHeading,
+  liveText,
+  listChangeText,
+  newRowText,
+  pinTitleOf,
+  pinnedAtLine,
+  pinnedMeanwhileText,
+  replaceLabel,
+  replacedText,
+  whoPinned,
+} from "../lib/person-pins";
 
-/** A note under one message: the cap, a pin or unpin that failed, or the Undo of an unpin. */
+/** A note under one message: the cap, a pin or unpin that failed, the Undo of an unpin or of
+ *  a replace, or a line that says why an Undo went away. */
 export type PinNote =
-  | { mid: string; kind: "cap"; text: string }
+  | { mid: string; kind: "cap" | "info"; text: string }
   | {
       mid: string;
       kind: "pin-failed" | "unpin-failed" | "restore-failed" | "undo";
       message: ConversationMessage;
+    }
+  | {
+      mid: string;
+      kind: "replaced" | "replace-undo-failed";
+      message: ConversationMessage;
+      /** The pin that was replaced, to bring back. */
+      replaced: AgentPin;
+      text: string;
     };
 
 /** One message's Pin, as its action row (or an HTML message's title bar) draws it. */
 export type PinState = {
   /** Who pinned it ("you" or the agent's name); null when it isn't pinned. */
   pinnedBy: string | null;
-  /** At the cap and not pinned: Pin is dimmed (aria-disabled, still focusable). */
+  /** At the cap and not pinned: Pin… opens the chooser of which pin to replace. */
   atCap: boolean;
-  /** The accessible name: Pin, Unpin, or the cap. */
+  /** The accessible name: Pin, Unpin, or Pin… at the cap. */
   label: string;
   /** A pin or unpin of this message is on its way. */
+  busy: boolean;
+  /** Its chooser is open. */
+  choosing: boolean;
+};
+
+/** One row of the chooser: a pin as the list shows it. */
+export type ChooserRow = {
+  pin: AgentPin;
+  title: string;
+  /** "Pinned by Story lead at 13:31". */
+  line: string;
+  /** The agent added it while the chooser was open. */
+  isNew: boolean;
+  /** It can be replaced: not new, or the person has arrived on it since. */
+  armed: boolean;
+};
+
+/** The chooser under a message at the cap. */
+export type PinChooser = {
+  mid: string;
+  id: string;
+  heading: string;
+  rows: ChooserRow[];
+  /** The row the keys, the pointer (with focus inside) and the strip's mark name. */
+  current: number | null;
+  /** What changed in the list, or why a choice didn't replace yet. */
+  change: string | null;
+  /** A replace that failed. */
+  error: string | null;
+  /** A pin left: there's room now, and a plain Pin pins. */
+  room: string | null;
   busy: boolean;
 };
 
 export type PersonPins = {
   stateOf(m: ConversationMessage): PinState;
-  /** Pin it, unpin it, or (at the cap) say whose pins fill the list. */
+  /** Pin it, unpin it, or (at the cap) open or close its chooser. */
   toggle(m: ConversationMessage): void;
-  /** The Undo of the last unpin. */
+  /** The Undo of the last unpin or replace. */
   undo(): void;
   /** Try the failed pin, unpin or Undo again. */
   retry(): void;
@@ -43,16 +100,43 @@ export type PersonPins = {
   note: PinNote | null;
   /** What the polite live region says now. */
   live: string;
-  /** The pin just made or restored: marked new until the next click or key press. */
+  /** The pin just made, replaced in or restored: marked new until the next click or key press. */
   fresh: number | null;
+  /** The open chooser, if any. */
+  chooser: PinChooser | null;
+  /** Move the chooser's current row (the person arrived on it). */
+  chooserMove(messageId: number): void;
+  /** Choose a row: replace it, or, on a row new since the chooser opened, arrive first. */
+  choose(messageId: number): void;
+  /** Pin with the room a pin that left made. */
+  pinInRoom(): void;
+  /** Close the chooser; focus goes back to Pin…. */
+  closeChooser(): void;
+  /** The pin the chooser would replace, for the Pinned strip's mark. */
+  replacing: number | null;
+  /** A message whose Pin should take focus (after a replace or its Undo). */
+  focusPin: string | null;
+  focusDone(): void;
+};
+
+type Open = {
+  mid: string;
+  message: ConversationMessage;
+  /** The pins when the chooser opened, plus the ones the person has arrived on since. */
+  known: Set<number>;
+  /** The list as last drawn, to say what changed. */
+  last: AgentPin[];
+  current: number | null;
+  change: string | null;
+  error: string | null;
 };
 
 /**
  * The person pins a chat's messages into its agent thread (saved agent + story) in `team`'s
  * store, and unpins them, with an Undo. `pins` is the thread's list and `apply` shows the list
- * a call returned. The cap is shared with the agent: at the cap every Pin is dimmed and a
- * click says whose pins fill the list; nothing is replaced. Undo lasts until the next pin,
- * unpin or Esc; nothing here runs on a timer.
+ * a call returned. The cap is shared with the agent: at the cap Pin… opens a chooser under the
+ * message, and one choice replaces that pin in its place, with one Undo for both. Undo lasts
+ * until the next pin, unpin or Esc; nothing here runs on a timer.
  */
 export function usePersonPins({
   team,
@@ -62,6 +146,7 @@ export function usePersonPins({
   apply,
   sender,
   labelOf,
+  titleOf,
   onShowPins,
 }: {
   team: InboxTeam | null;
@@ -72,12 +157,16 @@ export function usePersonPins({
   /** Who sent a message, by name, for an HTML message's fallback title. */
   sender: (m: ConversationMessage) => string;
   labelOf: (from: string) => string;
+  /** A pin's name as the Pinned strip shows it. */
+  titleOf: (pin: AgentPin) => string;
   onShowPins: () => void;
 }): PersonPins | null {
   const [note, setNote] = useState<PinNote | null>(null);
   const [live, setLive] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [fresh, setFresh] = useState<number | null>(null);
+  const [open, setOpen] = useState<Open | null>(null);
+  const [focusPin, setFocusPin] = useState<string | null>(null);
   // The new pin stays marked until the person's next click or key press: input events, no timer.
   useEffect(() => {
     if (fresh === null) return;
@@ -94,6 +183,36 @@ export function usePersonPins({
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
   const thread = team && agentId ? { team, agentId, storyId } : null;
+
+  // The chooser follows the live list: it says what changed, and the row the person was on
+  // stops being current if it left. If the agent pinned this message, it closes.
+  useEffect(() => {
+    if (!open) return;
+    const ids = new Set(pins.map((p) => p.messageId));
+    const before = new Set(open.last.map((p) => p.messageId));
+    if (ids.has(open.message.id) && !before.has(open.message.id)) {
+      const pin = pins.find((p) => p.messageId === open.message.id)!;
+      setOpen(null);
+      setNote({
+        mid: open.mid,
+        kind: "info",
+        text: pinnedMeanwhileText(whoPinned(pin.pinnedBy, labelOf)),
+      });
+      return;
+    }
+    const added = pins.filter((p) => !before.has(p.messageId));
+    const left = open.last.filter((p) => !ids.has(p.messageId));
+    if (added.length === 0 && left.length === 0) return;
+    setOpen({
+      ...open,
+      last: pins,
+      current: open.current !== null && ids.has(open.current) ? open.current : null,
+      change: listChangeText(added.map(titleOf), left.map(titleOf)),
+      error: null,
+    });
+    // `open` is replaced here; only the list drives this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pins]);
 
   const call = useCallback(
     async (
@@ -138,9 +257,103 @@ export function usePersonPins({
     [thread?.team.org, thread?.team.team, thread?.agentId, thread?.storyId, apply, sender],
   );
 
+  /** Replace `old` with message `m`, in its place. */
+  const replace = async (m: ConversationMessage, old: AgentPin) => {
+    if (!thread || !open) return;
+    const mid = msgKey(m);
+    setBusy(mid);
+    try {
+      const r = await agentPins(thread.team, thread.agentId, thread.storyId, {
+        op: "replace",
+        messageId: m.id,
+        replaces: old.messageId,
+      });
+      if (r.status !== "pins") throw new Error(r.message);
+      apply(r.pins);
+      const text = replacedText(whoPinned(old.pinnedBy, labelOf), titleOf(old));
+      setOpen(null);
+      setNote({ mid, kind: "replaced", message: m, replaced: old, text });
+      setLive(text);
+      setFresh(m.id);
+      setFocusPin(mid);
+    } catch {
+      // Nothing changed: the chooser stays on its row and says so. A list that moved on
+      // reaches the chooser through the change event.
+      setOpen((o) => (o ? { ...o, error: REPLACE_FAILED } : o));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** One Undo for a replace: the new pin goes and the old one comes back, in one step. */
+  const undoReplace = async (n: Extract<PinNote, { kind: "replaced" | "replace-undo-failed" }>) => {
+    if (!thread) return;
+    setBusy(n.mid);
+    try {
+      const r = await agentPins(thread.team, thread.agentId, thread.storyId, {
+        op: "restore",
+        messageId: n.replaced.messageId,
+        replacing: n.message.id,
+      });
+      if (r.status !== "pins") throw new Error(r.message);
+      apply(r.pins);
+      setNote(null);
+      setLive(liveText("restored", titleOf(n.replaced), r.pins.length));
+      setFresh(n.replaced.messageId);
+      setFocusPin(n.mid);
+    } catch (error) {
+      const why = String((error as Error)?.message ?? error);
+      if (/at most \d+ pins/.test(why) || /no message/.test(why)) {
+        const text = /at most/.test(why) ? UNDO_FULL : UNDO_GONE;
+        setNote({ mid: n.mid, kind: "info", text });
+        setLive(text);
+      } else {
+        setNote({ ...n, kind: "replace-undo-failed" });
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!thread) return null;
   const pinOf = (m: ConversationMessage) => (sameThreadTeam(m, team) ? byId.get(m.id) : undefined);
   const full = pins.length >= PIN_CAP;
+  const chooser: PinChooser | null = open
+    ? {
+        mid: open.mid,
+        id: `ibx-pin-chooser-${open.mid.replace(/[^\w-]/g, "_")}`,
+        heading: chooserHeading(pins.length),
+        rows: full
+          ? pins.map((pin) => {
+              const isNew = !open.known.has(pin.messageId);
+              return {
+                pin,
+                title: titleOf(pin),
+                line: pinnedAtLine(whoPinned(pin.pinnedBy, labelOf), formatClock(pin.pinnedAtMs)),
+                isNew,
+                armed: !isNew,
+              };
+            })
+          : [],
+        current: full ? open.current : null,
+        change: open.change,
+        error: open.error,
+        room: full ? null : ROOM_NOW,
+        busy: busy === open.mid,
+      }
+    : null;
+  const openFor = (m: ConversationMessage) => {
+    setNote(null);
+    setOpen({
+      mid: msgKey(m),
+      message: m,
+      known: new Set(pins.map((p) => p.messageId)),
+      last: pins,
+      current: pins[0]?.messageId ?? null,
+      change: null,
+      error: null,
+    });
+  };
   return {
     stateOf(m) {
       const pin = pinOf(m);
@@ -148,24 +361,29 @@ export function usePersonPins({
       return {
         pinnedBy: pin ? whoPinned(pin.pinnedBy, labelOf) : null,
         atCap,
-        label: pin ? "Unpin" : atCap ? `Pin (${capLabel(pins.length)})` : "Pin",
+        label: pin ? "Unpin" : atCap ? replaceLabel(pins.length) : "Pin",
         busy: busy === msgKey(m),
+        choosing: open?.mid === msgKey(m),
       };
     },
     toggle(m) {
       if (busy) return;
       const pin = pinOf(m);
       if (pin) return void call(m, "unpin", m.id);
-      if (full) {
-        const text = capNote(pins, labelOf);
-        setNote({ mid: msgKey(m), kind: "cap", text });
-        setLive(text);
+      if (open?.mid === msgKey(m)) {
+        setOpen(null);
         return;
       }
+      if (full) return openFor(m);
       void call(m, "pin", m.id);
     },
     undo() {
-      if (note?.kind !== "undo" || busy) return;
+      if (busy || !note) return;
+      if (note.kind === "replaced" || note.kind === "replace-undo-failed") {
+        void undoReplace(note);
+        return;
+      }
+      if (note.kind !== "undo") return;
       if (full) {
         const text = capNote(pins, labelOf);
         setNote({ mid: note.mid, kind: "cap", text });
@@ -175,7 +393,14 @@ export function usePersonPins({
       void call(note.message, "restore", note.message.id);
     },
     retry() {
-      if (busy || !note || note.kind === "cap" || note.kind === "undo") return;
+      if (busy || !note) return;
+      if (note.kind === "replace-undo-failed") return void undoReplace(note);
+      if (
+        note.kind !== "pin-failed" &&
+        note.kind !== "unpin-failed" &&
+        note.kind !== "restore-failed"
+      )
+        return;
       const op =
         note.kind === "unpin-failed" ? "unpin" : note.kind === "restore-failed" ? "restore" : "pin";
       void call(note.message, op, note.message.id);
@@ -190,6 +415,44 @@ export function usePersonPins({
     note,
     live,
     fresh,
+    chooser,
+    chooserMove(messageId) {
+      setOpen((o) => {
+        if (!o) return o;
+        const known = new Set(o.known);
+        known.add(messageId);
+        return { ...o, known, current: messageId, error: null };
+      });
+    },
+    choose(messageId) {
+      if (!open || busy) return;
+      const pin = pins.find((p) => p.messageId === messageId);
+      if (!pin) return;
+      if (!open.known.has(messageId)) {
+        // A pin the agent added a moment ago is never replaced unseen: the person arrives first.
+        const known = new Set(open.known);
+        known.add(messageId);
+        setOpen({ ...open, known, current: messageId, change: newRowText(titleOf(pin)) });
+        return;
+      }
+      void replace(open.message, pin);
+    },
+    pinInRoom() {
+      if (!open || busy) return;
+      const m = open.message;
+      setOpen(null);
+      void call(m, "pin", m.id).then((ok) => ok && setFocusPin(msgKey(m)));
+    },
+    closeChooser() {
+      if (!open) return;
+      setFocusPin(open.mid);
+      setOpen(null);
+    },
+    replacing: chooser?.current ?? null,
+    focusPin,
+    focusDone() {
+      setFocusPin(null);
+    },
   };
 }
 
