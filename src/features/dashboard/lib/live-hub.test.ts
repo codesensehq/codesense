@@ -6,6 +6,7 @@ import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import {
   LiveHub,
   liveHub,
+  orderedRows,
   paneViewKey,
   type HubDelta,
   type HubRow,
@@ -2469,4 +2470,286 @@ it("a frame that joins mid-turn hears the turn so far, and the frame already wat
   ];
   expect(heard(early)).toEqual(turn);
   expect(heard(late)).toEqual(turn);
+});
+
+// Per-delta cost and view retention.
+type HubInternals = {
+  views: Map<string, HubSnapshot>;
+  uiWrites: Map<string, Promise<unknown>>;
+  pendingReads: Map<string, HubDelta[]>;
+};
+const internals = (target: LiveHub) => target as unknown as HubInternals;
+const sizes = (target: LiveHub) => ({
+  views: internals(target).views.size,
+  uiWrites: internals(target).uiWrites.size,
+  pendingReads: internals(target).pendingReads.size,
+});
+function retentionHub(overrides: Partial<ConstructorParameters<typeof LiveHub>[0]> = {}) {
+  return new LiveHub({
+    read: async (topic, viewKey) => ({ topic, viewKey, rev: 1, snapshot: [{ id: "r1" }] }),
+    unsubscribe: async () => {},
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_key, patch) => patch,
+    ...overrides,
+  });
+}
+const frozen = (rows: HubRow[]) => rows.map((row) => Object.freeze({ ...row }));
+const sessionRows = () =>
+  frozen(["c", "a", "b"].map((id) => ({ id, handle: id, status: "idle" })));
+const agentRows = () =>
+  frozen([
+    { id: "x", order: 2, name: "x" },
+    { id: "y", order: 1, name: "y" },
+    { id: "z", order: 3, name: "z" },
+  ]);
+
+function countSorts<T>(run: () => T): { sorts: number; value: T } {
+  const sort = vi.spyOn(Array.prototype, "sort");
+  try {
+    const value = run();
+    return { sorts: sort.mock.calls.length, value };
+  } finally {
+    sort.mockRestore();
+  }
+}
+
+async function viewAfter(target: LiveHub, topic: string, deltas: HubDelta[]) {
+  for (const delta of deltas) target.receive(delta);
+  return target.snapshot(topic, "all");
+}
+
+it.each([
+  ["sessions", sessionRows, { id: "a", handle: "a", status: "working" }],
+  ["agentList", agentRows, { id: "x", order: 2, name: "renamed" }],
+] as const)(
+  "a %s delta that changes no order key does no sort and equals a full rebuild",
+  async (topic, rows, update) => {
+    const local = retentionHub();
+    try {
+      local.seed({ topic, viewKey: "all", rev: 1, snapshot: rows() });
+      // The first delta after a seed builds the index.
+      local.receive({ topic, viewKey: "all", rev: 2, upserts: [], removes: [] });
+      const before = await local.snapshot(topic, "all");
+      const upsert = Object.freeze({ ...update }) as HubRow;
+      const { sorts } = countSorts(() =>
+        local.receive({ topic, viewKey: "all", rev: 3, upserts: [upsert], removes: [] }),
+      );
+      const after = await local.snapshot(topic, "all");
+      expect(sorts).toBe(0);
+      expect(after.snapshot).not.toBe(before.snapshot);
+      expect(after.snapshot).toEqual(
+        orderedRows(topic, [...before.snapshot.filter((r) => r.id !== upsert.id), upsert]),
+      );
+      expect(after.snapshot.find((r) => r.id === upsert.id)).toBe(upsert);
+      // The rows the update did not touch are the same objects.
+      for (const row of after.snapshot)
+        if (row.id !== upsert.id) expect(before.snapshot).toContain(row);
+    } finally {
+      local.dispose();
+    }
+  },
+);
+
+it.each([
+  ["an order-key change", { upserts: [{ id: "x", order: 9, name: "x" }], removes: [] }],
+  ["an insert", { upserts: [{ id: "w", order: 0, name: "w" }], removes: [] }],
+  ["a remove", { upserts: [], removes: ["y"] }],
+])("%s still sorts and matches a full rebuild", async (_name, change) => {
+  const local = retentionHub();
+  try {
+    local.seed({ topic: "agentList", viewKey: "all", rev: 1, snapshot: agentRows() });
+    local.receive({ topic: "agentList", viewKey: "all", rev: 2, upserts: [], removes: [] });
+    const before = await local.snapshot("agentList", "all");
+    const delta = { topic: "agentList", viewKey: "all", rev: 3, ...change } as HubDelta;
+    const { sorts } = countSorts(() => local.receive(delta));
+    const after = await local.snapshot("agentList", "all");
+    const rows = new Map(before.snapshot.map((row) => [row.id, row]));
+    for (const id of delta.removes) rows.delete(id);
+    for (const row of delta.upserts) rows.set(row.id, row);
+    expect(sorts).toBeGreaterThan(0);
+    expect(after.snapshot).toEqual(orderedRows("agentList", [...rows.values()]));
+    expect(before.snapshot.map((row) => row.id)).toEqual(["y", "x", "z"]);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a delta after a seed or a gap applies to a fresh index", async () => {
+  const local = retentionHub();
+  try {
+    local.seed({ topic: "sessions", viewKey: "all", rev: 1, snapshot: sessionRows() });
+    local.receive({ topic: "sessions", viewKey: "all", rev: 2, upserts: [], removes: [] });
+    // A newer seed replaces the rows: an update must land on the new rows, not the old index.
+    local.seed({
+      topic: "sessions",
+      viewKey: "all",
+      rev: 5,
+      snapshot: frozen([{ id: "b" }, { id: "a" }]),
+    });
+    let view = await viewAfter(local, "sessions", [
+      { topic: "sessions", viewKey: "all", rev: 6, upserts: [{ id: "a", v: 1 }], removes: [] },
+    ]);
+    expect(view.snapshot).toEqual([{ id: "a", v: 1 }, { id: "b" }]);
+    // A gap drops the view; the next seed starts over.
+    local.receive({ topic: "sessions", viewKey: "all", rev: 9, upserts: [], removes: [] });
+    local.seed({ topic: "sessions", viewKey: "all", rev: 9, snapshot: frozen([{ id: "q" }]) });
+    view = await viewAfter(local, "sessions", [
+      { topic: "sessions", viewKey: "all", rev: 10, upserts: [{ id: "q", v: 2 }], removes: [] },
+      { topic: "sessions", viewKey: "all", rev: 11, upserts: [{ id: "q", v: 3 }], removes: [] },
+    ]);
+    expect(view.snapshot).toEqual([{ id: "q", v: 3 }]);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a scoped subscription applies its deltas through the same patch: no sort without an order change", async () => {
+  const post = vi.fn();
+  const local = retentionHub({
+    read: async (topic, viewKey) => ({ topic, viewKey, rev: 1, snapshot: sessionRows() }),
+  });
+  try {
+    const frame = local.attach("scoped", "all", post, true);
+    await frame.subscribe("records", undefined, { viewKey: "records:one" });
+    const subscription = [
+      ...(local as unknown as { scoped: Map<string, { value?: HubSnapshot }> }).scoped.values(),
+    ][0];
+    const apply = (delta: HubDelta) =>
+      (
+        local as unknown as { applyScoped: (s: unknown, d: HubDelta) => void }
+      ).applyScoped(subscription, delta);
+    apply({ topic: "records", viewKey: "records:one", rev: 2, upserts: [], removes: [] });
+    const before = subscription.value!.snapshot;
+    const upsert = Object.freeze({ id: "b", handle: "b", status: "working" });
+    const { sorts } = countSorts(() =>
+      apply({ topic: "records", viewKey: "records:one", rev: 3, upserts: [upsert], removes: [] }),
+    );
+    expect(sorts).toBe(0);
+    expect(subscription.value!.snapshot).toEqual(
+      orderedRows("records", [...before.filter((r) => r.id !== "b"), upsert]),
+    );
+    expect(subscription.value!.snapshot).not.toBe(before);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("opening then closing 50 watches and 50 seeding frames returns the view cache to its baseline", async () => {
+  const local = retentionHub();
+  try {
+    const baseline = sizes(local);
+    const stops: Array<() => void> = [];
+    for (let i = 0; i < 50; i++)
+      stops.push(local.watch("messageDelivery", `team:o/t${i}`, () => {}));
+    const frames = [];
+    for (let i = 0; i < 50; i++) {
+      const frame = local.attach(`page-${i}`, "team:o/t", () => {}, true);
+      const viewKey = `team:o/t|frame:page-${i}`;
+      local.seed(
+        { topic: "agentDefinitions", viewKey, rev: 1, snapshot: [{ id: "d" }] },
+        frame,
+      );
+      await frame.subscribe("agentDefinitions", undefined, { viewKey });
+      frames.push(frame);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sizes(local).views).toBeGreaterThanOrEqual(100);
+    for (const stop of stops) stop();
+    for (const frame of frames) frame.dispose();
+    expect(sizes(local)).toEqual(baseline);
+    // Keys seeded or read with no holder are bounded.
+    for (let i = 0; i < 40; i++)
+      local.seed({ topic: "messageDelivery", viewKey: `team:o/u${i}`, rev: 1, snapshot: [] });
+    await local.snapshot("sessions", "all");
+    expect(sizes(local).views).toBeLessThanOrEqual(16);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a view another holder still has survives a release; rekey releases the old key", async () => {
+  const local = retentionHub();
+  try {
+    const key = JSON.stringify(["messageDelivery", "team:o/a"]);
+    const first = local.watch("messageDelivery", "team:o/a", () => {});
+    const second = local.watch("messageDelivery", "team:o/a", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    first();
+    expect(internals(local).views.has(key)).toBe(true);
+    second();
+    expect(internals(local).views.has(key)).toBe(false);
+
+    const frame = local.attach("page", "team:o/a", () => {}, true);
+    await frame.subscribe("messageDelivery");
+    const seeded = "team:o/a|frame:page";
+    local.seed(
+      { topic: "agentDefinitions", viewKey: seeded, rev: 1, snapshot: [] },
+      frame,
+    );
+    expect(internals(local).views.has(key)).toBe(true);
+    frame.rekey("team:o/b");
+    expect(internals(local).views.has(key)).toBe(false);
+    expect(internals(local).views.has(JSON.stringify(["agentDefinitions", seeded]))).toBe(false);
+    await frame.subscribe("messageDelivery");
+    expect(internals(local).views.has(JSON.stringify(["messageDelivery", "team:o/b"]))).toBe(true);
+    frame.dispose();
+    expect(sizes(local)).toEqual({ views: 0, uiWrites: 0, pendingReads: 0 });
+  } finally {
+    local.dispose();
+  }
+});
+
+it("writeUi still resolves when its last holder leaves during the write, then the write is not retained", async () => {
+  let finish!: (state: Record<string, unknown>) => void;
+  const local = retentionHub({
+    writeUi: () => new Promise((resolve) => (finish = resolve)),
+  });
+  try {
+    const frame = local.attach("page", "all", () => {}, true);
+    await frame.subscribe("ui:slot");
+    const write = local.writeUi("ui:slot", "all", { open: true });
+    await vi.advanceTimersByTimeAsync(0);
+    frame.dispose();
+    finish({ open: true });
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(write).resolves.toMatchObject({ snapshot: [{ id: "ui:slot", open: true }] });
+    expect(sizes(local).uiWrites).toBe(0);
+    expect(sizes(local).views).toBeLessThanOrEqual(16);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a read that finishes after its key was released does not hold it", async () => {
+  let reply!: () => void;
+  const local = retentionHub({
+    read: (topic, viewKey) =>
+      new Promise((resolve) => {
+        reply = () => resolve({ topic, viewKey, rev: 1, snapshot: [] });
+      }),
+  });
+  try {
+    const key = JSON.stringify(["messageDelivery", "team:o/late"]);
+    const stop = local.watch("messageDelivery", "team:o/late", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    local.receive({
+      topic: "messageDelivery",
+      viewKey: "team:o/late",
+      rev: 2,
+      upserts: [],
+      removes: [],
+    });
+    expect(sizes(local).pendingReads).toBe(1);
+    stop();
+    reply();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sizes(local).pendingReads).toBe(0);
+    // Unheld, it is only an LRU entry: newer unheld keys push it out.
+    for (let i = 0; i < 16; i++)
+      local.seed({ topic: "messageDelivery", viewKey: `team:o/n${i}`, rev: 1, snapshot: [] });
+    expect(internals(local).views.has(key)).toBe(false);
+  } finally {
+    local.dispose();
+  }
 });
