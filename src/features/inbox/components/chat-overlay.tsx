@@ -218,10 +218,13 @@ export function ChatOverlay({
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
   // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
-  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too).
+  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too),
+  // else the rest of its mail (a lead's or a role's), in the Foreman's pin team.
   const pinnedMessage = (id: number) =>
     foreman
-      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ?? null)
+      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        null)
       : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
   const pinTitle = (id: number) => {
     const m = pinnedMessage(id);

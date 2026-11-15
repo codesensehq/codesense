@@ -1781,4 +1781,34 @@ describe("ChatOverlay for the Foreman", () => {
       .map(([, args]) => (args as { team: unknown }).team);
     expect(teams).toEqual(teams.map(() => DOCS_TEAM));
   });
+
+  it("names, cards and opens a pin on a lead's message to the Foreman", async () => {
+    const LEAD_TO_FOREMAN = fm(7, "acme-lead", FOREMAN, "Lead note for the Foreman.", NOW - 30_000);
+    foremanSetup(new Map([[FOREMAN, [...LIVE_MAIL, LEAD_TO_FOREMAN]]]));
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "agent_pins"
+        ? {
+            status: "pins",
+            team: DOCS_TEAM,
+            agentId: FOREMAN_AGENT_ID,
+            storyId: null,
+            pins: [
+              { messageId: 7, position: 0, pinnedBy: "human", pinnedAtMs: NOW, preview: null },
+            ],
+          }
+        : undefined,
+    );
+    await renderForeman();
+    const strip = await waitFor(() => {
+      const el = screen.getByTestId("chat-overlay").querySelector<HTMLElement>(".ibx-ov-pins");
+      expect(el?.textContent).toMatch(/Lead note for the Foreman/);
+      return el!;
+    });
+    expect(strip.textContent).not.toMatch(/Pin 7\b/);
+    const card = strip.querySelector<HTMLButtonElement>("button");
+    expect(card).not.toBeNull();
+    fireEvent.click(card!);
+    expect(screen.queryByText("This view is no longer in the thread.")).toBeNull();
+    expect(screen.getAllByText(/Lead note for the Foreman/).length).toBeGreaterThan(1);
+  });
 });
