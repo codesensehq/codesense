@@ -1380,6 +1380,7 @@ describe("kit.chat faces", () => {
   };
 
   it("with faces unset the thread is exactly what it was: one meta line and one body per message, no run marks", async () => {
+    // (role and tabindex are the thread's Tab stop, which every message carries; see "the thread is one Tab stop")
     const calls = withAvatar();
     const s = setup([lead("idle")], THREAD);
     mountOn(s);
@@ -1387,35 +1388,35 @@ describe("kit.chat faces", () => {
     expect(shape(s.el)).toEqual([
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "first",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "second",
       },
       {
         cls: "msg other",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Dev two",
         body: "from another agent",
       },
       {
         cls: "msg you",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "You",
         body: "my reply",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "back again",
@@ -1847,6 +1848,197 @@ describe("kit.chat onPin: the person pins a message", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".pin-b")).toBeNull();
+  });
+});
+
+describe("kit.chat: the thread is one Tab stop", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  const THREAD = [said(1, "Starting."), said(2, "Tests are green."), said(3, "Review is clean.")];
+
+  async function mountThread(thread: Row[] = [...THREAD]) {
+    let pins: Array<{ messageId: number; pinnedBy: string }> = [];
+    const onPin = {
+      pins: () => pins,
+      change: vi.fn(async (action: string, id: number) => {
+        pins =
+          action === "unpin"
+            ? pins.filter((p) => p.messageId !== id)
+            : [...pins, { messageId: id, pinnedBy: "human" }];
+        return pins;
+      }),
+    };
+    const s = setup([lead("idle")], thread);
+    mountOn(s, { onPin });
+    await flush();
+    const log = s.el.querySelector<HTMLElement>(".log")!;
+    const rows = () => [...log.querySelectorAll<HTMLElement>("[data-mid]")];
+    const row = (id: number) => log.querySelector<HTMLElement>(`[data-mid="${id}"]`)!;
+    /** What Tab stops on in the thread: anything focusable with a tabindex of 0 or more. */
+    const stops = () =>
+      [log, ...log.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tabIndex >= 0 &&
+          (el.matches("button, a[href], iframe, input") || el.hasAttribute("tabindex")) &&
+          !el.closest("[hidden]"),
+      );
+    const only = (owner: HTMLElement) => stops().every((el) => el === owner || owner.contains(el));
+    const key = (el: HTMLElement, k: string) =>
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    return { s, log, rows, row, stops, only, key, thread };
+  }
+
+  it("stops on the newest message and its own actions, and on nothing in older messages", async () => {
+    const { log, rows, stops, only } = await mountThread();
+    const newest = rows().at(-1)!;
+    expect(newest.getAttribute("data-mid")).toBe("3");
+    expect(newest.tabIndex).toBe(0);
+    expect(log.tabIndex).toBe(-1);
+    // each message reads as one item
+    expect(rows().every((r) => r.getAttribute("role") === "article")).toBe(true);
+    expect(stops().length).toBeGreaterThan(1);
+    expect(only(newest)).toBe(true);
+  });
+
+  it("moves between messages with the arrow keys, Home and End, and takes each message's actions along", async () => {
+    const { rows, only, key } = await mountThread();
+    const [first, middle, newest] = rows() as [HTMLElement, HTMLElement, HTMLElement];
+    newest.focus();
+    expect(key(newest, "ArrowUp")).toBe(false);
+    expect(document.activeElement).toBe(middle);
+    expect(middle.tabIndex).toBe(0);
+    expect(newest.tabIndex).toBe(-1);
+    expect(only(middle)).toBe(true);
+    key(middle, "Home");
+    expect(document.activeElement).toBe(first);
+    key(first, "ArrowUp");
+    expect(document.activeElement).toBe(first);
+    key(first, "End");
+    expect(document.activeElement).toBe(newest);
+    key(newest, "ArrowDown");
+    expect(document.activeElement).toBe(newest);
+    // A key with a modifier, or one inside a message's own control, is left alone.
+    const pin = newest.querySelector<HTMLButtonElement>(".pin-b")!;
+    pin.focus();
+    expect(key(pin, "ArrowUp")).toBe(true);
+    expect(document.activeElement).toBe(pin);
+    newest.focus();
+    newest.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Home",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(document.activeElement).toBe(newest);
+  });
+
+  it("an action focused in an older message makes that message the thread's stop, and keeps it there when the action redraws it", async () => {
+    const { row, only, rows } = await mountThread();
+    const pin = row(1).querySelector<HTMLButtonElement>(".pin-b")!;
+    pin.focus();
+    expect(row(1).tabIndex).toBe(0);
+    expect(rows().at(-1)!.tabIndex).toBe(-1);
+    expect(only(row(1))).toBe(true);
+    // Pinning rebuilds the message's node; the stop and focus stay on it.
+    pin.click();
+    await flush();
+    const unpin = row(1).querySelector<HTMLButtonElement>(".pin-b")!;
+    expect(unpin.getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(unpin);
+    expect(row(1).tabIndex).toBe(0);
+    expect(only(row(1))).toBe(true);
+  });
+
+  it("a message that lands while you read an older one leaves the stop where you are", async () => {
+    const { s, row, rows, thread } = await mountThread();
+    row(1).focus();
+    thread.push(said(4, "Merged."));
+    s.emit("inbox");
+    await flush();
+    expect(rows().at(-1)!.getAttribute("data-mid")).toBe("4");
+    expect(document.activeElement).toBe(row(1));
+    expect(row(1).tabIndex).toBe(0);
+    expect(row(4).tabIndex).toBe(-1);
+    expect(row(4).querySelector<HTMLButtonElement>(".pin-b")!.tabIndex).toBe(-1);
+  });
+
+  it("a focused message that a render redraws keeps focus: its Delivered mark arriving doesn't drop you to the page", async () => {
+    const roster = [lead("running")];
+    const thread = [...THREAD];
+    const s = setup(roster, thread);
+    mountOn(s);
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    // The inbox has your message now: it is a row of the thread, marked Queued.
+    thread.push({ ...said(41, "when you can"), from: "human", to: "lead-1", fromName: "You" });
+    s.emit("inbox");
+    await flush();
+    const row = () => s.el.querySelector<HTMLElement>('.log [data-mid="41"]')!;
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
+    const before = row();
+    before.focus();
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+    // the mark rebuilt the row's node; focus and the stop moved to the new one
+    expect(row()).not.toBe(before);
+    expect(document.activeElement).toBe(row());
+    expect(row().tabIndex).toBe(0);
+  });
+
+  it("a focused message that leaves the thread hands focus to the newest", async () => {
+    const { s, row, rows, thread } = await mountThread();
+    row(2).focus();
+    thread.splice(1, 1);
+    s.emit("inbox");
+    await flush();
+    expect(rows().map((r) => r.getAttribute("data-mid"))).toEqual(["1", "3"]);
+    expect(document.activeElement).toBe(row(3));
+    expect(row(3).tabIndex).toBe(0);
+  });
+
+  it("a render that doesn't move the stop doesn't walk the whole thread again", async () => {
+    const { s, log, thread } = await mountThread();
+    const walks = vi.spyOn(log, "querySelectorAll");
+    thread.push(said(4, "Merged."));
+    s.emit("inbox");
+    await flush();
+    // the newest moved, so the thread is walked once
+    const moved = walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]")).length;
+    expect(moved).toBe(1);
+    walks.mockClear();
+    s.emit("activity");
+    await flush();
+    expect(walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]"))).toEqual([]);
+  });
+
+  it("follows the newest message while you haven't moved, and keeps the log a Tab stop while it has none", async () => {
+    const { s, log, row, thread } = await mountThread([]);
+    expect(log.tabIndex).toBe(0);
+    thread.push(said(1, "Starting."));
+    s.emit("inbox");
+    await flush();
+    expect(log.tabIndex).toBe(-1);
+    expect(row(1).tabIndex).toBe(0);
+    thread.push(said(2, "Tests are green."));
+    s.emit("inbox");
+    await flush();
+    expect(row(2).tabIndex).toBe(0);
+    expect(row(1).tabIndex).toBe(-1);
   });
 });
 
