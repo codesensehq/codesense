@@ -1072,7 +1072,7 @@ async fn indexed_session_facts(
         // for what it picks up itself; a read stores no totals, so its story is marked.
         let now = chrono::Utc::now().timestamp_millis();
         let except = if computing {
-            Some((String::as_str(&scope_key), String::as_str(&entity)))
+            Some((std::string::String::as_str(&scope_key), std::string::String::as_str(&entity)))
         } else {
             None
         };
