@@ -242,7 +242,8 @@ pub(crate) trait InboxHost: Send + Sync {
         out
     }
     /// Every session the usage store recorded for `thread` (its saved agent, any revision,
-    /// and its story), ended ones included, oldest first. Default none.
+    /// and its story), ended ones included, oldest first; none for a no-story thread.
+    /// Default none.
     async fn thread_sessions(
         &self,
         _thread: &crate::weft::pins::ThreadKey,

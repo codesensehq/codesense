@@ -1296,8 +1296,9 @@ pub(crate) async fn session_inbox(
 }
 
 /// `list_thread_inbox`: the conversation of one saved agent + story thread (the key its
-/// pins use), every session of it the roster lists or the usage store recorded, ended
-/// ones included, so a successor opens on its predecessor's mail.
+/// pins use): every session of it the roster lists, and for a story thread every one the
+/// usage store recorded, ended ones included, so a successor opens on its predecessor's
+/// mail.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ThreadInboxDto {
@@ -1804,9 +1805,10 @@ pub async fn list_session_inbox(
 }
 
 /// One saved agent + story thread's conversation across every synced team: the mail of
-/// every session of it, ended ones included, so a successor opens on its predecessor's
-/// mail. `session` (a seat of the thread that runs now) leaves out the thread's other
-/// running seats. Marks nothing read, claims nothing.
+/// every session of it, the recorded ended ones of a story thread included (a no-story
+/// thread is its listed sessions), so a successor opens on its predecessor's mail.
+/// `session`, a seat of the thread (listed and not ended), leaves out the thread's other
+/// seats. Marks nothing read, claims nothing.
 #[tauri::command]
 pub async fn list_thread_inbox(
     app: tauri::AppHandle,
