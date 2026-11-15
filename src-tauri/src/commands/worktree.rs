@@ -1932,40 +1932,46 @@ pub(crate) async fn prune_worktree_locked(
 /// (renders as neither dirty nor a false "clean"); the auto-teardown gate folds
 /// `None → true` via [`worktree_git_dirty`] (never auto-destroy on an ambiguous read).
 pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
-    let out = super::worktree_probe::git_stdout(worktree, &super::worktree_probe::STATUS_ARGS)?;
-    Some(!out.trim().is_empty())
+    let out = Command::new(git_bin())
+        .args(["status", "--porcelain"])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
 }
 
-/// The listing's git facts for `worktree`: read once and kept until its gitdir `HEAD` or `index`
-/// changes, a file event under it drops them ([`invalidate_listing_facts`]), or they age out.
-/// Only the listing uses this; the teardown gate and the run-launch branch check read git
-/// directly, because a stale answer there could remove work or attribute a run to the wrong branch.
-pub(crate) fn listing_git_facts(worktree: &Path) -> super::worktree_probe::GitFacts {
-    listing_cache().facts_at(worktree, std::time::Instant::now(), || {
-        super::worktree_probe::GitFacts {
-            branch: current_branch_of_worktree(worktree),
-            dirty: worktree_git_dirty_opt(worktree),
-            repo_path: main_repo_of_worktree(worktree),
-        }
-    })
-}
+/// The git facts the listing's rows show, read once per listing: [`warm_listing_git_facts`]
+/// fills it, and the row builders read it, so a worktree whose read failed or whose stamp cannot
+/// be taken is not probed a second time, on the listing thread, outside the concurrency bound.
+/// A path it does not hold (a caller outside the listing) is read through the same bounded,
+/// cached probe.
+#[derive(Default)]
+pub(crate) struct FactsMap(HashMap<PathBuf, super::worktree_probe::GitFacts>);
 
-fn listing_cache() -> &'static super::worktree_probe::ProbeCache {
-    static CACHE: OnceLock<super::worktree_probe::ProbeCache> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
-}
-
-/// Drop the listing's facts for the worktree at `key` ([`worktree_probe::cache_key`]): the
-/// existing worktree file watch reports `relative` changed under it.
-pub(crate) fn invalidate_listing_facts(key: &Path, relative: &str) {
-    listing_cache().invalidate_under(key, relative);
+impl FactsMap {
+    fn get(&self, worktree: &Path) -> super::worktree_probe::GitFacts {
+        self.0
+            .get(worktree)
+            .cloned()
+            .unwrap_or_else(|| super::worktree_probe::listing_facts(worktree))
+    }
 }
 
 /// SLW-RS-4 (review M6/L9): the worktree's currently checked-out branch
 /// (`git rev-parse --abbrev-ref HEAD`), or `None` on a detached HEAD / git error.
 pub(crate) fn current_branch_of_worktree(worktree: &Path) -> Option<String> {
-    let out = super::worktree_probe::git_stdout(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let branch = out.trim().to_string();
+    let out = Command::new(git_bin())
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8(out.stdout).ok()?.trim().to_string();
     if branch.is_empty() || branch == "HEAD" {
         return None; // detached HEAD
     }
@@ -1996,11 +2002,15 @@ pub(crate) fn verify_worktree_branch(worktree: &Path, expected_branch: &str) -> 
 /// worktree or git is unavailable — the caller skips the auto-teardown (the manual
 /// path, which is handed an explicit `repo_path`, is unaffected).
 pub(crate) fn main_repo_of_worktree(worktree: &Path) -> Option<PathBuf> {
-    let out = super::worktree_probe::git_stdout(
-        worktree,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let common_dir = PathBuf::from(out.trim());
+    let out = Command::new(git_bin())
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let common_dir = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
     // `<main>/.git` → `<main>`. A bare/edge layout without a parent is skipped.
     common_dir.parent().map(Path::to_path_buf)
 }
@@ -2147,7 +2157,7 @@ pub(crate) fn distinct_clone_dirs(attached_worktree_paths: &[PathBuf]) -> Vec<Pa
     let mut clones: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for wt_path in attached_worktree_paths {
-        let Some(clone) = main_repo_of_worktree(wt_path) else {
+        let Some(clone) = super::worktree_probe::listing_clone_of(wt_path) else {
             continue; // AC-4: unresolvable clone — skip fail-soft.
         };
         if seen.insert(WaveCoordinator::normalize_target_path(&clone)) {
@@ -2215,16 +2225,15 @@ fn discover_worktrees_in(
     let mut out: Vec<WorktreeInfo> = Vec::new();
     let mut emitted: HashSet<PathBuf> = HashSet::new();
     for clone in &clones {
-        let porcelain = match run_git(&["worktree", "list", "--porcelain"], clone) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!(
-                    target: "commands::worktree",
-                    "discover_worktrees: skipping clone {} — git worktree list failed: {e}",
-                    clone.display()
-                );
-                continue; // AC-4: one bad clone never blanks the set.
-            }
+        // Bounded and kept until the clone's worktrees change: a clone that hangs costs one
+        // timeout and is skipped, and an unchanged listing spawns nothing here.
+        let Some(porcelain) = super::worktree_probe::listing_porcelain(clone) else {
+            log::warn!(
+                target: "commands::worktree",
+                "discover_worktrees: skipping clone {} — git worktree list failed or timed out",
+                clone.display()
+            );
+            continue; // AC-4: one bad clone never blanks the set.
         };
         // The main working copy path. For a standard/managed clone (`.git` dir inside the
         // working tree) this equals `main_repo_of_worktree`'s common-dir parent, so it
@@ -2422,7 +2431,15 @@ pub(crate) fn managed_row_from_record(
     r: crate::install::worktree_index::WorktreeStoryRecord,
     live_cli_session: bool,
 ) -> ManagedWorktreeRow {
-    let facts = listing_git_facts(r.code_repo_path.as_path());
+    managed_row_with_facts(r, live_cli_session, &FactsMap::default())
+}
+
+fn managed_row_with_facts(
+    r: crate::install::worktree_index::WorktreeStoryRecord,
+    live_cli_session: bool,
+    facts: &FactsMap,
+) -> ManagedWorktreeRow {
+    let facts = facts.get(r.code_repo_path.as_path());
     let (branch, dirty) = (facts.branch, facts.dirty);
     let repo_path = facts.repo_path.map(|p| p.to_string_lossy().into_owned());
     // SW-WM-3 (AC-1/AC-4): orphaned = parent working copy gone (git-link/parent broken →
@@ -2578,8 +2595,9 @@ impl WorktreeRow {
         path: &Path,
         branch: Option<String>,
         live_cli_session: bool,
+        facts: &FactsMap,
     ) -> Self {
-        let facts = listing_git_facts(path);
+        let facts = facts.get(path);
         WorktreeRow {
             kind,
             context: None,
@@ -2617,6 +2635,7 @@ impl WorktreeRow {
         path: &Path,
         branch: Option<String>,
         live: bool,
+        facts: &FactsMap,
     ) -> Self {
         let mut row = Self::git_only(
             WorktreeKind::EpicIntegration,
@@ -2624,6 +2643,7 @@ impl WorktreeRow {
             path,
             branch,
             live,
+            facts,
         );
         row.epic_id = Some(coords.epic_id);
         row.owner = Some(coords.owner);
@@ -2637,12 +2657,20 @@ impl WorktreeRow {
     /// off), falling back to the worktree path itself if the clone can't be resolved
     /// so the row still renders in a stable one-member group. Reveal-only in the
     /// panel — there is no story/epic affordance to offer.
-    fn orphan(path: &Path, branch: Option<String>, live: bool) -> Self {
-        let workspace_key = listing_git_facts(path)
+    fn orphan(path: &Path, branch: Option<String>, live: bool, facts: &FactsMap) -> Self {
+        let workspace_key = facts
+            .get(path)
             .repo_path
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        Self::git_only(WorktreeKind::Orphan, workspace_key, path, branch, live)
+        Self::git_only(
+            WorktreeKind::Orphan,
+            workspace_key,
+            path,
+            branch,
+            live,
+            facts,
+        )
     }
 }
 
@@ -2727,12 +2755,19 @@ pub async fn list_managed_worktrees(
             &cache,
             &live_home_dirs,
         )?;
-        for record in crate::install::worktree_index::context_records(
+        let context_records = crate::install::worktree_index::context_records(
             &codesense_home,
             &crate::domain::Principal::from(user_id),
         )
-        .map_err(|e| e.to_string())?
-        {
+        .map_err(|e| e.to_string())?;
+        let context_facts = warm_listing_git_facts(
+            context_records
+                .iter()
+                .filter(|record| record.launch_cwd.is_dir())
+                .map(|record| record.root.clone())
+                .collect(),
+        );
+        for record in context_records {
             // Retain the registration for explicit stale-id errors, but don't offer a vanished checkout.
             if !record.launch_cwd.is_dir() {
                 continue;
@@ -2762,6 +2797,7 @@ pub async fn list_managed_worktrees(
                 &record.root,
                 Some(record.branch),
                 !agents.is_empty(),
+                &context_facts,
             );
             row.org_slug = Some(record.org);
             row.team = Some(record.team);
@@ -2856,7 +2892,7 @@ fn list_managed_worktrees_core(
         &ctx.org_slug,
     );
     survivors.extend(adopted);
-    warm_listing_git_facts(
+    let facts = warm_listing_git_facts(
         survivors
             .iter()
             .map(|r| r.code_repo_path.clone())
@@ -2865,7 +2901,7 @@ fn list_managed_worktrees_core(
     );
     // Story rows: the user-global record set through the reused enrichment path,
     // wrapped as unified rows (no story enrichment duplicated).
-    let mut rows: Vec<WorktreeRow> = enrich_rows(survivors, live_home_dirs)
+    let mut rows: Vec<WorktreeRow> = enrich_rows(survivors, live_home_dirs, &facts)
         .into_iter()
         .map(WorktreeRow::story)
         .collect();
@@ -2876,7 +2912,12 @@ fn list_managed_worktrees_core(
         .iter()
         .map(|r| WaveCoordinator::normalize_target_path(&PathBuf::from(&r.path)))
         .collect();
-    rows.extend(discovered_extra_rows(present, &storied, live_home_dirs));
+    rows.extend(discovered_extra_rows(
+        present,
+        &storied,
+        live_home_dirs,
+        &facts,
+    ));
     Ok(ManagedWorktreeListing {
         rows,
         reaped: reaped.len(),
@@ -2916,6 +2957,7 @@ fn discovered_extra_rows(
     present: Vec<(WorktreeInfo, PathBuf)>,
     storied: &std::collections::HashSet<PathBuf>,
     live_home_dirs: &Liveness<Vec<PathBuf>>,
+    facts: &FactsMap,
 ) -> Vec<WorktreeRow> {
     let extra: Vec<(WorktreeInfo, PathBuf)> = present
         .into_iter()
@@ -2933,8 +2975,8 @@ fn discovered_extra_rows(
                 &path,
                 w.branch.as_deref(),
             ) {
-                Some(coords) => WorktreeRow::epic(coords, &path, w.branch, is_live),
-                None => WorktreeRow::orphan(&path, w.branch, is_live),
+                Some(coords) => WorktreeRow::epic(coords, &path, w.branch, is_live, facts),
+                None => WorktreeRow::orphan(&path, w.branch, is_live, facts),
             }
         })
         .collect()
@@ -2949,6 +2991,7 @@ fn discovered_extra_rows(
 fn enrich_rows(
     records: Vec<crate::install::worktree_index::WorktreeStoryRecord>,
     live_home_dirs: &Liveness<Vec<std::path::PathBuf>>,
+    facts: &FactsMap,
 ) -> Vec<ManagedWorktreeRow> {
     let roots: Vec<std::path::PathBuf> = records
         .iter()
@@ -2961,7 +3004,7 @@ fn enrich_rows(
     records
         .into_iter()
         .zip(roots)
-        .map(|(r, root)| managed_row_from_record(r, live.contains(&root)))
+        .map(|(r, root)| managed_row_with_facts(r, live.contains(&root), facts))
         .collect()
 }
 
@@ -2969,14 +3012,20 @@ fn enrich_rows(
 const LISTING_PROBE_CONCURRENCY: usize = 4;
 
 /// Read the git facts for every worktree the listing is about to show, at most
-/// [`LISTING_PROBE_CONCURRENCY`] at a time, so the row builders that follow find them kept. A
-/// worktree whose facts are already kept costs no git.
-fn warm_listing_git_facts(mut paths: Vec<PathBuf>) {
+/// [`LISTING_PROBE_CONCURRENCY`] at a time, and hand them to the row builders. A worktree whose
+/// facts are already kept costs no git; one whose read failed is read once, here, inside the
+/// bound.
+fn warm_listing_git_facts(mut paths: Vec<PathBuf>) -> FactsMap {
     paths.sort();
     paths.dedup();
+    let read = Mutex::new(HashMap::new());
     super::worktree_probe::for_each_bounded(&paths, LISTING_PROBE_CONCURRENCY, |path| {
-        listing_git_facts(path);
+        let facts = super::worktree_probe::listing_facts(path);
+        read.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(path.clone(), facts);
     });
+    FactsMap(read.into_inner().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// Parse `git worktree list --porcelain` output. Each worktree is a
@@ -5561,7 +5610,7 @@ detached
         let wt = PathBuf::from(&wt_path);
         let records = vec![wl2_record(&wt, "RT-6d")];
 
-        let rows = enrich_rows(records, &Liveness::Unknown);
+        let rows = enrich_rows(records, &Liveness::Unknown, &FactsMap::default());
         assert!(rows[0].live_cli_session);
     }
 
@@ -5650,6 +5699,145 @@ detached
         assert!(
             json.get("reapEligible").is_none(),
             "no automatic-removal flag on a worktree row: {json}"
+        );
+    }
+
+    /// A repo with a linked worktree that is attached and recorded, the way a listing finds
+    /// one: `(home, ctx, slug, worktree)`.
+    async fn attached_story_worktree(
+        tmp: &TempDir,
+        story: &str,
+    ) -> (
+        PathBuf,
+        crate::content_engine::ResolverContext,
+        SourceRepoSlug,
+        PathBuf,
+    ) {
+        use crate::content_engine::lockfile::register_attached_code_repo;
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        init_repo_with_commit(&repo);
+        let wt_path = tmp.path().join("repo-wt");
+        create_worktree(
+            repo.to_string_lossy().into_owned(),
+            format!("feat/{story}"),
+            wt_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .unwrap();
+        let ctx = wm3_test_ctx(&home);
+        let slug = SourceRepoSlug::new("alderco", "codesense").unwrap();
+        register_attached_code_repo(&ctx, &slug, &wt_path).unwrap();
+        crate::install::worktree_index::write_record(
+            &home,
+            &Principal::from(ctx.user_id),
+            &wl2_record(&wt_path, story),
+        )
+        .unwrap();
+        (home, ctx, slug, wt_path)
+    }
+
+    fn list_once(
+        home: &Path,
+        ctx: &crate::content_engine::ResolverContext,
+        slug: &SourceRepoSlug,
+    ) -> ManagedWorktreeListing {
+        let cache = crate::install::frontmatter_cache::FrontmatterCache::build_from_scan(home);
+        list_managed_worktrees_core(
+            ctx,
+            std::slice::from_ref(slug),
+            home,
+            ctx.user_id,
+            &cache,
+            &Liveness::Known(Vec::new()),
+        )
+        .unwrap()
+    }
+
+    /// AC 4: a listing where nothing changed spawns no git process, counted at the spawn
+    /// primitive, and an index change makes the next listing read that worktree again.
+    #[tokio::test]
+    async fn a_second_listing_with_nothing_changed_spawns_no_git() {
+        use super::super::worktree_probe::test_hooks::spawns_under;
+        let tmp = TempDir::new().unwrap();
+        let (home, ctx, slug, wt) = attached_story_worktree(&tmp, "pf1").await;
+
+        let first = list_once(&home, &ctx, &slug);
+        let after_first = spawns_under(tmp.path());
+        assert!(after_first > 0, "the first listing reads git");
+        let row = first
+            .rows
+            .iter()
+            .find(|r| r.path == wt.to_string_lossy())
+            .expect("the worktree is listed");
+        assert_eq!(row.dirty, Some(false));
+
+        let second = list_once(&home, &ctx, &slug);
+        assert_eq!(
+            spawns_under(tmp.path()),
+            after_first,
+            "an unchanged listing spawned git"
+        );
+        assert_eq!(second.rows.len(), first.rows.len());
+
+        // A new file and `git add` change the index: that worktree is read again.
+        fs::write(wt.join("staged.txt"), "x").unwrap();
+        run_git(&["add", "staged.txt"], &wt).unwrap();
+        let third = list_once(&home, &ctx, &slug);
+        assert!(spawns_under(tmp.path()) > after_first);
+        assert!(third.rows.iter().any(|r| r.dirty == Some(true)));
+    }
+
+    /// AC 3 at listing level: a worktree whose git hangs reads as unknown and the listing returns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_listing_whose_git_hangs_returns_with_unknown_facts() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let (home, ctx, slug, _wt) = attached_story_worktree(&tmp, "pf2").await;
+        let fake = tmp.path().join("hanging-git");
+        fs::write(&fake, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        super::super::worktree_probe::test_hooks::use_fake_git(
+            tmp.path(),
+            fake.to_str().unwrap(),
+            Duration::from_millis(300),
+        );
+
+        let started = std::time::Instant::now();
+        let listing = list_once(&home, &ctx, &slug);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the listing hung"
+        );
+        // The clone's own reads timed out, so it is skipped; the recorded worktree still lists,
+        // with every git fact unknown.
+        let row = listing
+            .rows
+            .iter()
+            .find(|r| r.story_id.is_some())
+            .expect("the recorded worktree is still listed");
+        assert_eq!(
+            (row.branch.clone(), row.dirty, row.repo_path.clone()),
+            (None, None, None)
+        );
+    }
+
+    /// AC 5: untracked files count as dirty for the listing even when the user's config hides
+    /// them from `git status`.
+    #[test]
+    fn the_listing_counts_untracked_files_even_if_the_user_hides_them() {
+        let tmp = TempDir::new().unwrap();
+        init_repo_with_commit(tmp.path());
+        run_git(&["config", "status.showUntrackedFiles", "no"], tmp.path()).unwrap();
+        fs::write(tmp.path().join("new.txt"), "untracked").unwrap();
+
+        assert_eq!(
+            super::super::worktree_probe::listing_facts(tmp.path()).dirty,
+            Some(true)
         );
     }
 
@@ -8980,8 +9168,12 @@ detached
             present_pair(&epic_wt, Some("integration/SW-EW-1")),
             present_pair(&orphan_wt, Some("feat/hand-made-scratch")),
         ];
-        let rows =
-            discovered_extra_rows(present, &Default::default(), &Liveness::Known(Vec::new()));
+        let rows = discovered_extra_rows(
+            present,
+            &Default::default(),
+            &Liveness::Known(Vec::new()),
+            &FactsMap::default(),
+        );
 
         assert_eq!(rows.len(), 2);
         let epic = rows
@@ -9027,7 +9219,12 @@ detached
 
         let present = vec![present_pair(&wt, Some("feat/SW-TS-1-live"))];
         let storied = norm_set(&[&wt]); // already a Story row.
-        let rows = discovered_extra_rows(present, &storied, &Liveness::Known(Vec::new()));
+        let rows = discovered_extra_rows(
+            present,
+            &storied,
+            &Liveness::Known(Vec::new()),
+            &FactsMap::default(),
+        );
 
         assert!(
             rows.is_empty(),
