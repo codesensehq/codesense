@@ -1276,8 +1276,9 @@ export const liveHub = new LiveHub({
   readUi: readSharedUiState,
   writeUi: writeSharedUiState,
   watchUi: watchSharedUiState,
-  watchText: sessionTextWatch,
-  unwatchText: sessionTextUnwatch,
+  // Read when called, so a test that mocks the commands without these still loads the hub.
+  watchText: (sessionId) => sessionTextWatch(sessionId),
+  unwatchText: (sessionId) => sessionTextUnwatch(sessionId),
   // Loaded when the hub starts: a static import of send-to-terminal (which reaches the viewer
   // and org stores) puts live-hub in their import cycle and breaks the app's boot order.
   watchPasteTarget: (changed) => {
