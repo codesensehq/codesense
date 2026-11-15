@@ -386,8 +386,8 @@ describe("ChatOverlay", () => {
         withRecord();
         await renderOverlay(w, h);
         // The elapsed time runs on the real clock.
-      const text = (await recordText())?.replace(/\s*↗/, "").replace(/\b(\d+h )?\d+m\b/, "TIME");
-      expect(text).toBe(want);
+        const text = (await recordText())?.replace(/\s*↗/, "").replace(/\b(\d+h )?\d+m\b/, "TIME");
+        expect(text).toBe(want);
         expect(invoke).toHaveBeenCalledWith("session_record", { params: { handle: LEAD } });
       },
     );
