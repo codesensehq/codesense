@@ -8,18 +8,26 @@ import { renderViewer } from "@/shared/lib/render-viewer";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { readFile } from "@/tauri/commands";
 
-import { NO_STORY_PAGE_NOTE } from "./story-aware-markdown";
+import { NO_STORY_PAGE_NOTE, missingStoryPageNote } from "./story-aware-markdown";
 
 // The viewers are stubs that show what they were given: this tests the choice, not the pages.
 const html = vi.hoisted(() => vi.fn());
+const markdown = vi.hoisted(() => vi.fn());
+// When set, the page's file is gone: the stub renders what the viewer would on a 404.
+const page = vi.hoisted(() => ({ missing: false }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
   HtmlViewer: (props: Record<string, unknown>) => {
     html(props);
-    return createElement("div", { "data-stub": "html" });
+    const missing = props.renderMissing as (() => unknown) | undefined;
+    if (page.missing && missing) return missing();
+    return createElement("div", { "data-stub": page.missing ? "deleted" : "html" });
   },
 }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({
-  MarkdownViewer: () => createElement("div", { "data-stub": "markdown" }),
+  MarkdownViewer: (props: Record<string, unknown>) => {
+    markdown(props);
+    return createElement("div", { "data-stub": "markdown" });
+  },
 }));
 vi.mock("@/tauri/commands", async (orig) => ({
   ...(await orig<typeof import("@/tauri/commands")>()),
@@ -46,6 +54,7 @@ const files = (map: Record<string, string>) =>
   });
 
 beforeEach(() => {
+  page.missing = false;
   html.mockClear();
   vi.mocked(readFile).mockReset();
   fileContentCache.clear();
@@ -53,6 +62,18 @@ beforeEach(() => {
 });
 
 describe("a story file in an .md tab", () => {
+  it("opens as markdown and says why when the team's story page isn't there", async () => {
+    page.missing = true;
+    files({ [STORY]: "---\ntype: story\n---\n# One\n" });
+    const { container } = open();
+    await waitFor(() => expect(container.querySelector('[data-stub="markdown"]')).not.toBeNull());
+    expect(container.querySelector('[data-stub="deleted"]')).toBeNull();
+    const note = screen.getByTestId("story-page-missing");
+    expect(note).toHaveAttribute("role", "note");
+    expect(note).toHaveTextContent(missingStoryPageNote("pages/story.html"));
+    expect(note).toHaveTextContent("pages/story.html");
+  });
+
   it("opens the team's story page in the same tab, naming the file in the fragment", async () => {
     files({ [STORY]: "---\ntype: story\ntitle: One\n---\n# One\n" });
     const { container } = open();
@@ -154,6 +175,20 @@ describe("a story file in an .md tab", () => {
     // Once the host clears its pending hash, the page keeps the anchor it was opened at.
     view.rerender(renderViewer({ ...common, filePath: STORY }, md));
     expect((html.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(hash);
+  });
+
+  it("opens a missing story page's md at the link's anchor, though the host's pending hash was consumed", async () => {
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    page.missing = true;
+    const consumed = vi.fn();
+    const at = { ...md, pendingHash: "#acceptance-criteria", onPendingHashConsumed: consumed };
+    const view = render(renderViewer({ ...common, filePath: STORY }, at));
+    await waitFor(() => expect(consumed).toHaveBeenCalled());
+    view.rerender(renderViewer({ ...common, filePath: STORY }, md));
+    expect(screen.getByTestId("story-page-missing")).toBeInTheDocument();
+    expect((markdown.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(
+      "#acceptance-criteria",
+    );
   });
 
   it("opens as markdown, and says why, when the team has no story page", async () => {
