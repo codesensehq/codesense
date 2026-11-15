@@ -171,6 +171,22 @@ afterEach(() => {
 });
 
 describe("one display per session (I2)", () => {
+  it("blinks the cursor only while the visible terminal has focus", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    const term = m.terminal("s1")!;
+    expect(term.options.cursorBlink).toBe(false);
+    m.attach("s1", target, { focus: false, visible: false });
+    term.element!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    expect(term.options.cursorBlink).toBe(false);
+    m.setVisible("s1", target, true);
+    term.element!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    expect(term.options.cursorBlink).toBe(true);
+    term.element!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(term.options.cursorBlink).toBe(false);
+  });
+
   it("created_once_across_random_moves", async () => {
     const seed = Number(process.env.TERMINAL_MOVES_SEED ?? Date.now() % 2 ** 31);
     const random = prng(seed);
@@ -522,6 +538,33 @@ describe("a parked display matches the reference (I4)", () => {
       );
     },
   );
+
+  it("does not parse parked output and catches up when shown", async () => {
+    let writes = 0;
+    const m = newManager({
+      applyOutput: (term, data, parsed) => {
+        writes++;
+        term.write(data, parsed);
+      },
+    });
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    vi.useRealTimers();
+    const expected = await headlessFrom("tui-fixture");
+    vi.useFakeTimers(FAKE_TIMERS);
+    const records = loadPtylog("tui-fixture");
+    m.detach("s1", target);
+    const before = writes;
+    for (const step of paneSteps(records)) {
+      if (step.kind === "output") fake.server.produce("s1", step.data);
+      else m.requestResize("s1", step.cols, step.rows);
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(writes).toBe(before);
+    m.attach("s1", target, { focus: false });
+    expect(bufferOf(await dumped(m, "s1"))).toEqual(expected);
+  });
 });
 
 describe("scroll position survives a park (AC-7)", () => {
@@ -687,6 +730,7 @@ describe("apply pipeline (§3.6)", () => {
     await vi.advanceTimersByTimeAsync(50);
     held.splice(0).forEach((f) => f());
     await until(opening);
+    m.attach("s1", slot(), { focus: false });
     fake.server.produce("s1", "before\r\n");
     await vi.advanceTimersByTimeAsync(50);
     held.splice(0).forEach((f) => f());
@@ -713,6 +757,7 @@ describe("apply pipeline (§3.6)", () => {
   it("a coalesced chunk still waiting for its frame is parsed before a queued dump", async () => {
     const m = newManager();
     await open(m);
+    m.attach("s1", slot(), { focus: false });
     fake.server.produce("s1", "pending\r\n");
     // No frame has run: the chunk sits in the coalescer.
     const dump = await dumped(m, "s1");
@@ -734,6 +779,7 @@ describe("apply pipeline (§3.6)", () => {
       await vi.advanceTimersByTimeAsync(20);
       held.splice(0).forEach((f) => f());
       await until(opening);
+      m.attach("s1", slot(), { focus: false });
       fake.server.produce("s1", "after\r\n");
       await vi.advanceTimersByTimeAsync(20);
       const term = m.terminal("s1")!;
@@ -1031,7 +1077,7 @@ describe("buildTerminalOptions", () => {
       scrollback: 5_000,
       cursorStyle: "block",
       cursorInactiveStyle: "outline",
-      cursorBlink: true,
+      cursorBlink: false,
       scrollSensitivity: TERMINAL_SCROLL_SENSITIVITY,
       smoothScrollDuration: TERMINAL_SMOOTH_SCROLL_DURATION_MS,
       drawBoldTextInBrightColors: false,

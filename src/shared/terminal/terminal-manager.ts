@@ -71,7 +71,12 @@ import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { referenceBuffer, type ReferenceBuffer } from "./buffer-dump";
 import { onPrivateAuthorityRetired } from "@/shared/lib/private-terminal-authority";
 import { isLiveStreamCurrent, openLiveStream, type LiveItem, type LiveStream } from "./live-stream";
-import { createPtyWriteBuffer, type PtyWriteBuffer } from "./pty-write-buffer";
+import {
+  createPtyOutputRing,
+  createPtyWriteBuffer,
+  type PtyOutputRing,
+  type PtyWriteBuffer,
+} from "./pty-write-buffer";
 import {
   BUFFER_BYTES_PER_CELL,
   DEFAULT_MAC_OPTION_IS_META,
@@ -94,7 +99,6 @@ import {
   type TerminalDisplayReference,
 } from "./terminal-display-reference";
 import { useViewerStore } from "@/shared/stores/viewer-store";
-import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 export type {
   TerminalDisplayReference,
@@ -129,7 +133,7 @@ export function buildTerminalOptions({
     fontWeight: "normal",
     fontWeightBold: "bold",
     theme: themeConfig?.theme ?? TERMINAL_THEME,
-    cursorBlink: true,
+    cursorBlink: false,
     cursorStyle: "block",
     cursorInactiveStyle: "outline",
     drawBoldTextInBrightColors: false,
@@ -394,6 +398,7 @@ interface Display {
   readonly host: HTMLElement;
   readonly keys: TerminalKeyHandler;
   readonly coalescer: PtyWriteBuffer;
+  readonly parkedOutput: PtyOutputRing;
   readonly queue: QueueItem[];
   readonly disposables: IDisposable[];
   readonly releaseInstance: () => void;
@@ -403,6 +408,7 @@ interface Display {
   appliedResizeGen: number;
   /** The seq the coalesced (not yet queued) output ends at. */
   pendingSeqEnd: number;
+  parkedSeqEnd: number;
   /** Writes of recorded output in flight: xterm's answers to the queries they
    *  hold are stale and never reach the PTY. */
   replayDepth: number;
@@ -502,6 +508,7 @@ export interface TerminalManagerDeps {
 }
 
 const leakedDisplays: unknown[] = [];
+const PARKED_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 
 /** A display's buffer estimate: `cols × lines × 12` of its normal buffer. */
 function estimatedBytes(term: Terminal): number {
@@ -760,14 +767,23 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     )
       return;
     if (item.kind === "resized") {
+      if (!holdsVisible(entry)) {
+        d.parkedOutput.resize(item.cols, item.rows, item.resizeGen);
+        return;
+      }
       enqueue(d, { kind: "resize", cols: item.cols, rows: item.rows, resizeGen: item.resizeGen });
       return;
     }
     d.pendingSeqEnd = item.seq;
+    if (!holdsVisible(entry)) {
+      d.parkedSeqEnd = item.seq;
+      d.parkedOutput.append(item.data, item.seq);
+      notify(entry, (l) => l.output?.(item.data));
+      return;
+    }
     d.coalescer.append(item.data);
     notify(entry, (l) => l.output?.(item.data));
     const now = Date.now();
-    if (item.data.length > 0) useAgentStateStore.getState().recordOutput(entry.sessionId, now);
     if (now - lastOutputBudgetCheck >= OUTPUT_BUDGET_CHECK_MS) {
       lastOutputBudgetCheck = now;
       scheduleBudget();
@@ -900,6 +916,38 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   /** Tell the session's watchers when whether it is on screen changed. */
   function notifyShown(entry: SessionEntry): void {
     const now = sessions.get(entry.sessionId) === entry && holdsVisible(entry);
+    const d = entry.display;
+    if (d) {
+      if (now) {
+        const parked = d.parkedOutput.drain();
+        if (parked.overflowed) {
+          d.parkedSeqEnd = 0;
+          reconnect(entry);
+        } else {
+          for (const item of parked.events) {
+            if (item.kind === "output") {
+              d.pendingSeqEnd = item.seqEnd;
+              d.coalescer.append(item.data);
+            } else {
+              enqueue(d, {
+                kind: "resize",
+                cols: item.cols,
+                rows: item.rows,
+                resizeGen: item.resizeGen,
+              });
+            }
+          }
+          d.parkedSeqEnd = 0;
+        }
+      } else {
+        const pending = d.coalescer.take();
+        if (pending) {
+          d.parkedSeqEnd = d.pendingSeqEnd;
+          d.parkedOutput.append(pending, d.pendingSeqEnd);
+        }
+        d.term.options.cursorBlink = false;
+      }
+    }
     watchLenders();
     if (now === entry.heardShown) return;
     entry.heardShown = now;
@@ -1028,6 +1076,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           return;
         enqueue(display, { kind: "output", data, seqEnd: display.pendingSeqEnd, replay: false });
       }),
+      parkedOutput: createPtyOutputRing(PARKED_OUTPUT_MAX_BYTES),
       queue: [],
       disposables: [],
       releaseInstance: acquireInstance("webglTerminal"),
@@ -1036,10 +1085,17 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       appliedSeq: 0,
       appliedResizeGen: snapshot.resize_gen,
       pendingSeqEnd: 0,
+      parkedSeqEnd: 0,
       replayDepth: 0,
       frozen: false,
       disposed: false,
     };
+    host.addEventListener("focusin", () => {
+      if (holdsVisible(entry) && entry.display === display) term.options.cursorBlink = true;
+    });
+    host.addEventListener("focusout", () => {
+      term.options.cursorBlink = false;
+    });
     display.disposables.push(
       term.onData((data) => {
         if (display.replayDepth > 0 || display.frozen) return;
