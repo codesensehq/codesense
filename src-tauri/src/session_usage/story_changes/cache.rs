@@ -11,6 +11,9 @@ use super::*;
 const KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(300);
 /// The most stories kept at once; the oldest goes first.
 const KEPT_STORIES: usize = 16;
+/// The most task walks kept at once, apart from the read halves: a task list over many stories
+/// does not push out the halves the story pages and record lines read.
+const KEPT_WALKS: usize = 32;
 
 struct Kept {
     at: std::time::Instant,
@@ -21,14 +24,19 @@ struct Kept {
     part: GitTotals,
 }
 
-/// The kept halves by key (tests keep their own).
-struct Store(std::sync::Mutex<std::collections::BTreeMap<String, Kept>>);
+/// The kept halves by key, and how many it holds (tests keep their own).
+struct Store(std::sync::Mutex<std::collections::BTreeMap<String, Kept>>, usize);
 
 static KEPT: Store = Store::new();
+static WALKS: Store = Store::keeping(KEPT_WALKS);
 
 impl Store {
     const fn new() -> Self {
-        Store(std::sync::Mutex::new(std::collections::BTreeMap::new()))
+        Store::keeping(KEPT_STORIES)
+    }
+
+    const fn keeping(most: usize) -> Self {
+        Store(std::sync::Mutex::new(std::collections::BTreeMap::new()), most)
     }
 }
 
@@ -114,17 +122,17 @@ pub(super) fn walk_key(home: &Path, story: &str, scopes: &[CallerScope], refs: &
 
 /// [`get`] for a caller already off the async runtime, of a walk kept by [`put_walk`].
 pub(super) fn get_walk(key: &str) -> Option<git::GitFacts> {
-    let (spec, kept_stamp) = Store::fresh(&KEPT, key, std::time::Instant::now())?;
+    let (spec, kept_stamp) = Store::fresh(&WALKS, key, std::time::Instant::now())?;
     if stamp_of(&spec) != kept_stamp {
         return None;
     }
-    Option::map(Store::renew(&KEPT, key, std::time::Instant::now()), |(git, _, _)| git)
+    Option::map(Store::renew(&WALKS, key, std::time::Instant::now()), |(git, _, _)| git)
 }
 
 /// [`put`] for a caller already off the async runtime: keeps a story walk alone.
 pub(super) fn put_walk(key: String, git: &git::GitFacts) {
     let seen = stamp_of(&git.stamp_spec);
-    Store::insert(&KEPT, key, seen, git, &Default::default(), &Default::default(), std::time::Instant::now());
+    Store::insert(&WALKS, key, seen, git, &Default::default(), &Default::default(), std::time::Instant::now());
 }
 
 /// Keep a half just read for `key`, unless a ref it read moved while the walk ran (`git.refs_stamp`
@@ -212,7 +220,7 @@ impl Store {
         let Ok(mut kept) = self.0.lock() else {
             return;
         };
-        if std::collections::BTreeMap::len(&kept) >= KEPT_STORIES
+        if std::collections::BTreeMap::len(&kept) >= self.1
             && !std::collections::BTreeMap::contains_key(&kept, &key)
         {
             let oldest = Option::map(
