@@ -1270,6 +1270,8 @@ export interface InboxView {
   hasMore: boolean;
   messages: InboxMessageRow[];
   humanUnread: number;
+  /** When the read named a saved agent's thread (`agentId` with `storyId`): its sessions' handles. */
+  threadSessions?: string[];
 }
 
 /** The team whose inbox an app command reads or answers. */
