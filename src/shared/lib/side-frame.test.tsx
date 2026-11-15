@@ -109,6 +109,8 @@ describe("SideFrame navigation", () => {
     fireEvent.load(frameOf(container)!);
     expect(frameOf(container)).toBeNull();
     expect(getByText(SIDE_LEFT_NOTE)).toBeInTheDocument();
+    // The note replaces the side under the reader's eyes, so it is said politely.
+    expect(getByText(SIDE_LEFT_NOTE).closest('[role="status"]')).not.toBeNull();
     fireEvent.click(getByRole("button", { name: "Show again" }));
     const again = frameOf(container)!;
     expect(nonceOf(again)).not.toBe(first);

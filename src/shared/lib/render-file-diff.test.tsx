@@ -93,7 +93,13 @@ vi.mock("./side-frame", () => ({
   ),
 }));
 
-import { LARGE_DIFF_CHARS, renderFileDiff, type FileDiffArgs } from "./render-file-diff";
+import {
+  FileDiffModeSwitch,
+  IMAGE_UNAVAILABLE,
+  LARGE_DIFF_CHARS,
+  renderFileDiff,
+  type FileDiffArgs,
+} from "./render-file-diff";
 import { DEFAULT_FILE_DIFF_MODES, type FileDiffModes } from "./file-diff-mode";
 import { getViewerFileType } from "./viewer-file-type";
 
@@ -539,7 +545,10 @@ describe("renderFileDiff — the switches and the skeleton (critique D3, D4, D9)
       expect(pressed.className).toContain("bg-primary");
       expect(pressed.className).toContain("text-primary-foreground");
       expect(pressed.className).not.toMatch(/(^|\s)bg-accent(\s|$)/);
-      for (const b of buttons) expect(b.className).toContain("focus-visible:outline-offset-[-2px]");
+      // Important: the unlayered global :focus-visible sets outline-offset 2px, which beats a layered
+      // utility, and the group's overflow-hidden then clips the ring away.
+      for (const b of buttons)
+        expect(b.className).toContain("focus-visible:!outline-offset-[-2px]");
     }
   });
 
@@ -589,6 +598,70 @@ describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () 
     expect(sideBySide).toHaveAttribute("title", "Over the 8 MB limit for drawing here");
     expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
       "An image has no text diff. Over the 8 MB limit for drawing here.",
+    );
+  });
+
+  it("a Side by side preference over an image that can't draw presses Source, as the body shows", () => {
+    render(
+      <FileDiffModeSwitch
+        kind="html"
+        mode="side-by-side"
+        onChange={vi.fn()}
+        testId="switch"
+        unavailable={{ "side-by-side": IMAGE_UNAVAILABLE.failed }}
+      />,
+    );
+    const group = screen.getByTestId("switch");
+    expect(within(group).getByRole("button", { name: "Source" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(group).getByRole("button", { name: "Side by side" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("while the diff is still loading it shows the reading skeleton, not the final Source line", () => {
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified" },
+            state: { kind: "loading" },
+            modes: { html: "side-by-side" },
+          },
+          { onModeChange: vi.fn() },
+        ),
+      ),
+    );
+    expect(screen.getByTestId("file-diff-code-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-diff-image-source")).toBeNull();
+  });
+
+  it("a side that failed to read keeps Side by side disabled with the reason, and offers no code modes", () => {
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified" },
+            state: { kind: "error", message: "permission denied" },
+            modes: { html: "side-by-side" },
+          },
+          { onModeChange: vi.fn() },
+        ),
+      ),
+    );
+    const group = screen.getByTestId("file-diff-mode-switch");
+    const sideBySide = within(group).getByRole("button", { name: "Side by side" });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", IMAGE_UNAVAILABLE.failed);
+    for (const code of ["Line", "Ignore whitespace", "Structural"])
+      expect(within(group).queryByRole("button", { name: code })).toBeNull();
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      `An image has no text diff. ${IMAGE_UNAVAILABLE.failed}.`,
     );
   });
 
