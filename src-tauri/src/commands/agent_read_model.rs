@@ -1412,11 +1412,11 @@ pub(crate) async fn thread_inbox(
         })
         .or_else(|| <[String]>::last(&handles).cloned())
         .unwrap_or_default();
-    let also = match String::as_str(&handle) {
+    let also = match std::string::String::as_str(&handle) {
         "" => None,
         handle => crate::commands::agent_inbox::handle_team(host, handle).await,
     };
-    let (roles, messages) = if Vec::is_empty(&addresses) {
+    let (roles, messages) = if std::vec::Vec::is_empty(&addresses) {
         (Vec::new(), Vec::new())
     } else {
         conversation_of(host, &sessions, addresses.clone(), also).await?
