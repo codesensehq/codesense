@@ -12,6 +12,7 @@ import { NO_STORY_PAGE_NOTE, missingStoryPageNote } from "./story-aware-markdown
 
 // The viewers are stubs that show what they were given: this tests the choice, not the pages.
 const html = vi.hoisted(() => vi.fn());
+const markdown = vi.hoisted(() => vi.fn());
 // When set, the page's file is gone: the stub renders what the viewer would on a 404.
 const page = vi.hoisted(() => ({ missing: false }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
@@ -23,7 +24,10 @@ vi.mock("@/features/dashboard/components/html-viewer", () => ({
   },
 }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({
-  MarkdownViewer: () => createElement("div", { "data-stub": "markdown" }),
+  MarkdownViewer: (props: Record<string, unknown>) => {
+    markdown(props);
+    return createElement("div", { "data-stub": "markdown" });
+  },
 }));
 vi.mock("@/tauri/commands", async (orig) => ({
   ...(await orig<typeof import("@/tauri/commands")>()),
@@ -171,6 +175,20 @@ describe("a story file in an .md tab", () => {
     // Once the host clears its pending hash, the page keeps the anchor it was opened at.
     view.rerender(renderViewer({ ...common, filePath: STORY }, md));
     expect((html.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(hash);
+  });
+
+  it("opens a missing story page's md at the link's anchor, though the host's pending hash was consumed", async () => {
+    fileContentCache.set(STORY, "---\ntype: story\n---\n", 0);
+    page.missing = true;
+    const consumed = vi.fn();
+    const at = { ...md, pendingHash: "#acceptance-criteria", onPendingHashConsumed: consumed };
+    const view = render(renderViewer({ ...common, filePath: STORY }, at));
+    await waitFor(() => expect(consumed).toHaveBeenCalled());
+    view.rerender(renderViewer({ ...common, filePath: STORY }, md));
+    expect(screen.getByTestId("story-page-missing")).toBeInTheDocument();
+    expect((markdown.mock.calls.at(-1)![0] as Record<string, unknown>).pendingHash).toBe(
+      "#acceptance-criteria",
+    );
   });
 
   it("opens as markdown, and says why, when the team has no story page", async () => {
