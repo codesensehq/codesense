@@ -105,6 +105,9 @@ function demoAppState(
       [TEAM_KEY]: CONTENT_WS,
       ...(secondTeam && { [SECOND_TEAM_KEY]: secondContent }),
     },
+    // A demo world is about its own team: the Foreman's start landing opens the Foreman in the
+    // docs team and makes that team active, so these worlds start without it.
+    settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
     // The CLI's chrome is saved as one `cliChrome` value; flat chrome keys would be read as
     // a pre-`cliChrome` state file and dropped, losing the shown CLI and the split.
     cliChrome: { visible: true, ...(splitRatio !== undefined && { splitRatio }) },
