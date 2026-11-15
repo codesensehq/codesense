@@ -381,7 +381,7 @@ declare namespace CodesenseSdk {
     /** Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
      * record's `sessionIds` to hear only about that agent's session. */
     onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
-    /** A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now. */
+    /** A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused. */
     onSessionText(
       sessionId: string,
       cb: (text: { kind: "prose" | "final"; turn: string; key: string; text: string } | null, error?: unknown) => void,
@@ -582,7 +582,7 @@ declare namespace CodesenseSdk {
     /** Builds the launch prompt from the first message. Default: the text itself. */
     card?(text: string): string;
     done?: boolean;
-    /** A send state the page keeps across mounts (`kit.chat.createSendState`). The send state (messages and their marks, the outbox, the launch and its timers, the cards answered from the page) survives an unmount and a new mount; the typing row and card drafts stay the page's own. The mount attaches to it and detaches on unmount. Without it the mount makes its own and ends it on unmount. */
+    /** A send state the page keeps across mounts (`kit.chat.createSendState`). The send state (messages and their marks, the outbox, the launch and its timers, the cards answered from the page) survives an unmount and a new mount; the composer text, the typing row and the card drafts belong to the mount and start empty on the next one. The mount attaches to it and detaches on unmount. Without it the mount makes its own and ends it on unmount. */
     send?: ChatSendState;
   }
   /** What a layout or header callback sees. */

@@ -157,11 +157,13 @@ fn reader_of(cli: AgentCli) -> LogReader {
     (output.session_log, format)
 }
 
-/// The interactive session log of a local Claude session, found as the capture finds it (its
-/// record's native id and config home): what the assistant-prose stream (`session_text`) tails.
-/// `None` for a CLI whose log is another format, a session with no record or native id yet, or no
-/// log on this Mac.
-pub(crate) fn claude_session_log(session_id: &str) -> Option<PathBuf> {
+/// The interactive session log of a local session and its transcript format, found as the
+/// capture finds it (its record's native id and config home): what the assistant-prose stream
+/// (`session_text`) tails. `None` for a CLI whose log has no prose parser, a session with no
+/// record or native id yet, or no log on this Mac.
+pub(crate) fn prose_session_log(
+    session_id: &str,
+) -> Option<(PathBuf, agent_cli::TranscriptFormat)> {
     let Ok(store_path) = crate::session_usage::store_path() else {
         return None;
     };
@@ -174,10 +176,12 @@ pub(crate) fn claude_session_log(session_id: &str) -> Option<PathBuf> {
     let Ok(cli) = record.cli.as_deref()?.parse::<AgentCli>() else {
         return None;
     };
-    let (Some(locate), Some(agent_cli::TranscriptFormat::AnthropicSessionJsonl)) = reader_of(cli)
-    else {
+    let (Some(locate), Some(format)) = reader_of(cli) else {
         return None;
     };
+    if !agent_cli::prose::streams(format) {
+        return None;
+    }
     let native = record.native_session_id.as_deref()?;
     let env = |key: &str| std::env::var_os(key);
     let home = record
@@ -185,7 +189,7 @@ pub(crate) fn claude_session_log(session_id: &str) -> Option<PathBuf> {
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| agent_cli::descriptor(cli).native_home(&env))?;
-    locate(&home, native)
+    locate(&home, native).map(|path| (path, format))
 }
 
 /// Why a CLI's conversation is not read.

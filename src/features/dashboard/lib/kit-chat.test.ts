@@ -1885,6 +1885,18 @@ describe("kit.chat send state", () => {
       removed.mockRestore();
     });
 
+    it("ends the state without it ever listening to the roster again: no read after unmount and no listener left", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      expect(chat.launch.unsettled()).toBe(true);
+      const on = vi.spyOn(s.reads, "on");
+      chat.unmount();
+      expect(on, "no listener added while it ends").not.toHaveBeenCalled();
+      expect(s.listenerCount("sessions")).toBe(0);
+    });
+
     it("keeps the unload warning while a message is held", async () => {
       const s = setup([]);
       const chat = mountOn(s, { clock: manualClock() });

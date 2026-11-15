@@ -416,7 +416,7 @@
       "name": "onSessionText",
       "owner": "Surface",
       "signature": "onSessionText(\n      sessionId: string,\n      cb: (text: { kind: \"prose\" | \"final\"; turn: string; key: string; text: string } | null, error?: unknown) => void,\n    ): Unsubscribe;",
-      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.",
+      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -1018,7 +1018,7 @@
       "name": "onSessionText",
       "owner": "Surface",
       "signature": "onSessionText(\n      sessionId: string,\n      cb: (text: { kind: \"prose\" | \"final\"; turn: string; key: string; text: string } | null, error?: unknown) => void,\n    ): Unsubscribe;",
-      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.",
+      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -18255,7 +18255,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "954e5cb252af88fe1b8775d67fbf6ade224e75eb21ea4fd5d95ea4680bb652cc",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "9609b49ea46259d4dc120ead688d46ee1e9423d2ab78f3e50a661f9863f19f63",
     "src-tauri/src/verbs/registry.generated.json": "646d254e80a7ada97e0261cb1ecda42c12a775f9f06e140f5b32cb4c2b4f5f7e",
     "src-tauri/src/verbs/registry.rs": "208cdc9cb4152027f433116abf23a0b273ca44c1aba6f9bc2b08bd763c0974db",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
