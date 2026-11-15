@@ -856,7 +856,11 @@ describe("ChatOverlay", () => {
     "shows a remote %s session's chat at its newest message, and sends to it from its composer",
     async (runtime) => {
       // A session on another machine: its row names the machine and the team it was launched in,
-      // and its agent is known from that host's activity snapshot, not a process on this Mac.
+      // and its agent is known from that host's activity snapshot, not a process on this Mac. Only
+      // the isRunningAgent line below exercises that remote path; the overlay itself reads nothing
+      // remote (the inbox by session id, the team from its prop), so the rest shows a remote row
+      // gets the same chat as a local one. The tab mounting the chat for a remote session is
+      // inbox-split's REMOTE_LAUNCH_CLIS case.
       roster({ kind: runtime, machineId: "box", launchTeamKey: TEAM_KEY });
       useAgentStateStore.setState({ processAgentBySession: {} });
       useAgentStateStore.getState().recordActivity(
