@@ -231,7 +231,10 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     // Muted and accent inks only just pass on the bare page: on the wash they fell to 4.36:1 and 4.25:1 in light.
     const current = ".ibx-pin-chooser .choice[data-current]";
     expect(ruleOf(current)).toContain("background: var(--ibx-accent-wash)");
-    expect(ruleOf(`${current} .by,\n${current} .go`)).toContain("color: var(--ibx-fg)");
+    // A pin that arrived while the chooser was open is a New row (accent), and it can be the current one.
+    expect(ruleOf(`${current} .by,\n${current} .go,\n${current} .new`)).toContain(
+      "color: var(--ibx-fg)",
+    );
   });
   it("sets the Pinned by tag at the 11 px meta floor", () => {
     expect(ruleOf(".ibx-pin-tag")).toContain("font-size: 11px");
