@@ -7,6 +7,7 @@ fn only(arrays: Value) -> Params {
     serde_json::from_value(json!({"storyId":"SV-29","only":arrays})).unwrap()
 }
 
+/// The dimensions of a story's history for the timing regressions.
 #[derive(Clone, Copy)]
 struct SyntheticStoryScale {
     commits: usize,
@@ -15,65 +16,35 @@ struct SyntheticStoryScale {
     sessions: usize,
 }
 
-/// Rebuild the same dimensions measured in the real-app baseline without checking a user repo in.
+/// A large real story's size (its `story_totals` when the budgets were set): 88 commits over 43
+/// files, 90 sessions. Synthetic content, so no user repository is checked in.
+const LARGE_STORY_SCALE: SyntheticStoryScale =
+    SyntheticStoryScale { commits: 88, files: 43, notes_per_commit: 1, sessions: 90 };
+
+/// A story branch of `scale.commits` commits touching `scale.files` files in all, each commit with
+/// its notes, and `scale.sessions` sessions working on the branch.
 fn synthetic_story_at_scale(
     scale: SyntheticStoryScale,
 ) -> (tempfile::TempDir, UsageStore, GitStory) {
     assert!(scale.commits >= 2);
-    assert!(scale.files >= 1);
+    assert!(scale.files >= 2, "the story's first commit touches one file, the rest at least one more");
     assert!(scale.sessions >= 1);
     assert!(scale.notes_per_commit <= crate::attribution::git_ai::NOTES_REFS.len());
 
     let (home, mut store, fixture) = git_story();
-    let first_session: String = store
-        .conn
-        .query_row("SELECT session_id FROM session_record LIMIT 1", [], |row| row.get(0))
-        .unwrap();
-    let branch = store
-        .read_session_record(&first_session)
-        .unwrap()
-        .unwrap()
-        .branch
-        .unwrap();
-    let mut commit_ids = vec![fixture.repo.refname_to_id(&branch).unwrap()];
-    let mut parent = *commit_ids.last().unwrap();
-    let mut files_left = scale.files.saturating_sub(1);
-
-    for commit_index in 1..scale.commits {
-        let commits_left = scale.commits - commit_index;
-        let files_here = (files_left + commits_left - 1) / commits_left;
-        files_left -= files_here;
-        let parent_commit = fixture.repo.find_commit(parent).unwrap();
-        let parent_tree = parent_commit.tree().unwrap();
-        let mut tree = fixture.repo.treebuilder(Some(&parent_tree)).unwrap();
-        for file_index in 0..files_here {
-            let path = format!("synthetic-{commit_index}-{file_index}.txt");
-            let bytes = format!("change {commit_index} {file_index}\n");
-            let blob = fixture.repo.blob(bytes.as_bytes()).unwrap();
-            tree.insert(path, blob, 0o100644).unwrap();
-        }
-        let tree = fixture.repo.find_tree(tree.write().unwrap()).unwrap();
-        let signature = parent_commit.author();
-        parent = fixture
-            .repo
-            .commit(
-                Some(&branch),
-                &signature,
-                &signature,
-                "synthetic story change",
-                &tree,
-                &[&parent_commit],
-            )
-            .unwrap();
-        commit_ids.push(parent);
+    let branch = "refs/heads/feat/SV-29-work";
+    let mut commit_ids = vec![fixture.repo.refname_to_id(branch).unwrap()];
+    // `git_story`'s commit touched a.txt; the others cycle through the rest of the files.
+    for index in 1..scale.commits {
+        let parent = *commit_ids.last().unwrap();
+        let file = format!("synthetic-{}.txt", (index - 1) % (scale.files - 1));
+        let subject = format!("SV-29 synthetic change {index}");
+        commit_ids.push(fixture.commit(branch, &subject, &file, 2000 + index as i64, &[parent]));
     }
 
-    let signature = fixture.repo.find_commit(fixture.root).unwrap().author();
-    for (commit_index, oid) in commit_ids.iter().enumerate() {
-        for notes_ref in crate::attribution::git_ai::NOTES_REFS
-            .iter()
-            .take(scale.notes_per_commit)
-        {
+    let signature = git2::Signature::new("fixture", "fixture@example.com", &git2::Time::new(2000, 0)).unwrap();
+    for (index, oid) in commit_ids.iter().enumerate() {
+        for notes_ref in crate::attribution::git_ai::NOTES_REFS.iter().take(scale.notes_per_commit) {
             fixture
                 .repo
                 .note(
@@ -84,15 +55,15 @@ fn synthetic_story_at_scale(
                     "---\n{\"schema_version\":\"authorship/3.0.0\",\"sessions\":{}}",
                     true,
                 )
-                .unwrap_or_else(|error| panic!("note {commit_index}: {error}"));
+                .unwrap_or_else(|error| panic!("note {index}: {error}"));
         }
     }
 
-    for session_index in 1..scale.sessions {
-        let session = format!("synthetic-session-{session_index}");
+    for index in 1..scale.sessions {
+        let session = format!("synthetic-session-{index}");
         seed(&mut store, home.path(), &session, true, false);
         let mut record = store.read_session_record(&session).unwrap().unwrap();
-        record.branch = Some(branch.clone());
+        record.branch = Some("feat/SV-29-work".into());
         record.worktree = Some(fixture.dir.path().to_string_lossy().into_owned());
         record.workspace = record.worktree.clone();
         store.write_session_record(&record).unwrap();
@@ -464,7 +435,7 @@ async fn story_reads_reuse_the_kept_git_half_until_a_branch_tip_moves() {
     let (home, _s, f) = git_story();
     let asked = only(json!(["commits", "prs", "branches"]));
     let first = serde_json::to_value(
-        read_with(home.path(), &asked, &CallerScope::Human, true, None)
+        read_with(home.path(), &asked, &CallerScope::Human, None)
             .await
             .unwrap(),
     )
@@ -496,60 +467,58 @@ async fn story_reads_reuse_the_kept_git_half_until_a_branch_tip_moves() {
     assert_eq!(moved["commits"].as_array().unwrap().len(), 2);
 }
 
-/// The public story read meets the cold and warm latency budgets, and an unrelated note does
-/// not invalidate its cached facts.
+/// At a large real story's size, the story read is under 1 s cold and 200 ms warm, an unrelated note
+/// does not invalidate its kept facts, and with the managed git-ai installed no read awaits it.
 #[tokio::test]
 async fn story_read_warm_cache_survives_an_unrelated_note() {
-    let scale = SyntheticStoryScale {
-        commits: 3,
-        files: 3,
-        notes_per_commit: 1,
-        sessions: 2,
-    };
+    use crate::attribution::git_ai::tests::{awaits, stub_git_ai};
+    let scale = LARGE_STORY_SCALE;
     let (home, _s, f) = synthetic_story_at_scale(scale);
+    let log = stub_git_ai(home.path());
     let asked = only(json!(["commits", "prs", "branches"]));
     let cold_at = std::time::Instant::now();
     let first = read(home.path(), &asked, &CallerScope::Human).await.unwrap();
     let cold = cold_at.elapsed();
     assert!(cold < std::time::Duration::from_secs(1), "cold read took {cold:?}");
     assert_eq!(first.commits.len(), scale.commits);
-    let children = crate::attribution::git_ai::child_processes(f.dir.path());
+    let files: BTreeSet<&String> = first.commits.iter().flat_map(|c| c.files.iter()).collect();
+    assert_eq!(files.len(), scale.files);
+    assert_eq!(awaits(&log), 0, "a cold read awaited git-ai");
+    let (children, walked) = (crate::attribution::git_ai::child_processes(f.dir.path()), git_reads(home.path()));
 
-    let signature = f.repo.find_commit(f.root).unwrap().author();
+    let signature = git2::Signature::new("fixture", "fixture@example.com", &git2::Time::new(9000, 0)).unwrap();
     f.repo
-        .note(
-            &signature,
-            &signature,
-            Some("refs/notes/sense"),
-            f.root,
-            "unrelated note",
-            true,
-        )
+        .note(&signature, &signature, Some("refs/notes/sense"), f.root, "unrelated note", true)
         .unwrap();
 
     let warm_at = std::time::Instant::now();
     let second = read(home.path(), &asked, &CallerScope::Human).await.unwrap();
     let warm = warm_at.elapsed();
     assert!(warm < std::time::Duration::from_millis(200), "warm read took {warm:?}");
-    assert_eq!(second.commits, first.commits);
+    assert_eq!(serde_json::to_value(&second.commits).unwrap(), serde_json::to_value(&first.commits).unwrap());
+    assert_eq!(git_reads(home.path()), walked, "the warm read walked git");
     assert_eq!(
         crate::attribution::git_ai::child_processes(f.dir.path()),
         children,
         "a warm story read spawned a git child"
     );
+    assert_eq!(awaits(&log), 0, "a warm read awaited git-ai");
 }
 
-/// Record reads repeatedly revisit the story, but warm reads reuse its cached git facts.
+/// Record reads revisit the story after every usage notice; once it is warm they reuse its
+/// kept git facts (no walk, no git child) and never await git-ai.
 #[tokio::test]
 async fn repeated_session_record_reads_do_not_spawn_more_git_children() {
+    use crate::attribution::git_ai::tests::{awaits, stub_git_ai};
     let (home, mut store, f) = git_story();
+    let log = stub_git_ai(home.path());
     let mut record = store.read_session_record("git-session").unwrap().unwrap();
     record.handle = Some("record-reader".into());
     store.write_session_record(&record).unwrap();
 
     let asked = only(json!(["commits"]));
     read(home.path(), &asked, &CallerScope::Human).await.unwrap();
-    let children = crate::attribution::git_ai::child_processes(f.dir.path());
+    let (children, walked) = (crate::attribution::git_ai::child_processes(f.dir.path()), git_reads(home.path()));
     for _ in 0..10 {
         let result = crate::session_usage::agent_record::read(
             home.path(),
@@ -563,11 +532,37 @@ async fn repeated_session_record_reads_do_not_spawn_more_git_children() {
         .unwrap();
         assert!(!result["story"].is_null());
     }
+    assert_eq!(git_reads(home.path()), walked, "a record read walked git");
     assert_eq!(
         crate::attribution::git_ai::child_processes(f.dir.path()),
         children,
         "record reads spawned git after warming the story cache"
     );
+    assert_eq!(awaits(&log), 0, "a record read awaited git-ai");
+}
+
+/// `task_read` (`task_view`) collects its story's git evidence through the kept walk: a second
+/// read at the same refs walks nothing, and a moved branch tip walks again.
+#[tokio::test]
+async fn task_view_reuses_the_kept_story_walk() {
+    let (home, store, f) = git_story();
+    let task_id: String = store
+        .conn
+        .query_row("SELECT task_id FROM task WHERE story_id = 'SV-29' LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let walks = git_walks(home.path());
+    assert!(store.task_view(&task_id).unwrap().is_some());
+    let walked = git_walks(home.path());
+    assert!(walked > walks, "the first task read walks the story");
+    let children = crate::attribution::git_ai::child_processes(f.dir.path());
+    store.task_view(&task_id).unwrap();
+    assert_eq!(git_walks(home.path()), walked, "the second task read walked git");
+    assert_eq!(crate::attribution::git_ai::child_processes(f.dir.path()), children);
+
+    let tip = f.repo.refname_to_id("refs/heads/feat/SV-29-work").unwrap();
+    f.commit("refs/heads/feat/SV-29-work", "SV-29 more", "b.txt", 3000, &[tip]);
+    store.task_view(&task_id).unwrap();
+    assert!(git_walks(home.path()) > walked, "a moved tip walks git again");
 }
 
 /// SV-ENG-121: only a kept read stamps refs (the totals sweep and task reads pay no ref scan),
