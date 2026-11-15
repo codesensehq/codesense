@@ -911,6 +911,26 @@ where
     .await
 }
 
+/// Mail was queued for `role` in the store at `path`: each session holding the role live
+/// is offered its notice, as for direct mail, and the notice names the role to claim
+/// from. A session with no handle here has no notice to take.
+pub(crate) async fn offer_role_holders(host: &dyn InboxHost, path: PathBuf, role: &str) {
+    let role = crate::weft::role_inbox::role_name(role).to_string();
+    let now = chrono::Utc::now().timestamp();
+    let sessions = with_store("role_holders", path, move |store| {
+        crate::weft::role_inbox::live_role_sessions(store, &role, now)
+    })
+    .await;
+    match sessions {
+        Ok(Ok(sessions)) => {
+            for handle in sessions.iter().filter_map(|s| host.handle_for_session(s)) {
+                host.mail_stored(&handle);
+            }
+        }
+        Ok(Err(e)) | Err(e) => log::warn!(target: "inbox", "role holders: {e}"),
+    }
+}
+
 /// Store a message to the already-resolved `to` in the store at `path`.
 #[allow(clippy::too_many_arguments)]
 async fn store_message(
@@ -1775,6 +1795,7 @@ async fn queue_role_reply(
                 ));
                 host.roles_changed();
                 host.role_message_queued(&own.team, &queued_role, message_id, &queued_sender);
+                offer_role_holders(&**host, own.path.clone(), &queued_role).await;
             }
             Ok((SendResult::sent(message_id), newly))
         }
@@ -2670,11 +2691,19 @@ async fn reserved_notice(
     })
     .await
     {
-        Ok(Ok(inbox::Reservation::Offer { token, count })) => Ok(Check::Offer {
-            notice: codesense_host_proto::inbox_wait::mail_and_chat_notice(
+        Ok(Ok(inbox::Reservation::Offer {
+            token,
+            count,
+            roles,
+        })) => Ok(Check::Offer {
+            notice: codesense_host_proto::inbox_wait::inbox_notice(
                 count,
                 session_id,
                 chat_text.as_ref().map(|(w, n)| (w.as_str(), *n)),
+                &roles
+                    .iter()
+                    .map(|r| (r.role.as_str(), r.pending))
+                    .collect::<Vec<_>>(),
             ),
             token,
         }),
