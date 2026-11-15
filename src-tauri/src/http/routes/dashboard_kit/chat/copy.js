@@ -18,7 +18,7 @@ export const CHAT_COPY={
  logLabel:'Story lead chat',
  chips:'Quick replies',
  chipEdit:{label:text=>`Edit “${text}” before sending`,title:'Edit before sending'},
- pin:{pin:'Pin',unpin:'Unpin',actions:'Message actions',by:who=>`Pinned by ${who}`,unpinned:'Unpinned.',undo:'Undo',showPins:'Show pins',failed:"Couldn't pin. Try again. If it keeps failing, reload the page.",unpinFailed:"Couldn't unpin. Try again. If it keeps failing, reload the page.",tryAgain:'Try again'},
+ pin:{pin:'Pin',unpin:'Unpin',actions:'Message actions',by:who=>`Pinned by ${who}`,unpinned:'Unpinned.',undo:'Undo',showPins:'Show pins',failed:"Couldn't pin. Try again. If it keeps failing, reload the page.",unpinFailed:"Couldn't unpin. Try again. If it keeps failing, reload the page.",tryAgain:'Try again',pinMore:'Pin…',cancel:'Cancel',isNew:'New',replace:'Replace',undoReplaceFailed:"Couldn't undo the replace. Try again. If it keeps failing, reload the page."},
 };
 export const failureText=(failure,copy=CHAT_COPY)=>failure.kind==='busy'?copy.failure.busy:failure.kind==='denied'?copy.failure.denied(failure.why):failure.kind==='unavailable'?copy.failure.unavailable(failure.why):failure.kind==='timeout'?copy.failure.timeout:failure.kind==='exited'?copy.failure.exited:failure.kind==='refused'&&copy.failure.refused?copy.failure.refused(failure.why):copy.failure.other(failure.code);
 export const failureReason=(failure,copy=CHAT_COPY)=>failure.kind==='busy'?copy.failure.reasonBusy:failure.kind==='timeout'?copy.failure.reasonTimeout:failure.kind==='exited'?copy.failure.reasonExited:failure.kind==='refused'&&!copy.failure.refused?failure.code:failure.why||failure.code;

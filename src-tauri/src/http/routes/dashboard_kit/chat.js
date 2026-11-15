@@ -37,7 +37,7 @@
     logLabel: "Story lead chat",
     chips: "Quick replies",
     chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" },
-    pin: { pin: "Pin", unpin: "Unpin", actions: "Message actions", by: (who) => `Pinned by ${who}`, unpinned: "Unpinned.", undo: "Undo", showPins: "Show pins", failed: "Couldn't pin. Try again. If it keeps failing, reload the page.", unpinFailed: "Couldn't unpin. Try again. If it keeps failing, reload the page.", tryAgain: "Try again" }
+    pin: { pin: "Pin", unpin: "Unpin", actions: "Message actions", by: (who) => `Pinned by ${who}`, unpinned: "Unpinned.", undo: "Undo", showPins: "Show pins", failed: "Couldn't pin. Try again. If it keeps failing, reload the page.", unpinFailed: "Couldn't unpin. Try again. If it keeps failing, reload the page.", tryAgain: "Try again", pinMore: "Pin…", cancel: "Cancel", isNew: "New", replace: "Replace", undoReplaceFailed: "Couldn't undo the replace. Try again. If it keeps failing, reload the page." }
   };
   var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
   var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
@@ -205,6 +205,17 @@
     const verb = done === "pinned" ? "Pinned" : done === "unpinned" ? "Unpinned" : "Restored";
     return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;
   }
+  var pinReplaceLabel = (count) => `Pin, replacing one (${pinCapLabel(count)})`;
+  var pinChooserHeading = (count) => `Replace a pin with this message · ${pinCapLabel(count)}`;
+  var pinPinnedAtLine = (who, at) => `Pinned by ${who} at ${at}`;
+  var pinReplacedText = (who, title) => `Replaced ${who === "you" ? "your" : `${who}'s`} pin “${title}”.`;
+  var pinNewRowText = (title) => `“${title}” is new. Choose it again to replace it.`;
+  var pinListChangeText = (added, left) => [...added.map((t) => `“${t}” is new.`), ...left.map((t) => `“${t}” left the list.`)].join(" ");
+  var pinPinnedMeanwhileText = (who) => `${who} pinned this message. Nothing was replaced.`;
+  var PIN_REPLACE_FAILED = "Couldn't replace. Nothing changed.";
+  var PIN_ROOM_NOW = "There's room now.";
+  var PIN_UNDO_FULL = "Can't undo: the list is full again.";
+  var PIN_UNDO_GONE = "Can't undo: that message was archived or withdrawn.";
   var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
   function plainText(markup) {
     return squashSpace(String(markup || "").replace(/<[^>]*>/g, " ").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
@@ -854,6 +865,245 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/pin-replace.js
+  var ALERT_NS = "http://www.w3.org/2000/svg";
+  var OWN_PATH = { quote: "M3 6h4v4l-2 3M9 6h4v4l-2 3", name: "M2 3h12v10H2zM2 7h12M7 7v6" };
+  function ownGlyph(kind) {
+    const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("class", "ico");
+    svg.setAttribute("aria-hidden", "true");
+    path.setAttribute("d", OWN_PATH[kind]);
+    svg.append(path);
+    return svg;
+  }
+  function createPinReplace({ onPin, state, live, list, nameOf, titleOf, ownOf, idOf, copy, render, pinNow }) {
+    let open = null, marked = null, focusWant = false;
+    const el = () => open && open.node;
+    const mark = (id) => {
+      if (id === marked) return;
+      marked = id;
+      if (typeof onPin.mark === "function") onPin.mark(id);
+    };
+    const close = (refocus) => {
+      if (!open) return;
+      if (refocus) state.refocus = open.item.id;
+      open = null;
+      mark(null);
+    };
+    function openFor(item) {
+      const pins = list();
+      state.note = null;
+      open = { item, known: new Set(pins.map((p) => p.messageId)), last: pins, current: pins.length ? pins[0].messageId : null, change: null, error: null, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
+      open.node.addEventListener("keydown", onKey);
+      focusWant = true;
+    }
+    function sync() {
+      if (!open) return;
+      const pins = list(), ids = new Set(pins.map((p) => p.messageId)), before = new Set(open.last.map((p) => p.messageId));
+      if (ids.has(open.item.id) && !before.has(open.item.id)) {
+        const pin = pins.find((p) => p.messageId === open.item.id), mid = open.item.id;
+        close(false);
+        state.note = { mid, kind: "info", text: pinPinnedMeanwhileText(pinWho(pin.pinnedBy, nameOf)) };
+        return;
+      }
+      const added = pins.filter((p) => !before.has(p.messageId)), left = open.last.filter((p) => !ids.has(p.messageId));
+      if (!added.length && !left.length) return;
+      open.last = pins;
+      if (open.current !== null && !ids.has(open.current)) open.current = null;
+      open.change = pinListChangeText(added.map(titleOf), left.map(titleOf));
+      open.error = null;
+      focusWant = true;
+    }
+    const rowEl = (id) => el() && el().querySelector(`.choice[data-pin-id="${CSS.escape(String(id))}"]`);
+    const within = () => el() && el().contains(el().ownerDocument.activeElement);
+    function goTo(index) {
+      const pins = list(), pin = pins[Math.max(0, Math.min(pins.length - 1, index))];
+      if (!pin || !open) return;
+      open.known.add(pin.messageId);
+      open.current = pin.messageId;
+      open.error = null;
+      focusWant = true;
+      after();
+    }
+    async function replace(old) {
+      const item = open.item;
+      state.busy = item.id;
+      render();
+      try {
+        await onPin.change("replace", item.id, { replaces: old.messageId });
+        const text = pinReplacedText(pinWho(old.pinnedBy, nameOf), titleOf(old));
+        close(false);
+        state.note = { mid: item.id, kind: "replaced", item, old, text };
+        live.textContent = text;
+        state.refocus = item.id;
+      } catch {
+        if (open) {
+          open.error = PIN_REPLACE_FAILED;
+          focusWant = true;
+        }
+      }
+      state.busy = null;
+      render();
+    }
+    function choose(id) {
+      if (!open || state.busy !== null) return;
+      const pin = list().find((p) => p.messageId === id);
+      if (!pin) return;
+      if (!open.known.has(id)) {
+        open.known.add(id);
+        open.current = id;
+        open.change = pinNewRowText(titleOf(pin));
+        focusWant = true;
+        after();
+        return;
+      }
+      replace(pin);
+    }
+    function onKey(event) {
+      if (!open) return;
+      const pins = list(), fromChange = event.target.classList && event.target.classList.contains("chg"), at = pins.findIndex((p) => p.messageId === open.current);
+      const step = event.key === "ArrowDown" ? fromChange ? 0 : at + 1 : event.key === "ArrowUp" ? fromChange ? pins.length - 1 : at - 1 : event.key === "Home" ? 0 : event.key === "End" ? pins.length - 1 : null;
+      if (step !== null && !open.room) {
+        event.preventDefault();
+        event.stopPropagation();
+        goTo(step);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+        render();
+        return;
+      }
+      if (event.key === "Enter" && event.target.classList && event.target.classList.contains("choice")) {
+        event.preventDefault();
+        event.stopPropagation();
+        choose(Number(event.target.getAttribute("data-pin-id")));
+      }
+    }
+    function paint() {
+      if (!open) return;
+      const pins = list(), full = pins.length >= PIN_CAP, id = idOf(open.item.id), node = open.node;
+      open.room = !full;
+      node.setAttribute("aria-busy", state.busy === open.item.id ? "true" : "false");
+      const head = h("div", { class: "hd", id: id + "-h" }, pinChooserHeading(pins.length));
+      const cancel = h("button", { type: "button", class: "btn sm quiet cancel", onclick: () => {
+        close(true);
+        render();
+      } }, copy.cancel);
+      if (!full) {
+        const pin = h("button", { type: "button", class: "btn sm room-pin", onclick: () => {
+          const item = open.item;
+          close(false);
+          pinNow(item);
+        } }, copy.pin);
+        node.replaceChildren(head, h("div", { class: "room" }, h("span", {}, PIN_ROOM_NOW), pin), cancel);
+        mark(null);
+        return;
+      }
+      const rows = pins.map((pin, i) => {
+        const current = pin.messageId === open.current, isNew = !open.known.has(pin.messageId), own = pin.preview ? null : ownOf(pin), value = pin.preview && pin.preview.value;
+        const by = pinPinnedAtLine(pinWho(pin.pinnedBy, nameOf), timeLabel(pin.pinnedAtMs));
+        return h(
+          "button",
+          {
+            type: "button",
+            class: "choice",
+            "data-pin-id": String(pin.messageId),
+            "data-current": current ? "true" : null,
+            "data-new": isNew ? "true" : null,
+            "data-own": own,
+            tabindex: current || open.current === null && i === 0 ? "0" : "-1",
+            onpointerenter: () => {
+              if (within() && open.current !== pin.messageId) goTo(i);
+            },
+            onclick: () => {
+              if (!open.known.has(pin.messageId)) return choose(pin.messageId);
+              if (open.current !== pin.messageId) return goTo(i);
+              choose(pin.messageId);
+            }
+          },
+          own ? h("span", { class: "dot own" }, ownGlyph(own)) : h("span", { class: "dot", "data-status": pin.preview && pin.preview.status || "none", "aria-hidden": "true" }),
+          h("span", { class: "t" }, titleOf(pin)),
+          value ? h("b", { class: "v" }, value) : null,
+          isNew ? h("span", { class: "new" }, copy.isNew) : null,
+          h("span", { class: "by" }, by),
+          current && !isNew ? h("span", { class: "go", "aria-hidden": "true" }, copy.replace) : null
+        );
+      });
+      const change = open.change ? h("div", { class: "chg", tabindex: "-1", role: "status" }, open.change) : null;
+      const error = open.error ? h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, open.error)) : null;
+      node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
+      mark(open.current);
+    }
+    function after(was = false) {
+      if (!open || !open.node.isConnected) return;
+      const had = was || within();
+      paint();
+      if (!had && !focusWant) return;
+      focusWant = false;
+      const target = open.room ? el().querySelector(".room-pin") : open.current !== null ? rowEl(open.current) : el().querySelector(".chg");
+      if (target) target.focus();
+    }
+    async function undo(note) {
+      if (state.busy !== null) return;
+      state.busy = note.mid;
+      render();
+      try {
+        const pins = await onPin.change("restore", note.old.messageId, { replacing: note.item.id });
+        state.note = null;
+        live.textContent = pinLiveText("restored", titleOf(note.old), (pins || list()).length);
+        state.refocus = note.mid;
+      } catch (error) {
+        if (error && error.refused) {
+          const text = list().length >= PIN_CAP ? PIN_UNDO_FULL : PIN_UNDO_GONE;
+          state.note = { mid: note.mid, kind: "info", text };
+          live.textContent = text;
+        } else state.note = { ...note, kind: "replace-undo-failed" };
+      }
+      state.busy = null;
+      render();
+    }
+    function foot(note) {
+      if (note.kind === "replaced") return h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => undo(note) }, copy.undo));
+      if (note.kind === "replace-undo-failed") return h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, copy.undoReplaceFailed), h("button", { type: "button", class: "btn sm", onclick: () => undo({ ...note, kind: "replaced" }) }, copy.tryAgain));
+      if (note.kind === "info") return h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text));
+      return null;
+    }
+    return {
+      isOpen: (mid) => Boolean(open && open.item.id === mid),
+      toggle(item) {
+        if (state.busy !== null) return;
+        if (open && open.item.id === item.id) {
+          close(true);
+          render();
+          return;
+        }
+        close(false);
+        openFor(item);
+        render();
+      },
+      /** The chooser for this message, or null; drawn fresh into its bubble. */
+      node(item) {
+        return open && open.item.id === item.id ? open.node : null;
+      },
+      // A pin, unpin or replace elsewhere ends the chooser, as it ends an Undo.
+      closeFor(mid) {
+        if (open && open.item.id !== mid) close(false);
+      },
+      sync,
+      after,
+      foot,
+      within: () => Boolean(within()),
+      /** Unmount: the page's pins lose the chooser's mark. */
+      release() {
+        close(false);
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/card.js
   var CARD_COPY = CHAT_COPY.card;
   function cardNode({ id, text, parsed, meta = null, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
@@ -910,9 +1160,9 @@
     return wrap;
   }
   var face = (state, label) => h("span", { class: "av", "aria-hidden": "true", "data-face": state, "data-label": label });
-  var ALERT_NS = "http://www.w3.org/2000/svg";
+  var ALERT_NS2 = "http://www.w3.org/2000/svg";
   var alertIcon = () => {
-    const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+    const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
     svg.setAttribute("viewBox", "0 0 16 16");
     svg.setAttribute("class", "ico alert");
     svg.setAttribute("aria-hidden", "true");
@@ -990,6 +1240,7 @@
     };
     async function pinChange(item, action) {
       if (pinState.busy !== null) return;
+      if (replacer) replacer.closeFor(item.id);
       pinState.busy = item.id;
       pinState.refocus = item.id;
       render();
@@ -1010,6 +1261,7 @@
       const pins = pinList(), pinned = pins.some((p) => p.messageId === item.id);
       if (pinned) return pinChange(item, "unpin");
       if (pins.length >= PIN_CAP) {
+        if (replacer) return replacer.toggle(item);
         capNoteOn(item);
         pinState.refocus = item.id;
         render();
@@ -1017,17 +1269,36 @@
       }
       return pinChange(item, "pin");
     }
+    const threadRow = (id) => thread.find((row) => row.messageId === id);
+    const pinTitleOfPin = (pin2) => {
+      const named = typeof onPin.title === "function" && onPin.title(pin2);
+      if (named) return named;
+      if (pin2.preview && pin2.preview.shortName) return pin2.preview.shortName;
+      const row = threadRow(pin2.messageId);
+      return row ? pinTitleOf(row, row.fromName || row.from || "") : String(pin2.messageId);
+    };
+    const chooserId = (mid) => `${ids.status}-pin-chooser-${mid}`;
+    const replacer = onPin && onPin.replace ? createPinReplace({ onPin, state: pinState, live: pinLive, list: pinList, nameOf: pinName, titleOf: pinTitleOfPin, ownOf: (pin2) => {
+      const row = threadRow(pin2.messageId);
+      return row && row.contentType === "html" ? "name" : "quote";
+    }, idOf: chooserId, copy: pinCopy, render: () => render(), pinNow: (item) => pinChange(item, "pin") }) : null;
     function pinParts(item) {
       if (!onPin || item.id === void 0 || item.id === null) return null;
       const pins = pinList(), pin2 = pins.find((p) => p.messageId === item.id), atCap = !pin2 && pins.length >= PIN_CAP, note = pinState.note && pinState.note.mid === item.id ? pinState.note : null;
-      const label = pin2 ? pinCopy.unpin : atCap ? `${pinCopy.pin} (${pinCapLabel(pins.length)})` : pinCopy.pin, busy = pinState.busy === item.id;
-      const sig = ["p", pin2 ? pin2.pinnedBy : "", atCap, busy, note ? note.kind + (note.text || "") : ""].join(":");
+      const more = Boolean(atCap && replacer), choosing = Boolean(replacer && replacer.isOpen(item.id));
+      const label = pin2 ? pinCopy.unpin : more ? pinReplaceLabel(pins.length) : atCap ? `${pinCopy.pin} (${pinCapLabel(pins.length)})` : pinCopy.pin, busy = pinState.busy === item.id;
+      const sig = ["p", pin2 ? pin2.pinnedBy : "", atCap, busy, note ? note.kind + (note.text || "") : "", more ? pins.length : "", choosing].join(":");
       const make = () => {
-        const button = h("button", { type: "button", class: "pin-b", "aria-label": label, "aria-pressed": pin2 ? "true" : "false", "aria-disabled": atCap || busy ? "true" : null, title: label, "data-pin": pin2 ? "pinned" : atCap ? "cap" : "pin", "data-pin-mid": String(item.id), onclick: () => pinToggle(item) }, pin2 ? pinCopy.unpin : pinCopy.pin);
+        const button = h(
+          "button",
+          { type: "button", class: "pin-b", "aria-label": label, "aria-pressed": pin2 ? "true" : "false", "aria-disabled": atCap && !more || busy ? "true" : null, "aria-expanded": more || choosing ? String(choosing) : null, "aria-controls": choosing ? chooserId(item.id) : null, title: label, "data-pin": pin2 ? "pinned" : atCap ? "cap" : "pin", "data-pin-mid": String(item.id), onclick: () => pinToggle(item) },
+          pin2 ? pinCopy.unpin : more ? [pinCopy.pinMore, h("span", { class: "pin-cap", "aria-hidden": "true" }, String(pins.length))] : pinCopy.pin
+        );
         const acts = h("div", { class: "pin-acts", role: "group", "aria-label": pinCopy.actions }, button);
         const tag = pin2 ? h("div", { class: "pin-tag" }, pinCopy.by(pinWho(pin2.pinnedBy, pinName))) : null;
-        let foot = null;
-        if (note && note.kind === "cap") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => {
+        let foot = replacer && note ? replacer.foot(note) : null;
+        if (foot) ;
+        else if (note && note.kind === "cap") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => {
           pinState.note = null;
           render();
           if (typeof onPin.showPins === "function") onPin.showPins();
@@ -1039,7 +1310,7 @@
           } else pinChange(note.item, "restore");
         } }, pinCopy.undo));
         else if (note) foot = h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, note.kind === "unpin-failed" ? pinCopy.unpinFailed : pinCopy.failed), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, note.kind === "unpin-failed" ? "unpin" : note.action || "pin") }, pinCopy.tryAgain));
-        return { acts, tag, foot, pinned: Boolean(pin2) };
+        return { acts, tag, foot: [choosing ? replacer.node(item) : null, foot], pinned: Boolean(pin2) };
       };
       return { sig, make };
     }
@@ -1065,7 +1336,7 @@
     };
     const nextOpt = next ? typeof next === "object" ? next : {} : null;
     const pencil = () => {
-      const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+      const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("class", "ico");
       svg.setAttribute("aria-hidden", "true");
@@ -1322,6 +1593,8 @@
       const here = state();
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
+      if (replacer) replacer.sync();
+      const inChooser = replacer ? replacer.within() : false;
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       const held = roving.focused();
       reconcile(log, cache, want);
@@ -1335,6 +1608,7 @@
           pinState.refocus = null;
         }
       }
+      if (replacer) replacer.after(inChooser);
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
         if (done2) {
@@ -1446,6 +1720,7 @@
         offs.forEach((off) => off && off());
         pin.release();
         roving.release();
+        if (replacer) replacer.release();
         mountSlot.release();
         if (sendOpt) detach();
         else send.dispose();
@@ -1490,6 +1765,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho, pinReplaceLabel, pinChooserHeading, pinPinnedAtLine, pinReplacedText, pinNewRowText, pinListChangeText, pinPinnedMeanwhileText, PIN_REPLACE_FAILED, PIN_ROOM_NOW, PIN_UNDO_FULL, PIN_UNDO_GONE }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();
