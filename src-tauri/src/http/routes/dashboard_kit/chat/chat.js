@@ -4,7 +4,8 @@
 // A page with another peer or another frame passes options, never a second chat:
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
-//  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
+//  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send,label}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
+//   label names the input while composer(state) gives it (a recipient's name), else composerLabel. composerSlot(el)->release: the page's own control in the composer, above the box (a "To" chip), mounted once; release runs on unmount.
 //  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the live lead's prose from the host's onSessionText, else the peer's current step while it runs, else Working…).
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
@@ -17,7 +18,8 @@
 //   handles(peerRows)->[handle]: more handles whose messages are the peer's side of the thread (an older peer's).
 //   sources(peerRows)->[id]: the mailboxes the thread reads, one read each (transport.threadOf(id), plus the role queue), instead of read(); a source that fails never hides the rest, and the thread says so (unread, stale rows).
 //   bindLaunched, keepUnsent: the launch's rules (launch.js).
-// The mount returns post(text) (a message from another control, true when it went), threadFailed(), threadSettled() and refresh(onlyNew), which reads again (only the sources not read yet).
+//   recipient()->{handle,name}|null: read at each send. A recipient takes the message straight to its handle (launch.sendTo), never through the launch; its bubble says "To <name>" in its meta line. Null is the peer, as without it.
+// The mount returns post(text) (a message from another control, true when it went), threadFailed(), threadSettled(), refresh(onlyNew), which reads again (only the sources not read yet), and repaint() after the page's own state changes (a recipient picked).
 // state is {lead, fail(what,text), clear(what)}; fail puts a role=alert row in the thread's status slot.
 import {h} from './dom.js';
 import {CHAT_COPY,failureText,mergeCopy,modelLabel,timeLabel} from './copy.js';
@@ -167,9 +169,16 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // The thread is one Tab stop: its active message (the newest, until the person moves), with Up, Down, Home and End between messages.
  const roving=rovingThread(log);
  const status=h('div',{class:'status-slot',id:ids.status,tabindex:'-1'});
- const composer=createComposer({ids,onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
+ // A send from the box, a chip or post: to the page's recipient when it names one (the promise tells the composer whether it went), else to the peer.
+ const sendText=text=>{
+  fails.clear();
+  const to=target.recipient?target.recipient():null;
+  if(!to){awaitBase=leadCount();launch.send(text);return undefined;}
+  return launch.sendTo(to,text).then(()=>true,failure=>{fails.set('send',copy.failure.send(failure.why||failure.code));render();return false;});
+ };
+ const composer=createComposer({ids,onSend:sendText,rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
- const sendChip=text=>{awaitBase=leadCount();fails.clear();launch.send(text);};
+ const sendChip=sendText;
  // Chips: the page's own (chips) and, with next, the ones in the lead's newest Next line. A chip's pencil (edit) puts its text in the composer instead of sending it.
  const nextOpt=next?(typeof next==='object'?next:{}):null;
  const pencil=()=>{const svg=document.createElementNS(ALERT_NS,'svg'),path=document.createElementNS(ALERT_NS,'path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M4 20h4L19 9l-4-4L4 16z');svg.append(path);return svg;};
@@ -179,6 +188,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
+ // The page's composer slot: its own node above the box, made once, so a repaint never rebuilds the page's control.
+ const composerSlot=layout.composerSlot?h('div',{'data-composer-slot':''}):null;
+ if(composerSlot)composer.region.insertBefore(composerSlot,composer.region.firstChild);
  el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,actFoot,pinLive,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
@@ -190,7 +202,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
   return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`)):null,pin?pin.acts:null,h('div',{class:'body'},item.contentType==='html'?item.text:inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`,item.label?h('span',{'data-row-label':''},` · ${item.label}`):null)):null,pin?pin.acts:null,h('div',{class:'body'},item.contentType==='html'?item.text:inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
  };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
@@ -257,7 +269,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  function markOfItem(item){
   if(item.mark==='starting'&&launch.stuck)return 'stuck';
   if(item.mark!=='sent')return item.mark;
-  return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles()),delivery:deliveryRow(item.messageId)});
+  // A message to a recipient is read against the recipient's own row and messages, not the peer's.
+  const to=item.to?item.to.handle:null,lead=to?rows.find(row=>row.handle===to)||null:live();
+  return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead,newestLeadAt:newestFrom(thread,to?new Set([to]):leadHandles()),delivery:deliveryRow(item.messageId)});
  }
  // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the live lead's prose, else the peer's current step while it runs.
  // The working row sits at the thread's foot, after the log: outside its live region, so a line it shows is never read out with the row. The prose row is one node whose line
@@ -303,6 +317,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const given=typeof faces==='function'?faces(row):null;
   return {name:(given&&given.name)||who,label:given&&given.label||null,src:given&&given.src||null,face:given&&given.face||null};
  }
+ // A message sent here to a recipient is labelled from its own send (launch.sendTo records to); under faces, messages to one recipient are one run, so the label is on its meta line.
+ const toLabel=item=>item&&item.to?copy.row.to(item.to.name):null;
+ const youKey=item=>item&&item.to?'you|'+item.to.handle:'you';
  function threadItems(){
   let lastLead=null;
   const handles=leadHandles(),entries=[],rowIds=new Set(thread.map(row=>row.messageId)),sentHere=new Map(launch.messages.filter(item=>item.messageId!==undefined).map(item=>[item.messageId,item]));
@@ -314,16 +331,16 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    // With next on, a lead message's Next line is the chips, not part of the text; a message that is only that line shows nothing.
    const said=row.text||row.summary||'',shown=nextOpt&&side==='lead'&&row.text?(parseNext(row.text)||{text:said}).text:said;
    if(nextOpt&&side==='lead'&&row.text&&!shown)continue;
-   const item={id:row.messageId,text:shown,said,contentType:row.contentType,summary:row.summary,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs},info=faceInfo(row,side,who);
+   const label=toLabel(own),item={id:row.messageId,text:shown,said,contentType:row.contentType,summary:row.summary,mark:mark&&copy.mark[mark],markKey:mark,who,at:row.createdAtMs,label},info=faceInfo(row,side,who);
    item.pin=pinParts(item);
-   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark,item.pin?item.pin.sig:''].join('|'),make:()=>bubble(item,side),
-    run:faces?{key:side==='you'?'you':side+'|'+(row.from||''),info,make:(first,info)=>bubble(item,side,first,info)}:null});
+   entries.push({t:row.createdAtMs||0,id:'m'+row.messageId,sig:['m',row.messageId,shown,side,row.createdAtMs,mark,label,item.pin?item.pin.sig:''].join('|'),make:()=>bubble(item,side),
+    run:faces?{key:side==='you'?youKey(own):side+'|'+(row.from||''),info,make:(first,info)=>bubble(item,side,first,info)}:null});
   }
   for(const item of launch.messages){
    if(item.messageId!==undefined&&rowIds.has(item.messageId))continue;
    const mark=markOfItem(item);
-   const sent={text:item.text,mark:copy.mark[mark]||null,markKey:mark,who:copy.who.you,at:item.sentAt};
-   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text].join('|'),make:()=>bubble(sent,'you'),run:faces?{key:'you',info:null,make:(first)=>bubble(sent,'you',first)}:null});
+   const sent={text:item.text,mark:copy.mark[mark]||null,markKey:mark,who:copy.who.you,at:item.sentAt,label:toLabel(item)};
+   entries.push({t:item.sentAt,id:'l'+item.id,sig:['l',item.id,mark,item.text,sent.label].join('|'),make:()=>bubble(sent,'you'),run:faces?{key:youKey(item),info:null,make:(first)=>bubble(sent,'you',first)}:null});
   }
   entries.sort((a,b)=>a.t-b.t);
   // A streamed reply is the lead's next message, so under faces it joins the lead's run (the lead's key and face) and shows no meta line of its own that the final message would then drop.
@@ -432,6 +449,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  if(onPin&&typeof onPin.subscribe==='function')offs.push(onPin.subscribe(()=>render()));
  if(typeof reads.delivery==='function')offs.push(reads.on('delivery',()=>render()));
  if(typeof transport.stream==='function')offs.push(transport.stream(chunk=>{streams.set(chunk.messageId,(streams.get(chunk.messageId)||'')+chunk.text);render();}));
+ const releaseSlot=composerSlot?layout.composerSlot(composerSlot):null;
  render();
  if(layout.autofocus!==false)composer.input.focus();
  // A page that reads by source does not wait on the roster: a sessions read that fails or never answers still settles the first thread read.
@@ -445,7 +463,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();if(typeof releaseSlot==='function')releaseSlot();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
@@ -457,6 +475,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   post:text=>composer.post(text),threadFailed:()=>Boolean(sources&&sources.failedNow()),threadSettled:()=>!sources||sources.settled(),
   presence,launch,showTerminal,thread:()=>thread,leadHandles,terminalOn:()=>Boolean(terminalTarget()),lead:live,
   setDone(value){isDone=Boolean(value);render();},
+  repaint:()=>render(),
   subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},
  };
 }

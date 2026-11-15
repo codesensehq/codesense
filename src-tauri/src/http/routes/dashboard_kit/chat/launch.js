@@ -135,6 +135,16 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
    // With the lead gone, text kept from a failed send rides along with the new launch.
    return startLaunch([...messages.filter(other=>other!==item&&other.mark==='kept'),item]);
   },
+  // A message to another agent (the page's target.recipient, {handle, name}): straight to its handle, never a launch, the outbox or a kept message. Only a sent one joins the messages, with its recipient (to), so its bubble carries the mark;
+  // a failure rejects with parseFailure's shape and leaves no message behind (the composer keeps the text).
+  sendTo(to,text){
+   const sentAt=clock.now();inflight++;emit();
+   return enqueue(()=>transport.send(to.handle,text)).then(result=>{
+    inflight--;
+    if(result&&result.status!==undefined&&result.status!=='sent'){emit();throw {kind:'other',code:String(result.status),why:result.message||String(result.status)};}
+    messages.push({id:++ids,text,mark:'sent',busyAtSend:isBusy(rows.find(row=>row.handle===to.handle)),sentAt,to,messageId:result&&result.messageId});emit();
+   },error=>{inflight--;emit();throw parseFailure(error);});
+  },
   // Launch from the header, with no message of its own: kept text rides along as it does on a send. A live or starting lead needs nothing.
   start(){
    if(live()||starting())return Promise.resolve();

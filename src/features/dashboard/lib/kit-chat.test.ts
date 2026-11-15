@@ -2871,3 +2871,163 @@ describe("kit.chat send state", () => {
     });
   });
 });
+
+describe("kit.chat recipient, composer slot and row label", () => {
+  const helper: Row = { ...lead("idle"), sessionId: "s9", handle: "helper-1", role: "helper" };
+  const to = { handle: "helper-1", name: "Helper" };
+  // The story's own peer, with the page's recipient seam.
+  const storyWith = (recipient: () => unknown) => ({
+    ...(kitOf().chat as unknown as { targetOf(o: Row): Row }).targetOf({
+      storyId: "demo-story",
+      leadRole: "lead",
+    }),
+    recipient,
+  });
+  const input = (el: HTMLElement) => el.querySelector<HTMLTextAreaElement>(".composer textarea")!;
+  const key = (el: HTMLElement, init: KeyboardEventInit) =>
+    input(el).dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+    );
+
+  it("with a recipient, a send goes to its handle once and never launches", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    await typeAndSend(s.el, "hello helper");
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.send).toHaveBeenCalledWith("helper-1", "hello helper");
+    expect(s.transport.launch).not.toHaveBeenCalled();
+    expect(input(s.el).value).toBe("");
+    const bubble = s.el.querySelector(".log .msg.you")!;
+    expect(bubble.querySelector(".body")!.textContent).toBe("hello helper");
+    expect(bubble.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
+  it("a recipient of null keeps today's path: with no lead running the send launches", async () => {
+    const s = setup([]);
+    mountOn(s, {
+      target: storyWith(() => null),
+    });
+    await flush();
+    await typeAndSend(s.el, "start please");
+    expect(s.transport.launch).toHaveBeenCalledTimes(1);
+    expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it("a failed send to a recipient keeps the text in the box and shows the failure", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    s.send.mockRejectedValueOnce(new Error("unavailable: offline"));
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("hello helper");
+    expect(s.el.querySelector(".log .msg.you")).toBeNull();
+    const row = s.el.querySelector('[role="alert"][data-fail="send"]')!;
+    expect(row.textContent).toContain("offline");
+    s.send.mockResolvedValueOnce({ status: "invalid", message: "no such agent" });
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("hello helper");
+    expect(s.el.querySelector('[data-fail="send"]')!.textContent).toContain("no such agent");
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("");
+    expect(s.el.querySelector('[data-fail="send"]')).toBeNull();
+    expect(s.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("Enter sends to the recipient; Shift+Enter and an IME composition do not", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    input(s.el).value = "line";
+    key(s.el, { code: "Enter", shiftKey: true });
+    key(s.el, { code: "Enter", isComposing: true });
+    await flush();
+    expect(s.send).not.toHaveBeenCalled();
+    key(s.el, { code: "NumpadEnter" });
+    await flush();
+    expect(s.send).toHaveBeenCalledWith("helper-1", "line");
+  });
+
+  it("a second Enter while the send is in flight sends nothing more", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    let answer: (value: Record<string, unknown>) => void = () => {};
+    s.send.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    input(s.el).value = "once";
+    key(s.el, { code: "Enter" });
+    key(s.el, { code: "Enter" });
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(1);
+    answer({ status: "sent", messageId: 77 });
+    await flush();
+    expect(input(s.el).value).toBe("");
+  });
+
+  it("layout.composerSlot mounts once above the box, survives a repaint and is released on unmount", async () => {
+    const s = setup([lead("idle")]);
+    const release = vi.fn();
+    const composerSlot = vi.fn((el: HTMLElement) => {
+      el.append(
+        Object.assign(document.createElement("span"), {
+          className: "to-chip",
+          textContent: "To: Helper",
+        }),
+      );
+      return release;
+    });
+    const chat = mountOn(s, { layout: { composerSlot } });
+    await flush();
+    await typeAndSend(s.el, "hello");
+    chat.setDone(false);
+    expect(composerSlot).toHaveBeenCalledTimes(1);
+    const region = s.el.querySelector(".composer")!;
+    const chip = region.querySelector(".to-chip")!;
+    expect(chip.textContent).toBe("To: Helper");
+    expect(
+      chip.compareDocumentPosition(region.querySelector(".box")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(release).not.toHaveBeenCalled();
+    chat.unmount();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("layout.composer's label names the input, and the mount's label comes back without it", async () => {
+    const s = setup([lead("idle")]);
+    let name: string | null = "Helper";
+    const chat = mountOn(s, {
+      layout: { composer: () => (name ? { label: `Message to ${name}` } : {}) },
+    });
+    await flush();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to Helper");
+    name = null;
+    chat.repaint();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to the story lead");
+  });
+
+  it("a message sent to a recipient shows its label in the meta line, and the text is unchanged", async () => {
+    const s = setup([lead("idle"), helper]);
+    let recipient: typeof to | null = to;
+    mountOn(s, {
+      target: storyWith(() => recipient),
+    });
+    await flush();
+    await typeAndSend(s.el, "for the helper");
+    recipient = null;
+    await typeAndSend(s.el, "for the lead");
+    const [first, second] = [...s.el.querySelectorAll(".log .msg.you")];
+    expect(first.querySelector(".body")!.textContent).toBe("for the helper");
+    expect(first.querySelector(".meta")!.textContent).toContain("To Helper");
+    expect(second.querySelector(".body")!.textContent).toBe("for the lead");
+    expect(second.querySelector(".meta")!.textContent).not.toContain("To ");
+  });
+});

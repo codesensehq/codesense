@@ -3,17 +3,24 @@
 import {h} from './dom.js';
 import {CHAT_COPY} from './copy.js';
 import {idsOf} from './mount-ids.js';
-// rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes.
+// rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes, and the input's name (label) while the page gives one.
+// onSend(text) may answer a promise (a send to the page's recipient): the box keeps the text, takes no other send until it settles, and clears only on true while it still holds that text.
 export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.composerLabel,hint=CHAT_COPY.hint,send:sendLabel=CHAT_COPY.send}){
  const input=h('textarea',{id:ids.input,rows,'aria-label':label,'aria-describedby':ids.hint,spellcheck:'true'});
  const send=h('button',{id:ids.send,type:'button',class:'btn primary'},sendLabel);
  const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,send),h('div',{class:'hint',id:ids.hint},hint));
- const submit=()=>{const text=input.value.trim();if(!text||input.disabled)return;input.value='';onSend(text);};
+ let pending=false;
+ const submit=()=>{
+  const raw=input.value,text=raw.trim();if(!text||input.disabled||pending)return;
+  const held=onSend(text);
+  if(!held||typeof held.then!=='function'){input.value='';return;}
+  pending=true;held.then(sent=>{pending=false;if(sent&&input.value===raw)input.value='';},()=>{pending=false;});
+ };
  input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!event.isComposing){event.preventDefault();submit();}});
  send.addEventListener('click',submit);
  return {region,input,send,
-  update({placeholder,disabled,hint:nextHint,send:nextSend}){
-   input.placeholder=placeholder;input.disabled=Boolean(disabled);send.disabled=Boolean(disabled);
+  update({placeholder,disabled,hint:nextHint,send:nextSend,label:nextLabel}){
+   input.placeholder=placeholder;input.setAttribute('aria-label',nextLabel===undefined?label:nextLabel);input.disabled=Boolean(disabled);send.disabled=Boolean(disabled);
    if(nextHint!==undefined)region.querySelector('.hint').textContent=nextHint;
    if(nextSend!==undefined)send.textContent=nextSend;
   },
