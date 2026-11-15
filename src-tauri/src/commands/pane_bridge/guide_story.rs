@@ -8,10 +8,16 @@
 //! depends on nor widens what that scope admits. Every refusal is the same "File not found",
 //! so a refused path looks like a missing one.
 
+use std::ffi::OsStr;
+use std::path::{Component, Path};
+
 use crate::context_query::index::IndexRoot;
+use crate::context_query::model::Layer;
 use crate::context_repo::caller_scope::MISSING;
 
-use super::OpenTarget;
+use super::{path_str, OpenTarget};
+
+const STORIES: &str = "stories";
 
 /// An existing `.md` file under `stories/` of a synced team's content root, named by an
 /// absolute path with no `.` or `..`. `team` is refused: the path alone says where it is.
@@ -20,8 +26,54 @@ pub(crate) fn resolve(
     path: &str,
     team: Option<&str>,
 ) -> Result<OpenTarget, String> {
-    let _ = (roots, path, team);
-    Err(MISSING.into())
+    let refused = || String::from(MISSING);
+    let file = Path::new(path.trim());
+    if team.is_some()
+        || !file.is_absolute()
+        || file.extension() != Some(OsStr::new("md"))
+        || file
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(refused());
+    }
+    let root = roots
+        .iter()
+        .filter(|root| root.layer == Layer::Team && file.starts_with(&root.dir))
+        .max_by_key(|root| root.dir.components().count())
+        .ok_or_else(refused)?;
+    let (Some(org), Some(team)) = (root.org.clone(), root.team.clone()) else {
+        return Err(refused());
+    };
+    // Under `stories/`, at least one name deep, through plain names only.
+    let inside: Vec<_> = file
+        .strip_prefix(&root.dir)
+        .map_err(|_| refused())?
+        .components()
+        .collect();
+    if inside.len() < 2
+        || inside[0] != Component::Normal(OsStr::new(STORIES))
+        || !inside
+            .iter()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(refused());
+    }
+    // The real file must sit in the real `stories/` folder, and that folder in the real root, so
+    // no link on the way out of either is followed.
+    let real_root = std::fs::canonicalize(&root.dir).map_err(|_| refused())?;
+    let real_stories = std::fs::canonicalize(root.dir.join(STORIES)).map_err(|_| refused())?;
+    let real = std::fs::canonicalize(file).map_err(|_| refused())?;
+    if !real_stories.starts_with(&real_root) || !real.starts_with(&real_stories) || !real.is_file()
+    {
+        return Err(refused());
+    }
+    Ok(OpenTarget {
+        path: path_str(file),
+        org,
+        team,
+        content_root: path_str(&root.dir),
+    })
 }
 
 #[cfg(test)]
