@@ -61,8 +61,8 @@ describe("the cap", () => {
   ];
 
   it("names how many are pinned, as the dimmed Pin's accessible name says it", () => {
-    expect(PIN_CAP).toBe(3);
-    expect(capLabel(3)).toBe("3 of 3 pinned");
+    // PIN_CAP is the engine's (pin-cap.contract.test.ts); the words name it.
+    expect(capLabel(PIN_CAP)).toBe(`${PIN_CAP} of ${PIN_CAP} pinned`);
   });
 
   it("the note says whose pins fill the list, the most first", () => {
