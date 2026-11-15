@@ -33,7 +33,7 @@ import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {rovingThread} from './roving.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,pinTitleOf,pinWho} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,htmlNameOf,pinTitleOf,pinWho} from './chat-core.js';
 import {createPinReplace} from './pin-replace.js';
 import {cardNode} from './card.js';
 import {inlineNodes} from './inline.js';
@@ -202,8 +202,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),holds(info.name,who)?null:h('span',{class:'sr'},`${info.name}, `),meta):meta;
  // An HTML message is a page the chat doesn't draw: it shows by name (summary, <title>, first heading, as a pin names it) and sender, never as its source.
  const htmlName=(item,who)=>{
-  const from=copy.row.htmlFrom(who),title=pinTitleOf({text:item.said||item.text,contentType:'html',summary:item.summary},who);
-  return title===from?[from]:[h('div',{class:'html-t'},title),h('div',{class:'html-from'},from)];
+  const from=copy.row.htmlFrom(who),name=htmlNameOf({text:item.said||item.text,summary:item.summary});
+  return name?[h('div',{class:'html-t'},name),h('div',{class:'html-from'},from)]:[from];
  };
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;

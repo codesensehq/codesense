@@ -246,20 +246,23 @@
       return named === void 0 ? all : named;
     }));
   }
-  function pinTitleOf(m, sender) {
+  function htmlNameOf(m) {
     const summary = squashSpace(m && m.summary);
     if (summary) return summary;
     const text = String(m && m.text || "");
-    if (m && m.contentType === "html") {
-      const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
-      if (title && plainText(title[1])) return plainText(title[1]);
-      for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
-        const name = plainText(heading[2]);
-        if (name) return name;
-      }
-      return `Dashboard from ${sender}`;
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+    if (title && plainText(title[1])) return plainText(title[1]);
+    for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+      const name = plainText(heading[2]);
+      if (name) return name;
     }
-    return pinFirstSentence(text) || `Message from ${sender}`;
+    return "";
+  }
+  function pinTitleOf(m, sender) {
+    if (m && m.contentType === "html") return htmlNameOf(m) || `Dashboard from ${sender}`;
+    const summary = squashSpace(m && m.summary);
+    if (summary) return summary;
+    return pinFirstSentence(String(m && m.text || "")) || `Message from ${sender}`;
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
@@ -1520,8 +1523,8 @@
     const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
     const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
     const htmlName = (item, who) => {
-      const from = copy.row.htmlFrom(who), title = pinTitleOf({ text: item.said || item.text, contentType: "html", summary: item.summary }, who);
-      return title === from ? [from] : [h("div", { class: "html-t" }, title), h("div", { class: "html-from" }, from)];
+      const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary });
+      return name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from];
     };
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;

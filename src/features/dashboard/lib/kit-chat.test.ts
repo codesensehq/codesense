@@ -1974,6 +1974,27 @@ describe("kit.chat onPin: the person pins a message", () => {
     expect(body(10).textContent).toBe("Dashboard from Story lead");
   });
 
+  it("says an untitled HTML message's sender once in a page's own words too", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    mountOn(s, { copy: { row: { htmlFrom: (who: string) => `A page from ${who}` } } });
+    await flush();
+    expect(s.el.querySelector('.msg[data-mid="10"] .body')!.textContent).toBe(
+      "A page from Story lead",
+    );
+  });
+
   it("names an HTML message by its title, not its markup, in the live region", async () => {
     const s = setup(
       [lead("idle")],
