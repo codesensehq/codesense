@@ -26,6 +26,7 @@ import {
 } from "./terminal-constants";
 import { TERMINAL_THEME } from "@/features/viewer/components/terminal-constants";
 import { SCROLLBACK_OPTIONS } from "@/shared/constants/settings-options";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import type { WebglAddon } from "@xterm/addon-webgl";
 
 const fake = vi.hoisted(() => ({
@@ -763,6 +764,17 @@ describe("apply pipeline (§3.6)", () => {
     const dump = await dumped(m, "s1");
     expect(dump.lines[0]).toBe("pending");
     expect(dump.appliedSeq).toBe(fake.server.seqOf("s1"));
+  });
+
+  it("does not stamp agent activity from individual PTY chunks", async () => {
+    const recordOutput = vi.spyOn(useAgentStateStore.getState(), "recordOutput");
+    const m = newManager();
+    await open(m);
+    m.attach("s1", slot(), { focus: false });
+    fake.server.produce("s1", "one");
+    fake.server.produce("s1", "two");
+    await dumped(m, "s1");
+    expect(recordOutput).not.toHaveBeenCalled();
   });
 
   describe("teeth", () => {
