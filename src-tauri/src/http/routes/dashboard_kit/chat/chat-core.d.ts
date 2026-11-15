@@ -125,6 +125,35 @@ export function pinPinnedMeanwhileText(who: string): string;
 export const PIN_REPLACE_FAILED: string;
 /** The chooser when a pin left and there's room. */
 export const PIN_ROOM_NOW: string;
+/** The replace chooser's state: the pins it opened on plus the rows arrived on since, the list as last drawn, the current row, what changed, a failed replace. */
+export interface PinChooserState<P extends { messageId: number } = { messageId: number }> {
+  known: ReadonlySet<number>;
+  last: readonly P[];
+  current: number | null;
+  change: string | null;
+  error: string | null;
+}
+/** A chooser opened on `pins`: the first row current. */
+export function pinChooserOpen<P extends { messageId: number }>(pins: readonly P[]): PinChooserState<P>;
+/** The row a key moves the current row to, or null for any other key. */
+export function pinChooserStep(key: string, at: number, count: number, fromChange: boolean): number | null;
+/** The person arrived on a row: current and known, and a failed replace's line goes. */
+export function pinChooserArrive<S extends PinChooserState<{ messageId: number }>>(state: S, id: number): S;
+/** Choose a row: replace it if arrived on, else arrive on it first and say it is new. */
+export function pinChooserChoose<S extends PinChooserState<{ messageId: number }>, P extends { messageId: number }>(
+  state: S,
+  pin: P,
+  titleOf: (pin: P) => string,
+): { state: S; replace: boolean };
+/** Follow the live list: null when nothing changed, {pinned} when the agent pinned this message, else the next state. */
+export function pinChooserSync<S extends PinChooserState<P>, P extends { messageId: number }>(
+  state: S,
+  pins: readonly P[],
+  messageId: number,
+  titleOf: (pin: P) => string,
+): { pinned: P } | { state: S } | null;
+/** The chooser's room line below the cap, else null. */
+export function pinChooserRoom(count: number): string | null;
 /** An Undo of a replace refused because the list is full again. */
 export const PIN_UNDO_FULL: string;
 /** An Undo of a replace refused because the old pin's message is gone. */

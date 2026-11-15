@@ -876,13 +876,10 @@ mod tests {
     fn m4_event_metrics_change_only_after_their_event_is_recorded() {
         let r = Registry::new();
         assert!(r.metric_at("session_record.read", 0).is_none());
-        assert!(r.metric_at("story_changes.git_child", 0).is_none());
         assert!(r.metric_at("session_text.emit", 0).is_none());
         r.metric_count_at("session_record.read", secs(1));
-        r.metric_count_at("story_changes.git_child", secs(1));
         r.metric_count_at("session_text.emit", secs(1));
         assert_eq!(r.metric_at("session_record.read", 0).unwrap().count, 1);
-        assert_eq!(r.metric_at("story_changes.git_child", 0).unwrap().count, 1);
         assert_eq!(r.metric_at("session_text.emit", 0).unwrap().count, 1);
         assert!(r.metric_at("session_record.read", 1).is_none());
     }

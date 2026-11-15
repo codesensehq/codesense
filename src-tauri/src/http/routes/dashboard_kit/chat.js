@@ -216,6 +216,25 @@
   var PIN_ROOM_NOW = "There's room now.";
   var PIN_UNDO_FULL = "Can't undo: the list is full again.";
   var PIN_UNDO_GONE = "Can't undo: that message was archived or withdrawn.";
+  var pinChooserOpen = (pins) => ({ known: new Set(pins.map((p) => p.messageId)), last: pins, current: pins.length ? pins[0].messageId : null, change: null, error: null });
+  function pinChooserStep(key, at, count, fromChange) {
+    if (key === "ArrowDown") return fromChange ? 0 : at + 1;
+    if (key === "ArrowUp") return fromChange ? count - 1 : at - 1;
+    return key === "Home" ? 0 : key === "End" ? count - 1 : null;
+  }
+  var pinChooserArrive = (state, id) => ({ ...state, known: /* @__PURE__ */ new Set([...state.known, id]), current: id, error: null });
+  function pinChooserChoose(state, pin, titleOf) {
+    if (state.known.has(pin.messageId)) return { state, replace: true };
+    return { state: { ...pinChooserArrive(state, pin.messageId), change: pinNewRowText(titleOf(pin)) }, replace: false };
+  }
+  function pinChooserSync(state, pins, messageId, titleOf) {
+    const ids = new Set(pins.map((p) => p.messageId)), before = new Set(state.last.map((p) => p.messageId));
+    if (ids.has(messageId) && !before.has(messageId)) return { pinned: pins.find((p) => p.messageId === messageId) };
+    const added = pins.filter((p) => !before.has(p.messageId)), left = state.last.filter((p) => !ids.has(p.messageId));
+    if (!added.length && !left.length) return null;
+    return { state: { ...state, last: pins, current: state.current !== null && ids.has(state.current) ? state.current : null, change: pinListChangeText(added.map(titleOf), left.map(titleOf)), error: null } };
+  }
+  var pinChooserRoom = (count) => count >= PIN_CAP ? null : PIN_ROOM_NOW;
   var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
   function plainText(markup) {
     return squashSpace(String(markup || "").replace(/<[^>]*>/g, " ").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
@@ -929,6 +948,7 @@
       refresh();
       const row = log.querySelector(`[data-mid="${CSS.escape(key)}"]`);
       if (!row) return;
+      row.tabIndex = 0;
       row.focus({ preventScroll: true });
       if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
     }
@@ -954,6 +974,10 @@
     return {
       focused,
       refresh,
+      // Where focus goes when the thread is entered from outside it (Jump to latest): the newest message.
+      focusNewest() {
+        moveTo(keys().at(-1));
+      },
       release() {
         watch.disconnect();
         log.removeEventListener("keydown", onKeyDown);
@@ -991,25 +1015,21 @@
     function openFor(item) {
       const pins = list();
       state.note = null;
-      open = { item, known: new Set(pins.map((p) => p.messageId)), last: pins, current: pins.length ? pins[0].messageId : null, change: null, error: null, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
+      open = { ...pinChooserOpen(pins), item, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
       open.node.addEventListener("keydown", onKey);
       focusWant = true;
     }
     function sync() {
       if (!open) return;
-      const pins = list(), ids = new Set(pins.map((p) => p.messageId)), before = new Set(open.last.map((p) => p.messageId));
-      if (ids.has(open.item.id) && !before.has(open.item.id)) {
-        const pin = pins.find((p) => p.messageId === open.item.id), mid = open.item.id;
+      const next = pinChooserSync(open, list(), open.item.id, titleOf);
+      if (!next) return;
+      if (next.pinned) {
+        const mid = open.item.id;
         close(false);
-        state.note = { mid, kind: "info", text: pinPinnedMeanwhileText(pinWho(pin.pinnedBy, nameOf)) };
+        state.note = { mid, kind: "info", text: pinPinnedMeanwhileText(pinWho(next.pinned.pinnedBy, nameOf)) };
         return;
       }
-      const added = pins.filter((p) => !before.has(p.messageId)), left = open.last.filter((p) => !ids.has(p.messageId));
-      if (!added.length && !left.length) return;
-      open.last = pins;
-      if (open.current !== null && !ids.has(open.current)) open.current = null;
-      open.change = pinListChangeText(added.map(titleOf), left.map(titleOf));
-      open.error = null;
+      open = next.state;
       focusWant = true;
     }
     const rowEl = (id) => el() && el().querySelector(`.choice[data-pin-id="${CSS.escape(String(id))}"]`);
@@ -1017,9 +1037,7 @@
     function goTo(index) {
       const pins = list(), pin = pins[Math.max(0, Math.min(pins.length - 1, index))];
       if (!pin || !open) return;
-      open.known.add(pin.messageId);
-      open.current = pin.messageId;
-      open.error = null;
+      open = pinChooserArrive(open, pin.messageId);
       focusWant = true;
       after();
     }
@@ -1047,10 +1065,9 @@
       if (!open || state.busy !== null) return;
       const pin = list().find((p) => p.messageId === id);
       if (!pin) return;
-      if (!open.known.has(id)) {
-        open.known.add(id);
-        open.current = id;
-        open.change = pinNewRowText(titleOf(pin));
+      const chosen = pinChooserChoose(open, pin, titleOf);
+      if (!chosen.replace) {
+        open = chosen.state;
         focusWant = true;
         after();
         return;
@@ -1060,7 +1077,7 @@
     function onKey(event) {
       if (!open) return;
       const pins = list(), fromChange = event.target.classList && event.target.classList.contains("chg"), at = pins.findIndex((p) => p.messageId === open.current);
-      const step = event.key === "ArrowDown" ? fromChange ? 0 : at + 1 : event.key === "ArrowUp" ? fromChange ? pins.length - 1 : at - 1 : event.key === "Home" ? 0 : event.key === "End" ? pins.length - 1 : null;
+      const step = pinChooserStep(event.key, at, pins.length, fromChange);
       if (step !== null && !open.room) {
         event.preventDefault();
         event.stopPropagation();
@@ -1082,7 +1099,7 @@
     }
     function paint() {
       if (!open) return;
-      const pins = list(), full = pins.length >= PIN_CAP, id = idOf(open.item.id), node = open.node;
+      const pins = list(), room = pinChooserRoom(pins.length), full = room === null, id = idOf(open.item.id), node = open.node;
       open.room = !full;
       node.setAttribute("aria-busy", state.busy === open.item.id ? "true" : "false");
       const head = h("div", { class: "hd", id: id + "-h" }, pinChooserHeading(pins.length));
@@ -1096,7 +1113,7 @@
           close(false);
           pinNow(item);
         } }, copy.pin);
-        node.replaceChildren(head, h("div", { class: "room" }, h("span", {}, PIN_ROOM_NOW), pin), cancel);
+        node.replaceChildren(head, h("div", { class: "room" }, h("span", {}, room), pin), cancel);
         mark(null);
         return;
       }

@@ -26,6 +26,11 @@ pub(crate) struct Drain {
 /// The notes refs read, first match wins: CodeSense's local-only ref, then git-ai's default.
 pub(crate) const NOTES_REFS: [&str; 2] = [super::managed::NOTES_REF, "ai"];
 
+pub(crate) fn is_missing_object(error: &git2::Error) -> bool {
+    git2::Error::code(error) == git2::ErrorCode::NotFound
+        && git2::Error::class(error) == git2::ErrorClass::Odb
+}
+
 /// How long a drain may wait, in seconds.
 const DRAIN_SECONDS: &str = "5";
 
@@ -33,7 +38,6 @@ const DRAIN_SECONDS: &str = "5";
 pub(crate) struct GitAiSource {
     git: String,
     drain: Option<Drain>,
-    count_story_changes_children: bool,
 }
 
 /// Ambient variables that would point git at another repository, index or object store.
@@ -46,6 +50,49 @@ pub(crate) const REPO_OVERRIDES: [&str; 7] = [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_NAMESPACE",
 ];
+
+#[cfg(test)]
+static CHILD_PROCESSES: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// The `git-ai await` runs per repository (each is also a child process).
+#[cfg(test)]
+static DRAINS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn count_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) {
+    let mut counts = counts.lock().unwrap();
+    if let Some((_, count)) = counts.iter_mut().find(|(path, _)| path == repo) {
+        *count += 1;
+    } else {
+        counts.push((repo.to_owned(), 1));
+    }
+}
+
+#[cfg(test)]
+fn count_child(repo: &Path) {
+    count_in(&CHILD_PROCESSES, repo);
+}
+
+#[cfg(test)]
+fn counted_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) -> usize {
+    counts
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(path, _)| path == repo)
+        .map(|(_, count)| *count)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn child_processes(repo: &Path) -> usize {
+    counted_in(&CHILD_PROCESSES, repo)
+}
+
+#[cfg(test)]
+pub(crate) fn drains(repo: &Path) -> usize {
+    counted_in(&DRAINS, repo)
+}
 
 fn local_read_env(command: &mut Command) {
     // Only the repository at `repo` decides anything.
@@ -68,7 +115,6 @@ impl GitAiSource {
         Self {
             git: git.into(),
             drain: None,
-            count_story_changes_children: false,
         }
     }
 
@@ -83,12 +129,6 @@ impl GitAiSource {
         } else {
             source
         }
-    }
-
-    pub(crate) fn for_story_changes(home: &Path) -> Self {
-        let mut source = Self::for_home(home);
-        source.count_story_changes_children = true;
-        source
     }
 
     /// Run `git-ai await` before each read.
@@ -114,9 +154,8 @@ impl GitAiSource {
         local_read_env(&mut command);
         #[cfg(test)]
         crate::test_support::strip_attribution_env(&mut command);
-        if self.count_story_changes_children {
-            crate::shared::invoke_stats::metric_count("story_changes.git_child");
-        }
+        #[cfg(test)]
+        count_child(repo);
         let output = command
             .stdin(Stdio::null())
             .output()
@@ -151,8 +190,10 @@ impl GitAiSource {
             .current_dir(repo)
             .envs(drain.env.iter().map(|(k, v)| (k, v)));
         local_read_env(&mut command);
-        if self.count_story_changes_children {
-            crate::shared::invoke_stats::metric_count("story_changes.git_child");
+        #[cfg(test)]
+        {
+            count_child(repo);
+            count_in(&DRAINS, repo);
         }
         let _ = command
             .stdin(Stdio::null())
@@ -161,23 +202,15 @@ impl GitAiSource {
             .status();
     }
 
-    /// The raw note on `commit` from the first of [`NOTES_REFS`] that has one: the one test of
-    /// "this commit has a git-ai note here" every reader shares.
+    /// The raw note on `commit` from the first of [`NOTES_REFS`] that has one, found in-process.
     pub(crate) fn raw_note(
         &self,
         repo: &Path,
         commit: &str,
-    ) -> Result<Option<std::process::Output>, AttributionError> {
-        for notes_ref in NOTES_REFS {
-            let output = self.git(
-                repo,
-                &["notes", &format!("--ref={notes_ref}"), "show", commit],
-            )?;
-            if output.status.success() {
-                return Ok(Some(output));
-            }
-        }
-        Ok(None)
+    ) -> Result<Option<String>, AttributionError> {
+        let repository = git2::Repository::open(repo)
+            .map_err(|error| AttributionError::Git(error.to_string()))?;
+        raw_note_in(&repository, commit)
     }
 
     /// The parsed note on `commit` ([`Self::raw_note`]); `None` when it has none or it cannot
@@ -188,15 +221,44 @@ impl GitAiSource {
         repo: &Path,
         commit: &str,
     ) -> Result<Option<Authorship>, AttributionError> {
-        let Some(output) = self.raw_note(repo, commit)? else {
-            return Ok(None);
-        };
-        match Authorship::parse(&String::from_utf8_lossy(&output.stdout)) {
-            Ok(note) => Ok(Some(note)),
-            Err(error) => {
-                log::warn!(target: "attribution", "note on {commit} unreadable: {error}");
-                Ok(None)
-            }
+        Ok(parsed_note(commit, self.raw_note(repo, commit)?))
+    }
+}
+
+/// [`GitAiSource::raw_note`] in a repository the caller already opened.
+pub(crate) fn raw_note_in(
+    repository: &git2::Repository,
+    commit: &str,
+) -> Result<Option<String>, AttributionError> {
+    let oid = git2::Oid::from_str(commit).map_err(|error| AttributionError::Git(error.to_string()))?;
+    if let Err(_error) = git2::Repository::find_object(repository, oid, None) {
+        return Err(AttributionError::ObjectsNotLocal);
+    }
+    for notes_ref in NOTES_REFS {
+        match git2::Repository::find_note(repository, Some(&format!("refs/notes/{notes_ref}")), oid) {
+            Ok(note) => return Ok(Some(String::from(git2::Note::message(&note).unwrap_or_default()))),
+            Err(error) if is_missing_object(&error) => return Err(AttributionError::ObjectsNotLocal),
+            Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(AttributionError::Git(error.to_string())),
+        }
+    }
+    Ok(None)
+}
+
+/// [`GitAiSource::note`] in a repository the caller already opened.
+pub(crate) fn note_in(
+    repository: &git2::Repository,
+    commit: &str,
+) -> Result<Option<Authorship>, AttributionError> {
+    Ok(parsed_note(commit, raw_note_in(repository, commit)?))
+}
+
+fn parsed_note(commit: &str, raw: Option<String>) -> Option<Authorship> {
+    match Authorship::parse(&raw?) {
+        Ok(note) => Some(note),
+        Err(error) => {
+            log::warn!(target: "attribution", "note on {commit} unreadable: {error}");
+            None
         }
     }
 }
@@ -430,22 +492,6 @@ fn same_origin(a: &LineRange, b: &LineRange) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     #[test]
-    fn only_a_story_changes_source_counts_its_git_children() {
-        use crate::shared::invoke_stats::metric_total;
-        assert!(!GitAiSource::new("git").count_story_changes_children);
-        let home = tempfile::tempdir().unwrap();
-        let counted = GitAiSource::for_story_changes(home.path());
-        assert!(counted.count_story_changes_children);
-        assert!(!GitAiSource::for_home(home.path()).count_story_changes_children);
-        // The spawn fails, but the counter moves before it.
-        let before = metric_total("story_changes.git_child");
-        let mut source = GitAiSource::new("/nonexistent-git-for-counter-test");
-        source.count_story_changes_children = true;
-        let _ = source.git(home.path(), &["status"]);
-        assert!(metric_total("story_changes.git_child") > before);
-    }
-
-    #[test]
     fn a_renamed_drain_binary_runs_as_git_ai() {
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("git-ai-macos-arm64");
@@ -472,6 +518,32 @@ pub(crate) mod tests {
     /// commit 2 a human line.
     fn testdata() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/attribution/testdata/git_ai_1_7_5")
+    }
+
+    /// A stand-in managed `git-ai` in `home/bin` that logs each call's arguments, one per line:
+    /// with it [`GitAiSource::for_home`] drains, so a test sees every `git-ai await` a read runs.
+    pub(crate) fn stub_git_ai(home: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let (bin, log) = (home.join("bin"), home.join("git-ai-calls.log"));
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("git-ai");
+        std::fs::write(&script, format!("#!/bin/sh\necho \"$*\" >> \"{}\"\n", log.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log
+    }
+
+    /// The `git-ai await` calls [`stub_git_ai`] logged.
+    pub(crate) fn awaits(log: &Path) -> usize {
+        std::fs::read_to_string(log).unwrap_or_default().lines().filter(|line| line.starts_with("await")).count()
+    }
+
+    #[test]
+    fn the_stub_git_ai_logs_a_drain() {
+        let home = tempfile::tempdir().unwrap();
+        let log = stub_git_ai(home.path());
+        GitAiSource::for_home(home.path()).drain(home.path());
+        assert_eq!(awaits(&log), 1, "the stub must see a drain, or a zero proves nothing");
+        assert_eq!(drains(home.path()), 1);
     }
 
     pub(crate) fn git(repo: &Path, args: &[&str]) -> String {

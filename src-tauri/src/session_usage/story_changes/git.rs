@@ -323,6 +323,29 @@ pub(super) fn collect(
     collect_refs(home, store, story, &refs, scopes, false, None)
 }
 
+/// [`collect`] kept like a story read's git half: a second collect at the same refs (a task read
+/// after the story's facts were read) reuses the walk until origin's head or a story branch tip
+/// moves, or for at most the kept bound.
+pub(super) fn collect_kept(
+    home: &Path,
+    store: &UsageStore,
+    story: &str,
+    sessions: &[Value],
+    scopes: &[CallerScope],
+) -> Result<GitFacts, String> {
+    let refs: Vec<SessionRef> = Iterator::collect(Iterator::map(
+        <[Value]>::iter(sessions),
+        SessionRef::of_read,
+    ));
+    let key = super::cache::walk_key(home, story, scopes, &refs);
+    if let Some(kept) = super::cache::get_walk(&key) {
+        return Ok(kept);
+    }
+    let git = collect_refs(home, store, story, &refs, scopes, true, None)?;
+    super::cache::put_walk(key, &git);
+    Ok(git)
+}
+
 /// The error a walk ends with when its cancel flag is set (a hosted read past its deadline).
 const CANCELLED: &str = "cancelled";
 
@@ -789,7 +812,6 @@ pub(super) fn collect_refs(
                 .or_default()
                 .push(root.to_owned());
         }
-        crate::attribution::git_ai::GitAiSource::for_story_changes(home).drain(root);
         let bound_key = attachments
             .iter()
             .find_map(|set| {
@@ -828,7 +850,7 @@ pub(super) fn collect_refs(
     }
     // Resolve notes only after every clone has contributed checkpoint evidence.
     for (root, note_commits) in repository_notes {
-        let notes = read_notes(home, &root, &note_commits, &checkpoint_store);
+        let notes = read_notes(&root, &note_commits, &checkpoint_store);
         for (sha, (ids, reason)) in notes {
             if let Some(commit) = commits.get_mut(&sha) {
                 // Every clone contributes note evidence, independently of file deduplication.
@@ -1041,9 +1063,8 @@ fn read_ranges<'r>(
     Ok(hit)
 }
 
-/// Reuse the attribution reader's managed drain, local-only runner and one shared retry loop.
+/// Resolve every requested commit note in-process from the two supported notes refs.
 fn read_notes(
-    home: &Path,
     repo: &Path,
     commits: &BTreeSet<String>,
     store: &UsageStore,
@@ -1051,52 +1072,60 @@ fn read_notes(
     if std::collections::BTreeSet::is_empty(commits) {
         return std::collections::BTreeMap::new();
     }
-    let source = crate::attribution::git_ai::GitAiSource::for_story_changes(home);
-    let result = crate::attribution::why_line::read_notes_snapshot(repo, |_| {
-        Ok(commits
-            .iter()
-            .map(|sha| {
-                let value = match source.note(repo, sha) {
-                    Ok(note) => {
-                        let ids = note
-                            .map(|mut n| {
-                                n.normalize_sessions(store)?;
-                                Ok::<_, String>(n.session_ids())
-                            })
-                            .transpose();
-                        match ids {
-                            Ok(ids) => (ids.unwrap_or_default(), None),
-                            Err(_) => (Vec::new(), Some("checkpoint identities unavailable")),
+    let opened = git2::Repository::open(repo);
+    commits
+        .iter()
+        .map(|sha| {
+            let value = match (&opened, git2::Oid::from_str(sha)) {
+                (Ok(repository), Ok(oid)) => {
+                    let mut note = None;
+                    let mut reason = None;
+                    for name in crate::attribution::git_ai::NOTES_REFS {
+                        match git2::Repository::find_note(
+                            repository,
+                            Some(&format!("refs/notes/{name}")),
+                            oid,
+                        ) {
+                            Ok(found) => {
+                                note = Some(found);
+                                break;
+                            }
+                            Err(error)
+                                if crate::attribution::git_ai::is_missing_object(&error) =>
+                            {
+                                reason = Some(crate::attribution::ranges::OBJECTS_NOT_LOCAL);
+                                break;
+                            }
+                            Err(error)
+                                if git2::Error::code(&error) == git2::ErrorCode::NotFound =>
+                            {}
+                            Err(_) => {
+                                reason = Some("git-ai note unavailable locally");
+                                break;
+                            }
                         }
                     }
-                    Err(crate::attribution::ranges::AttributionError::ObjectsNotLocal) => (
-                        Vec::new(),
-                        Some(crate::attribution::ranges::OBJECTS_NOT_LOCAL),
-                    ),
-                    Err(_) => (Vec::new(), Some("git-ai note unavailable locally")),
-                };
-                (sha.clone(), value)
-            })
-            .collect())
-    });
-    match result {
-        Ok((notes, _)) => notes,
-        other => {
-            let reason = match other {
-                Err(error) if error == crate::attribution::why_line::NOTES_CHANGED => {
-                    crate::attribution::why_line::NOTES_CHANGED
+                    let ids = note
+                        .and_then(|note| {
+                            Result::ok(crate::attribution::authorship::Authorship::parse(
+                                git2::Note::message(&note).unwrap_or_default(),
+                            ))
+                        })
+                        .map(|mut note| {
+                            note.normalize_sessions(store)?;
+                            Ok::<_, String>(note.session_ids())
+                        })
+                        .transpose();
+                    match ids {
+                        Ok(ids) => (ids.unwrap_or_default(), reason),
+                        Err(_) => (Vec::new(), Some("checkpoint identities unavailable")),
+                    }
                 }
-                Err(error) if error == crate::attribution::ranges::OBJECTS_NOT_LOCAL => {
-                    crate::attribution::ranges::OBJECTS_NOT_LOCAL
-                }
-                _ => "git-ai note unavailable locally",
+                _ => (Vec::new(), Some("git-ai note unavailable locally")),
             };
-            commits
-                .iter()
-                .map(|sha| (sha.clone(), (Vec::new(), Some(reason))))
-                .collect()
-        }
-    }
+            (sha.clone(), value)
+        })
+        .collect()
 }
 
 /// The prefix of every commit cursor for `story` over this complete ordered commit set.

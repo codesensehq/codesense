@@ -4,8 +4,11 @@
  * created once and kept alive — visible or parked — until its tab closes, the
  * process restarts in place, or a reconnect loses its stream. React renders
  * slots (`terminal-slot.tsx`); showing a terminal moves its existing element
- * into a slot, hiding moves it to a parking container. Nothing is rebuilt,
- * replayed, reset or refitted on a show.
+ * into a slot, hiding moves it to a parking container. A parked display parses
+ * nothing: its output and resizes wait in a bounded ring and are written, in
+ * order, on the next show (a ring that overflows evicts the display, and the
+ * show rebuilds it from the host). Nothing else is rebuilt, reset or refitted
+ * on a show.
  *
  * Every display is built one way: from the host emulator's snapshot of its
  * session, at the size the snapshot was taken, then the stream from there
@@ -71,7 +74,12 @@ import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { referenceBuffer, type ReferenceBuffer } from "./buffer-dump";
 import { onPrivateAuthorityRetired } from "@/shared/lib/private-terminal-authority";
 import { isLiveStreamCurrent, openLiveStream, type LiveItem, type LiveStream } from "./live-stream";
-import { createPtyWriteBuffer, type PtyWriteBuffer } from "./pty-write-buffer";
+import {
+  createPtyOutputRing,
+  createPtyWriteBuffer,
+  type PtyOutputRing,
+  type PtyWriteBuffer,
+} from "./pty-write-buffer";
 import {
   BUFFER_BYTES_PER_CELL,
   DEFAULT_MAC_OPTION_IS_META,
@@ -94,7 +102,6 @@ import {
   type TerminalDisplayReference,
 } from "./terminal-display-reference";
 import { useViewerStore } from "@/shared/stores/viewer-store";
-import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 export type {
   TerminalDisplayReference,
@@ -129,7 +136,7 @@ export function buildTerminalOptions({
     fontWeight: "normal",
     fontWeightBold: "bold",
     theme: themeConfig?.theme ?? TERMINAL_THEME,
-    cursorBlink: true,
+    cursorBlink: false,
     cursorStyle: "block",
     cursorInactiveStyle: "outline",
     drawBoldTextInBrightColors: false,
@@ -394,6 +401,11 @@ interface Display {
   readonly host: HTMLElement;
   readonly keys: TerminalKeyHandler;
   readonly coalescer: PtyWriteBuffer;
+  readonly parkedOutput: PtyOutputRing;
+  /** Not on screen: output waits in `parkedOutput`. Only `notifyShown` flips it. */
+  parked: boolean;
+  /** The last of the previous parked chunk, for a query split across chunks. */
+  queryTail: string;
   readonly queue: QueueItem[];
   readonly disposables: IDisposable[];
   readonly releaseInstance: () => void;
@@ -502,6 +514,24 @@ export interface TerminalManagerDeps {
 }
 
 const leakedDisplays: unknown[] = [];
+const PARKED_OUTPUT_MAX_CHARS = 2 * 1024 * 1024;
+/** Bytes per UTF-16 code unit of parked output, for the memory estimate. */
+const PARKED_BYTES_PER_CHAR = 2;
+
+/** Output a program waits on a reply to: DSR/CPR (`CSI [?] n n`), device
+ *  attributes (`CSI … c`), DECRQM (`CSI … $ p`), kitty keyboard (`CSI ? u`),
+ *  DECRQSS (`DCS $ q`) and the OSC 4, 10, 11 and 12 colour queries. */
+export const TERMINAL_QUERY =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[[?>=]?[0-9;]*(?:n|c|\$p)|\x1b\[\?u|\x1bP\$q|\x1b\](?:4;[0-9]+|1[012]);\?/;
+/** How much of the previous chunk is checked with the next: a query split
+ *  across two chunks is still seen. */
+const QUERY_TAIL_CHARS = 16;
+
+/** A display's estimate: its buffer plus the output it holds while parked. */
+function displayBytes(d: Display): number {
+  return estimatedBytes(d.term) + d.parkedOutput.size() * PARKED_BYTES_PER_CHAR;
+}
 
 /** A display's buffer estimate: `cols × lines × 12` of its normal buffer. */
 function estimatedBytes(term: Terminal): number {
@@ -760,14 +790,29 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     )
       return;
     if (item.kind === "resized") {
+      if (d.parked) {
+        if (d.parkedOutput.resize(item.cols, item.rows, item.resizeGen)) dropParked(entry);
+        return;
+      }
       enqueue(d, { kind: "resize", cols: item.cols, rows: item.rows, resizeGen: item.resizeGen });
       return;
     }
     d.pendingSeqEnd = item.seq;
+    if (d.parked) {
+      const overflowed = d.parkedOutput.append(item.data, item.seq);
+      notify(entry, (l) => l.output?.(item.data));
+      if (overflowed) dropParked(entry);
+      // A program waiting on a reply gets it now, not on the next show.
+      else if (TERMINAL_QUERY.test(d.queryTail + item.data)) {
+        writeParked(entry, d);
+        // The question is answered: the next chunk must not match it again.
+        d.queryTail = "";
+      } else d.queryTail = (d.queryTail + item.data).slice(-QUERY_TAIL_CHARS);
+      return;
+    }
     d.coalescer.append(item.data);
     notify(entry, (l) => l.output?.(item.data));
     const now = Date.now();
-    if (item.data.length > 0) useAgentStateStore.getState().recordOutput(entry.sessionId, now);
     if (now - lastOutputBudgetCheck >= OUTPUT_BUDGET_CHECK_MS) {
       lastOutputBudgetCheck = now;
       scheduleBudget();
@@ -814,7 +859,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       for (const d of [entry.display, entry.outgoing?.display]) {
         if (!d) continue;
         displays++;
-        bytes += estimatedBytes(d.term);
+        bytes += displayBytes(d);
       }
     }
     return { displays, estimatedBytes: bytes };
@@ -827,7 +872,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     const oldest = [...sessions.values()].filter(evictable).sort((a, b) => a.lastSeen - b.lastSeen);
     for (const entry of oldest) {
       if (displays <= maxDisplays && bytes <= maxBytes) break;
-      bytes -= estimatedBytes(entry.display!.term);
+      bytes -= displayBytes(entry.display!);
       displays--;
       evict(entry);
     }
@@ -897,9 +942,53 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     return shown(entry);
   }
 
+  /** Write what a parked display held, in order, through the normal pipeline. */
+  function writeParked(entry: SessionEntry, d: Display): void {
+    const parked = d.parkedOutput.drain();
+    if (parked.overflowed) {
+      reconnect(entry);
+      return;
+    }
+    for (const item of parked.events) {
+      if (item.kind === "output") {
+        d.pendingSeqEnd = item.seqEnd;
+        d.coalescer.append(item.data);
+      } else {
+        // enqueue flushes the coalesced output before a resize, so the order holds.
+        enqueue(d, {
+          kind: "resize",
+          cols: item.cols,
+          rows: item.rows,
+          resizeGen: item.resizeGen,
+        });
+      }
+    }
+    d.coalescer.flush();
+  }
+
+  /** The parked ring overflowed: release the display, so the next show rebuilds it
+   *  from the host. One that cannot be evicted now (a restore is in flight) keeps
+   *  the overflow and reconnects on its show. */
+  function dropParked(entry: SessionEntry): void {
+    if (evictable(entry)) evict(entry);
+  }
+
   /** Tell the session's watchers when whether it is on screen changed. */
   function notifyShown(entry: SessionEntry): void {
     const now = sessions.get(entry.sessionId) === entry && holdsVisible(entry);
+    const d = entry.display;
+    if (d) {
+      const onScreen = sessions.get(entry.sessionId) === entry && shown(entry);
+      if (onScreen && d.parked) {
+        d.parked = false;
+        writeParked(entry, d);
+      } else if (!onScreen && !d.parked) {
+        d.parked = true;
+        const pending = d.coalescer.take();
+        if (pending && d.parkedOutput.append(pending, d.pendingSeqEnd)) dropParked(entry);
+      }
+      if (!onScreen) d.term.options.cursorBlink = false;
+    }
     watchLenders();
     if (now === entry.heardShown) return;
     entry.heardShown = now;
@@ -1028,6 +1117,9 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           return;
         enqueue(display, { kind: "output", data, seqEnd: display.pendingSeqEnd, replay: false });
       }),
+      parkedOutput: createPtyOutputRing(PARKED_OUTPUT_MAX_CHARS),
+      parked: !shown(entry),
+      queryTail: "",
       queue: [],
       disposables: [],
       releaseInstance: acquireInstance("webglTerminal"),
@@ -1040,6 +1132,12 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       frozen: false,
       disposed: false,
     };
+    host.addEventListener("focusin", () => {
+      if (!display.parked && entry.display === display) term.options.cursorBlink = true;
+    });
+    host.addEventListener("focusout", () => {
+      term.options.cursorBlink = false;
+    });
     display.disposables.push(
       term.onData((data) => {
         if (display.replayDepth > 0 || display.frozen) return;
@@ -1535,9 +1633,10 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       entry.focusOnRestore = false;
       const frozen = entry.outgoing?.display;
       if (frozen) parking().appendChild(frozen.host);
-      const d = entry.display;
       notifyShown(entry);
-      if (!d) return;
+      // Parking can overflow the ring and evict the display: read it after.
+      const d = entry.display;
+      if (!d || d.disposed) return;
       parking().appendChild(d.host);
       d.keys.clearRepeat();
       leases.setVisible(d.instanceId, false);
