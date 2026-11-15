@@ -107,6 +107,13 @@ function bufferOf(dump: DisplayDump): ReferenceBuffer {
   return buffer;
 }
 
+/** Put the session's display on screen: a parked one parses nothing. */
+function mount(m: TerminalManager, id: string): void {
+  const slot = document.createElement("div");
+  document.body.appendChild(slot);
+  m.attach(id, slot, { focus: false });
+}
+
 /** Wait (on real timers) until `check` holds. */
 const eventually = (check: () => void) => vi.waitFor(check, { timeout: 5000, interval: 5 });
 
@@ -207,6 +214,7 @@ async function restoreAt(cut: SnapshotFixture, raw?: string): Promise<ReferenceB
   h.server.open("s1", start);
   const m = newManager();
   await m.ensure("s1", OPTS);
+  mount(m, "s1");
   if (raw !== undefined) m.requestResize("s1", cut.snapshot.cols, cut.snapshot.rows);
   const dump = await m.debugDump("s1");
   m.dispose("s1");
@@ -247,6 +255,7 @@ async function restoreFrom(cut: SnapshotFixture, vt?: string): Promise<Reference
   const m = newManager();
   const handle = await m.ensure("s1", OPTS);
   expect(handle?.outcome).toEqual({ kind: "attached" });
+  mount(m, "s1");
   for (const event of rest.slice(heldCount)) h.bus.emit(channel, event);
   const dump = await m.debugDump("s1");
   m.dispose("s1");
@@ -281,6 +290,7 @@ describe("one construction site (I6)", () => {
     h.server.open("s1", { cols: 91, rows: 27, scrollback: 321 });
     const m = newManager();
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     expect(h.constructed).toEqual([{ cols: 91, rows: 27, scrollback: 321 }]);
   });
 });
@@ -357,6 +367,7 @@ describe("restore at the recorded size, then the slot's", () => {
     // The slot already measured a different size while the restore runs.
     m.requestResize("s1", 80, 24);
     await opening;
+    mount(m, "s1");
     expect(h.constructed).toEqual([{ cols: 100, rows: 30, scrollback: 1000 }]);
     expect(transport.resizePty).toHaveBeenCalledWith("s1", 80, 24);
     const dump = await m.debugDump("s1");
@@ -376,6 +387,7 @@ describe("rebuild triggers", () => {
     for (const id of ids) {
       h.server.open(id);
       await m.ensure(id, OPTS);
+      mount(m, id);
       h.server.produce(id, `before ${id}\r\n`);
     }
     await Promise.all(ids.map((id) => m.debugDump(id)));
@@ -398,6 +410,7 @@ describe("rebuild triggers", () => {
     const m = newManager();
     h.server.open("s1");
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     h.server.produce("s1", "old run\r\n\x1b[?1049hFULLSCREEN");
     await m.debugDump("s1");
     h.server.respawn("s1", "new prompt $ ");
@@ -461,6 +474,7 @@ describe("ended while closed", () => {
     h.server.produce("s1", "last words\r\n[exit 3]\r\n");
     const m = newManager();
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     h.bus.emit("pty-exit", { session_id: "s1" });
     m.requestResize("s1", 90, 20);
     const dump = await m.debugDump("s1");
@@ -474,6 +488,7 @@ describe("resizes apply in stream order (I5)", () => {
     h.server.open("s1");
     const m = newManager();
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     const term = m.terminal("s1")!;
     const resize = vi.spyOn(term, "resize");
     // Hold the Resized so the display is seen before it arrives.
@@ -493,6 +508,7 @@ describe("resizes apply in stream order (I5)", () => {
     h.server.open("s1");
     const m = newManager();
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     const wide = "x".repeat(95);
     h.server.produce("s1", `${wide}\r\n`);
     await h.server.resize("s1", 40, 10);
@@ -517,6 +533,7 @@ describe("resizes apply in stream order (I5)", () => {
     });
     h.server.open("s1");
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     hold = true;
     h.server.produce("s1", "pending\r\n");
     await eventually(() => expect(held).toHaveLength(1));
@@ -536,6 +553,7 @@ describe("selection and find across a Resized", () => {
     h.server.open("s1");
     const m = newManager();
     await m.ensure("s1", OPTS);
+    mount(m, "s1");
     h.server.produce("s1", "alpha beta gamma\r\n");
     await m.debugDump("s1");
     const term = m.terminal("s1")!;
