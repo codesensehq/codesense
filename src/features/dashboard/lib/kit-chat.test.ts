@@ -1728,6 +1728,61 @@ describe("kit.chat: the thread is one Tab stop", () => {
     expect(row(4).querySelector<HTMLButtonElement>(".pin-b")!.tabIndex).toBe(-1);
   });
 
+  it("a focused message that a render redraws keeps focus: its Delivered mark arriving doesn't drop you to the page", async () => {
+    const roster = [lead("running")];
+    const thread = [...THREAD];
+    const s = setup(roster, thread);
+    mountOn(s);
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    // The inbox has your message now: it is a row of the thread, marked Queued.
+    thread.push({ ...said(41, "when you can"), from: "human", to: "lead-1", fromName: "You" });
+    s.emit("inbox");
+    await flush();
+    const row = () => s.el.querySelector<HTMLElement>('.log [data-mid="41"]')!;
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
+    const before = row();
+    before.focus();
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+    // the mark rebuilt the row's node; focus and the stop moved to the new one
+    expect(row()).not.toBe(before);
+    expect(document.activeElement).toBe(row());
+    expect(row().tabIndex).toBe(0);
+  });
+
+  it("a focused message that leaves the thread hands focus to the newest", async () => {
+    const { s, row, rows, thread } = await mountThread();
+    row(2).focus();
+    thread.splice(1, 1);
+    s.emit("inbox");
+    await flush();
+    expect(rows().map((r) => r.getAttribute("data-mid"))).toEqual(["1", "3"]);
+    expect(document.activeElement).toBe(row(3));
+    expect(row(3).tabIndex).toBe(0);
+  });
+
+  it("a render that doesn't move the stop doesn't walk the whole thread again", async () => {
+    const { s, log, thread } = await mountThread();
+    const walks = vi.spyOn(log, "querySelectorAll");
+    thread.push(said(4, "Merged."));
+    s.emit("inbox");
+    await flush();
+    // the newest moved, so the thread is walked once
+    const moved = walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]")).length;
+    expect(moved).toBe(1);
+    walks.mockClear();
+    s.emit("activity");
+    await flush();
+    expect(walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]"))).toEqual([]);
+  });
+
   it("follows the newest message while you haven't moved, and keeps the log a Tab stop while it has none", async () => {
     const { s, log, row, thread } = await mountThread([]);
     expect(log.tabIndex).toBe(0);
