@@ -5,7 +5,7 @@
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send,label}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
-//   label names the input while composer(state) gives it (a recipient's name), else composerLabel. composerSlot(el)->release: the page's own control in the composer, above the box (a "To" chip), mounted once; release runs on unmount.
+//   label names the input while composer(state) gives it (a recipient's name), else composerLabel. composerSlot(el)->release: the page's own control in the composer, above the box (a "To" chip), mounted once; release runs on unmount. A filled slot grows the composer past its 96px; an empty one takes no room.
 //  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the live lead's prose from the host's onSessionText, else the peer's current step while it runs, else Working…).
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
@@ -169,21 +169,22 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // The thread is one Tab stop: its active message (the newest, until the person moves), with Up, Down, Home and End between messages.
  const roving=rovingThread(log);
  const status=h('div',{class:'status-slot',id:ids.status,tabindex:'-1'});
- // A send from the box, a chip or post: to the page's recipient when it names one (the promise tells the composer whether it went), else to the peer.
+ // A send to the peer. A Next-line chip always goes here: it is the peer's own suggested reply, whoever the page's recipient is.
+ const sendPeer=text=>{fails.clear();awaitBase=leadCount();launch.send(text);return undefined;};
+ // A send from the box, a page chip or post: to the page's recipient when it names one (the promise tells the composer whether it went), else to the peer.
  const sendText=text=>{
-  fails.clear();
   const to=target.recipient?target.recipient():null;
-  if(!to){awaitBase=leadCount();launch.send(text);return undefined;}
+  if(!to)return sendPeer(text);
+  fails.clear();
   return launch.sendTo(to,text).then(()=>true,failure=>{fails.set('send',copy.failure.send(failure.why||failure.code));render();return false;});
  };
- const composer=createComposer({ids,onSend:sendText,rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
+ const composer=createComposer({ids,onSend:sendText,rows:layout.composerRows,label:layout.composerLabel==null?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
- const sendChip=sendText;
  // Chips: the page's own (chips) and, with next, the ones in the lead's newest Next line. A chip's pencil (edit) puts its text in the composer instead of sending it.
  const nextOpt=next?(typeof next==='object'?next:{}):null;
  const pencil=()=>{const svg=document.createElementNS(ALERT_NS,'svg'),path=document.createElementNS(ALERT_NS,'path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M4 20h4L19 9l-4-4L4 16z');svg.append(path);return svg;};
  const chipNode=chip=>{
-  const main=h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)sendChip(chip.text);}},chip.label);
+  const main=h('button',{type:'button',class:'btn sm','data-chip':chip.label,onclick:()=>{if(!isDone)(chip.peer?sendPeer:sendText)(chip.text);}},chip.label);
   return chip.edit?h('span',{class:'pchip'},main,h('button',{type:'button',class:'btn sm ed','data-chip-edit':chip.label,'aria-label':copy.chipEdit.label(chip.label),title:copy.chipEdit.title,onclick:()=>{if(!isDone)composer.setText(chip.text);}},pencil())):main;
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
@@ -302,7 +303,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   for(const item of launch.messages)mine=Math.max(mine,item.sentAt);
   if(!newest||newest.at<mine||(cards!==false&&newest.row.kind==='needs-you'))return [];
   const parsed=parseNext(newest.row.text||newest.row.summary||'');
-  return parsed?parsed.chips.map(text=>({label:text,text,edit:Boolean(nextOpt.edit)})):[];
+  return parsed?parsed.chips.map(text=>({label:text,text,edit:Boolean(nextOpt.edit),peer:true})):[];
  }
  function paintChips(){
   if(!chipsBox)return;

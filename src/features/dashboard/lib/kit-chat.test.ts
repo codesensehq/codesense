@@ -2967,9 +2967,105 @@ describe("kit.chat recipient, composer slot and row label", () => {
     key(s.el, { code: "Enter" });
     await flush();
     expect(s.send).toHaveBeenCalledTimes(1);
+    const sendButton = s.el.querySelector<HTMLButtonElement>(".composer .box button")!;
+    expect(sendButton.disabled).toBe(true);
+    expect(input(s.el).getAttribute("aria-busy")).toBe("true");
+    sendButton.click();
     answer({ status: "sent", messageId: 77 });
     await flush();
+    // Once answered, nothing queued behind the first send goes out.
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.el.querySelectorAll(".log .msg.you").length).toBe(1);
     expect(input(s.el).value).toBe("");
+    expect(sendButton.disabled).toBe(false);
+    expect(input(s.el).hasAttribute("aria-busy")).toBe(false);
+  });
+
+  it("a busy recipient's message reads Queued until its own notice says it was told, whatever the peer does", async () => {
+    const roster = [lead("idle"), { ...helper, state: "running" }];
+    const s = setup(roster);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    const mark = () => s.el.querySelector(".log .msg.you .mark")!.getAttribute("data-mark");
+    expect(mark()).toBe("queued");
+    // The peer's notice is not the recipient's.
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(mark()).toBe("queued");
+    roster[1] = {
+      ...roster[1],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(mark()).toBe("delivered");
+  });
+
+  it("busy is read when the message goes, not when the send answers", async () => {
+    const roster = [lead("idle"), helper];
+    const s = setup(roster);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    let answer: (value: Record<string, unknown>) => void = () => {};
+    s.send.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    input(s.el).value = "wake up";
+    key(s.el, { code: "Enter" });
+    await flush();
+    // The message woke the idle recipient before the answer came back.
+    roster[1] = { ...roster[1], state: "running" };
+    await s.reads.sessions();
+    answer({ status: "sent", messageId: 77 });
+    await flush();
+    expect(s.el.querySelector(".log .msg.you .mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
+  it("under faces, a message to the recipient after one to the peer starts its own run with a meta line", async () => {
+    const s = setup([lead("idle"), helper]);
+    let recipient: typeof to | null = null;
+    mountOn(s, { target: storyWith(() => recipient), faces: true });
+    await flush();
+    await typeAndSend(s.el, "for the lead");
+    recipient = to;
+    await typeAndSend(s.el, "for the helper");
+    const [first, second] = [...s.el.querySelectorAll(".log .msg.you")];
+    expect(first.querySelector(".meta")).not.toBeNull();
+    expect(second.querySelector(".meta")!.textContent).toContain("To Helper");
+  });
+
+  it("a Next-line chip answers the peer even with a recipient picked; a page chip goes to the recipient", async () => {
+    const reply = {
+      messageId: 1,
+      from: "lead-1",
+      text: "Done.\n\nNext: `Ship it`",
+      createdAtMs: 1000,
+    };
+    const s = setup([lead("idle"), helper], [reply]);
+    mountOn(s, {
+      target: storyWith(() => to),
+      next: true,
+      chips: [{ label: "Ping", text: "ping" }],
+    });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Ship it"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("lead-1", "Ship it");
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Ping"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "ping");
+  });
+
+  it("a null label or composerLabel falls back to the default name, never the word null", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s, { layout: { composerLabel: null, composer: () => ({ label: null }) } });
+    await flush();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to the story lead");
   });
 
   it("layout.composerSlot mounts once above the box, survives a repaint and is released on unmount", async () => {

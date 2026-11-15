@@ -524,7 +524,7 @@ declare namespace CodesenseSdk {
     bindLaunched?: boolean;
     /** A failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order. */
     keepUnsent?: boolean;
-    /** Read at each send (Enter, Send, a chip, `post`). A recipient takes the message straight to its handle with `transport.send`, never through the launch: the box clears only once it is sent, a failure keeps the text and shows an alert row, and its bubble says "To <name>" in its meta line. `null` sends to the peer as without it. */
+    /** Read at each send (Enter, Send, a page chip, `post`). A `next` chip is the peer's own suggested reply, so it always goes to the peer. A recipient takes the message straight to its handle with `transport.send`, never through the launch: the box clears only once it is sent, a failure keeps the text and shows an alert row, and its bubble says "To <name>" in its meta line. `null` sends to the peer as without it. */
     recipient?(): { handle: string; name: string } | null;
   }
   /** A header or head slot's paint: nodes are replaced only when sig changes. */
@@ -543,9 +543,9 @@ declare namespace CodesenseSdk {
     layout?: {
       head?(state: ChatState): ChatPaint;
       source?: string;
-      /** `label` names the input while it is given (a recipient's name); without it the input is named by `composerLabel`. */
+      /** `label` names the input while it is given (a recipient's name); without it, or `null`, the input is named by `composerLabel`. */
       composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string; label?: string };
-      /** The page's own control in the composer, above the box (a "To" chip): called once with the slot's element; the function it returns runs on unmount. */
+      /** The page's own control in the composer, above the box (a "To" chip): called once with the slot's element; the function it returns runs on unmount. A filled slot grows the composer past its 96px; an empty one takes no room. */
       composerSlot?(element: HTMLElement): (() => void) | void;
       composerRows?: string;
       composerLabel?: string;

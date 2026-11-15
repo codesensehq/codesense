@@ -289,6 +289,7 @@
       return chain;
     };
     const texts = (list) => list.map((item) => item.text).join("\n\n");
+    const statusFailure = (result) => result && result.status !== void 0 && result.status !== "sent" ? { kind: "other", code: String(result.status), why: result.message || String(result.status) } : null;
     const deliver = (list, handle) => {
       const busy = handle === queue || isBusy(peerRows().find((row) => row.handle === handle));
       list.forEach((item) => {
@@ -300,11 +301,11 @@
       inflight++;
       return enqueue(() => transport.send(handle, texts(list))).then((result) => {
         inflight--;
-        if (result && result.status !== void 0 && result.status !== "sent") {
+        if (statusFailure(result)) {
           list.forEach((item) => {
             item.mark = "kept";
           });
-          sendFailure = { kind: "other", code: String(result.status), why: result.message || String(result.status) };
+          sendFailure = statusFailure(result);
           emit();
           return;
         }
@@ -492,16 +493,17 @@
       // A message to another agent (the page's target.recipient, {handle, name}): straight to its handle, never a launch, the outbox or a kept message. Only a sent one joins the messages, with its recipient (to), so its bubble carries the mark;
       // a failure rejects with parseFailure's shape and leaves no message behind (the composer keeps the text).
       sendTo(to, text) {
-        const sentAt = clock.now();
+        const sentAt = clock.now(), busy = isBusy(rows.find((row) => row.handle === to.handle));
         inflight++;
         emit();
         return enqueue(() => transport.send(to.handle, text)).then((result) => {
           inflight--;
-          if (result && result.status !== void 0 && result.status !== "sent") {
+          const failed = statusFailure(result);
+          if (failed) {
             emit();
-            throw { kind: "other", code: String(result.status), why: result.message || String(result.status) };
+            throw failed;
           }
-          messages.push({ id: ++ids, text, mark: "sent", busyAtSend: isBusy(rows.find((row) => row.handle === to.handle)), sentAt, to, messageId: result && result.messageId });
+          messages.push({ id: ++ids, text, mark: "sent", busyAtSend: busy, sentAt, to, messageId: result && result.messageId });
           emit();
         }, (error) => {
           inflight--;
@@ -766,7 +768,17 @@
     const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
     const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
     const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: ids.hint }, hint));
-    let pending = false;
+    let pending = false, disabled = false;
+    const setPending = (on) => {
+      pending = on;
+      send.disabled = on || disabled;
+      if (on) input.setAttribute("aria-busy", "true");
+      else input.removeAttribute("aria-busy");
+    };
+    const nameInput = (name) => {
+      if (name == null) input.removeAttribute("aria-label");
+      else input.setAttribute("aria-label", name);
+    };
     const submit = () => {
       const raw = input.value, text = raw.trim();
       if (!text || input.disabled || pending) return;
@@ -775,12 +787,12 @@
         input.value = "";
         return;
       }
-      pending = true;
+      setPending(true);
       held.then((sent) => {
-        pending = false;
+        setPending(false);
         if (sent && input.value === raw) input.value = "";
       }, () => {
-        pending = false;
+        setPending(false);
       });
     };
     input.addEventListener("keydown", (event) => {
@@ -794,11 +806,12 @@
       region,
       input,
       send,
-      update({ placeholder, disabled, hint: nextHint, send: nextSend, label: nextLabel }) {
+      update({ placeholder, disabled: off, hint: nextHint, send: nextSend, label: nextLabel }) {
+        disabled = Boolean(off);
         input.placeholder = placeholder;
-        input.setAttribute("aria-label", nextLabel === void 0 ? label : nextLabel);
-        input.disabled = Boolean(disabled);
-        send.disabled = Boolean(disabled);
+        nameInput(nextLabel == null ? label : nextLabel);
+        input.disabled = disabled;
+        send.disabled = disabled || pending;
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
       },
@@ -1434,23 +1447,24 @@
     const pin = pinToBottom(log, { win });
     const roving = rovingThread(log);
     const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
-    const sendText = (text) => {
+    const sendPeer = (text) => {
       fails.clear();
+      awaitBase = leadCount();
+      launch.send(text);
+      return void 0;
+    };
+    const sendText = (text) => {
       const to = target.recipient ? target.recipient() : null;
-      if (!to) {
-        awaitBase = leadCount();
-        launch.send(text);
-        return void 0;
-      }
+      if (!to) return sendPeer(text);
+      fails.clear();
       return launch.sendTo(to, text).then(() => true, (failure) => {
         fails.set("send", copy.failure.send(failure.why || failure.code));
         render();
         return false;
       });
     };
-    const composer = createComposer({ ids, onSend: sendText, rows: layout.composerRows, label: layout.composerLabel === void 0 ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
+    const composer = createComposer({ ids, onSend: sendText, rows: layout.composerRows, label: layout.composerLabel == null ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
     const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
-    const sendChip = sendText;
     const nextOpt = next ? typeof next === "object" ? next : {} : null;
     const pencil = () => {
       const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
@@ -1463,7 +1477,7 @@
     };
     const chipNode = (chip) => {
       const main = h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
-        if (!isDone) sendChip(chip.text);
+        if (!isDone) (chip.peer ? sendPeer : sendText)(chip.text);
       } }, chip.label);
       return chip.edit ? h("span", { class: "pchip" }, main, h("button", { type: "button", class: "btn sm ed", "data-chip-edit": chip.label, "aria-label": copy.chipEdit.label(chip.label), title: copy.chipEdit.title, onclick: () => {
         if (!isDone) composer.setText(chip.text);
@@ -1635,7 +1649,7 @@
       for (const item of launch.messages) mine = Math.max(mine, item.sentAt);
       if (!newest || newest.at < mine || cards !== false && newest.row.kind === "needs-you") return [];
       const parsed = parseNext(newest.row.text || newest.row.summary || "");
-      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit) })) : [];
+      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit), peer: true })) : [];
     }
     function paintChips() {
       if (!chipsBox) return;
