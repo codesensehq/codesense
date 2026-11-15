@@ -213,6 +213,30 @@ async fn every_session_of_the_same_agent_and_story_shares_one_thread() {
 }
 
 #[tokio::test]
+async fn a_successor_pins_its_predecessors_mail_and_a_concurrent_seat_pins_only_its_own() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    let first = mail(&fake, "S1", "human", "from the first session").await;
+    let second = mail(&fake, "S2", "human", "from the second session").await;
+    // Two seats run at once: neither pins the other's mail.
+    let other_seat = pin_request(&*fake, Some("S2"), first, None, None, false)
+        .await
+        .unwrap();
+    assert!(matches!(&other_seat, PinResult::Invalid { message } if message.contains("no message")));
+    // Once the first has ended, its successor's thread holds its mail: the successor pins it.
+    fake.end("H1");
+    let pinned = pin_request(&*fake, Some("S2"), first, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(listed(&pinned), vec![first]);
+    let both = pin_request(&*fake, Some("S2"), second, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(listed(&both), vec![first, second]);
+}
+
+#[tokio::test]
 async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do_not() {
     let fake = FakeHost::new();
     fake.launched_from("H1", "acme/default/claude-dev@3", Some("DEMO-1"));
