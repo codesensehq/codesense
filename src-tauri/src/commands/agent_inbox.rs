@@ -2701,8 +2701,8 @@ async fn reserved_notice(
                 session_id,
                 chat_text.as_ref().map(|(w, n)| (w.as_str(), *n)),
                 &roles
-                    .iter()
-                    .map(|r| (r.role.as_str(), r.pending))
+                    .into_iter()
+                    .map(|r| (r.role, r.pending))
                     .collect::<Vec<_>>(),
             ),
             token,

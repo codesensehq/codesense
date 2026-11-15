@@ -1282,7 +1282,7 @@ pub fn roles_held_by(
 /// them. Reading this claims nothing.
 pub fn live_role_sessions(store: &WeftStore, role: &str, now: i64) -> WvWriteResult<Vec<String>> {
     let conn = store.conn()?;
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT COALESCE(session_id, instance_id) FROM wv_role_registration \
          WHERE role = ?1 AND expires_at > ?2 ORDER BY 1",
     )?;

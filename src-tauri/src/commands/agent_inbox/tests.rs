@@ -2515,7 +2515,7 @@ async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
     let asked = ask("role:triage").await;
     fake.stored_for.lock().unwrap().clear();
     sent_id(reply(&host, Some("S1"), asked, "red", None).await.unwrap());
-    assert!(fake.stored_for.lock().unwrap().is_empty());
+    assert_eq!(*fake.stored_for.lock().unwrap(), Vec::<String>::new());
     assert_eq!(hook_notice(&*host, "S2").await, None);
 }
 
