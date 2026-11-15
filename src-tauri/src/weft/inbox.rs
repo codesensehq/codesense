@@ -1166,17 +1166,13 @@ fn inbox_reserve_with_chat_at(
     // Role mail counts toward the notice of each session holding the role live; its
     // message ids join the watermark, so each one is announced once.
     let held = super::role_inbox::pending_role_mail(&tx, session, recipient, now / 1000)?;
-    let newest = held
-        .iter()
-        .map(|(_, _, id)| *id)
-        .chain(newest)
-        .max()
-        .unwrap_or(0);
+    let newest_role = held.iter().map(|(_, _, id)| *id).max();
+    let newest = newest_role.max(newest).unwrap_or(0);
     let roles: Vec<RoleMail> = held
         .into_iter()
         .map(|(role, pending, _)| RoleMail { role, pending })
         .collect();
-    if count == 0 && roles.is_empty() && chat.is_none() {
+    if count == 0 && newest_role.is_none() && chat.is_none() {
         return Ok(Reservation::Nothing);
     }
     // This session's marks; another session's under the handle tell it nothing.

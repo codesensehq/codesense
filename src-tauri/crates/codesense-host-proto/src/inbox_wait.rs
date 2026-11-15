@@ -26,7 +26,7 @@ pub fn inbox_notice(
     count: u32,
     session: &str,
     chat: Option<(&str, u32)>,
-    roles: &[(&str, u32)],
+    roles: &[(String, u32)],
 ) -> String {
     let plural = |n: u32| if n == 1 { "" } else { "s" };
     let mut parts = Vec::new();
@@ -157,19 +157,18 @@ mod tests {
     #[test]
     fn a_role_notice_names_each_role_to_claim_its_mail_from() {
         assert_eq!(
-            inbox_notice(0, "S1", None, &[("reviewer", 1)]),
+            inbox_notice(0, "S1", None, &[("reviewer".into(), 1)]),
             "You have 1 pending message for role reviewer. \
              Call claim_role_messages with role reviewer."
         );
         assert_eq!(
-            inbox_notice(2, "S1", Some(("story:demo", 1)), &[("a", 2), ("b", 1)]),
+            inbox_notice(2, "S1", Some(("story:demo", 1)), &[("a".into(), 2), ("b".into(), 1)]),
             "You have 2 new messages. Call read_messages with session_id S1. \
              You also have 1 new group-chat message in demo. Call workspace_chat_read with sessionId S1. \
              You also have 2 pending messages for role a. Call claim_role_messages with role a. \
              You also have 1 pending message for role b. Call claim_role_messages with role b."
         );
         let many: Vec<(String, u32)> = (0..40).map(|i| (format!("{i:0>90}"), 1)).collect();
-        let many: Vec<(&str, u32)> = many.iter().map(|(r, n)| (r.as_str(), *n)).collect();
         let notice = inbox_notice(1, "S1", None, &many);
         assert!(notice.len() < MAX_LINE / 2, "{}", notice.len());
         assert!(notice.ends_with("You also have mail for 35 more roles: see role_state."));
