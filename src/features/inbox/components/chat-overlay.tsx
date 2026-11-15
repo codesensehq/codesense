@@ -364,6 +364,7 @@ export function ChatOverlay({
         data-record={layout.record}
         data-pins={pinShape}
         data-avatars={layout.avatars ? "true" : "false"}
+        data-text={layout.textPx}
         style={{ ...style, fontSize: layout.textPx }}
         onKeyDown={(e) => {
           const t = e.target as HTMLElement;

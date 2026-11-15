@@ -175,6 +175,10 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
   return utils;
 }
 
+/** An elapsed time as the record line says it (`formatElapsed`): "45s", "41m", "65h" or
+ *  "2h 5m". It runs on the real clock. */
+const ELAPSED = /\b\d+(?:s|m|h(?: \d+m)?)\b/;
+
 const composerBox = () =>
   screen.getByTestId("chat-overlay").querySelector<HTMLTextAreaElement>(".ibx-comp textarea")!;
 
@@ -187,6 +191,16 @@ const ruleOf = (selector: string) => {
 };
 
 describe("ChatOverlay contrast and focus (inbox.css)", () => {
+  it("draws a failed pins read as one muted line, with a Retry that has the 2 px accent focus ring", () => {
+    const failed = ruleOf(".ibx-ov-pins.ibx-ov-pins-failed");
+    expect(failed).toContain("display: flex");
+    expect(failed).toContain("color: var(--ibx-mfg)");
+    expect(ruleOf(".ibx-ov-pins-retry")).toContain("color: var(--ibx-accent)");
+    expect(ruleOf(".ibx-ov-pins-retry:focus-visible")).toContain(
+      "outline: 2px solid var(--ibx-accent)",
+    );
+  });
+
   it("draws the composer's hint, placeholder and key words in the muted ink that reads at 4.5:1", () => {
     expect(ruleOf(".ibx-box textarea::placeholder")).toContain("color: var(--ibx-mfg)");
     expect(ruleOf(".ibx-comp-foot")).toContain("color: var(--ibx-mfg)");
@@ -342,6 +356,45 @@ describe("ChatOverlay", () => {
     expect(tests).toHaveTextContent("stopped 14:05");
   });
 
+  it("the one-line strip shows every pin, each keeping its full name and its value", async () => {
+    await renderOverlay(250, 250);
+    await screen.findByTestId("chat-overlay-pin-1");
+    const three = [
+      ...PINS,
+      {
+        messageId: 2,
+        position: 2,
+        pinnedBy: LEAD,
+        pinnedAtMs: NOW,
+        preview: { shortName: "Review rounds", value: "2", status: "running" as const },
+        previewAtMs: NOW,
+      },
+    ];
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "agent_pins"
+        ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: three }
+        : undefined,
+    );
+    act(() =>
+      listeners
+        .get(AGENT_PINS_CHANGED_EVENT)
+        ?.forEach((h) =>
+          h({ payload: { ...TEAM, agentId: "builtin/claude", storyId: "BUG-142" } }),
+        ),
+    );
+    const third = await screen.findByTestId("chat-overlay-pin-2");
+    for (const [id, name] of [
+      [3, "QA"],
+      [1, "Tests"],
+      [2, "Review rounds"],
+    ] as const) {
+      const pin = id === 2 ? third : screen.getByTestId(`chat-overlay-pin-${id}`);
+      expect(pin).toHaveAccessibleName(expect.stringContaining(name));
+      expect(pin.querySelector(".ibx-pk-t")).toHaveAttribute("title", name);
+      expect(pin.querySelector(".ibx-pk-v")).not.toBeNull();
+    }
+  });
+
   it("a stopped pin in the one-line strip says stopped without its time, so it keeps to one row", async () => {
     await renderOverlay(250, 250);
     const tests = await screen.findByTestId("chat-overlay-pin-1");
@@ -422,7 +475,7 @@ describe("ChatOverlay", () => {
         withRecord();
         await renderOverlay(w, h);
         // The elapsed time runs on the real clock.
-        const text = (await recordText())?.replace(/\s*↗/, "").replace(/\b(\d+h )?\d+m\b/, "TIME");
+        const text = (await recordText())?.replace(/\s*↗/, "").replace(ELAPSED, "TIME");
         expect(text).toBe(want);
         expect(invoke).toHaveBeenCalledWith("session_record", { params: { handle: LEAD } });
       },
@@ -539,7 +592,7 @@ describe("ChatOverlay", () => {
         expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "session_record")).toBe(true),
       );
       const line = screen.getByTestId("chat-overlay-record");
-      expect(line.textContent).toMatch(/^\d+(h \d+)?m · BUG-142/);
+      expect(line.textContent).toMatch(new RegExp(`^${ELAPSED.source} · BUG-142`));
       expect(line).not.toHaveTextContent("$");
     });
   });
