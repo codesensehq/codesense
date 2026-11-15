@@ -385,3 +385,32 @@ fn a_chain_with_nothing_priced_has_no_cost() {
     let why = record["unavailable"]["cost"].as_str().unwrap();
     assert!(!why.contains("priced part"), "{why}");
 }
+
+#[test]
+fn a_thread_lists_every_recorded_session_of_its_agent_and_story_ended_ones_included() {
+    let (dir, store) = store();
+    chain_session(dir.path(), "dev-1", "dev@3", "STORY-A", AT, 100);
+    chain_session(dir.path(), "dev-2", "dev@4", "STORY-A", AT + 1_000, 100);
+    chain_session(dir.path(), "qa-1", "qa@1", "STORY-A", AT + 500, 100);
+    chain_session(dir.path(), "dev-other", "dev@3", "STORY-B", AT + 700, 100);
+    // A key that only shares a prefix with the agent is another agent.
+    chain_session(dir.path(), "devops-1", "devops@1", "STORY-A", AT + 800, 100);
+    let found = thread_sessions(&store, "dev@9", "STORY-A").unwrap();
+    assert_eq!(
+        found,
+        vec![
+            ThreadSession {
+                session_id: "tab-dev-1".into(),
+                handle: Some("dev-1".into())
+            },
+            ThreadSession {
+                session_id: "tab-dev-2".into(),
+                handle: Some("dev-2".into())
+            },
+        ]
+    );
+    assert_eq!(thread_sessions(&store, "dev", "").unwrap(), vec![]);
+    assert_eq!(thread_sessions(&store, "", "STORY-A").unwrap(), vec![]);
+    let empty = tempfile::tempdir().unwrap();
+    assert_eq!(thread_sessions_in(empty.path(), "dev", "STORY-A").unwrap(), vec![]);
+}
