@@ -2396,7 +2396,10 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// collisions are covered by the SQL review). This cap is a growth tripwire:
 /// raise it only after reviewing the added sites, never by adding sink
 /// exceptions or slack.
-const MAX_UNRESOLVED_METHODS: usize = 6_495;
+/// The census after the runtime counters is 6_497 (two more than before). Their code is in
+/// `live_hub/mod.rs`, `shared/invoke_stats.rs`, `attribution/git_ai.rs` and `session_text.rs`
+/// and calls no write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_497;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
