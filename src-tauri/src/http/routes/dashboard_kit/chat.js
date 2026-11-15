@@ -27,7 +27,7 @@
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
-    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
+    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", why: (lead, pick, reason) => `${lead} recommends ${pick} because ${String(reason).replace(/[.!?\s]+$/, "")}.`, consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
     send: "Send",
     hint: "Enter to send · Shift+Enter for a new line",
     who: { you: "You" },
@@ -768,7 +768,8 @@
     const answered = state === "answered", busy = state === "pending", inInbox = answered && answer.where === "inbox";
     const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), meta ? h("span", { class: "cls", "data-consent": meta.consent }, CARD_COPY.consent[meta.consent]) : null, h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
     const body = h("div", { class: "body" }, parsed ? parsed.question : text);
-    const parts = [head, body];
+    const why = parsed && parsed.pick && parsed.reason && !(answered && !inInbox) ? h("p", { class: "why" }, CARD_COPY.why(lead, parsed.pick, parsed.reason)) : null;
+    const parts = [head, body, why];
     if (parsed && !(answered && !inInbox)) {
       parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: (option === parsed.pick || option === parsed.primary) && !answered ? "btn primary" : "btn", "data-ans": option, "data-act": meta ? (meta.acts.find((item) => item.label === option) || {}).act : null, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
     } else if (!parsed && !answered) {
