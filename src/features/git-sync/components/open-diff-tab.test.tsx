@@ -246,7 +246,9 @@ it("a changed PNG reads its sides at the same revision and renders Before and Af
     expect.objectContaining({ repo: "acme/app", rev: "abcdef1", path: "art/logo.png" }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Source" }));
-  expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
+  expect(await screen.findByTestId("open-diff-image-source")).toHaveTextContent(
+    "An image has no text diff. Side by side compares it.",
+  );
   expect(pngImages()).toEqual([]);
 });
 it("a changed PNG shows one side at a time below 900 px", async () => {
@@ -261,22 +263,34 @@ it("a changed PNG shows one side at a time below 900 px", async () => {
   expect(await screen.findByTestId("open-diff-one-at-a-time")).toBeVisible();
   expect(pngImages()).toEqual(["After"]);
 });
-it("a PNG past the size cap, or one the read refuses, keeps the binary note", async () => {
-  for (const images of [
-    {
-      status: "opened",
-      resolvedRev: "abcdef1",
-      images: { before: null, after: null, tooLarge: true },
-    },
-    { status: "refused", reason: "no" },
-  ]) {
+it("a PNG past the size cap, or one the read refuses, says why, with Side by side disabled", async () => {
+  for (const [images, reason] of [
+    [
+      {
+        status: "opened",
+        resolvedRev: "abcdef1",
+        images: { before: null, after: null, tooLarge: true },
+      },
+      "Over the 8 MB limit for drawing here",
+    ],
+    [{ status: "refused", reason: "no" }, "Couldn't read the image"],
+  ] as const) {
     openPng(images);
     await waitFor(() => expect(mocks.images).toHaveBeenCalled());
-    expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
+    expect(await screen.findByTestId("open-diff-image-source")).toHaveTextContent(
+      `An image has no text diff. ${reason}.`,
+    );
+    expect(screen.getByRole("button", { name: "Side by side" })).toHaveAttribute("title", reason);
     expect(pngImages()).toEqual([]);
     cleanup();
     mocks.images.mockClear();
   }
+});
+
+it("a PNG whose bytes are still being read says so, not Binary file", async () => {
+  openPng(new Promise(() => {}));
+  expect(await screen.findByText("Reading the image…")).toBeInTheDocument();
+  expect(screen.queryByText("Binary file — a text diff is unavailable.")).toBeNull();
 });
 it("a line range into a markdown file opens it as source, highlighted, without changing the default", async () => {
   mocks.read.mockResolvedValue({ ...opened, files: [{ path: "doc.md" }] });

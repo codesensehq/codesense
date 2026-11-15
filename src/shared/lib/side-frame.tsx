@@ -147,8 +147,22 @@ export function isRasterImage(filePath: string): boolean {
   return Object.hasOwn(IMAGE_MIME, extensionOf(filePath) ?? "");
 }
 
-/** A raster image side from its base64 bytes. Never an SVG: that can carry
- *  script, so it goes through {@link SideFrame}. */
+/** A byte count as the caption shows it: B, KB or MB, one decimal past bytes. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The decoded size of base64 `text`. */
+const decodedBytes = (text: string) =>
+  Math.floor((text.length * 3) / 4) - (text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0);
+
+/**
+ * A raster image side from its base64 bytes, captioned with its size in pixels and its file
+ * size (so a change of resolution alone shows). Never an SVG: that can carry script, so it goes
+ * through {@link SideFrame}. Bytes that won't decode say so instead of a broken-image glyph.
+ */
 export function SideImage({
   base64,
   filePath,
@@ -159,7 +173,15 @@ export function SideImage({
   alt: string;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
-  const mime = IMAGE_MIME[extensionOf(filePath) ?? ""] ?? "application/octet-stream";
+  const ext = extensionOf(filePath) ?? "";
+  const mime = IMAGE_MIME[ext] ?? "application/octet-stream";
+  // What the drawn image measured, or that it would not decode; both belong to these bytes.
+  const [drawn, setDrawn] = useState<{
+    of: string;
+    size?: { w: number; h: number };
+    broken?: boolean;
+  } | null>(null);
+  const mine = drawn?.of === base64 ? drawn : null;
   useEffect(() => {
     const img = imgRef.current;
     if (!img) return;
@@ -171,9 +193,43 @@ export function SideImage({
       URL.revokeObjectURL(url);
     };
   }, [base64, mime]);
+  if (mine?.broken)
+    return (
+      <OverlayCenteredState testId="side-image-broken">
+        <span role="alert">
+          Couldn&apos;t draw this side: the bytes aren&apos;t a readable{" "}
+          {ext === "jpg" ? "JPEG" : ext.toUpperCase()}.
+        </span>
+      </OverlayCenteredState>
+    );
+  const caption = [
+    mine?.size ? `${mine.size.w} × ${mine.size.h}` : null,
+    formatBytes(decodedBytes(base64)),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className="flex h-full items-center justify-center overflow-auto p-4">
-      <img ref={imgRef} alt={alt} className="max-h-full max-w-full object-contain" />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+        <img
+          ref={imgRef}
+          alt={alt}
+          className="max-h-full max-w-full object-contain"
+          onLoad={(e) =>
+            setDrawn({
+              of: base64,
+              size: { w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight },
+            })
+          }
+          onError={() => setDrawn({ of: base64, broken: true })}
+        />
+      </div>
+      <p
+        className="flex-none px-3 pb-2 text-center text-xs text-muted-foreground"
+        data-testid="side-image-caption"
+      >
+        {caption}
+      </p>
     </div>
   );
 }

@@ -7,6 +7,7 @@ vi.mock("@/features/git-sync/lib/source-redline-source", () => ({
 }));
 
 import { sourceFileImageSides } from "@/features/git-sync/lib/source-redline-source";
+import { IMAGE_UNAVAILABLE } from "@/shared/lib/render-file-diff";
 import { useSourceImageSides } from "./use-source-image-sides";
 
 const read = vi.mocked(sourceFileImageSides);
@@ -18,13 +19,17 @@ beforeEach(() => {
 });
 
 describe("useSourceImageSides", () => {
+  const ready = (imageBytes: object) => ({ imageBytes });
   it("reads a local raster file's sides at the working tree, then at a commit", async () => {
     const { result, rerender } = renderHook(
       ({ sha }: { sha: string | null }) =>
         useSourceImageSides(LOCAL, sha, "art/logo.png", "art/old.png", "main"),
       { initialProps: { sha: null as string | null } },
     );
-    await waitFor(() => expect(result.current).toEqual({ before: "QkVGT1JF", after: "QUZURVI=" }));
+    expect(result.current).toEqual({ imageState: { kind: "reading" } });
+    await waitFor(() =>
+      expect(result.current).toEqual(ready({ before: "QkVGT1JF", after: "QUZURVI=" })),
+    );
     expect(read).toHaveBeenCalledWith("/wt/story", "art/logo.png", {
       oldPath: "art/old.png",
       baseRef: "main",
@@ -42,26 +47,28 @@ describe("useSourceImageSides", () => {
     const { result } = renderHook(() =>
       useSourceImageSides("/wt/story", null, "new.webp", undefined, undefined),
     );
-    await waitFor(() => expect(result.current).toEqual({ after: "QUZURVI=" }));
+    await waitFor(() => expect(result.current).toEqual(ready({ after: "QUZURVI=" })));
   });
 
-  it("has no bytes past the size cap or when the read fails, so the diff stays Source only", async () => {
+  it("says why there are no bytes: past the size cap, a failed read, or a remote worktree", async () => {
     read.mockResolvedValue({ before: "QkVGT1JF", after: null, tooLarge: true });
     const big = renderHook(() => useSourceImageSides(LOCAL, null, "big.png", undefined, undefined));
-    await waitFor(() => expect(read).toHaveBeenCalled());
-    expect(big.result.current).toBeUndefined();
+    await waitFor(() =>
+      expect(big.result.current).toEqual({
+        imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.tooLarge },
+      }),
+    );
     read.mockRejectedValue(new Error("Access denied"));
     const denied = renderHook(() =>
       useSourceImageSides(LOCAL, null, "x.png", undefined, undefined),
     );
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
-    expect(denied.result.current).toBeUndefined();
-  });
-
-  it("reads nothing for an SVG, a text file, no selection or a remote worktree", () => {
-    for (const path of ["logo.svg", "page.html", "a.ts", null])
-      renderHook(() => useSourceImageSides(LOCAL, null, path, undefined, undefined));
-    renderHook(() =>
+    await waitFor(() =>
+      expect(denied.result.current).toEqual({
+        imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.failed },
+      }),
+    );
+    read.mockClear();
+    const remote = renderHook(() =>
       useSourceImageSides(
         { kind: "remote", machineId: "m1", handle: "ws-1" },
         null,
@@ -70,20 +77,33 @@ describe("useSourceImageSides", () => {
         undefined,
       ),
     );
+    expect(remote.result.current).toEqual({
+      imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.remote },
+    });
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("drops the previous file's sides on a file switch", async () => {
+  it("reads nothing, and says nothing, for an SVG, a text file or no selection", () => {
+    for (const path of ["logo.svg", "page.html", "a.ts", null]) {
+      const { result } = renderHook(() =>
+        useSourceImageSides(LOCAL, null, path, undefined, undefined),
+      );
+      expect(result.current).toEqual({});
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("drops the previous file's sides on a file switch, reading again", async () => {
     let resolve: (v: Awaited<ReturnType<typeof sourceFileImageSides>>) => void = () => {};
     const { result, rerender } = renderHook(
       ({ path }: { path: string }) => useSourceImageSides(LOCAL, null, path, undefined, undefined),
       { initialProps: { path: "a.png" } },
     );
-    await waitFor(() => expect(result.current).toBeDefined());
+    await waitFor(() => expect(result.current.imageBytes).toBeDefined());
     read.mockImplementation(() => new Promise((ok) => (resolve = ok)));
     rerender({ path: "b.png" });
-    expect(result.current).toBeUndefined();
+    expect(result.current).toEqual({ imageState: { kind: "reading" } });
     resolve({ before: "Qg==", after: "Qg==", tooLarge: false });
-    await waitFor(() => expect(result.current).toEqual({ before: "Qg==", after: "Qg==" }));
+    await waitFor(() => expect(result.current).toEqual(ready({ before: "Qg==", after: "Qg==" })));
   });
 });

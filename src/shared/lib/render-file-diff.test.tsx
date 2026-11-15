@@ -252,13 +252,27 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.getByTestId("file-diff-rendered-alone")).toBeInTheDocument();
   });
 
+  const scene = (n: number) => JSON.stringify({ type: "excalidraw", elements: [], n });
   it("off Files: Excalidraw's sides are read-only scenes from their text", () => {
     atWidth(1200);
-    render(renderFileDiff(args("/repo/d.excalidraw")));
+    render(
+      renderFileDiff(args("/repo/d.excalidraw", { sides: { before: scene(1), after: scene(2) } })),
+    );
     const canvases = screen.getAllByTestId("excalidraw");
-    expect(canvases.map((c) => c.dataset.scene)).toEqual(["old", "new"]);
+    expect(canvases.map((c) => c.dataset.scene)).toEqual([scene(1), scene(2)]);
     expect(canvases.every((c) => c.dataset.readonly === "true")).toBe(true);
     expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: an Excalidraw side that won't parse says so instead of drawing a blank scene", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args("/repo/d.excalidraw", { sides: { before: scene(1), after: '{"type":"excal' } }),
+      ),
+    );
+    expect(screen.getAllByTestId("excalidraw")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't read this side's drawing");
   });
 
   it("off Files: a raster image renders from the bytes the surface holds", () => {
@@ -289,17 +303,21 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
         ),
       ),
     );
-    expect(screen.getByText("binary here")).toBeInTheDocument();
+    // Source only, in the one image line: no side is drawn from half the bytes.
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff.",
+    );
+    expect(screen.queryByText("binary here")).toBeNull();
     expect(screen.queryByTestId("side-image")).toBeNull();
   });
 
-  it("off Files: a binary image shows the binary affordance", () => {
+  it("off Files: a binary image with no bytes says an image has no text diff", () => {
     render(
       renderFileDiff(
         args("/repo/logo.png", { state: { kind: "binary" } }, { binary: <p>binary here</p> }),
       ),
     );
-    expect(screen.getByText("binary here")).toBeInTheDocument();
+    expect(screen.getByTestId("file-diff-image-source")).toBeInTheDocument();
     expect(screen.queryByTestId("image")).toBeNull();
   });
 
@@ -501,5 +519,84 @@ describe("renderFileDiff — the code mode switch only where it applies", () => 
   it("keeps Structural for a supported language", () => {
     render(renderFileDiff(args("/repo/a.ts", {}, { onModeChange: vi.fn() })));
     expect(screen.getByRole("button", { name: "Structural" })).toBeEnabled();
+  });
+});
+
+describe("renderFileDiff — the switches and the skeleton (critique D3, D4, D9)", () => {
+  it("the pressed segment uses the primary pair, and each segment draws its focus ring inside the group", () => {
+    atWidth(899);
+    render(
+      renderFileDiff(
+        args("/repo/page.html", { modes: { html: "side-by-side" } }, { onModeChange: vi.fn() }),
+      ),
+    );
+    for (const group of [
+      screen.getByTestId("file-diff-mode-switch"),
+      screen.getByRole("group", { name: "Side shown" }),
+    ]) {
+      const buttons = within(group).getAllByRole("button");
+      const pressed = buttons.find((b) => b.getAttribute("aria-pressed") === "true")!;
+      expect(pressed.className).toContain("bg-primary");
+      expect(pressed.className).toContain("text-primary-foreground");
+      expect(pressed.className).not.toMatch(/(^|\s)bg-accent(\s|$)/);
+      for (const b of buttons) expect(b.className).toContain("focus-visible:outline-offset-[-2px]");
+    }
+  });
+
+  it("the loading skeleton pulses only where motion is welcome, and says it is loading", () => {
+    render(renderFileDiff(args("/repo/a.ts", { state: { kind: "loading" } })));
+    const skeleton = screen.getByTestId("file-diff-code-skeleton");
+    expect(skeleton.className).toContain("motion-safe:animate-pulse");
+    expect(skeleton.className).not.toMatch(/(^|\s)animate-pulse/);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the diff");
+  });
+});
+
+describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () => {
+  const png = (
+    sides: Partial<FileDiffArgs["sides"]>,
+    mode: "side-by-side" | "source" = "side-by-side",
+  ) =>
+    args(
+      "/repo/logo.png",
+      {
+        sides: { before: "", after: "", status: "modified", ...sides },
+        state: { kind: "binary" },
+        modes: { html: mode },
+      },
+      { onModeChange: vi.fn(), binary: <p>surface binary note</p> },
+    );
+
+  it("while its bytes are read it says so, never the final binary state", () => {
+    render(renderFileDiff(png({ imageState: { kind: "reading" } })));
+    expect(screen.getByTestId("file-diff-code-skeleton")).toBeInTheDocument();
+    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    expect(screen.queryByText("surface binary note")).toBeNull();
+  });
+
+  it("when it can't be drawn, Side by side stays in the switch, disabled with the reason", () => {
+    render(
+      renderFileDiff(
+        png({
+          imageState: { kind: "unavailable", reason: "Over the 8 MB limit for drawing here" },
+        }),
+      ),
+    );
+    const sideBySide = within(screen.getByTestId("file-diff-mode-switch")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", "Over the 8 MB limit for drawing here");
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Over the 8 MB limit for drawing here.",
+    );
+  });
+
+  it("its Source mode is one image-aware line on every surface", () => {
+    render(renderFileDiff(png({ imageBytes: { before: "QQ==", after: "Qg==" } }, "source")));
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
+    expect(screen.queryByText("surface binary note")).toBeNull();
   });
 });

@@ -252,7 +252,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     expect(h.readFile).not.toHaveBeenCalled();
   });
 
-  it("an image past the size cap stays the binary note, and a missing copy is a side that isn't there", async () => {
+  it("an image past the size cap says why, with Side by side disabled, and a missing copy is a side that isn't there", async () => {
     atWidth(1000);
     blobUrls();
     h.readImageFile.mockImplementation((p: string) =>
@@ -267,9 +267,12 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
         onClose={() => {}}
       />,
     );
-    expect(await screen.findAllByText("Not a text file: no line-by-line view.")).not.toHaveLength(
-      0,
+    expect(await screen.findByTestId("team-edit-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Over the 8 MB limit for drawing here.",
     );
+    expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+    // One line says it: no separate binary note for an image.
+    expect(screen.queryByText("Not a text file: no line-by-line view.")).toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
   });
 
