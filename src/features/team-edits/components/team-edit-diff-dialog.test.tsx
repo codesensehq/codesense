@@ -82,7 +82,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     readsAs("team text", "my text");
     render(<TeamEditDiffDialog workspace={workspace} file={edit("doc.md")} onClose={() => {}} />);
     expect(await screen.findByTestId("redline")).toHaveTextContent("team text→my text");
-    expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent("Team's version");
+    expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent("Team’s version");
   });
 
   it("the mode switch in the dialog writes the shared default", async () => {
@@ -99,12 +99,12 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     await screen.findByTestId("redline");
     // The redline is one column, so the sides read as one line, not two columns.
     expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent(
-      "Team's version → Workspace A’s version",
+      "Team’s version → Workspace A’s version",
     );
     fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
     expect(screen.queryByTestId("team-edit-diff-sides")).toBeNull();
     expect(await screen.findAllByTestId("rendered-md")).not.toHaveLength(0);
-    expect(screen.getAllByText("Team's version").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Team’s version").length).toBeGreaterThan(0);
   });
 
   it("a changed HTML file renders both versions live side by side at 900 px", async () => {
@@ -114,7 +114,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
       <TeamEditDiffDialog workspace={workspace} file={edit("page.html")} onClose={() => {}} />,
     );
     expect(await screen.findByTestId("team-edit-diff-side-by-side")).toBeInTheDocument();
-    expect(frames().map((f) => f.title)).toEqual(["Team's version", "Workspace A’s version"]);
+    expect(frames().map((f) => f.title)).toEqual(["Team’s version", "Workspace A’s version"]);
     expect(frames().map((f) => f.getAttribute("srcdoc")?.slice(-8))).toEqual([
       "<p>a</p>",
       "<p>b</p>",
@@ -133,8 +133,8 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     );
     expect(await screen.findByTestId("team-edit-diff-one-at-a-time")).toBeInTheDocument();
     expect(frames().map((f) => f.title)).toEqual(["Workspace A’s version"]);
-    fireEvent.click(screen.getByRole("button", { name: "Team's version" }));
-    expect(frames().map((f) => f.title)).toEqual(["Team's version"]);
+    fireEvent.click(screen.getByRole("button", { name: "Team’s version" }));
+    expect(frames().map((f) => f.title)).toEqual(["Team’s version"]);
   });
 
   it("a changed HTML file's Source mode is the text diff under the column legend", async () => {
@@ -146,7 +146,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     await screen.findByTestId("team-edit-diff-side-by-side");
     fireEvent.click(screen.getByRole("button", { name: "Source" }));
     expect(await screen.findByTestId("code-diff")).toHaveTextContent("<p>a</p>→<p>b</p>");
-    expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent("Team's version");
+    expect(screen.getByTestId("team-edit-diff-sides")).toHaveTextContent("Team’s version");
     expect(frames()).toEqual([]);
   });
 
@@ -181,7 +181,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     expect(remote.getAttribute("sandbox")).toBe("allow-scripts");
     expect(remote.hasAttribute("src")).toBe(false);
     // The team's side never sees the machine's content, nor the machine's the team's.
-    const team = frames().find((f) => f.title === "Team's version")!;
+    const team = frames().find((f) => f.title === "Team’s version")!;
     expect(team.getAttribute("srcdoc")).not.toContain("127.0.0.1");
     expect(remote.getAttribute("srcdoc")).not.toContain("<p>team</p>");
   });
@@ -229,7 +229,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
       />,
     );
     await screen.findByTestId("team-edit-diff-side-by-side");
-    expect(alts()).toEqual(["Team's version", "Workspace B’s version"]);
+    expect(alts()).toEqual(["Team’s version", "Workspace B’s version"]);
     expect(h.readImageFile).toHaveBeenCalledWith("/team/art/logo.png");
     expect(h.readFile).not.toHaveBeenCalled();
   });
@@ -244,7 +244,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
       <TeamEditDiffDialog workspace={workspace} file={edit("art/logo.png")} onClose={() => {}} />,
     );
     await screen.findByTestId("team-edit-diff-side-by-side");
-    expect(alts()).toEqual(["Team's version", "Workspace A’s version"]);
+    expect(alts()).toEqual(["Team’s version", "Workspace A’s version"]);
     expect(h.readImageFile.mock.calls.map(([p]) => p).sort()).toEqual([
       "/team/art/logo.png",
       "/wt/ws/art/logo.png",

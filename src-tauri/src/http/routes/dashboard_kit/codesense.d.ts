@@ -562,7 +562,7 @@ declare namespace CodesenseSdk {
     faces?: boolean | ((row: ChatRow) => { src?: string; face?: string; name?: string; label?: string } | null | undefined);
     /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
     next?: boolean | { edit?: boolean };
-    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
+    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the live lead's prose (`onSessionText`, when the host offers it for that session: the latest chunk's last sentence on one line, its whole text in the title, not announced chunk by chunk, until the turn's final message or the lead's next message), else the peer's current step while it runs, else `Working…`. */
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
     /** The chat links its stylesheet (`/kit/v1/chat.css`, every rule under the chat's `.cs-chat` root) once per page. `false` keeps the page's own chat rules. Each mount takes its own element ids: the first chat on a page keeps the plain ones (`sv-composer-input`, `sv-status`, …), the next carry `-2`, `-3`; unmount gives the ids back. Default `true`. */
     styles?: boolean;

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { useLayoutEffect, useState, type RefObject } from "react";
 
-/** What a message can hold that Tab would stop on: its actions, links and framed dashboards. */
-const FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex]";
+/** What a message can hold that Tab would stop on: its actions, links and framed dashboards, and the
+ *  code blocks and tables Chromium makes keyboard-focusable when they scroll (with no tabindex). */
+const FOCUSABLE =
+  "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
 /** The tabindex a control had before the thread took it out of the Tab order ("" for none). */
 const HELD = "data-roving-tabindex";
 const ROW = "[data-mid]";

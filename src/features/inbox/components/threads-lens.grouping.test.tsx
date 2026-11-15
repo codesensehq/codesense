@@ -57,6 +57,7 @@ function renderChat(
     openRoleInbox?: (roleKey: string) => void;
     offlineNoted?: boolean;
     quick?: boolean;
+    pins?: unknown;
   } = {},
 ) {
   const dir = buildDirectory(opts.sessions ?? [], messages, { holdings: opts.holdings });
@@ -81,6 +82,7 @@ function renderChat(
         request={null}
         defaultTo={AGENT}
         quick={opts.quick ?? true}
+        pins={(opts.pins ?? null) as never}
       />
     </InboxViewProvider>,
   );
@@ -465,5 +467,41 @@ describe("the chat composer's state belongs to the conversation that sent", () =
     expect(screen.getByTestId("ibx-send-failed")).toHaveTextContent(
       "Not sent: the team is not synced",
     );
+  });
+});
+
+describe("a message's Pin and the Tab order", () => {
+  // Enough of the person's pins for a Pin on each plain message.
+  const pins = {
+    stateOf: () => ({
+      pinnedBy: null,
+      atCap: false,
+      label: "Pin",
+      busy: false,
+      choosing: false,
+      capCount: null,
+    }),
+    toggle: () => {},
+    note: null,
+    chooser: null,
+    focusPin: null,
+    focusDone: () => {},
+    live: "",
+  };
+  const pinsOf = (bubbles: HTMLElement[]) =>
+    bubbles.map((b) => b.querySelector<HTMLElement>(".ibx-acts [data-testid='ibx-pin']")!);
+
+  it("in the Inbox pane (no roving thread), no message's hidden Pin is a Tab stop", () => {
+    // The action row is hidden by opacity, not display: none, so its Pin can take focus back after
+    // a redraw; outside the chat's roving thread it must still not add a Tab stop per message.
+    const { bubbles } = renderChat([msg(1), msg(2), msg(3)], { quick: false, pins });
+    const all = pinsOf(bubbles());
+    expect(all).toHaveLength(3);
+    for (const pin of all) expect(pin.tabIndex).toBe(-1);
+  });
+
+  it("in the chat's roving thread, the stop's Pin is a Tab stop and the others are not", () => {
+    const { bubbles } = renderChat([msg(1), msg(2), msg(3)], { quick: true, pins });
+    expect(pinsOf(bubbles()).map((pin) => pin.tabIndex)).toEqual([-1, -1, 0]);
   });
 });

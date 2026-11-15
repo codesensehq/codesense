@@ -1015,6 +1015,159 @@ describe("kit.chat message text: an inline markdown subset", () => {
   });
 });
 
+describe("kit.chat activity: the live lead's prose from onSessionText", () => {
+  type Prose = { kind: "prose" | "final"; turn: string; key: string; text: string } | null;
+  const running = (sessionId = "s1"): Row => ({ ...lead("running"), sessionId });
+  const activityRow = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-row="activity"]');
+  // The host's onSessionText: one subscriber per session; say(sessionId, text) pushes to it.
+  function host() {
+    const subs = new Map<string, (text: Prose, error?: unknown) => void>();
+    const offs: string[] = [];
+    const onSessionText = vi.fn((sessionId: string, cb: (text: Prose, error?: unknown) => void) => {
+      subs.set(sessionId, cb);
+      return () => {
+        offs.push(sessionId);
+        subs.delete(sessionId);
+      };
+    });
+    (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText =
+      onSessionText;
+    const say = async (sessionId: string, text: Prose, error?: unknown) => {
+      subs.get(sessionId)?.(text, error);
+      await flush();
+    };
+    return { onSessionText, say, offs, subs };
+  }
+  const prose = (text: string, kind: "prose" | "final" = "prose"): Prose => ({
+    kind,
+    turn: "t1",
+    key: "k1",
+    text,
+  });
+
+  it("shows the latest prose's last sentence in the working row, one line with the whole text in its title, and announces only Working…", async () => {
+    const { onSessionText, say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    expect(onSessionText).toHaveBeenCalledWith("s1", expect.any(Function));
+    await say("s1", prose("Reading the diff.\nNow the tests pass. Writing the summary."));
+    const row = activityRow(s.el)!;
+    const line = row.querySelector<HTMLElement>(".prose")!;
+    expect(line.textContent).toBe("Writing the summary.");
+    expect(line.getAttribute("title")).toBe(
+      "Reading the diff.\nNow the tests pass. Writing the summary.",
+    );
+    // each chunk is not announced: the row sits outside the log's live region, at the thread's foot, and its status says Working… once
+    expect(line.closest("[aria-live]")).toBeNull();
+    expect(row.closest(".log")).toBeNull();
+    expect(s.el.querySelector(".log")!.nextElementSibling!.contains(row)).toBe(true);
+    expect(row.querySelector('[role="status"]')!.textContent).toBe("Working…");
+    await say("s1", prose("Opening the PR."));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe("Opening the PR.");
+  });
+
+  it.each([
+    ["a file name", "Now editing src/chat/prose.js", "Now editing src/chat/prose.js"],
+    ["a version", "Read the notes. Bumping to 0.159.3", "Bumping to 0.159.3"],
+    [
+      "a URL",
+      "See https://example.com/docs/a.html for it",
+      "See https://example.com/docs/a.html for it",
+    ],
+    ["a mid-token ?", "Checked the ?raw=1 path", "Checked the ?raw=1 path"],
+    ["a list item", "Done so far:\n- Updated the `docs` page", "Updated the docs page"],
+    ["a heading", "## Next step", "Next step"],
+    ["a quote", "> Ship it when green.", "Ship it when green."],
+    ["a closing fence", "Here it is:\n```", "Here it is:"],
+    ["a fenced block's code", "Running it:\n```sh\nnpm test\n```", "Running it:"],
+    ["a block still open", "Writing it:\n```\nconst a = 1;", "Writing it:"],
+    ["a table", "The results:\n| a | b |\n|---|---|\n| 1 | 2 |", "The results:"],
+  ])("the line reads as a sentence: %s", async (_kind, text, line) => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose(text));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe(line);
+  });
+
+  it("clears on the turn's final message and on the lead's next message in the thread", async () => {
+    const { say } = host();
+    const thread: Row[] = [];
+    const s = setup([running()], thread);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("Thinking it through."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    await say("s1", prose("Done.", "final"));
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    await say("s1", prose("Next step."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    thread.push({
+      messageId: 9,
+      from: "lead-1",
+      text: "Here's the plan.",
+      createdAtMs: Date.now() + 1000,
+    });
+    s.emit("inbox");
+    await flush();
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+
+  it("follows the live lead's session, and lets it go on a peer change and on unmount", async () => {
+    const { onSessionText, say, offs } = host();
+    const roster = [running("s1")];
+    const s = setup(roster);
+    const chat = mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("On the first session."));
+    roster[0] = running("s2");
+    await s.reads.sessions();
+    await flush();
+    expect(offs).toEqual(["s1"]);
+    expect(onSessionText).toHaveBeenLastCalledWith("s2", expect.any(Function));
+    // the old session's prose doesn't carry over
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    chat.unmount();
+    expect(offs).toEqual(["s1", "s2"]);
+  });
+
+  it("works without it: a refusal, a host without onSessionText, or no activity row shows today's row", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", null, new Error("refused: a remote session"));
+    const row = activityRow(s.el)!;
+    expect(row.querySelector(".prose")).toBeNull();
+    expect(row.querySelector('[role="alert"]')).toBeNull();
+    expect(row.textContent).toContain("Working…");
+
+    const off = setup([running()]);
+    const { onSessionText } = host();
+    mountOn(off);
+    await flush();
+    expect(onSessionText).not.toHaveBeenCalled();
+
+    delete (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText;
+    const bare = setup([running()]);
+    mountOn(bare, { activity: true });
+    await flush();
+    expect(activityRow(bare.el)!.textContent).toContain("Working…");
+  });
+
+  it("the page's own activity line still wins over the prose", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: { text: () => "Cloning acme/api · 62%" } });
+    await flush();
+    await say("s1", prose("Reading files."));
+    expect(activityRow(s.el)!.textContent).toContain("Cloning acme/api · 62%");
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+});
+
 describe("kit.chat suggestion chips from the Next line", () => {
   const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
     messageId: id,
@@ -2311,6 +2464,24 @@ describe("kit.chat: the thread is one Tab stop", () => {
     expect(document.activeElement).toBe(unpin);
     expect(row(1).tabIndex).toBe(0);
     expect(only(row(1))).toBe(true);
+  });
+
+  it("holds an older message's scrolling code block or table out of the Tab order, as its controls are", async () => {
+    // Chromium makes an overflowing pre or table scroller keyboard-focusable with no tabindex, so one a
+    // message draws would leak out of the thread's one stop.
+    const { row, only } = await mountThread();
+    const pre = document.createElement("pre");
+    const table = document.createElement("div");
+    table.className = "inbox-table-scroll";
+    row(1).append(pre, table);
+    await flush();
+    expect(pre.getAttribute("tabindex")).toBe("-1");
+    expect(table.getAttribute("tabindex")).toBe("-1");
+    expect(only(row(3))).toBe(true);
+    // its message becomes the stop: they are as the browser made them again
+    row(1).focus();
+    expect(pre.hasAttribute("tabindex")).toBe(false);
+    expect(table.hasAttribute("tabindex")).toBe(false);
   });
 
   it("a message that lands while you read an older one leaves the stop where you are", async () => {

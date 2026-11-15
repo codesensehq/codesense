@@ -579,6 +579,58 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/prose.js
+  var FENCE = /^(?:`{3,}|~{3,})/;
+  var TABLE = /^\|/;
+  var plain = (line) => line.replace(/^(?:>\s*)+/, "").replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/`/g, "").trim();
+  function proseLines(text) {
+    let inFence = false;
+    return String(text || "").split("\n").map((part) => part.trim()).filter((part) => {
+      if (FENCE.test(part)) {
+        inFence = !inFence;
+        return false;
+      }
+      return part && !inFence && !TABLE.test(part);
+    });
+  }
+  function lastSentence(text) {
+    const lines = proseLines(text).map(plain).filter(Boolean);
+    const sentences = (lines.pop() || "").split(/(?<=[.!?])\s+/).filter(Boolean);
+    return sentences.length ? sentences[sentences.length - 1] : "";
+  }
+  function createProse({ win, clock, render }) {
+    let sid = null, off = null, now = null;
+    function follow(next) {
+      if (next === sid) return;
+      if (typeof off === "function") off();
+      off = null;
+      sid = next;
+      now = null;
+      const host = win.codesense;
+      if (!next || !host || typeof host.onSessionText !== "function") return;
+      try {
+        off = host.onSessionText(next, (said, error) => {
+          if (sid !== next) return;
+          now = !said || error || said.kind === "final" ? null : { text: said.text, line: lastSentence(said.text), at: clock.now() };
+          render();
+        });
+      } catch {
+        off = null;
+      }
+    }
+    return {
+      follow,
+      /** The prose to show now: none once a lead message newer than it is in the thread. */
+      current(newestLeadAt) {
+        if (now && newestLeadAt > now.at) now = null;
+        return now;
+      },
+      release() {
+        follow(null);
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/thread.js
   var rowsOf = (answer) => Array.isArray(answer) ? answer : Array.isArray(answer && answer.messages) ? answer.messages : [];
   function mergeThread(...lists) {
@@ -774,7 +826,7 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
-  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex]";
+  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
   function setControl(el, on) {
@@ -1254,6 +1306,7 @@
       if (target2) transport.gotoAgent(target2);
     };
     const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
+    const actFoot = activity ? h("div", { class: "act-foot" }) : null, actCache = /* @__PURE__ */ new Map();
     const pinCopy = copy.pin || CHAT_COPY.pin, pinState = { note: null, busy: null, refocus: null };
     const pinLive = onPin ? h("div", { class: "pin-live", role: "status", "aria-live": "polite" }) : null;
     const pinList = () => onPin && typeof onPin.pins === "function" && onPin.pins() || [];
@@ -1380,7 +1433,7 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
-    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, pinLive, chipsBox, composer.region));
+    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, actFoot, pinLive, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -1509,9 +1562,22 @@
       if (item.mark !== "sent") return item.mark;
       return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()), delivery: deliveryRow(item.messageId) });
     }
+    const prose = activity ? createProse({ win, clock, render: () => render() }) : null;
+    let proseRow = null;
+    function proseItem(said) {
+      if (!proseRow) proseRow = h("div", { class: "act", "data-row": "activity" }, face("working", copy.row.working), h("span", { class: "sr", role: "status", "aria-live": "polite" }, copy.row.working), h("span", { class: "prose" }));
+      const line = proseRow.querySelector(".prose");
+      line.textContent = said.line;
+      line.title = said.text;
+      return { id: "activity", node: proseRow };
+    }
     function activityItem() {
       if (!activity) return null;
       const here = state(), own2 = activity.text ? activity.text(here) : null, p = presence();
+      prose.follow(live() ? live().sessionId : null);
+      const said = own2 ? null : prose.current(newestFrom(thread, leadHandles()));
+      if (said) return proseItem(said);
+      proseRow = null;
       const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
       return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
     }
@@ -1621,10 +1687,11 @@
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
       if (replacer) replacer.sync();
       const inChooser = replacer ? replacer.within() : false;
-      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       const held = roving.focused();
       reconcile(log, cache, want);
       roving.refresh(held);
+      if (actFoot) reconcile(actFoot, actCache, act ? [act] : []);
       paintChips();
       pin.onContentChanged();
       if (pinState.refocus !== null) {
@@ -1744,6 +1811,7 @@
       unmount() {
         gone = true;
         offs.forEach((off) => off && off());
+        if (prose) prose.release();
         pin.release();
         roving.release();
         if (replacer) replacer.release();

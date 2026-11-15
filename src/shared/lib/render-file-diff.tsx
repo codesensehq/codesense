@@ -198,6 +198,12 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
   unavailable?: Partial<Record<FileDiffModes[K], string>>;
 }) {
   const options = MODE_LABELS[kind] as [FileDiffModes[K], string][];
+  // A mode that can't apply here isn't what the body shows: the first one that can is pressed
+  // (an image that can't draw shows Source, whatever the preference says).
+  const shown =
+    unavailable?.[mode] != null
+      ? (options.find(([value]) => unavailable?.[value] == null)?.[0] ?? mode)
+      : mode;
   return (
     <div
       role="group"
@@ -209,14 +215,15 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
         <button
           key={value}
           type="button"
-          aria-pressed={mode === value}
+          aria-pressed={shown === value}
           disabled={unavailable?.[value] != null}
           title={unavailable?.[value]}
           onClick={() => onChange(value)}
           className={cn(
-            // The ring is drawn inside the button: the group's overflow-hidden would clip it.
-            "px-2 py-0.5 focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
-            mode === value
+            // The ring is drawn inside the button: the group's overflow-hidden would clip it. Important,
+            // because the global :focus-visible rule (unlayered) sets a 2 px offset that beats utilities.
+            "px-2 py-0.5 focus-visible:!outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
+            shown === value
               ? "bg-primary font-medium text-primary-foreground"
               : "enabled:hover:bg-accent/60",
           )}
@@ -289,7 +296,7 @@ function SideToggle({
           aria-pressed={picked === side}
           onClick={() => onPick(side)}
           className={cn(
-            "px-2 py-0.5 focus-visible:outline-offset-[-2px]",
+            "px-2 py-0.5 focus-visible:!outline-offset-[-2px]",
             picked === side
               ? "bg-primary font-medium text-primary-foreground"
               : "hover:bg-accent/60",
@@ -710,9 +717,18 @@ function RenderedFileDiff({
   // Off Files a raster image draws from the bytes the surface reads: while they are read it
   // says so, and when they won't draw here Side by side stays in the switch with the reason.
   const raster = !rendered && fileType === "image" && !rendersFromText(filePath);
-  const reading = raster && sides.imageState?.kind === "reading";
-  const cannotDraw =
-    raster && sides.imageState?.kind === "unavailable" ? sides.imageState.reason : null;
+  // Before the surface knows anything of the image (its diff still loading), it is being read too.
+  const reading =
+    raster &&
+    (sides.imageState?.kind === "reading" || (!sides.imageState && state.kind === "loading"));
+  // A side that failed to read can't draw either: Side by side says so, rather than the code modes.
+  const cannotDraw = !raster
+    ? null
+    : sides.imageState?.kind === "unavailable"
+      ? sides.imageState.reason
+      : state.kind === "error"
+        ? IMAGE_UNAVAILABLE.failed
+        : null;
   // Off Files the sides are drawn from what the surface holds; a type it can't
   // draw that way (a raster image it has no bytes for) has Source only.
   const renderable = !!rendered || reading || rendersInline(filePath, sides, state);
