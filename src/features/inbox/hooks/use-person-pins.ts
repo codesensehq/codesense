@@ -6,16 +6,21 @@ import { agentPins, type AgentPin, type InboxTeam } from "@/tauri/commands";
 import type { ConversationMessage } from "../api";
 import { formatClock, msgKey } from "../model";
 import {
+  pinChooserArrive,
+  pinChooserChoose,
+  pinChooserOpen,
+  pinChooserRoom,
+  pinChooserSync,
+  type PinChooserState,
+} from "../lib/chat-core";
+import {
   PIN_CAP,
   REPLACE_FAILED,
-  ROOM_NOW,
   UNDO_FULL,
   UNDO_GONE,
   capNote,
   chooserHeading,
   liveText,
-  listChangeText,
-  newRowText,
   pinTitleOf,
   pinnedAtLine,
   pinnedMeanwhileText,
@@ -123,16 +128,12 @@ export type PersonPins = {
   focusDone(): void;
 };
 
-type Open = {
+/** The open chooser: chat-core's chooser state (the pins it opened on plus the rows arrived on
+ *  since, the list as last drawn, the current row, what changed, a failed replace), under one
+ *  message. The kit's chooser runs the same rules. */
+type Open = PinChooserState<AgentPin> & {
   mid: string;
   message: ConversationMessage;
-  /** The pins when the chooser opened, plus the ones the person has arrived on since. */
-  known: Set<number>;
-  /** The list as last drawn, to say what changed. */
-  last: AgentPin[];
-  current: number | null;
-  change: string | null;
-  error: string | null;
 };
 
 /**
@@ -195,28 +196,18 @@ export function usePersonPins({
   // stops being current if it left. If the agent pinned this message, it closes.
   useEffect(() => {
     if (!open) return;
-    const ids = new Set(pins.map((p) => p.messageId));
-    const before = new Set(open.last.map((p) => p.messageId));
-    if (ids.has(open.message.id) && !before.has(open.message.id)) {
-      const pin = pins.find((p) => p.messageId === open.message.id)!;
+    const next = pinChooserSync(open, pins, open.message.id, titleOf);
+    if (!next) return;
+    if ("pinned" in next) {
       setOpen(null);
       setNote({
         mid: open.mid,
         kind: "info",
-        text: pinnedMeanwhileText(whoPinned(pin.pinnedBy, labelOf)),
+        text: pinnedMeanwhileText(whoPinned(next.pinned.pinnedBy, labelOf)),
       });
       return;
     }
-    const added = pins.filter((p) => !before.has(p.messageId));
-    const left = open.last.filter((p) => !ids.has(p.messageId));
-    if (added.length === 0 && left.length === 0) return;
-    setOpen({
-      ...open,
-      last: pins,
-      current: open.current !== null && ids.has(open.current) ? open.current : null,
-      change: listChangeText(added.map(titleOf), left.map(titleOf)),
-      error: null,
-    });
+    setOpen(next.state);
     // `open` is replaced here; only the list drives this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pins]);
@@ -347,21 +338,13 @@ export function usePersonPins({
         current: full ? open.current : null,
         change: open.change,
         error: open.error,
-        room: full ? null : ROOM_NOW,
+        room: pinChooserRoom(pins.length),
         busy: busy === open.mid,
       }
     : null;
   const openFor = (m: ConversationMessage) => {
     setNote(null);
-    setOpen({
-      mid: msgKey(m),
-      message: m,
-      known: new Set(pins.map((p) => p.messageId)),
-      last: pins,
-      current: pins[0]?.messageId ?? null,
-      change: null,
-      error: null,
-    });
+    setOpen({ ...pinChooserOpen(pins), mid: msgKey(m), message: m });
   };
   return {
     stateOf(m) {
@@ -427,22 +410,16 @@ export function usePersonPins({
     fresh,
     chooser,
     chooserMove(messageId) {
-      setOpen((o) => {
-        if (!o) return o;
-        const known = new Set(o.known);
-        known.add(messageId);
-        return { ...o, known, current: messageId, error: null };
-      });
+      setOpen((o) => (o ? pinChooserArrive(o, messageId) : o));
     },
     choose(messageId) {
       if (!open || busy) return;
       const pin = pins.find((p) => p.messageId === messageId);
       if (!pin) return;
-      if (!open.known.has(messageId)) {
-        // A pin the agent added a moment ago is never replaced unseen: the person arrives first.
-        const known = new Set(open.known);
-        known.add(messageId);
-        setOpen({ ...open, known, current: messageId, change: newRowText(titleOf(pin)) });
+      const chosen = pinChooserChoose(open, pin, titleOf);
+      // A pin the agent added a moment ago is never replaced unseen: the person arrives first.
+      if (!chosen.replace) {
+        setOpen(chosen.state);
         return;
       }
       void replace(open.message, pin);
