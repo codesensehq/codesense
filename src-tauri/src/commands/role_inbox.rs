@@ -472,7 +472,9 @@ pub(crate) fn note_role_store(app: &tauri::AppHandle, path: PathBuf) {
 /// Whether session `id` runs, read from the same session list `list_sessions` and the
 /// inbox use. A running session is live. A session on a machine that is not connected
 /// is unknown (it may still run there; its registration rides out the remote TTL). A
-/// listed session that exited is ended. An id no listed session holds is unknown.
+/// listed session that exited is ended. A headless run is listed while it runs, so a
+/// headless id the list no longer holds was torn down: ended. Any other id no listed
+/// session holds is unknown.
 pub(crate) fn session_liveness(
     rows: &[crate::mcp::session_list::SessionListRow],
     id: &str,
@@ -487,6 +489,7 @@ pub(crate) fn session_liveness(
     match row {
         Some(row) if crate::mcp::identity_tools::is_running(row.state) => SessionLiveness::Live,
         Some(row) if row.state == SessionState::Exited => SessionLiveness::Ended,
+        None if super::dashboard_launch::is_headless_session_id(id) => SessionLiveness::Ended,
         _ => SessionLiveness::Unknown,
     }
 }
@@ -497,6 +500,27 @@ pub(crate) fn renew_store(
     rows: &[crate::mcp::session_list::SessionListRow],
 ) -> role_inbox::RoleInboxResult<role_inbox::RenewReport> {
     role_inbox::renew_session_registrations(store, now, |session| session_liveness(rows, session))
+}
+
+/// How a renewal pass reads one registration's session.
+type Liveness = std::sync::Arc<dyn Fn(&str) -> role_inbox::SessionLiveness + Send + Sync>;
+
+/// Release every role registration `session` held, in each noted store, now. A headless
+/// run calls it at teardown, so its claims go back to the queue for the live holders
+/// instead of waiting for the renewer's next tick or their expiry.
+pub(crate) async fn release_session_roles(app: &tauri::AppHandle, session: &str) {
+    let session = session.to_string();
+    renew_noted_stores(
+        app,
+        std::sync::Arc::new(move |id: &str| {
+            if id == session {
+                role_inbox::SessionLiveness::Ended
+            } else {
+                role_inbox::SessionLiveness::Unknown
+            }
+        }),
+    )
+    .await;
 }
 
 /// One renewer tick: read the session list once, then renew or release every noted
@@ -518,13 +542,27 @@ async fn renew_roles_once(app: &tauri::AppHandle) {
             return;
         }
     };
+    renew_noted_stores(
+        app,
+        std::sync::Arc::new(move |id: &str| session_liveness(&rows, id)),
+    )
+    .await;
+}
+
+/// Renew or release the session-held registrations of every noted store, by `liveness`.
+async fn renew_noted_stores(app: &tauri::AppHandle, liveness: Liveness) {
+    use tauri::Manager;
+    let Some(stores) = app.try_state::<RoleRenewalStores>() else {
+        return;
+    };
     let mut changed = false;
-    for path in paths {
-        let (rows, store_path) = (rows.clone(), path.clone());
+    for path in stores.snapshot() {
+        let (liveness, store_path) = (liveness.clone(), path.clone());
         let report = await_blocking("role_renewal", move || {
             // RI-2-ALLOW: inside await_blocking closure, off the async runtime.
             let store = WeftStore::open(store_path).map_err(|e| format!("open role store: {e}"))?;
-            renew_store(&store, now_secs(), &rows).map_err(|e| e.to_string())
+            role_inbox::renew_session_registrations(&store, now_secs(), |id| liveness(id))
+                .map_err(|e| e.to_string())
         })
         .await;
         match report {
@@ -635,6 +673,86 @@ mod tests {
         assert_eq!(session_liveness(&rows, "s-gone"), SessionLiveness::Ended);
         assert_eq!(session_liveness(&rows, "s-off"), SessionLiveness::Unknown);
         assert_eq!(session_liveness(&rows, "nobody"), SessionLiveness::Unknown);
+
+        // A headless run is listed while it runs; one the list no longer holds has ended.
+        let rows = vec![row(
+            "routine:team/wf-reply@1",
+            "headless-1000-7",
+            SessionState::Running,
+        )];
+        assert_eq!(
+            session_liveness(&rows, "headless-1000-7"),
+            SessionLiveness::Live
+        );
+        assert_eq!(
+            session_liveness(&rows, "headless-1000-8"),
+            SessionLiveness::Ended
+        );
+        assert_eq!(
+            session_liveness(&rows, "shell-mcp-1000-8"),
+            SessionLiveness::Unknown
+        );
+    }
+
+    /// The seam: a headless run claims a role's delivery and ends without acking it. Once
+    /// its row has left the session list, the role's live holder claims and acks it at once,
+    /// not after the claim expires.
+    #[test]
+    fn an_ended_headless_claimers_delivery_is_claimable_and_ackable_by_the_live_lead() {
+        let td = tempfile::TempDir::new().unwrap();
+        // RI-2-ALLOW: a test, no UI thread.
+        let store = WeftStore::open(td.path().join("weft.sqlite3")).unwrap();
+        let role = "story-lead:DEMO-1";
+        let shared = |session: &str| role_inbox::RegisterOptions {
+            session_id: Some(session.into()),
+            exclusive: false,
+            ttl_secs: role_inbox::DEFAULT_REGISTRATION_TTL_SECS,
+        };
+        let run = "headless-1000-7";
+        let reg = role_inbox::register_role_as(&store, role, run, &shared(run), 1_000).unwrap();
+        let (_, delivery) = role_inbox::send_role_message_commit(
+            &store, "seat", role, "ready", None, None, None, "hash", 1_000, None, None, None,
+        )
+        .unwrap();
+        let taken =
+            role_inbox::claim_role_messages(&store, role, run, reg.generation, 50, 1_001).unwrap();
+        assert_eq!(taken.len(), 1);
+
+        // The run was torn down; the lead's tab runs.
+        let rows = vec![row("DEMO-1#lead", "s-lead", SessionState::Idle)];
+        let report = renew_store(&store, 1_015, &rows).unwrap();
+        assert_eq!((report.released, report.released_claims), (1, 1));
+
+        let lead =
+            role_inbox::register_role_as(&store, role, "s-lead", &shared("s-lead"), 1_016).unwrap();
+        let mine =
+            role_inbox::claim_role_messages(&store, role, "s-lead", lead.generation, 50, 1_016)
+                .unwrap();
+        assert_eq!(
+            mine.iter().map(|d| d.delivery_id).collect::<Vec<_>>(),
+            vec![delivery]
+        );
+        let receipt = role_inbox::accept_role_message(
+            &store,
+            delivery,
+            &mine[0].claim_token,
+            "s-lead",
+            lead.generation,
+            role_inbox::AcceptKind::Work,
+            "handled",
+            1_017,
+        )
+        .unwrap();
+        role_inbox::ack_role_message(
+            &store,
+            delivery,
+            &mine[0].claim_token,
+            "s-lead",
+            lead.generation,
+            &receipt,
+            1_018,
+        )
+        .unwrap();
     }
 
     /// The seam: a store noted for a session, renewed by the session list's truth.
