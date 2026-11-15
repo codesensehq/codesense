@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The typed surface of the dashboard kit's chat rules: one DOM-free module (the Queued/Delivered marks, the
 // needs-you card parser and the Next-line chip parser), served to pages as /kit/v1/chat-core.js and re-exported here as it is. The inbox
-// overlay does not use it yet. A second marks rule or card parser in the app is a review finding.
+// overlay reads its Queued/Delivered marks from it. A second marks rule or card parser in the app is a review finding.
 export {
   CONSENT_CLASSES,
   cardAnswer,
@@ -12,6 +12,32 @@ export {
   parseCard,
   parseCardLine,
   parseNext,
+  PIN_CAP,
+  pinCapLabel,
+  pinCapNote,
+  pinFirstSentence,
+  pinFirstWords,
+  pinLiveText,
+  pinTitleOf,
+  pinWho,
+  pinReplaceLabel,
+  pinChooserHeading,
+  pinPinnedAtLine,
+  pinReplacedText,
+  pinNewRowText,
+  pinListChangeText,
+  pinPinnedMeanwhileText,
+  PIN_REPLACE_FAILED,
+  PIN_ROOM_NOW,
+  PIN_UNDO_FULL,
+  PIN_UNDO_GONE,
+  pinChooserArrive,
+  pinChooserChoose,
+  pinChooserOpen,
+  pinChooserRoom,
+  pinChooserStep,
+  pinChooserSync,
+  type PinChooserState,
   type ChatCard,
   type ChatCardAct,
   type ChatCardLine,

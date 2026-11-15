@@ -21,6 +21,8 @@ const OPEN_DELIVERY_CAP: u32 = 500;
 
 /// How much of a message's text a delivery carries.
 const EXCERPT_CHARS: usize = 160;
+/// How much of an open delivery's message `role_state` carries in `text`.
+const TEXT_CHARS: usize = 4000;
 
 /// Where a delivery to a role stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -102,6 +104,14 @@ pub struct RoleDeliveryView {
     pub from_name: Option<String>,
     /// The start of the message text.
     pub excerpt: String,
+    /// The message it answers (`inbox_list` `inReplyTo`): the card a reply is for. Null
+    /// for a message that answers none.
+    pub in_reply_to: Option<i64>,
+    /// The message text, up to [`TEXT_CHARS`] characters, for an open delivery (pending,
+    /// claimed or accepted); null once acknowledged.
+    pub text: Option<String>,
+    /// `text` was cut at [`TEXT_CHARS`]; `inbox_list {role}` has the whole message.
+    pub text_truncated: bool,
     pub created_at_ms: i64,
     /// When an instance first claimed it (kept if that claim later lapsed).
     pub first_claimed_at_ms: Option<i64>,
@@ -274,7 +284,7 @@ fn deliveries_where(
                 d.claim_owner_instance, d.claim_owner_generation, d.claim_expires_at, \
                 m.sender, m.text, \
                 r.receipt_id, r.instance_id, r.generation, r.kind, r.note_or_reason, \
-                r.queue_item_id, r.created_at \
+                r.queue_item_id, r.created_at, m.in_reply_to \
          FROM wv_role_delivery d \
          LEFT JOIN wv_inbox m ON m.id = d.message_id \
          LEFT JOIN wv_role_acceptance_receipt r ON r.delivery_id = d.delivery_id \
@@ -306,6 +316,11 @@ fn deliveries_where(
             }),
             None => None,
         };
+        let open = state != RoleDeliveryState::Acknowledged;
+        let text_truncated = open
+            && text
+                .as_ref()
+                .is_some_and(|t| t.chars().nth(TEXT_CHARS).is_some());
         Ok(RoleDeliveryView {
             delivery_id: r.get(0)?,
             message_id: r.get(1)?,
@@ -313,8 +328,14 @@ fn deliveries_where(
             from: r.get::<_, Option<String>>(8)?.unwrap_or_default(),
             from_name: None,
             excerpt: text
+                .as_ref()
                 .map(|t| t.chars().take(EXCERPT_CHARS).collect())
                 .unwrap_or_default(),
+            in_reply_to: r.get(17)?,
+            text: text
+                .filter(|_| open)
+                .map(|t| t.chars().take(TEXT_CHARS).collect()),
+            text_truncated,
             created_at_ms: r.get::<_, i64>(3)? * 1000,
             first_claimed_at_ms: r.get::<_, Option<i64>>(4)?.map(|s| s * 1000),
             claim_owner: r.get(5)?,
@@ -476,6 +497,81 @@ mod tests {
             .unwrap();
         assert!(claimed_later.claim_lapsed);
         assert!(!later[0].registrations[0].live);
+    }
+
+    #[test]
+    fn an_open_delivery_carries_its_card_and_text() {
+        let (_dir, store) = open();
+        let now = 1_000_000;
+        let (card, _) = send(&store, "reviewer", "the card", now);
+        let long = format!("merge. {}", "x".repeat(TEXT_CHARS));
+        let (_, reply) = send_role_message_commit(
+            &store,
+            "human",
+            "reviewer",
+            &long,
+            Some(card),
+            None,
+            None,
+            "hash",
+            now + 1,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let reg = register_role(&store, "reviewer", "inst-a", now + 2).unwrap();
+        let claimed =
+            claim_role_messages(&store, "reviewer", "inst-a", reg.generation, 1, now + 3).unwrap();
+        let token = claimed[0].claim_token.clone();
+        let receipt = accept_role_message(
+            &store,
+            claimed[0].delivery_id,
+            &token,
+            "inst-a",
+            reg.generation,
+            AcceptKind::NoWork,
+            "seen",
+            now + 4,
+        )
+        .unwrap();
+        ack_role_message(
+            &store,
+            claimed[0].delivery_id,
+            &token,
+            "inst-a",
+            reg.generation,
+            &receipt,
+            now + 5,
+        )
+        .unwrap();
+
+        let q = role_state_read(&store, Some("reviewer"), now + 6, 20)
+            .unwrap()
+            .remove(0);
+        let open = q
+            .deliveries
+            .iter()
+            .find(|d| d.delivery_id == reply)
+            .unwrap();
+        assert_eq!(open.in_reply_to, Some(card));
+        assert_eq!(
+            open.text.as_deref().map(|t| t.chars().count()),
+            Some(TEXT_CHARS)
+        );
+        assert!(open.text.as_deref().unwrap().starts_with("merge. x"));
+        assert!(open.text_truncated);
+        let done = q
+            .deliveries
+            .iter()
+            .find(|d| d.delivery_id != reply)
+            .unwrap();
+        assert_eq!(done.state, RoleDeliveryState::Acknowledged);
+        assert_eq!((done.in_reply_to, done.text.as_deref()), (None, None));
+        assert!(!done.text_truncated);
+        let json = serde_json::to_value(open).unwrap();
+        assert_eq!(json["inReplyTo"], serde_json::json!(card));
+        assert_eq!(json["textTruncated"], serde_json::json!(true));
     }
 
     #[test]

@@ -6,7 +6,12 @@ import {
   pasteToActiveTerminal,
   type PasteStatus,
 } from "@/shared/lib/send-to-terminal";
-import { agentLaunchOpen, fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
+import {
+  agentLaunchOpen,
+  agentReadSessions,
+  fileSurfaceCall,
+  fileSurfacePrepareView,
+} from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
@@ -418,6 +423,14 @@ async function openTeamWorkspace(a: Record<string, unknown>, target: Record<stri
 }
 
 /** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
+/** The `sessionId` a session-text call names. */
+function textSessionId(args: unknown, verb: string): string {
+  const a = argObject(args, verb);
+  if (typeof a.sessionId !== "string" || !a.sessionId)
+    throw new Error(`${verb}: {sessionId} must name a session`);
+  return a.sessionId;
+}
+
 function pageAdmittedTeams(ctx: BridgeContext | undefined): InboxTeam[] {
   const grant = ctx?.frameGrant ?? ctx?.frame?.grant;
   return useOrgStore
@@ -1353,6 +1366,28 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     return { subscribed: "codesense:inbox-changed", agentId: agentId ?? null };
   },
   watchAgentActivity: async () => ({ subscribed: "codesense:agent-activity-changed" }),
+  // A page hears a session's assistant prose as it is written, then one final message per turn
+  // (`codesense:session-text`, through `onSessionText`): under sessions:read, and only a
+  // session of the page's own team.
+  "sessions.watchText": async (args, ctx) => {
+    const sessionId = textSessionId(args, "sessions.watchText");
+    if (!ctx?.frame?.effectiveGrant?.includes("sessions:read")) throw new Error("denied: grant");
+    const row = (await agentReadSessions()).find((s) => s.sessionId === sessionId);
+    if (!row) throw new Error("not_found: no session " + sessionId);
+    const team = (ctx.frameGrant ?? ctx.frame.grant)?.team;
+    if (team && !(row.team && row.team.org === team.org && row.team.team === team.team))
+      throw new Error("denied: session team");
+    const frame = await ctx.liveFrame?.();
+    if (!frame) throw new Error("unavailable: live frame is starting");
+    // The frame holds one host watch per session, released when the page goes.
+    await frame.watchText(sessionId);
+    return { watching: sessionId };
+  },
+  "sessions.unwatchText": async (args, ctx) => {
+    const sessionId = textSessionId(args, "sessions.unwatchText");
+    await (await ctx?.liveFrame?.())?.unwatchText(sessionId);
+    return null;
+  },
 
   // ── The human's writes from a dashboard ───────────────────────────────────
   // The same inbox operations the Inbox pane uses, as the human. Send class:
@@ -1464,6 +1499,33 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const id = messageId(a.messageId, "unpin");
     return inboxWrite(ctx, "unpin", a, (team) =>
       agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
+    );
+  },
+  // The Undo of an unpin: the pin comes back as it was (who pinned it, when, its preview).
+  // With `replacing`, the Undo of a replace: that pin goes in the same step.
+  restorePin: async (args, ctx) => {
+    const a = argObject(args, "restorePin");
+    const { agentId, storyId } = pinThread(a, "restorePin");
+    const id = messageId(a.messageId, "restorePin");
+    const replacing =
+      a.replacing == null ? undefined : messageId(a.replacing, "restorePin: replacing");
+    return inboxWrite(ctx, "restorePin", a, (team) =>
+      agentPins(team, agentId, storyId, {
+        op: "restore",
+        messageId: id,
+        ...(replacing === undefined ? {} : { replacing }),
+      }),
+    );
+  },
+  // At the cap, the person pins a message in place of a pin they choose, in one step.
+  replacePin: async (args, ctx) => {
+    const a = argObject(args, "replacePin");
+    const { agentId, storyId } = pinThread(a, "replacePin");
+    const id = messageId(a.messageId, "replacePin");
+    if (a.replaces == null) throw new Error("replacePin: {replaces} must name the pin to replace");
+    const replaces = messageId(a.replaces, "replacePin: replaces");
+    return inboxWrite(ctx, "replacePin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "replace", messageId: id, replaces }),
     );
   },
   reorderPins: async (args, ctx) => {

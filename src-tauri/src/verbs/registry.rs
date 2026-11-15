@@ -151,6 +151,8 @@ fn spec(
                 | "pins"
                 | "pin"
                 | "unpin"
+                | "restorePin"
+                | "replacePin"
                 | "reorderPins"
         ),
         confirmable,
@@ -170,7 +172,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         );
     }
     match name {
-        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
+        "agent" | "agents" | "gotoAgent" | "sessions" | "sessions.watchText"
+        | "sessions.unwatchText" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
         | "setPrefs" | "setUiState" | "subscribe" | "unsubscribe" | "page" | "moveWorkspace"
         | "openLauncher" | "openRoutineDraft" | "launchUnder" | "dismiss_agent_mark"
         | "showMenu" | "showPopover" | "focusOut" | "focusTerminal" | "commands.register" => {
@@ -186,8 +189,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
-        | "unpin" | "reorderPins" => "inbox:write",
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin" | "unpin"
+        | "restorePin" | "replacePin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -229,8 +232,9 @@ impl VerbSpec {
         if matches!(&*self.name, "subscribe" | "unsubscribe" | "page") && args["topic"] == "pins" {
             return "inbox:read:team";
         }
+        // Where the human's messages to sessions stand reads like the inbox it comes from.
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
-            && args["topic"] == "inbox"
+            && (args["topic"] == "inbox" || args["topic"] == "messageDelivery")
         {
             if caller.scope == "team" {
                 "inbox:read:team"
@@ -278,6 +282,15 @@ fn register_resources(registry: &mut Registry) {
         ),
         ("pin", Class::Metadata, Some("pin"), None),
         ("unpin", Class::Metadata, Some("pin"), None),
+        // The Undo of an unpin: the pin comes back as it was.
+        ("restorePin", Class::Metadata, Some("pin"), None),
+        // At the cap, the person pins in place of a pin they choose.
+        (
+            "replacePin",
+            Class::Metadata,
+            None,
+            Some("The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin"),
+        ),
         (
             "reorderPins",
             Class::Metadata,
@@ -990,6 +1003,23 @@ fn register_resources(registry: &mut Registry) {
             false,
         ),
     );
+    // A page hears a session's assistant prose as it is written (`onSessionText`): the bridge
+    // also confines it to the page's own team.
+    for name in ["sessions.watchText", "sessions.unwatchText"] {
+        Registry::register(
+            registry,
+            "sessions",
+            spec(
+                name,
+                Class::Read,
+                false,
+                None,
+                Some("A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"),
+                false,
+                false,
+            ),
+        );
+    }
     registry.register_existing(
         "inbox",
         spec(

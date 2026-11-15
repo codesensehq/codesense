@@ -641,6 +641,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position"
   },
   {
+    "name": "replacePin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin"
+  },
+  {
     "name": "replyAsHuman",
     "class": "send",
     "grant": "inbox:write",
@@ -648,6 +658,16 @@ export const VERB_REGISTRY = [
     "confirmable": true,
     "action": true,
     "mcpTwin": "reply",
+    "presentationOnlyReason": null
+  },
+  {
+    "name": "restorePin",
+    "class": "metadata",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": "pin",
     "presentationOnlyReason": null
   },
   {
@@ -889,6 +909,26 @@ export const VERB_REGISTRY = [
     "action": false,
     "mcpTwin": "list_sessions",
     "presentationOnlyReason": null
+  },
+  {
+    "name": "sessions.unwatchText",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"
+  },
+  {
+    "name": "sessions.watchText",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"
   },
   {
     "name": "setField",

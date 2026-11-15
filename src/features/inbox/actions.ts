@@ -2,7 +2,9 @@
 import { toast } from "sonner";
 
 import { locateAgentByAgentId } from "@/features/weft/lib/locate-agent";
-import type { InboxTeam } from "@/tauri/commands";
+import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { useOrgStore } from "@/shared/stores/org-store";
+import { resolveStoryPath, type InboxTeam } from "@/tauri/commands";
 
 import { sendAsHuman, type ConversationMessage, type RoleSummary } from "./api";
 import { HUMAN, isRoleKey, machineLabel, participant, type Directory } from "./model";
@@ -17,6 +19,19 @@ export async function goToSession(handle: string): Promise<boolean> {
     // Callers fire and forget: a failed lookup says so instead of rejecting unhandled.
     toast(`Could not open that session: ${err instanceof Error ? err.message : String(err)}`);
     return false;
+  }
+}
+
+/** Open story `storyId` where its file opens (its team's story page, else as markdown). The
+ *  path comes from the managed story cache, in the active org; a story it can't find says so. */
+export async function openStory(storyId: string): Promise<void> {
+  try {
+    const { storyFilePath, team } = await resolveStoryPath(storyId);
+    const org = useOrgStore.getState().activeOrgSlug;
+    if (!org) throw new Error("no active org");
+    openFileInTeam({ org, team, path: storyFilePath });
+  } catch (err) {
+    toast(`Could not open ${storyId}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

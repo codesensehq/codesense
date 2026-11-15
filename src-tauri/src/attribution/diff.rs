@@ -29,7 +29,17 @@ fn state(status: &str, reason: impl ToString) -> Value {
 }
 
 pub(crate) fn read(home: &Path, principal: &Principal, scope: &CallerScope, params: &Params) -> Value {
-    match read_inner(home, principal, scope, params) {
+    match resolve_then(home, principal, scope, params, read_revision) {
+        Ok(value) => value,
+        Err(reason) => state("unavailable", reason),
+    }
+}
+
+/// A raster file's Before | After bytes at the same revision [`read`] opens, revalidated
+/// the same way on every call: `{"status":"opened","images":{before,after,tooLarge}}`, or
+/// the state [`read`] would give. Only PNG, JPEG, GIF and WebP paths are read.
+pub(crate) fn read_images(home: &Path, principal: &Principal, scope: &CallerScope, params: &Params) -> Value {
+    match resolve_then(home, principal, scope, params, read_image_revision) {
         Ok(value) => value,
         Err(reason) => state("unavailable", reason),
     }
@@ -52,7 +62,16 @@ fn stays_inside(root: &Path, relative: &str) -> bool {
     }
 }
 
-fn read_inner(home: &Path, principal: &Principal, scope: &CallerScope, params: &Params) -> Result<Value, String> {
+/// Revalidates `params` (path, range, revision, the configured attachment and, for
+/// WORKTREE, the one story worktree in the caller's view) and hands the resolved root
+/// and revision to `finish`, or returns the state that stops it.
+fn resolve_then(
+    home: &Path,
+    principal: &Principal,
+    scope: &CallerScope,
+    params: &Params,
+    finish: fn(&Path, &str, &Params) -> Result<Value, String>,
+) -> Result<Value, String> {
     if std::string::String::is_empty(&params.path)
         || params.path.contains('\0')
         || Path::new(&params.path)
@@ -149,7 +168,7 @@ fn read_inner(home: &Path, principal: &Principal, scope: &CallerScope, params: &
         };
         (Path::new(&root).to_path_buf(), commit)
     };
-    read_revision(&path, &rev, params)
+    finish(&path, &rev, params)
 }
 
 fn read_revision(root: &Path, rev: &str, params: &Params) -> Result<Value, String> {
@@ -199,6 +218,27 @@ fn read_revision(root: &Path, rev: &str, params: &Params) -> Result<Value, Strin
         }
     }
     Ok(json!({"status":"opened","resolvedRev":rev,"redline":redline,"files":files}))
+}
+
+fn read_image_revision(root: &Path, rev: &str, params: &Params) -> Result<Value, String> {
+    use crate::commands::{git_sync, raster_bytes};
+    if !raster_bytes::is_raster(&params.path) {
+        return Ok(state("refused", "Only a PNG, JPEG, GIF or WebP file has image sides"));
+    }
+    let live = rev == "WORKTREE";
+    if live && !stays_inside(root, &params.path) {
+        return Ok(state("refused", "The path leaves the story worktree"));
+    }
+    let files = if live {
+        git_sync::source_worktree_changeset_impl(root, None)
+    } else {
+        git_sync::source_commit_changeset_impl(root, rev)
+    }?;
+    let file = std::iter::Iterator::find(&mut files.iter(), |file| file.path == params.path);
+    let old_path = file.and_then(|file| file.rename_old.as_deref());
+    let sha = if live { None } else { Some(rev) };
+    let images = git_sync::source_image_sides_impl(root, &params.path, old_path, None, sha)?;
+    Ok(json!({"status":"opened","resolvedRev":rev,"images":images}))
 }
 
 #[cfg(test)]
@@ -484,6 +524,46 @@ mod tests {
                 23 => a_path_missing_at_the_revision_is_unavailable(),
                 id => panic!("Missing native diff case {id}"),
             }
+        }
+    }
+
+    #[test]
+    fn image_sides_are_read_at_the_commit_and_its_parent_and_only_for_raster_files() {
+        let (home, repo, mut params) = fixture();
+        params.range = None;
+        commit_file(repo.path(), "logo.png", b"\x89PNG one");
+        params.rev = commit_file(repo.path(), "logo.png", b"\x89PNG two");
+        params.path = "logo.png".into();
+        let result = read_images(home.path(), &Principal::from(1), &CallerScope::Human, &params);
+        assert_eq!(result["status"], "opened", "{result}");
+        let b64 = |bytes: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+        assert_eq!(result["images"]["before"], b64(b"\x89PNG one"));
+        assert_eq!(result["images"]["after"], b64(b"\x89PNG two"));
+        assert_eq!(result["images"]["tooLarge"], false);
+        params.path = "a.txt".into();
+        assert_eq!(
+            read_images(home.path(), &Principal::from(1), &CallerScope::Human, &params)["status"],
+            "refused"
+        );
+    }
+    #[test]
+    fn worktree_image_sides_stay_inside_the_canonical_worktree() {
+        let (home, _repo, live, mut params) = live_fixture();
+        std::fs::write(live.join("new.png"), b"\x89PNG new").unwrap();
+        params.path = "new.png".into();
+        let result = read_images(home.path(), &Principal::from(1), &CallerScope::Human, &params);
+        assert_eq!(result["status"], "opened", "{result}");
+        assert!(result["images"]["before"].is_null());
+        assert!(result["images"]["after"].is_string());
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.png"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.png"), live.join("link.png")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), live.join("out")).unwrap();
+        for path in ["link.png", "out/secret.png", "../outside/secret.png"] {
+            params.path = path.into();
+            let result = read_images(home.path(), &Principal::from(1), &CallerScope::Human, &params);
+            assert_ne!(result["status"], "opened", "{path}: {result}");
+            assert!(!result.to_string().contains(&base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"secret")), "{path}");
         }
     }
 

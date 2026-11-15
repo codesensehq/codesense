@@ -1,0 +1,141 @@
+/* SPDX-License-Identifier: MIT */
+/* kit.chat's stylesheet: the thread, the status rows, the composer and the needs-you cards, read from the kit tokens and kept inside the chat's own root (.cs-chat) so a page's classes of the same names are not touched. chat.js links it once per page. */
+.cs-chat,.cs-chat *,.cs-chat *::before,.cs-chat *::after{box-sizing:border-box}
+.cs-chat{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;height:100%}
+.cs-chat .src{display:flex;justify-content:center;font-size:var(--cs-text-xs);color:var(--cs-muted-fg);padding:6px 24px 0;flex:none}
+.cs-chat .chat-head{flex:none}
+.cs-chat .log{flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px max(24px,calc((100% - 720px)/2)) 10px;display:flex;flex-direction:column;gap:10px}
+.cs-chat .log:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-2px}
+.cs-chat .log>:first-child{margin-top:auto}
+.cs-chat .log>.status-slot,.cs-chat .log>.src{align-self:stretch}
+.cs-chat .log>.empty{text-align:center;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg{display:flex;flex-direction:column;gap:3px;max-width:min(560px,100%)}
+.cs-chat .msg.lead,.cs-chat .msg.other{align-self:flex-start;align-items:flex-start}
+.cs-chat .msg.you{align-self:flex-end;align-items:flex-end}
+.cs-chat .msg .meta{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg .who{display:flex;align-items:center}
+.cs-chat .msg .body{white-space:pre-wrap;overflow-wrap:anywhere;padding:7px 11px;border-radius:var(--cs-radius-lg);background:var(--cs-surface);border:1px solid var(--cs-border)}
+.cs-chat .msg.you .body{background:color-mix(in srgb,var(--cs-accent) 10%,var(--cs-bg))}
+/* A message's inline markdown (chat/inline.js): code is set in the mono face on the inset; strong and em keep the browser's weight and slant. */
+.cs-chat .msg .body code{padding:0 3px;border-radius:var(--cs-radius-sm);background:var(--cs-inset);font-family:var(--cs-font-mono);font-size:.92em}
+.cs-chat .msg .note,.cs-chat .msg .mark{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .msg .mark[data-mark=kept]{color:var(--cs-danger)}
+.cs-chat .msg.typing{flex-direction:row;align-items:center;gap:6px}
+.cs-chat .dots{display:inline-flex;gap:4px}
+.cs-chat .dots i{width:6px;height:6px;border-radius:50%;background:var(--cs-muted-fg);animation:cs-chat-dots 1.2s infinite}
+.cs-chat .dots i:nth-child(2){animation-delay:.2s}
+.cs-chat .dots i:nth-child(3){animation-delay:.4s}
+@keyframes cs-chat-dots{0%,80%,100%{opacity:.3}40%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.cs-chat .dots i{animation:none}}
+.cs-chat .status-slot{display:flex;flex-direction:column;gap:8px}
+.cs-chat .status-slot[hidden]{display:none}
+.cs-chat .sys{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-sm);color:var(--cs-fg);padding:6px 10px;border-radius:var(--cs-radius);border:1px solid var(--cs-border);background:var(--cs-surface)}
+.cs-chat .sys.warn{border-color:color-mix(in srgb,var(--cs-warning) 40%,var(--cs-border));background:color-mix(in srgb,var(--cs-warning) 10%,var(--cs-bg))}
+.cs-chat .sys.danger{border-color:color-mix(in srgb,var(--cs-danger) 45%,var(--cs-border));background:color-mix(in srgb,var(--cs-danger) 10%,var(--cs-bg))}
+.cs-chat .sys .code{color:var(--cs-muted-fg)}
+.cs-chat .ico{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.cs-chat .ico.alert{color:var(--cs-danger)}
+.cs-chat .composer{flex:none;height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
+.cs-chat .composer [data-composer-slot]{flex:none}
+.cs-chat .composer [data-composer-slot]:empty{display:none}
+.cs-chat .composer:has([data-composer-slot]:not(:empty)){height:auto;min-height:96px}
+.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:flex;gap:8px;align-items:flex-end;padding:6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+.cs-chat .composer .box:focus-within{border-color:var(--cs-accent)}
+.cs-chat .composer .hint{flex:none;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .composer textarea{flex:1 1 auto;align-self:stretch;resize:none;border:0;outline:0;padding:2px 4px;background:transparent;color:var(--cs-fg)}
+.cs-chat .composer textarea::placeholder{color:var(--cs-muted-fg);opacity:1}
+.cs-chat .composer textarea:disabled{color:var(--cs-muted-fg)}
+.cs-chat .composer .btn{min-width:64px;justify-content:center}
+.cs-chat[data-variant=page]{background:var(--cs-bg)}
+.cs-chat .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cs-chat .btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:var(--cs-radius);white-space:nowrap;cursor:pointer;border:1px solid color-mix(in srgb,var(--cs-border) 62%,var(--cs-border-control));background:var(--cs-bg);color:var(--cs-fg);font:inherit;font-size:var(--cs-text-sm);font-weight:500}
+.cs-chat .btn:hover{background:var(--cs-surface)}
+.cs-chat .btn:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px}
+.cs-chat .btn.primary{background:var(--cs-accent);border-color:var(--cs-accent);color:var(--cs-accent-fg)}
+.cs-chat .btn.primary:hover{background:color-mix(in srgb,var(--cs-accent) 88%,var(--cs-fg))}
+.cs-chat .btn.quiet{border-color:transparent;background:transparent;color:var(--cs-fg)}
+.cs-chat .btn.quiet:hover{background:var(--cs-surface)}
+.cs-chat .btn.sm{height:24px;padding:0 9px;font-size:var(--cs-text-xs)}
+.cs-chat .btn[disabled]{cursor:not-allowed;color:var(--cs-muted-fg);background:var(--cs-surface);border-color:var(--cs-border)}
+.cs-chat .btn.quiet[disabled]{background:transparent;border-color:transparent}
+.cs-chat .btn.term{flex:none}
+.cs-chat .av{position:relative;display:inline-block;width:12px;height:12px;border-radius:50%;flex:none;background:var(--cs-status-idle)}
+.cs-chat .av[data-face=working]{background:var(--cs-status-busy);animation:cs-chat-breathe 1.6s ease-in-out infinite}
+.cs-chat .av[data-face=idle]{background:var(--cs-status-idle)}
+.cs-chat .av[data-face=off]{background:transparent;box-shadow:inset 0 0 0 2px var(--cs-border-control)}
+.cs-chat .av[data-face=failed]{background:transparent;box-shadow:inset 0 0 0 2px var(--cs-danger)}
+.cs-chat .av[data-face=starting]{background:transparent;border:2px solid color-mix(in srgb,var(--cs-accent) 22%,transparent);border-top-color:var(--cs-accent);animation:cs-chat-spin .9s linear infinite}
+@keyframes cs-chat-spin{to{transform:rotate(360deg)}}
+@keyframes cs-chat-breathe{50%{box-shadow:0 0 0 3px color-mix(in srgb,var(--cs-accent) 30%,transparent)}}
+@media (prefers-reduced-motion:reduce){.cs-chat .av[data-face]{animation:none}.cs-chat .av[data-face=starting]{border-style:dashed}}
+.cs-chat .act-foot{padding:0 max(24px,calc((100% - 720px)/2)) 6px}
+.cs-chat .act-foot:empty{display:none}
+.cs-chat .act{position:relative;display:flex;align-items:center;gap:8px;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+/* The live lead's prose: one line, the whole chunk in its title; no motion, so reduced motion needs nothing. */
+.cs-chat .act .prose{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-chat .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 max(24px,calc((100% - 720px)/2)) 8px}
+.cs-chat .pchip{display:inline-flex;align-items:stretch}
+.cs-chat .pchip .btn:first-child{border-top-right-radius:0;border-bottom-right-radius:0}
+.cs-chat .pchip .btn.ed{border-left:0;border-top-left-radius:0;border-bottom-left-radius:0;padding:0 6px}
+.cs-chat .why{min-width:0;overflow-wrap:anywhere}
+.cs-chat .cls{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:var(--cs-radius-sm);border:1px solid var(--cs-border-control);font-size:var(--cs-text-xs);color:var(--cs-muted-fg);white-space:nowrap}
+.cs-chat .card{display:grid;gap:8px;padding:10px 12px;border-radius:var(--cs-radius-lg);border:1px solid var(--cs-border);background:var(--cs-surface);max-width:100%}
+.cs-chat .card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .card-h b{color:var(--cs-fg);font-size:var(--cs-text-sm)}
+.cs-chat .card-h .sp{flex:1}
+.cs-chat .card .why{margin:0;font-size:var(--cs-text-sm);color:var(--cs-muted-fg)}
+.cs-chat .card .body{padding:0;border:0;background:transparent}
+.cs-chat .card .opts{display:flex;flex-wrap:wrap;gap:6px}
+.cs-chat .card .opts .btn{white-space:normal;height:auto;min-height:28px;padding-top:4px;padding-bottom:4px;text-align:left}
+.cs-chat .card .rec{font-weight:400}
+.cs-chat .card .reply{display:flex;gap:6px;align-items:flex-end}
+.cs-chat .card .reply textarea{flex:1 1 auto;resize:vertical;min-height:40px;padding:4px 6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg);color:var(--cs-fg)}
+.cs-chat .card[data-state=answered]{background:var(--cs-bg)}
+.cs-chat .card .chosen{font-size:var(--cs-text-sm);color:var(--cs-fg)}
+.cs-chat .card .sys{margin:0}
+@container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .act-foot{padding:0 16px 4px}.cs-chat .composer{padding:8px 16px 10px}}
+/* The person's pins (onPin): an action row over the message's top edge, shown on hover and while focus is inside it; a tag and a note under it. Nothing moves with reduced motion. */
+.cs-chat .msg{position:relative}
+/* Hidden by opacity, not display:none: a redrawn Pin… or Unpin must be able to take focus back (after a replace, its Undo, Esc in the chooser or a pin), and then focus-within shows it. */
+.cs-chat .msg .pin-acts{position:absolute;top:-12px;right:6px;z-index:2;display:flex;opacity:0;pointer-events:none;padding:1px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-bg)}
+.cs-chat .msg.you .pin-acts{right:auto;left:6px}
+.cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts{opacity:1;pointer-events:auto}
+.cs-chat .pin-b{display:inline-flex;align-items:center;height:24px;padding:0 8px;border:0;border-radius:var(--cs-radius);background:none;color:var(--cs-muted-fg);font-size:var(--cs-text-xs);cursor:pointer}
+.cs-chat .pin-b:hover{background:var(--cs-surface);color:var(--cs-fg)}
+.cs-chat .pin-b:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px}
+.cs-chat .pin-b[aria-pressed="true"]{color:var(--cs-accent)}
+.cs-chat .pin-b[aria-disabled="true"]{cursor:not-allowed;opacity:.45}
+.cs-chat .pin-b[aria-disabled="true"]:hover{background:none;color:var(--cs-muted-fg)}
+@media (pointer:coarse){.cs-chat .pin-b{min-width:36px;height:36px}.cs-chat .msg .pin-acts{top:-38px}}
+.cs-chat .msg.pinned .body{border-color:var(--cs-accent)}
+.cs-chat .pin-tag{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .pin-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;max-width:100%;padding:4px 6px 4px 8px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-surface);font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .pin-note.danger{border-color:var(--cs-danger)}
+.cs-chat .pin-live{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+/* At the cap with onPin.replace: Pin… carries a small count, and its chooser opens under the message, the full width of the column. One row is current; the others are quiet. */
+.cs-chat .pin-b[aria-expanded="true"]{background:var(--cs-surface);color:var(--cs-accent)}
+.cs-chat .pin-cap{margin-left:4px;font-variant-numeric:tabular-nums;font-weight:600}
+.cs-chat .pin-chooser{display:grid;gap:6px;width:min(440px,100%);padding:8px;border:1px solid var(--cs-border);border-radius:var(--cs-radius-lg);background:var(--cs-bg);font-size:var(--cs-text-sm)}
+.cs-chat .msg.you .pin-chooser{justify-self:end}
+.cs-chat .pin-chooser .hd{padding:0 4px;font-weight:600}
+.cs-chat .pin-chooser .chg,.cs-chat .pin-chooser .room{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--cs-radius);background:var(--cs-surface);font-size:var(--cs-text-xs)}
+.cs-chat .pin-chooser .chg:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-1px}
+.cs-chat .pin-chooser .rows{display:grid;gap:2px}
+.cs-chat .pin-chooser .choice{display:grid;grid-template-columns:13px minmax(0,1fr) auto;grid-template-areas:"d t v" ". by go";gap:1px 8px;align-items:center;width:100%;padding:6px 8px;border:1px solid transparent;border-radius:var(--cs-radius);background:none;color:var(--cs-fg);font:inherit;text-align:left;cursor:pointer}
+.cs-chat .pin-chooser .choice:hover{background:color-mix(in srgb,var(--cs-surface) 50%,transparent)}
+.cs-chat .pin-chooser .choice[data-current]{background:var(--cs-surface);border-color:var(--cs-border)}
+.cs-chat .pin-chooser .choice:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-1px}
+.cs-chat .pin-chooser .dot{grid-area:d;width:8px;height:8px;justify-self:center;border-radius:50%;background:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .dot[data-status="on-track"]{background:var(--cs-success)}
+.cs-chat .pin-chooser .dot[data-status="running"]{background:var(--cs-accent)}
+.cs-chat .pin-chooser .dot[data-status="needs-you"]{background:var(--cs-warning)}
+.cs-chat .pin-chooser .dot.own{width:13px;height:13px;border-radius:0;background:none;color:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.cs-chat .pin-chooser .v{grid-area:v;font-size:var(--cs-text-xs);font-variant-numeric:tabular-nums}
+.cs-chat .pin-chooser .new{grid-area:v;justify-self:end;padding:0 5px;border-radius:var(--cs-radius-sm);background:var(--cs-accent);color:var(--cs-accent-fg);font-size:var(--cs-text-xs);font-weight:600}
+.cs-chat .pin-chooser .v+.new{grid-area:auto;grid-column:3;grid-row:1}
+.cs-chat .pin-chooser .by{grid-area:by;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .go{grid-area:go;justify-self:end;font-size:var(--cs-text-xs);font-weight:600;color:var(--cs-accent)}
+.cs-chat .pin-chooser .cancel{justify-self:start}
+.cs-chat .pin-chooser .room-pin{margin-left:auto}
+@media (pointer:coarse){.cs-chat .pin-chooser .choice{min-height:44px}}

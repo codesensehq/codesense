@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: MIT
-// The composer: a pinned region with stable ids (pages and tests find them by id). Enter sends, Shift+Enter is a newline; typing and focus never launch.
+// The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). Enter sends, Shift+Enter is a newline; typing and focus never launch.
 import {h} from './dom.js';
 import {CHAT_COPY} from './copy.js';
-export const COMPOSER_IDS={region:'sv-composer',input:'sv-composer-input',send:'sv-send',hint:'sv-composer-hint'};
-// rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes.
-export function createComposer({onSend,rows='2',label=CHAT_COPY.composerLabel,hint=CHAT_COPY.hint,send:sendLabel=CHAT_COPY.send}){
- const input=h('textarea',{id:COMPOSER_IDS.input,rows,'aria-label':label,'aria-describedby':COMPOSER_IDS.hint,spellcheck:'true'});
- const send=h('button',{id:COMPOSER_IDS.send,type:'button',class:'btn primary'},sendLabel);
- const region=h('div',{id:COMPOSER_IDS.region,class:'composer'},h('div',{class:'box'},input,send),h('div',{class:'hint',id:COMPOSER_IDS.hint},hint));
- const submit=()=>{const text=input.value.trim();if(!text||input.disabled)return;input.value='';onSend(text);};
+import {idsOf} from './mount-ids.js';
+// rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes, and the input's name (label) while the page gives one.
+// onSend(text) may answer a promise (a send to the page's recipient): the box keeps the text, is aria-busy with Send off and takes no other send until it settles, and clears only on true while it still holds that text.
+export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.composerLabel,hint=CHAT_COPY.hint,send:sendLabel=CHAT_COPY.send}){
+ const input=h('textarea',{id:ids.input,rows,'aria-label':label,'aria-describedby':ids.hint,spellcheck:'true'});
+ const send=h('button',{id:ids.send,type:'button',class:'btn primary'},sendLabel);
+ const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,send),h('div',{class:'hint',id:ids.hint},hint));
+ let pending=false,disabled=false;
+ const setPending=on=>{pending=on;send.disabled=on||disabled;if(on)input.setAttribute('aria-busy','true');else input.removeAttribute('aria-busy');};
+ const nameInput=name=>{if(name==null)input.removeAttribute('aria-label');else input.setAttribute('aria-label',name);};
+ const submit=()=>{
+  const raw=input.value,text=raw.trim();if(!text||input.disabled||pending)return;
+  const held=onSend(text);
+  if(!held||typeof held.then!=='function'){input.value='';return;}
+  setPending(true);held.then(sent=>{setPending(false);if(sent&&input.value===raw)input.value='';},()=>{setPending(false);});
+ };
  input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!event.isComposing){event.preventDefault();submit();}});
  send.addEventListener('click',submit);
  return {region,input,send,
-  update({placeholder,disabled,hint:nextHint,send:nextSend}){
-   input.placeholder=placeholder;input.disabled=Boolean(disabled);send.disabled=Boolean(disabled);
+  update({placeholder,disabled:off,hint:nextHint,send:nextSend,label:nextLabel}){
+   disabled=Boolean(off);input.placeholder=placeholder;nameInput(nextLabel==null?label:nextLabel);input.disabled=disabled;send.disabled=disabled||pending;
    if(nextHint!==undefined)region.querySelector('.hint').textContent=nextHint;
    if(nextSend!==undefined)send.textContent=nextSend;
   },

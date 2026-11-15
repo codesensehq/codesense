@@ -5233,6 +5233,8 @@ async fn run_headless_to_completion(
     let launch = app.state::<DashboardLaunchState>();
     // Idempotent: Stop/drain may already have released the row.
     launch.release_for_session(&session_id);
+    // Its role claims go back to the queue now, for the roles' live holders.
+    crate::commands::role_inbox::release_session_roles(&app, &session_id).await;
     crate::commands::mcp_scope::remove_scope_config_async(&session_id).await;
     // SW-OR-14 (AC-4): sweep any outstanding `ask_user` oneshot for this session so a
     // headless agent (or its caller) resolves to a typed `cancel` instead of wedging for

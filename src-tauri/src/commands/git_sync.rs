@@ -21,6 +21,7 @@
 //! truth; these structs mirror it field-for-field.
 
 use crate::attribution::history::{default_branch, default_branch_name, default_branch_ref};
+use crate::commands::raster_bytes;
 use crate::shared::git_util::{open_repo, tree_or_err};
 use std::path::Path;
 
@@ -1897,6 +1898,98 @@ pub(crate) fn read_tree_blob(
     let oid = git2::Oid::from_str(tree_oid).map_err(|e| format!("tree oid: {e}"))?;
     let tree = repo.find_tree(oid).map_err(|e| format!("find tree: {e}"))?;
     tree_blob_bytes(&repo, &tree, rel)
+}
+
+/// A raster file's Before | After bytes in a source worktree, for its rendered diff
+/// (see [`crate::commands::raster_bytes`]). With `sha`, before is the first-parent blob
+/// and after the commit's blob, as [`commit_file_redline_impl`] reads them; without it,
+/// before is the merge-base blob (as [`source_file_redline_impl`]) and after the
+/// working-tree file, which must be a regular file inside the worktree. Both paths must
+/// be repo-relative raster paths; a blob past the cap is never copied.
+pub(crate) fn source_image_sides_impl(
+    repo_path: &Path,
+    file_path: &str,
+    old_path: Option<&str>,
+    base_ref: Option<&str>,
+    sha: Option<&str>,
+) -> Result<raster_bytes::ImageSides, String> {
+    raster_bytes::require_raster(file_path)?;
+    let rel = safe_rel_path(file_path)?;
+    let before_rel = match old_path {
+        Some(op) => {
+            raster_bytes::require_raster(op)?;
+            safe_rel_path(op)?
+        }
+        None => rel,
+    };
+    let repo = open_repo(repo_path)?;
+    let blob_side =
+        |tree: &git2::Tree, at: &Path| -> Result<Option<raster_bytes::Capped>, String> {
+            let Ok(entry) = tree.get_path(at) else {
+                return Ok(None);
+            };
+            let object = entry
+                .to_object(&repo)
+                .map_err(|e| format!("tree object {}: {e}", std::path::Path::display(at)))?;
+            let Some(blob) = object.as_blob() else {
+                return Ok(None);
+            };
+            Ok(Some(if blob.size() > raster_bytes::MAX_RASTER_BYTES {
+                raster_bytes::Capped::TooLarge
+            } else {
+                raster_bytes::Capped::Bytes(blob.content().to_vec())
+            }))
+        };
+    let (before, after) = match sha {
+        Some(sha) => {
+            let (before_tree, after_tree) = commit_trees(&repo, sha)?;
+            let before = match before_tree.as_ref() {
+                Some(tree) => blob_side(tree, before_rel)?,
+                None => None,
+            };
+            (before, blob_side(&after_tree, rel)?)
+        }
+        None => {
+            let baseline = resolve_source_baseline_tree(&repo, base_ref)?;
+            let before = match baseline.as_ref() {
+                Some(tree) => blob_side(tree, before_rel)?,
+                None => None,
+            };
+            (
+                before,
+                raster_bytes::read_file_within(repo_path, &repo_path.join(rel))?,
+            )
+        }
+    };
+    Ok(raster_bytes::image_sides(before, after))
+}
+
+/// The source diff's raster sides (see [`source_image_sides_impl`]): a local worktree
+/// the editor may read, at the working tree (`sha` absent) or at a commit. Read-only,
+/// off the UI thread.
+#[tauri::command]
+pub async fn source_image_sides<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    repo_path: String,
+    file_path: String,
+    old_path: Option<String>,
+    base_ref: Option<String>,
+    sha: Option<String>,
+) -> Result<raster_bytes::ImageSides, String> {
+    crate::commands::files::validate_repo_read_path(&repo_path, &app)?;
+    let path = std::path::PathBuf::from(repo_path);
+    let old_path = old_path.filter(|p| !std::string::String::is_empty(p));
+    tauri::async_runtime::spawn_blocking(move || {
+        source_image_sides_impl(
+            &path,
+            &file_path,
+            old_path.as_deref(),
+            base_ref.as_deref(),
+            sha.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("source_image_sides task failed: {e}"))?
 }
 
 /// Bytes of `rel` in `tree`, or `None` when the path is absent there (or is not a
@@ -4056,6 +4149,90 @@ mod tests {
             PublishFileStatus::Added,
             "root commit diffs against the empty tree"
         );
+    }
+
+    /// The rendered diff's raster sides: before at the merge-base, after on disk; at a
+    /// commit, its first parent and itself; a rename reads before at the old path.
+    #[test]
+    fn source_image_sides_read_the_baseline_the_worktree_and_a_commit() {
+        let b64 = |text: &str| {
+            Some(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                text,
+            ))
+        };
+        let (_dir, path) = repo_with_main(&[("logo.png", "png one"), ("old.gif", "gif")]);
+        checkout_new_branch(&path, "feature");
+        let commit = commit_on_head(&path, "edit", &[("logo.png", "png two")]);
+        fs::write(path.join("logo.png"), "png three").unwrap();
+
+        let working = source_image_sides_impl(&path, "logo.png", None, None, None).unwrap();
+        assert_eq!(
+            (working.before, working.after),
+            (b64("png one"), b64("png three"))
+        );
+        assert!(!working.too_large);
+
+        let at_commit =
+            source_image_sides_impl(&path, "logo.png", None, None, Some(&commit.to_string()))
+                .unwrap();
+        assert_eq!(
+            (at_commit.before, at_commit.after),
+            (b64("png one"), b64("png two"))
+        );
+
+        fs::write(path.join("new.webp"), "webp").unwrap();
+        let added = source_image_sides_impl(&path, "new.webp", None, None, None).unwrap();
+        assert_eq!((added.before, added.after), (None, b64("webp")));
+        fs::rename(path.join("old.gif"), path.join("moved.gif")).unwrap();
+        let renamed =
+            source_image_sides_impl(&path, "moved.gif", Some("old.gif"), None, None).unwrap();
+        assert_eq!((renamed.before, renamed.after), (b64("gif"), b64("gif")));
+        fs::remove_file(path.join("logo.png")).unwrap();
+        let deleted = source_image_sides_impl(&path, "logo.png", None, None, None).unwrap();
+        assert_eq!((deleted.before, deleted.after), (b64("png one"), None));
+    }
+
+    #[test]
+    fn source_image_sides_refuse_other_types_and_paths_that_leave_the_repo() {
+        let (_dir, path) = repo_with_main(&[("page.html", "<p>x</p>"), ("a.png", "png")]);
+        for (file, old) in [
+            ("page.html", None),
+            ("logo.svg", None),
+            ("../a.png", None),
+            ("/etc/a.png", None),
+            ("a.png", Some("page.html")),
+            ("a.png", Some("../b.png")),
+        ] {
+            assert!(
+                source_image_sides_impl(&path, file, old, None, None).is_err(),
+                "{file} {old:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_image_sides_refuse_a_working_file_that_links_outside() {
+        let (_dir, path) = repo_with_main(&[("keep.md", "k\n")]);
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.png"), "secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.png"), path.join("leaf.png"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), path.join("out")).unwrap();
+        assert!(source_image_sides_impl(&path, "leaf.png", None, None, None).is_err());
+        assert!(source_image_sides_impl(&path, "out/secret.png", None, None, None).is_err());
+    }
+
+    #[test]
+    fn source_image_sides_carry_no_bytes_past_the_cap() {
+        let big = "x".repeat(raster_bytes::MAX_RASTER_BYTES + 1);
+        let (_dir, path) = repo_with_main(&[("big.png", big.as_str())]);
+        fs::write(path.join("big.png"), "small").unwrap();
+        let sides = source_image_sides_impl(&path, "big.png", None, None, None).unwrap();
+        assert_eq!(sides.before, None);
+        assert!(sides.after.is_some());
+        assert!(sides.too_large);
     }
 
     /// (Task 4 — AC-4) A binary file in a commit returns `binary: true` + empty

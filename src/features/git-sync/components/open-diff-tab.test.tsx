@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   review: vi.fn(),
   workspace: vi.fn(),
   team: vi.fn(),
   management: vi.fn(),
+  images: vi.fn(),
 }));
 vi.mock("@/shared/lib/open-file-in-team", () => ({ openFileInTeam: mocks.team }));
 vi.mock("@/shared/lib/open-management-tab", () => ({ openManagementTab: mocks.management }));
-vi.mock("../lib/source-redline-source", () => ({ readOpenDiff: mocks.read }));
+vi.mock("../lib/source-redline-source", () => ({
+  readOpenDiff: mocks.read,
+  readOpenDiffImages: mocks.images,
+}));
 vi.mock("@/shared/components/code-editor/CodeDiffReview", () => ({
   CodeDiffReview: (props: unknown) => {
     mocks.review(props);
@@ -31,6 +35,7 @@ vi.mock("@/features/dashboard/components/html-bridge", () => ({
   HTML_BRIDGE_ALLOWLIST: { openWorkspace: mocks.workspace },
 }));
 import { LARGE_DIFF_CHARS } from "@/shared/lib/render-file-diff";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { OpenDiffTab } from "./open-diff-tab";
 const params = {
@@ -139,12 +144,51 @@ it("a changed markdown file is the shared redline, with Source a switch away", a
   expect(mocks.review).toHaveBeenCalled();
   expect(useViewerStore.getState().settings.defaultFileDiffMode?.markdown).toBe("source");
 });
-it("a changed HTML file is its source diff, with no rendered mode offered", async () => {
-  mocks.read.mockResolvedValue({ ...opened, files: [{ path: "page.html" }] });
+function atWidth(width: number) {
+  const ro = stubResizeObserver(width);
+  onTestFinished(() => ro.restore());
+}
+const htmlRead = {
+  ...opened,
+  redline: { before: "<p>old</p>", after: "<p>new</p>", binary: false, status: "modified" },
+  files: [{ path: "page.html" }],
+};
+const frameDocs = () =>
+  Array.from(document.querySelectorAll("iframe")).map((f) => [
+    f.title,
+    f.getAttribute("srcdoc")?.endsWith(f.title === "Before" ? "<p>old</p>" : "<p>new</p>"),
+  ]);
+it("a changed HTML file renders Before and After live side by side at 900 px", async () => {
+  atWidth(900);
+  mocks.read.mockResolvedValue(htmlRead);
   render(<OpenDiffTab filePath={tabFor("page.html")} />);
-  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(await screen.findByTestId("open-diff-side-by-side")).toBeVisible();
+  expect(frameDocs()).toEqual([
+    ["Before", true],
+    ["After", true],
+  ]);
+  expect(screen.getByTestId("open-diff-rendered-alone")).toBeVisible();
+  expect(mocks.review).not.toHaveBeenCalled();
   expect(screen.queryByTestId("html-viewer")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+});
+it("a changed HTML file shows one side at a time below 900 px, Source a switch away", async () => {
+  atWidth(899);
+  mocks.read.mockResolvedValue(htmlRead);
+  render(<OpenDiffTab filePath={tabFor("page.html")} />);
+  expect(await screen.findByTestId("open-diff-one-at-a-time")).toBeVisible();
+  expect(frameDocs()).toEqual([["After", true]]);
+  fireEvent.click(screen.getByRole("button", { name: "Before" }));
+  expect(frameDocs()).toEqual([["Before", true]]);
+  fireEvent.click(screen.getByRole("button", { name: "Source" }));
+  expect(mocks.review).toHaveBeenCalled();
+  expect(document.querySelector("iframe")).toBeNull();
+});
+it("a line range into an HTML file opens it as source, highlighted", async () => {
+  mocks.read.mockResolvedValue(htmlRead);
+  render(<OpenDiffTab filePath={tabFor("page.html", { start: 1, end: 1 })} />);
+  await waitFor(() => expect(mocks.review).toHaveBeenCalled());
+  expect(mocks.review.mock.calls.at(-1)?.[0]).toMatchObject({ afterRange: { start: 1, end: 1 } });
+  expect(document.querySelector("iframe")).toBeNull();
 });
 it("a changed .ts file is a code diff in the shared code mode, never a redline", async () => {
   useViewerStore.getState().setFileDiffMode("code", "structural");
@@ -170,6 +214,83 @@ it("a binary file keeps its note", async () => {
   render(<OpenDiffTab filePath={path} />);
   expect(await screen.findByText("Binary file — a text diff is unavailable.")).toBeVisible();
   expect(mocks.review).not.toHaveBeenCalled();
+  expect(mocks.images).not.toHaveBeenCalled();
+});
+function openPng(images: unknown, width = 900) {
+  atWidth(width);
+  const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  URL.createObjectURL = vi.fn(() => "blob:side");
+  URL.revokeObjectURL = vi.fn();
+  onTestFinished(() => {
+    URL.createObjectURL = blob.create;
+    URL.revokeObjectURL = blob.revoke;
+  });
+  mocks.read.mockResolvedValue({
+    ...opened,
+    files: [{ path: "art/logo.png" }],
+    redline: { before: "", after: "", binary: true, status: "modified" },
+  });
+  mocks.images.mockResolvedValue(images);
+  render(<OpenDiffTab filePath={tabFor("art/logo.png")} />);
+}
+const pngImages = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
+it("a changed PNG reads its sides at the same revision and renders Before and After at 900 px", async () => {
+  openPng({
+    status: "opened",
+    resolvedRev: "abcdef1",
+    images: { before: "QQ==", after: "Qg==", tooLarge: false },
+  });
+  expect(await screen.findByTestId("open-diff-side-by-side")).toBeVisible();
+  expect(pngImages()).toEqual(["Before", "After"]);
+  expect(mocks.images).toHaveBeenCalledWith(
+    expect.objectContaining({ repo: "acme/app", rev: "abcdef1", path: "art/logo.png" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Source" }));
+  expect(await screen.findByTestId("open-diff-image-source")).toHaveTextContent(
+    "An image has no text diff. Side by side compares it.",
+  );
+  expect(pngImages()).toEqual([]);
+});
+it("a changed PNG shows one side at a time below 900 px", async () => {
+  openPng(
+    {
+      status: "opened",
+      resolvedRev: "abcdef1",
+      images: { before: "QQ==", after: "Qg==", tooLarge: false },
+    },
+    899,
+  );
+  expect(await screen.findByTestId("open-diff-one-at-a-time")).toBeVisible();
+  expect(pngImages()).toEqual(["After"]);
+});
+it("a PNG past the size cap, or one the read refuses, says why, with Side by side disabled", async () => {
+  for (const [images, reason] of [
+    [
+      {
+        status: "opened",
+        resolvedRev: "abcdef1",
+        images: { before: null, after: null, tooLarge: true },
+      },
+      "Over the 8 MB limit for drawing here",
+    ],
+    [{ status: "refused", reason: "no" }, "Couldn't read the image"],
+  ] as const) {
+    openPng(images);
+    await waitFor(() => expect(mocks.images).toHaveBeenCalled());
+    expect(await screen.findByTestId("open-diff-image-source")).toHaveTextContent(
+      `An image has no text diff. ${reason}.`,
+    );
+    expect(screen.getByRole("button", { name: "Side by side" })).toHaveAttribute("title", reason);
+    expect(pngImages()).toEqual([]);
+    cleanup();
+    mocks.images.mockClear();
+  }
+});
+
+it("a PNG whose bytes are still being read says so, not Binary file", async () => {
+  openPng(new Promise(() => {}));
+  expect(await screen.findByText("Reading the image…")).toBeInTheDocument();
+  expect(screen.queryByText("Binary file — a text diff is unavailable.")).toBeNull();
 });
 it("a line range into a markdown file opens it as source, highlighted, without changing the default", async () => {
   mocks.read.mockResolvedValue({ ...opened, files: [{ path: "doc.md" }] });

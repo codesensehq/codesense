@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 
 import { renderViewer } from "@/shared/lib/render-viewer";
@@ -21,6 +22,10 @@ vi.mock("@/features/dashboard/components/excalidraw-viewer", () => ({
 }));
 vi.mock("@/features/dashboard/components/image-viewer", () => ({
   ImageViewer: () => createElement("div", { "data-stub": "image" }),
+}));
+vi.mock("@/tauri/commands", async (orig) => ({
+  ...(await orig<typeof import("@/tauri/commands")>()),
+  readFile: vi.fn(async () => "# Doc\n"),
 }));
 vi.mock("@/features/git-sync/components/markdown-redline-viewer", () => ({
   MarkdownRedlineViewer: () => createElement("div", { "data-stub": "redline" }),
@@ -51,7 +56,7 @@ describe("renderViewer virtual-tab dispatch (AC-11) @P1", () => {
 
   it("normal file types are unaffected", () => {
     const el = renderViewer({ ...common, filePath: "/team/doc.md" }, md);
-    // markdown stub component, not a virtual surface
+    // a viewer component, not a virtual surface
     expect(typeof el.type).toBe("function");
   });
 
@@ -68,10 +73,10 @@ describe("renderViewer virtual-tab dispatch (AC-11) @P1", () => {
   });
 
   it("SW-GS-3: a markdown file routes to the normal viewer without the redline directive", () => {
-    const el = renderViewer({ ...common, filePath: "/team/doc.md" }, { ...md, redline: null });
-    expect((el.type as () => ReactElement)()).toStrictEqual(
-      createElement("div", { "data-stub": "markdown" }),
+    const { container } = render(
+      renderViewer({ ...common, filePath: "/team/doc.md" }, { ...md, redline: null }),
     );
+    expect(container.querySelector('[data-stub="markdown"]')).not.toBeNull();
   });
 
   it("a changed image/html/excalidraw file routes to the one Files diff wrapper", () => {

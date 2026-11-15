@@ -46,6 +46,7 @@ export function Composer({
   request,
   onSent,
   quick = false,
+  compact = false,
 }: {
   defaultTo: string | null;
   /** What is selected (a thread key); defaults to `defaultTo`. */
@@ -59,6 +60,9 @@ export function Composer({
    * Shift+Enter starts a new line, and a send that fails says so under the box.
    */
   quick?: boolean;
+  /** A quick composer on a small or short pane: one row, without the route and key hints
+   *  (the placeholder names the recipient). A failure still says so under the box. */
+  compact?: boolean;
 }) {
   const view = useInboxView();
   const { dir, roles } = view;
@@ -306,7 +310,10 @@ export function Composer({
   ) : null;
 
   return (
-    <div className={quick ? "ibx-comp quick" : "ibx-comp"} data-testid="ibx-composer">
+    <div
+      className={quick ? (compact ? "ibx-comp quick compact" : "ibx-comp quick") : "ibx-comp"}
+      data-testid="ibx-composer"
+    >
       {quick ? (
         endedNote
       ) : (
@@ -445,14 +452,16 @@ export function Composer({
             </span>
           )}
           {/* Kept beside a failure: where the message was going is part of why it did not. */}
-          {quickHint && !emptyNudge && (
+          {quickHint && !emptyNudge && !compact && (
             <span className="ibx-tohint" data-testid="ibx-route-hint" title={quickHint}>
               {quickHint}
             </span>
           )}
-          <span className="ibx-comp-keys" aria-hidden>
-            <kbd>↵</kbd> send <kbd>⇧↵</kbd> new line
-          </span>
+          {!compact && (
+            <span className="ibx-comp-keys" aria-hidden>
+              <kbd>↵</kbd> send <kbd>⇧↵</kbd> new line
+            </span>
+          )}
         </div>
       )}
     </div>

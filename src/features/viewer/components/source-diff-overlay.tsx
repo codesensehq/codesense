@@ -43,13 +43,16 @@ import {
   sourceDiffModeFor,
   type SourceDiffViewOption,
 } from "@/shared/stores/viewer-store";
-import { resolveFileDiffModes, type MarkdownDiffMode } from "@/shared/lib/file-diff-mode";
+import { resolveFileDiffModes, type FileDiffModes } from "@/shared/lib/file-diff-mode";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import {
   FileDiffModeSwitch,
   renderFileDiff,
+  rendersFromText,
+  rendersInline,
   type FileDiffState,
 } from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { useTabSourceRepo } from "@/features/viewer/hooks/use-tab-source-repo";
 import { useSessionCwd } from "../hooks/use-session-cwd";
@@ -75,6 +78,7 @@ import {
   useSourceDiffBase,
   useSourceFileRedline,
 } from "../lib/use-source-diff";
+import { useSourceImageSides, type SourceImageSides } from "../lib/use-source-image-sides";
 import { comparisonLabel, effectiveBaseRef } from "../lib/source-diff-base";
 import { useRepoWorktreeWatch } from "../lib/use-repo-worktree-watch";
 import { useRemoteWatchNonce } from "../lib/use-remote-worktree-watch";
@@ -424,6 +428,14 @@ export function SourceDiffOverlay({
     baseRef,
     liveNonce + refreshNonce,
   );
+  const imageSides = useSourceImageSides(
+    changesetKey,
+    null,
+    paneFile,
+    selected?.renamedFrom,
+    baseRef,
+    liveNonce + refreshNonce,
+  );
 
   // The rail's rows — and so the j/k order — are exactly what is on screen.
   const visibleFiles = useMemo(() => filterFiles(files ?? [], query), [files, query]);
@@ -666,13 +678,13 @@ export function SourceDiffOverlay({
     // Identical sides (a mode-only change) render a sentence, not a diff.
     redline.before !== redline.after &&
     redlineError == null &&
-    readsAsCode(paneFile, markdownMode);
+    readsAsCode(paneFile, fileDiffModes);
   const resolved = redline != null || redlineError != null;
   const [lastWasCode, setLastWasCode] = useState(false);
   if (resolved && lastWasCode !== resolvedCodeDiff) setLastWasCode(resolvedCodeDiff);
   const paneIsCodeDiff = resolved
     ? resolvedCodeDiff
-    : lastWasCode && paneFile != null && readsAsCode(paneFile, markdownMode);
+    : lastWasCode && paneFile != null && readsAsCode(paneFile, fileDiffModes);
 
   // The "copied" tick clears itself.
   useEffect(() => {
@@ -1174,6 +1186,19 @@ export function SourceDiffOverlay({
                   <Divider />
                 </>
               )}
+              {paneFile != null &&
+                drawsPages(paneFile, selected?.status, redline?.binary, imageSides) && (
+                  <>
+                    <FileDiffModeSwitch
+                      kind="html"
+                      mode={fileDiffModes.html}
+                      onChange={(m) => setFileDiffMode("html", m)}
+                      testId={`source-diff-html-mode-${ws.id}`}
+                      unavailable={sideBySideUnavailable(imageSides)}
+                    />
+                    <Divider />
+                  </>
+                )}
               {paneIsCodeDiff && (
                 <>
                   <div
@@ -1281,6 +1306,7 @@ export function SourceDiffOverlay({
               badges={selected?.badges}
               before={redline?.before ?? null}
               after={redline?.after ?? null}
+              imageSides={imageSides}
               inline={inline}
               wordWrap={wordWrap}
               expandAll={expandAll}
@@ -1455,10 +1481,37 @@ function DiffCodeControls({
   );
 }
 
+/** Whether a file's diff offers Side by side | Source in its view options: an HTML, SVG or
+ *  Excalidraw file read as text, or a raster image (drawn from its bytes, being read, or
+ *  with Side by side disabled and its reason). */
+function drawsPages(
+  path: string,
+  status: PublishFile["status"] | undefined,
+  binary: boolean | undefined,
+  imageSides: SourceImageSides,
+): boolean {
+  if (isRasterImage(path) && imageSides.imageState) return true;
+  const state: FileDiffState = { kind: binary ? "binary" : "ready" };
+  return rendersInline(
+    path,
+    { before: "", after: "", status, imageBytes: imageSides.imageBytes },
+    state,
+  );
+}
+
+/** Side by side, disabled with its reason, for a raster image whose sides won't draw here. */
+function sideBySideUnavailable(imageSides: SourceImageSides) {
+  return imageSides.imageState?.kind === "unavailable"
+    ? { "side-by-side": imageSides.imageState.reason }
+    : undefined;
+}
+
 /** Whether a file's diff is the code diff the code controls drive: any
  *  non-markdown file, and markdown shown as Source. */
-function readsAsCode(path: string, markdownMode: MarkdownDiffMode): boolean {
-  return getViewerFileType(path) !== "markdown" || markdownMode === "source";
+function readsAsCode(path: string, modes: FileDiffModes): boolean {
+  if (getViewerFileType(path) === "markdown") return modes.markdown === "source";
+  if (rendersFromText(path)) return modes.html === "source";
+  return true;
 }
 
 /**
@@ -1466,8 +1519,9 @@ function readsAsCode(path: string, markdownMode: MarkdownDiffMode): boolean {
  * `{ file, redline }` → render boundary that the master-detail layout drops into
  * its right column. Binary files and identical sides are this surface's own
  * states; everything else goes through the shared `renderFileDiff` (markdown in
- * the shared markdown mode, other files as a `CodeDiffReview` in this session's
- * code mode, split or inline per the `inline` toggle). Loading, error and the
+ * the shared markdown mode, HTML, SVG and Excalidraw rendered from their text or
+ * as source, other files as a `CodeDiffReview` in this session's code mode,
+ * split or inline per the `inline` toggle). Loading, error and the
  * large-diff gate render inside this pane, so a redline failure never blanks
  * the rail beside it.
  */
@@ -1478,6 +1532,7 @@ export function SourceDiffPane({
   badges,
   before,
   after,
+  imageSides = {},
   error,
   inline,
   wordWrap,
@@ -1490,6 +1545,9 @@ export function SourceDiffPane({
   filePath: string;
   binary: boolean;
   status: PublishFile["status"];
+  /** A raster image's sides, base64, where this surface read them: its rendered
+   *  Before | After draws from these. */
+  imageSides?: SourceImageSides;
   /** The file's classification badges — a `mode` badge explains an identical
    *  before/after. */
   badges?: PublishFile["badges"];
@@ -1509,18 +1567,28 @@ export function SourceDiffPane({
 }) {
   const { modes } = useFileDiffModes();
 
+  // The binary placeholder REUSES the shared `FileWarningPlaceholder` (the WD-2
+  // binary-affordance idiom) but OMITS its context-viewer "open current version"
+  // action. It is a raster image's Source mode too.
+  const binaryNote = (
+    <FileWarningPlaceholder
+      icon={Binary}
+      message={`${STATUS_LABEL[status]} · Binary file — no text diff to show`}
+      filename={basename(filePath)}
+      testId="source-diff-binary-placeholder"
+    />
+  );
   if (binary) {
-    // The binary placeholder REUSES the shared `FileWarningPlaceholder` (the WD-2
-    // binary-affordance idiom) but OMITS its context-viewer "open current
-    // version" action (a true source-baseline image diff is a scoped WD follow-up).
-    return (
-      <FileWarningPlaceholder
-        icon={Binary}
-        message={`${STATUS_LABEL[status]} · Binary file — no text diff to show`}
-        filename={basename(filePath)}
-        testId="source-diff-binary-placeholder"
-      />
-    );
+    // A raster image goes through the dispatch: drawn from its bytes, read, or with its
+    // reason; any other binary file is the binary note.
+    if (!isRasterImage(filePath)) return binaryNote;
+    return renderFileDiff({
+      fileType: getViewerFileType(filePath),
+      filePath,
+      sides: { before: "", after: "", status, ...imageSides },
+      state: { kind: "binary" },
+      prefs: { modes, testIdPrefix: "source-diff", binary: binaryNote },
+    });
   }
 
   // Identical text on both sides: a mode-only change (or an empty file added or
@@ -1646,6 +1714,14 @@ function CommitDetailPane({
     selected?.renamedFrom,
   );
   const redline = sha === null ? workingRedline.redline : commitRedline.redline;
+  const imageSides = useSourceImageSides(
+    effectiveCwd,
+    sha,
+    selectedFile,
+    selected?.renamedFrom,
+    baseRef,
+    worktreeNonce,
+  );
   const redlineError = sha === null ? workingRedline.error : commitRedline.error;
 
   const label = sha === null ? "Working tree" : sha.slice(0, 7);
@@ -1672,6 +1748,16 @@ function CommitDetailPane({
                 testId={`commit-diff-markdown-mode-${ws.id}`}
               />
             )}
+            {selectedFile &&
+              drawsPages(selectedFile, selected?.status, redline?.binary, imageSides) && (
+                <FileDiffModeSwitch
+                  kind="html"
+                  mode={fileDiffModes.html}
+                  onChange={(m) => setFileDiffMode("html", m)}
+                  testId={`commit-diff-html-mode-${ws.id}`}
+                  unavailable={sideBySideUnavailable(imageSides)}
+                />
+              )}
             {redline != null &&
               !redline.binary &&
               // A mode-only change renders a sentence and an error its message:
@@ -1679,7 +1765,7 @@ function CommitDetailPane({
               redline.before !== redline.after &&
               redlineError == null &&
               selectedFile &&
-              readsAsCode(selectedFile, markdownMode) && (
+              readsAsCode(selectedFile, fileDiffModes) && (
                 <DiffCodeControls
                   wsId={ws.id}
                   idPrefix="commit-diff"
@@ -1740,6 +1826,7 @@ function CommitDetailPane({
             badges={selected?.badges}
             before={redline?.before ?? null}
             after={redline?.after ?? null}
+            imageSides={imageSides}
             inline={inline}
             wordWrap={wordWrap}
             expandAll={expandAll}

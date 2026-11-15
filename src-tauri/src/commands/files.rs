@@ -551,6 +551,17 @@ pub(crate) fn validate_canvas_read_path<R: tauri::Runtime>(
     path_str: &str,
     app: &tauri::AppHandle<R>,
 ) -> Result<(), String> {
+    validate_repo_read_path(path_str, app)
+}
+
+/// The read gate for a path under a repository the app knows: the context-repo
+/// allow-list, a registered source-repo attachment root or a registered worktree root
+/// (traversal-safe via [`normalize_path_components`]). The canvas renderer and the
+/// rendered diff's raster reads (`source_image_sides`, `read_image_file`) share it.
+pub(crate) fn validate_repo_read_path<R: tauri::Runtime>(
+    path_str: &str,
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
     let p = PathBuf::from(path_str);
     if path_in_context_roots(&p, app) {
         return Ok(());
@@ -561,7 +572,7 @@ pub(crate) fn validate_canvas_read_path<R: tauri::Runtime>(
     }
     warn!(
         target: "files",
-        "canvas read rejected (outside context roots, source-repo attachments and worktrees): {}",
+        "repo read rejected (outside context roots, source-repo attachments and worktrees): {}",
         p.display()
     );
     Err(
@@ -674,6 +685,47 @@ pub async fn read_file<R: tauri::Runtime>(
         editor_read_fs(&app).read(Path::new(&path))
     })
     .await
+}
+
+/// One raster image's bytes for a team edit's rendered diff (the team's copy, or a
+/// workspace's copy on This Mac): a PNG, JPEG, GIF or WebP path the repo read gate
+/// admits as given and as it resolves (so a linked directory can't lead outside every
+/// root), a regular file and not a symlink, capped at the media cap. A missing file
+/// errors with "not found".
+#[tauri::command]
+pub async fn read_image_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<crate::commands::raster_bytes::ImageFile, String> {
+    crate::commands::await_blocking("read_image_file", move || {
+        read_image_file_gated(Path::new(&path), |at: &Path| {
+            validate_repo_read_path(&at.to_string_lossy(), &app)
+        })
+    })
+    .await
+}
+
+/// [`read_image_file`] with its gate injected: `admit` judges the path as given and,
+/// when it exists, as it resolves.
+fn read_image_file_gated(
+    path: &Path,
+    admit: impl Fn(&Path) -> Result<(), String>,
+) -> Result<crate::commands::raster_bytes::ImageFile, String> {
+    crate::commands::raster_bytes::require_raster(&path.to_string_lossy())?;
+    admit(path)?;
+    let real = match path.canonicalize() {
+        Ok(real) => real,
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => {
+            return Err(format!("not found: {}", std::path::Path::display(path)))
+        }
+        Err(e) => return Err(format!("resolve {}: {e}", std::path::Path::display(path))),
+    };
+    admit(&real)?;
+    let root: &Path = real.parent().ok_or("invalid image path")?;
+    match crate::commands::raster_bytes::read_file_within(root, path)? {
+        Some(side) => Ok(crate::commands::raster_bytes::image_file(side)),
+        None => Err(format!("not found: {}", std::path::Path::display(path))),
+    }
 }
 
 /// The same editor reader gate, with bounded bytes for the page/MCP file API.
@@ -2352,5 +2404,64 @@ mod attached_context_gate_tests {
             std::os::unix::fs::symlink(root.join(".git"), root.join("hidden-metadata")).unwrap();
             assert!(registered_editor_root(&home, &root.join("hidden-metadata/config")).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod read_image_file_tests {
+    use super::read_image_file_gated;
+    use std::path::Path;
+
+    /// The repo read gate over one root, as `validate_repo_read_path` judges a path.
+    fn under(root: &Path) -> impl Fn(&Path) -> Result<(), String> + '_ {
+        move |at: &Path| {
+            let real_root = root.canonicalize().unwrap();
+            if at.starts_with(root) || at.starts_with(&real_root) {
+                Ok(())
+            } else {
+                Err("Access denied".into())
+            }
+        }
+    }
+
+    #[test]
+    fn reads_a_raster_file_the_gate_admits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.png"), [1u8, 2, 3]).unwrap();
+        let file = read_image_file_gated(&dir.path().join("a.png"), under(dir.path())).unwrap();
+        assert_eq!(file.base64.as_deref(), Some("AQID"));
+        assert!(!file.too_large);
+    }
+
+    #[test]
+    fn refuses_what_is_not_a_raster_image_outside_the_gate_or_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.svg"), "<svg/>").unwrap();
+        assert!(read_image_file_gated(&dir.path().join("a.svg"), under(dir.path())).is_err());
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("b.png"), [1u8]).unwrap();
+        let denied = read_image_file_gated(&elsewhere.path().join("b.png"), under(dir.path()));
+        assert_eq!(denied.unwrap_err(), "Access denied");
+        let missing = read_image_file_gated(&dir.path().join("gone.png"), under(dir.path()));
+        assert!(missing.unwrap_err().starts_with("not found: "));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_file_and_a_linked_directory_that_leads_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.png"), b"secret").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::os::unix::fs::symlink(outside.path().join("secret.png"), root.join("leaf.png"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("linked")).unwrap();
+        // The leaf resolves outside the gate; were it inside, a symlink is still refused.
+        assert!(read_image_file_gated(&root.join("leaf.png"), under(root)).is_err());
+        std::fs::write(root.join("real.png"), [1u8]).unwrap();
+        std::os::unix::fs::symlink(root.join("real.png"), root.join("alias.png")).unwrap();
+        assert!(read_image_file_gated(&root.join("alias.png"), under(root)).is_err());
+        let through = read_image_file_gated(&root.join("linked/secret.png"), under(root));
+        assert_eq!(through.unwrap_err(), "Access denied");
     }
 }

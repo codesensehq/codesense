@@ -80,7 +80,26 @@ vi.mock("@/features/dashboard/components/excalidraw-viewer", () => ({
   ),
 }));
 
-import { LARGE_DIFF_CHARS, renderFileDiff, type FileDiffArgs } from "./render-file-diff";
+vi.mock("./side-frame", () => ({
+  SideFrame: ({ html, title }: { html: string; title: string }) => (
+    <div data-testid="side-frame" data-title={title}>
+      {html}
+    </div>
+  ),
+  SideImage: ({ base64, alt }: { base64: string; alt: string }) => (
+    <div data-testid="side-image" data-alt={alt}>
+      {base64}
+    </div>
+  ),
+}));
+
+import {
+  FileDiffModeSwitch,
+  IMAGE_UNAVAILABLE,
+  LARGE_DIFF_CHARS,
+  renderFileDiff,
+  type FileDiffArgs,
+} from "./render-file-diff";
 import { DEFAULT_FILE_DIFF_MODES, type FileDiffModes } from "./file-diff-mode";
 import { getViewerFileType } from "./viewer-file-type";
 
@@ -167,6 +186,8 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(frames.map((f) => f.dataset.baseline)).toEqual(["yes", "no"]);
     // Neither pane draws the Snapshot band, so both pages start level.
     expect(frames.map((f) => f.dataset.snapshot)).toEqual(["false", "false"]);
+    // Files serves the page beside its linked files, so there is nothing to note.
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
   });
 
   it("Files: HTML shows the toggle at 899 px, After first", () => {
@@ -187,23 +208,122 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.queryByTestId("html")).toBeNull();
   });
 
-  it("off Files (no rendered source): HTML is the Source text diff and no rendered mode is offered", () => {
-    atWidth(1200);
+  it("off Files: HTML renders Before and After from their text side by side at 900 px", () => {
+    atWidth(900);
     render(renderFileDiff(args("/repo/page.html", {}, { onModeChange: vi.fn() })));
-    expect(screen.getByTestId("code-diff")).toBeInTheDocument();
+    const frames = screen.getAllByTestId("side-frame");
+    expect(frames.map((f) => [f.dataset.title, f.textContent])).toEqual([
+      ["Before", "old"],
+      ["After", "new"],
+    ]);
+    expect(screen.getByTestId("file-diff-side-by-side")).toBeInTheDocument();
+    expect(screen.queryByTestId("code-diff")).toBeNull();
+    // It renders alone, and says so once under the diff.
+    expect(screen.getByTestId("file-diff-rendered-alone")).toHaveTextContent(
+      "Rendered on its own: linked files such as stylesheets and images aren't loaded here.",
+    );
     expect(screen.queryByTestId("html")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
-    // It is a code diff there, so it offers the code modes.
-    expect(screen.getByRole("button", { name: "Structural" })).toBeInTheDocument();
   });
 
-  it("off Files: a binary image shows the binary affordance", () => {
+  it("off Files: HTML shows the Before | After toggle at 899 px, After first", () => {
+    atWidth(899);
+    render(renderFileDiff(args("/repo/page.html")));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual(["new"]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual(["old"]);
+  });
+
+  it("off Files: Source stays a mode away, as the text diff", () => {
+    atWidth(1200);
+    const onModeChange = vi.fn();
+    const { rerender } = render(renderFileDiff(args("/repo/page.html", {}, { onModeChange })));
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(onModeChange).toHaveBeenCalledWith("html", "source");
+    rerender(
+      renderFileDiff(args("/repo/page.html", { modes: { html: "source" } }, { onModeChange })),
+    );
+    expect(screen.getByTestId("code-diff")).toHaveTextContent("old→new");
+    expect(screen.queryByTestId("side-frame")).toBeNull();
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: an SVG renders through the sandboxed frame, never as an image", () => {
+    atWidth(1200);
+    render(renderFileDiff(args("/repo/icon.svg", { sides: { ...sides(), before: "<svg/>" } })));
+    expect(screen.getAllByTestId("side-frame").map((f) => f.textContent)).toEqual([
+      "<svg/>",
+      "new",
+    ]);
+    expect(screen.queryByTestId("side-image")).toBeNull();
+    expect(screen.getByTestId("file-diff-rendered-alone")).toBeInTheDocument();
+  });
+
+  const scene = (n: number) => JSON.stringify({ type: "excalidraw", elements: [], n });
+  it("off Files: Excalidraw's sides are read-only scenes from their text", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(args("/repo/d.excalidraw", { sides: { before: scene(1), after: scene(2) } })),
+    );
+    const canvases = screen.getAllByTestId("excalidraw");
+    expect(canvases.map((c) => c.dataset.scene)).toEqual([scene(1), scene(2)]);
+    expect(canvases.every((c) => c.dataset.readonly === "true")).toBe(true);
+    expect(screen.queryByTestId("file-diff-rendered-alone")).toBeNull();
+  });
+
+  it("off Files: an Excalidraw side that won't parse says so instead of drawing a blank scene", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args("/repo/d.excalidraw", { sides: { before: scene(1), after: '{"type":"excal' } }),
+      ),
+    );
+    expect(screen.getAllByTestId("excalidraw")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't read this side's drawing");
+  });
+
+  it("off Files: a raster image renders from the bytes the surface holds", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args("/repo/logo.png", {
+          sides: { before: "", after: "", status: "added", imageBytes: { after: "iVBO" } },
+          state: { kind: "binary" },
+        }),
+      ),
+    );
+    expect(screen.getAllByTestId("side-image").map((i) => i.textContent)).toEqual(["iVBO"]);
+    expect(screen.getByTestId("file-diff-one-side")).toHaveTextContent("After");
+  });
+
+  it("off Files: a raster image missing a side's bytes stays the binary affordance", () => {
+    atWidth(1200);
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified", imageBytes: { after: "iVBO" } },
+            state: { kind: "binary" },
+          },
+          { binary: <p>binary here</p> },
+        ),
+      ),
+    );
+    // Source only, in the one image line: no side is drawn from half the bytes.
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff.",
+    );
+    expect(screen.queryByText("binary here")).toBeNull();
+    expect(screen.queryByTestId("side-image")).toBeNull();
+  });
+
+  it("off Files: a binary image with no bytes says an image has no text diff", () => {
     render(
       renderFileDiff(
         args("/repo/logo.png", { state: { kind: "binary" } }, { binary: <p>binary here</p> }),
       ),
     );
-    expect(screen.getByText("binary here")).toBeInTheDocument();
+    expect(screen.getByTestId("file-diff-image-source")).toBeInTheDocument();
     expect(screen.queryByTestId("image")).toBeNull();
   });
 
@@ -405,5 +525,156 @@ describe("renderFileDiff — the code mode switch only where it applies", () => 
   it("keeps Structural for a supported language", () => {
     render(renderFileDiff(args("/repo/a.ts", {}, { onModeChange: vi.fn() })));
     expect(screen.getByRole("button", { name: "Structural" })).toBeEnabled();
+  });
+});
+
+describe("renderFileDiff — the switches and the skeleton (critique D3, D4, D9)", () => {
+  it("the pressed segment uses the primary pair, and each segment draws its focus ring inside the group", () => {
+    atWidth(899);
+    render(
+      renderFileDiff(
+        args("/repo/page.html", { modes: { html: "side-by-side" } }, { onModeChange: vi.fn() }),
+      ),
+    );
+    for (const group of [
+      screen.getByTestId("file-diff-mode-switch"),
+      screen.getByRole("group", { name: "Side shown" }),
+    ]) {
+      const buttons = within(group).getAllByRole("button");
+      const pressed = buttons.find((b) => b.getAttribute("aria-pressed") === "true")!;
+      expect(pressed.className).toContain("bg-primary");
+      expect(pressed.className).toContain("text-primary-foreground");
+      expect(pressed.className).not.toMatch(/(^|\s)bg-accent(\s|$)/);
+      // Important: the unlayered global :focus-visible sets outline-offset 2px, which beats a layered
+      // utility, and the group's overflow-hidden then clips the ring away.
+      for (const b of buttons)
+        expect(b.className).toContain("focus-visible:!outline-offset-[-2px]");
+    }
+  });
+
+  it("the loading skeleton pulses only where motion is welcome, and says it is loading", () => {
+    render(renderFileDiff(args("/repo/a.ts", { state: { kind: "loading" } })));
+    const skeleton = screen.getByTestId("file-diff-code-skeleton");
+    expect(skeleton.className).toContain("motion-safe:animate-pulse");
+    expect(skeleton.className).not.toMatch(/(^|\s)animate-pulse/);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the diff");
+  });
+});
+
+describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () => {
+  const png = (
+    sides: Partial<FileDiffArgs["sides"]>,
+    mode: "side-by-side" | "source" = "side-by-side",
+  ) =>
+    args(
+      "/repo/logo.png",
+      {
+        sides: { before: "", after: "", status: "modified", ...sides },
+        state: { kind: "binary" },
+        modes: { html: mode },
+      },
+      { onModeChange: vi.fn(), binary: <p>surface binary note</p> },
+    );
+
+  it("while its bytes are read it says so, never the final binary state", () => {
+    render(renderFileDiff(png({ imageState: { kind: "reading" } })));
+    expect(screen.getByTestId("file-diff-code-skeleton")).toBeInTheDocument();
+    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    expect(screen.queryByText("surface binary note")).toBeNull();
+  });
+
+  it("when it can't be drawn, Side by side stays in the switch, disabled with the reason", () => {
+    render(
+      renderFileDiff(
+        png({
+          imageState: { kind: "unavailable", reason: "Over the 8 MB limit for drawing here" },
+        }),
+      ),
+    );
+    const sideBySide = within(screen.getByTestId("file-diff-mode-switch")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", "Over the 8 MB limit for drawing here");
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Over the 8 MB limit for drawing here.",
+    );
+  });
+
+  it("a Side by side preference over an image that can't draw presses Source, as the body shows", () => {
+    render(
+      <FileDiffModeSwitch
+        kind="html"
+        mode="side-by-side"
+        onChange={vi.fn()}
+        testId="switch"
+        unavailable={{ "side-by-side": IMAGE_UNAVAILABLE.failed }}
+      />,
+    );
+    const group = screen.getByTestId("switch");
+    expect(within(group).getByRole("button", { name: "Source" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(group).getByRole("button", { name: "Side by side" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // and it looks it: the pressed style follows what is shown, not the preference
+    expect(within(group).getByRole("button", { name: "Source" }).className).toContain("bg-primary");
+    expect(within(group).getByRole("button", { name: "Side by side" }).className).not.toContain(
+      "bg-primary",
+    );
+  });
+
+  it("while the diff is still loading it shows the reading skeleton, not the final Source line", () => {
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified" },
+            state: { kind: "loading" },
+            modes: { html: "side-by-side" },
+          },
+          { onModeChange: vi.fn() },
+        ),
+      ),
+    );
+    expect(screen.getByTestId("file-diff-code-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-diff-image-source")).toBeNull();
+  });
+
+  it("a side that failed to read keeps Side by side disabled with the reason, and offers no code modes", () => {
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified" },
+            state: { kind: "error", message: "permission denied" },
+            modes: { html: "side-by-side" },
+          },
+          { onModeChange: vi.fn() },
+        ),
+      ),
+    );
+    const group = screen.getByTestId("file-diff-mode-switch");
+    const sideBySide = within(group).getByRole("button", { name: "Side by side" });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", IMAGE_UNAVAILABLE.failed);
+    for (const code of ["Line", "Ignore whitespace", "Structural"])
+      expect(within(group).queryByRole("button", { name: code })).toBeNull();
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      `An image has no text diff. ${IMAGE_UNAVAILABLE.failed}.`,
+    );
+  });
+
+  it("its Source mode is one image-aware line on every surface", () => {
+    render(renderFileDiff(png({ imageBytes: { before: "QQ==", after: "Qg==" } }, "source")));
+    expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
+    expect(screen.queryByText("surface binary note")).toBeNull();
   });
 });
