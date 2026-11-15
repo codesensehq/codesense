@@ -464,7 +464,7 @@ onSessionText(
     ): Unsubscribe;
 ```
 
-A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.
+A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused.
 
 ## Surface: onPasteTargetChanged
 
