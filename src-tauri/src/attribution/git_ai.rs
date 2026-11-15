@@ -200,7 +200,9 @@ impl GitAiSource {
                 oid,
             ) {
                 Ok(note) => {
-                    return Ok(Some(git2::Note::message(&note).unwrap_or_default().to_owned()))
+                    return Ok(Some(String::from(
+                        git2::Note::message(&note).unwrap_or_default(),
+                    )))
                 }
                 Err(error) if is_missing_object(&error) => {
                     return Err(AttributionError::ObjectsNotLocal)
