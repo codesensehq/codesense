@@ -237,6 +237,39 @@ async fn a_successor_pins_its_predecessors_mail_and_a_concurrent_seat_pins_only_
 }
 
 #[tokio::test]
+async fn a_successor_restores_and_updates_the_preview_of_its_predecessors_pin() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    let first = mail(&fake, "S1", "human", "the first session's view").await;
+    pin_request(&*fake, Some("S1"), first, None, None, false)
+        .await
+        .unwrap();
+    pin_request(&*fake, Some("S1"), first, None, None, true)
+        .await
+        .unwrap();
+    fake.end("H1");
+    // The successor undoes its predecessor's unpin, then gives the pin a preview.
+    let restored = pin_request(&*fake, Some("S2"), first, None, None, PinChange::Restore)
+        .await
+        .unwrap();
+    assert_eq!(listed(&restored), vec![first]);
+    let preview = PinPreview {
+        short_name: Some("View".into()),
+        value: Some("3 of 5".into()),
+        status: Some(PinStatus::Running),
+        ..PinPreview::default()
+    };
+    let updated = pin_request(&*fake, Some("S2"), first, None, Some(preview.clone()), false)
+        .await
+        .unwrap();
+    match &updated {
+        PinResult::Pins { list, .. } => assert_eq!(list.pins[0].preview, Some(preview)),
+        other => panic!("expected pins, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do_not() {
     let fake = FakeHost::new();
     fake.launched_from("H1", "acme/default/claude-dev@3", Some("DEMO-1"));
