@@ -247,7 +247,14 @@ describe("kit.chat", () => {
   it("is the committed bundle of its modules, and a plain script", () => {
     expect(bundleChat()).toBe(CHAT_JS);
     expect(CHAT_JS).not.toMatch(/^\s*(import|export)\b/m);
-    expect(Object.keys(kitOf().chat).sort()).toEqual(["core", "mount", "pinToBottom", "thread"]);
+    expect(Object.keys(kitOf().chat).sort()).toEqual([
+      "core",
+      "createSendState",
+      "mount",
+      "pinToBottom",
+      "targetOf",
+      "thread",
+    ]);
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
       "CONSENT_CLASSES",
       "PIN_CAP",
@@ -1596,5 +1603,272 @@ describe("kit.chat onPin: the person pins a message", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".pin-b")).toBeNull();
+  });
+});
+
+describe("kit.chat send state", () => {
+  type Clock = ReturnType<typeof manualClock>;
+  const manualClock = () => {
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    return {
+      timers,
+      now: () => 5000,
+      setTimeout: (fn: () => void) => {
+        timers.set(++next, fn);
+        return next;
+      },
+      clearTimeout: (id: number) => timers.delete(id),
+    };
+  };
+  const makeSend = (s: ReturnType<typeof setup>, clock: Clock) =>
+    (kitOf().chat as any).createSendState({
+      transport: s.transport,
+      reads: s.reads,
+      clock,
+      target: (kitOf().chat as any).targetOf({ storyId: "demo-story", leadRole: "lead" }),
+      storyId: "demo-story",
+      leadRole: "lead",
+    });
+  const marks = (el: HTMLElement) =>
+    [...el.querySelectorAll(".msg.you .mark")].map((m) => m.getAttribute("data-mark"));
+
+  describe("launch.unsettled()", () => {
+    it("is false when idle and once the lead has joined, and true while a launch starts", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      let started!: (row: Row) => void;
+      s.transport.launch.mockImplementation(
+        () => new Promise<Row>((resolve) => (started = resolve)),
+      );
+      const clock = manualClock();
+      const chat = mountOn(s, { clock });
+      await flush();
+      expect(chat.launch.unsettled()).toBe(false);
+      await typeAndSend(s.el, "hello");
+      expect(chat.launch.state).toBe("starting");
+      expect(chat.launch.unsettled()).toBe(true);
+      started({ sessionId: "s1" });
+      await flush();
+      roster.push(lead("idle"));
+      await s.reads.sessions();
+      await flush();
+      expect(chat.launch.state).toBe("joined");
+      expect(chat.launch.unsettled()).toBe(false);
+    });
+
+    it("stays true when the launch is slow and when it has failed", async () => {
+      const s = setup([]);
+      const clock = manualClock();
+      const chat = mountOn(s, { clock, timers: { slowMs: 10, failMs: 20 } });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      const [slow, fail] = [...clock.timers.values()];
+      slow();
+      expect(chat.launch.state).toBe("slow");
+      expect(chat.launch.unsettled()).toBe(true);
+      fail();
+      expect(chat.launch.state).toBe("failed");
+      expect(chat.launch.unsettled()).toBe(true);
+    });
+
+    it("counts a held message, a send in flight and a kept message, and settles when each is done", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      let finish!: (value: Row) => void;
+      let refuse!: (error: Error) => void;
+      const chat = mountOn(s);
+      await flush();
+      s.send.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await typeAndSend(s.el, "one");
+      expect(chat.launch.unsettled(), "in flight").toBe(true);
+      finish({ status: "sent", messageId: 1 });
+      await flush();
+      expect(chat.launch.unsettled(), "delivered").toBe(false);
+      s.send.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      await typeAndSend(s.el, "two");
+      refuse(new Error("busy"));
+      await flush();
+      expect(marks(s.el)).toEqual(["delivered", "kept"]);
+      expect(chat.launch.unsettled(), "kept").toBe(true);
+    });
+
+    it("counts a message held while the launch starts", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      expect(chat.launch.held).toBe(1);
+      expect(chat.launch.unsettled()).toBe(true);
+    });
+  });
+
+  describe("launch.attach()", () => {
+    it("takes the changes in place of the first listener, and a detached listener hears nothing", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      const send = makeSend(s, manualClock());
+      const heard: string[] = [];
+      const detach = send.launch.attach(() => heard.push("attached"));
+      send.launch.rows(roster);
+      expect(heard.length).toBeGreaterThan(0);
+      heard.length = 0;
+      detach();
+      send.launch.rows([lead("running")]);
+      send.launch.send("quiet");
+      await flush();
+      expect(heard, "no emit while detached").toEqual([]);
+      expect(send.launch.messages).toHaveLength(1);
+      send.dispose();
+    });
+
+    it("detaching a listener that was already replaced leaves the newer one", () => {
+      const send = makeSend(setup([]), manualClock());
+      const first: string[] = [];
+      const second: string[] = [];
+      const detachFirst = send.launch.attach(() => first.push("a"));
+      send.launch.attach(() => second.push("b"));
+      detachFirst();
+      send.launch.rows([lead("idle")]);
+      expect(first).toEqual([]);
+      expect(second.length).toBeGreaterThan(0);
+      send.dispose();
+    });
+  });
+
+  describe("launch.sessionId()", () => {
+    it("is null until the launch result names a session, then that session", async () => {
+      const s = setup([]);
+      let started!: (row: Row) => void;
+      s.transport.launch.mockImplementation(
+        () => new Promise<Row>((resolve) => (started = resolve)),
+      );
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      expect(chat.launch.sessionId()).toBeNull();
+      started({ sessionId: "s-new" });
+      await flush();
+      expect(chat.launch.sessionId()).toBe("s-new");
+    });
+  });
+
+  describe("the send option", () => {
+    it("keeps the messages and their marks across an unmount and a new mount", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const first = mountOn(s, { clock, send });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      expect(marks(s.el)).toEqual(["starting", "held"]);
+      first.unmount();
+      expect(s.el.childNodes.length).toBe(0);
+      expect(clock.timers.size, "the launch's timers outlive the mount").toBe(2);
+      const again = mountOn(s, { clock, send });
+      await flush();
+      expect(marks(s.el)).toEqual(["starting", "held"]);
+      expect(again.launch).toBe(send.launch);
+      again.unmount();
+      send.dispose();
+    });
+
+    it("sends the held message when the lead joins while no chat is mounted, and the next mount shows it delivered", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const chat = mountOn(s, { clock, send });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      chat.unmount();
+      roster.push(lead("idle"));
+      await s.reads.sessions();
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-1", "second");
+      expect(send.launch.unsettled()).toBe(false);
+      const again = mountOn(s, { clock, send });
+      await flush();
+      expect(marks(s.el)).toEqual(["delivered", "delivered"]);
+      again.unmount();
+      send.dispose();
+    });
+
+    it("stops listening to the roster once the work settles while hidden, and never paints a hidden chat", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      const send = makeSend(s, manualClock());
+      const chat = mountOn(s, { send });
+      await flush();
+      let finish!: (value: Row) => void;
+      s.send.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await typeAndSend(s.el, "one");
+      chat.unmount();
+      finish({ status: "sent", messageId: 2 });
+      await flush();
+      expect(s.el.childNodes.length, "nothing paints into the old element").toBe(0);
+      expect(send.unsettled()).toBe(false);
+      send.dispose();
+    });
+
+    it("keeps the unload guard for the page's life, and dispose removes it", async () => {
+      const added = vi.spyOn(window, "addEventListener");
+      const removed = vi.spyOn(window, "removeEventListener");
+      const s = setup([]);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const unloads = () =>
+        added.mock.calls.filter(([name]) => String(name) === "beforeunload").length;
+      const unloadsRemoved = () =>
+        removed.mock.calls.filter(([name]) => String(name) === "beforeunload").length;
+      expect(unloads()).toBe(1);
+      const chat = mountOn(s, { clock, send });
+      expect(unloads(), "the mount adds none of its own").toBe(1);
+      chat.unmount();
+      expect(unloadsRemoved(), "a hide does not end the guard").toBe(0);
+      send.dispose();
+      expect(unloadsRemoved()).toBe(1);
+      expect(clock.timers.size).toBe(0);
+      added.mockRestore();
+      removed.mockRestore();
+    });
+  });
+
+  describe("with no send option", () => {
+    it("makes its own send state and ends it on unmount: timers cleared and the unload guard removed", async () => {
+      const added = vi.spyOn(window, "addEventListener");
+      const removed = vi.spyOn(window, "removeEventListener");
+      const s = setup([]);
+      const clock = manualClock();
+      const chat = mountOn(s, { clock });
+      await flush();
+      await typeAndSend(s.el, "first");
+      expect(clock.timers.size).toBe(2);
+      expect(added.mock.calls.filter(([name]) => String(name) === "beforeunload")).toHaveLength(1);
+      chat.unmount();
+      expect(clock.timers.size, "disposed").toBe(0);
+      expect(removed.mock.calls.filter(([name]) => String(name) === "beforeunload")).toHaveLength(
+        1,
+      );
+      expect(s.el.childNodes.length).toBe(0);
+      added.mockRestore();
+      removed.mockRestore();
+    });
+
+    it("keeps the unload warning while a message is held", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      chat.unmount();
+    });
   });
 });

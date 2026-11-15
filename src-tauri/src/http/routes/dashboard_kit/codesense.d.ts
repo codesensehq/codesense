@@ -582,6 +582,8 @@ declare namespace CodesenseSdk {
     /** Builds the launch prompt from the first message. Default: the text itself. */
     card?(text: string): string;
     done?: boolean;
+    /** A send state the page keeps across mounts (`kit.chat.createSendState`): the launch with its messages, outbox and timers, and the cards answered from this page. The mount attaches to it and detaches on unmount, so hiding and showing the chat loses nothing. Without it the mount makes its own and ends it on unmount. */
+    send?: ChatSendState;
   }
   /** What a layout or header callback sees. */
   interface ChatState {
@@ -609,9 +611,34 @@ declare namespace CodesenseSdk {
     subscribe(listener: () => void): () => void;
     [member: string]: unknown;
   }
+  /** The launch controller a chat sends through. */
+  interface ChatLaunch {
+    readonly state: "idle" | "starting" | "slow" | "failed" | "joined";
+    readonly messages: Array<{ id: number; text: string; mark: string | null }>;
+    /** True while the send state still has work: a launch starting or failed, or a message held, kept or in flight. */
+    unsettled(): boolean;
+    /** The session the launch opened, or null until it names one. */
+    sessionId(): string | null;
+    /** Takes the launch's changes in place of the previous listener; the returned function detaches it (no listener, no emit). */
+    attach(listener: () => void): () => void;
+    [member: string]: unknown;
+  }
+  /** What a chat has sent or asked to send, kept outside its DOM. It ends with the page, through `dispose()`, never on a hide. */
+  interface ChatSendState {
+    readonly launch: ChatLaunch;
+    readonly cards: Map<string | number, { phase: "pending" | "error" | "answered"; text: string; at?: number; failure?: string }>;
+    unsettled(): boolean;
+    /** A mounted chat's render takes the launch's changes; the returned function hands them back, and the state listens to the roster only while it has work. */
+    attach(render: () => void): () => void;
+    dispose(): void;
+  }
   /** `/kit/v1/chat.js`'s `kit.chat`. The marks rule and the card parser (`core`) are DOM-free: `/kit/v1/chat-core.js` is the same code as an ES module. */
   interface KitChat {
     mount(element: HTMLElement, options: ChatMountOptions): ChatHandle;
+    /** Makes the send state a page keeps across mounts (the `send` mount option). Takes the mount's `transport`, `reads`, `timers`, `card`, `clock` and `win`, and a `target` from `targetOf`. */
+    createSendState(options: Record<string, unknown>): ChatSendState;
+    /** The peer a chat talks to: `target` when the page gives one, else the story's lead rows. */
+    targetOf(options: { target?: ChatTarget | null; storyId?: string | null; leadRole?: string | null }): ChatTarget;
     /** Keeps a chat log at the newest message while you are at the bottom. `win` is the window whose resize and timers it uses; `reset()` re-pins after the log is rebuilt. */
     pinToBottom(
       log: HTMLElement,

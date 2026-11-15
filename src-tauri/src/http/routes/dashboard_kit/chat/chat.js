@@ -10,6 +10,7 @@
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
 //  faces: true|(row)->{src|face,name,label}: opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run (src draws that image, face or a name goes to kit.avatar, true draws initials from the sender's name), and a run of messages from one sender is one meta line (label is the name on it, else the sender's name); the person's own messages carry no avatar. Unset, the thread is unchanged.
 //  next: true|{edit}: the lead's trailing `Next:` line (chat-core parseNext) becomes chips after its newest message and is left out of the message's text; edit adds each chip's pencil. Off by default.
+//  send: a send state (createSendState, send-state.js) the page keeps across mounts: the launch with its messages, outbox and timers, and the cards answered from this page. The mount attaches to it and detaches on unmount; without it the mount makes one and ends it on unmount.
 //  copy: the page's own words over CHAT_COPY, one level deep (a section it names keeps the keys it leaves out).
 //  target also takes, all off by default:
 //   pick(peerRows)->row: the live row, for presence and for the row a send goes to (default: the first that has not exited, and for a send the first that is joinable).
@@ -20,7 +21,8 @@
 // state is {lead, fail(what,text), clear(what)}; fail puts a role=alert row in the thread's status slot.
 import {h} from './dom.js';
 import {CHAT_COPY,failureText,mergeCopy,modelLabel,timeLabel} from './copy.js';
-import {createLaunch,joinable,parseFailure} from './launch.js';
+import {joinable,parseFailure} from './launch.js';
+import {DEFAULT_TIMERS,createSendState,systemClock} from './send-state.js';
 import {activityOf,leadRowsOf,liveOf,presenceOf} from './presence.js';
 import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
@@ -29,7 +31,6 @@ import {pinToBottom} from './pin.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
 import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinTitleOf,pinWho} from './chat-core.js';
 import {cardNode} from './card.js';
-const systemClock=()=>({now:()=>Date.now(),setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:id=>clearTimeout(id)});
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
 // A sender's avatar for the faces option: an image by src, else kit.avatar (a face ref or initials from the name); a page without kit.avatar gets the initials in a plain span.
 const initialsOf=name=>{const parts=String(name||'?').split(/[\s_-]+/).filter(Boolean);return(parts.length>1?parts[0][0]+parts[1][0]:(parts[0]||'?').slice(0,2)).toUpperCase();};
@@ -61,26 +62,26 @@ function reconcile(parent,cache,items){
  nodes.forEach((node,index)=>{if(parent.childNodes[index]!==node)parent.insertBefore(node,parent.childNodes[index]||null);});
  while(parent.childNodes.length>nodes.length)parent.lastChild.remove();
 }
-const storyTarget=(storyId,leadRole)=>({
+export const storyTarget=(storyId,leadRole)=>({
  rows:sessions=>leadRowsOf(sessions,storyId,leadRole),
  read:(peers,transport)=>Promise.all([...peers.map(row=>transport.threadOf(row.sessionId).catch(()=>[])),transport.roleThread().catch(()=>[])]),
  queue:null,follow:false,leadName:()=>CHAT_COPY.lead,
 });
-const DEFAULT_TIMERS={slowMs:20000,failMs:120000};
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null}){
+// The peer a chat talks to: the page's own target, else the story's lead rows. A page that makes the send state itself resolves its target the same way.
+export const targetOf=({target=null,storyId=null,leadRole=null})=>target||storyTarget(storyId,leadRole);
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null,send:sendOpt=null}){
  const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
  if(styles)linkChatStyles(win.document);
- const target=own||storyTarget(storyId,leadRole),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
- // Cards answered from this page: id -> {phase:'pending'|'error'|'answered', text, at, failure}. An answer sent from the Inbox is read from the thread instead (chat-core cardAnswer).
- const cardState=new Map(),drafts=new Map();
+ const target=targetOf({target:own,storyId,leadRole}),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
+ // The send state (send-state.js): the launch with its messages, outbox and timers, and the cards answered from this page (id -> {phase:'pending'|'error'|'answered', text, at, failure}; an answer sent from the Inbox is read from the thread instead, chat-core cardAnswer).
+ // A page that keeps the send state across a hide hands it in (send); without it this mount makes one and ends it on unmount.
+ const send=sendOpt||createSendState({transport,reads,clock,timers,card,target,storyId,leadRole,win,copy:words}),launch=send.launch,cardState=send.cards,drafts=new Map();
  let refocusCard=null;
- let started=false,gotRows=false,firstRead=Promise.resolve(),rows=[],thread=[],model=null,joinedAt=null,runningSince=0,lastLiveState=null,launchSessionId=null,isDone=done,awaitBase=null,gen=0,refocus=false;
+ let gone=false,started=false,gotRows=false,firstRead=Promise.resolve(),rows=[],thread=[],model=null,joinedAt=null,runningSince=0,lastLiveState=null,isDone=done,awaitBase=null,gen=0,refocus=false;
  const streams=new Map(),watched=new Set(),listeners=new Set(),cache=new Map();
  const fails=new Map();
  // The thread has been read once: until then an empty thread is unknown, not empty.
  let threadRead=false;
- const wrapped={launch:async prompt=>{const result=await transport.launch(prompt);if(result&&result.sessionId)launchSessionId=result.sessionId;return result;},send:(handle,text)=>transport.send(handle,text)};
- const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue,pickLive:target.pick,bindLaunched:target.bindLaunched,keepUnsent:target.keepUnsent});
  // The live row for presence: the launched row while it can be joined (bindLaunched), else the page's rule over the peer rows.
  const live=()=>{const own=target.bindLaunched?launch.launchedIn(rows):null;return joinable(own)?own:(target.pick||liveOf)(target.rows(rows));};
  const leadHandles=()=>new Set([...target.rows(rows).map(row=>row.handle),...(target.handles?target.handles(target.rows(rows)):[])]);
@@ -90,7 +91,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const presence=()=>presenceOf(live(),{launch:{state:launch.state,failure:launch.failure,stuck:launch.stuck},runningSince,done:isDone},copy);
  // A dead or stuck launch points at the launched session first: another lead row can be live to presence.
  const launchedFirst=()=>launch.stuck||(launch.state==='failed'&&launch.failure.kind==='exited');
- const terminalTarget=()=>(launchedFirst()&&launchSessionId)||(live()&&live().sessionId)||launchSessionId||null;
+ const terminalTarget=()=>(launchedFirst()&&launch.sessionId())||(live()&&live().sessionId)||launch.sessionId()||null;
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
  const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
@@ -312,11 +313,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   return entries;
  }
  const awaiting=()=>awaitBase!==null&&leadCount()<=awaitBase&&(launch.state==='joined'||Boolean(live()&&live().state==='running'));
- // A result that names only a handle (a team workspace open) finds its session through the launch's launchedRow, so Show terminal works after a failed start.
- function noteLaunched(){if(!target.bindLaunched)return;const row=launch.launchedRow();if(row)launchSessionId=row.sessionId;}
  function render(){
-  noteLaunched();
-  const p=presence();
+  if(gone)return;
+    const p=presence();
   if(launch.state==='joined'&&joinedAt===null){
    joinedAt=clock.now();const row=live();
    // The model comes from sessionUsage for this lead's own session; the usage row's sessionId is the CLI's id, so rows are never joined by id.
@@ -385,12 +384,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const again=sources?sources.seen(target.rows(next),firstRoster):false;
   if(!started||moved||again||target.rows(next).some(row=>!watched.has(row.sessionId))){const more=started&&Boolean(sources);const read=readThread(more);if(!started)firstRead=read;started=true;}else render();
  }
+ const detach=send.attach(render);
  const offs=[reads.on('sessions',()=>onRows(reads.latestSessions())),reads.on('inbox',()=>{readThread();}),reads.on('activity',()=>render())];
  if(onPin&&typeof onPin.subscribe==='function')offs.push(onPin.subscribe(()=>render()));
  if(typeof reads.delivery==='function')offs.push(reads.on('delivery',()=>render()));
  if(typeof transport.stream==='function')offs.push(transport.stream(chunk=>{streams.set(chunk.messageId,(streams.get(chunk.messageId)||'')+chunk.text);render();}));
- const onUnload=event=>{if(launch.hasHeld()){const text=launch.hasKept()?copy.unloadKept:copy.unload;event.preventDefault();event.returnValue=text;return text;}};
- win.addEventListener('beforeunload',onUnload);
  render();
  if(layout.autofocus!==false)composer.input.focus();
  // A page that reads by source does not wait on the roster: a sessions read that fails or never answers still settles the first thread read.
@@ -404,7 +402,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){offs.forEach(off=>off&&off());pin.release();mountSlot.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
