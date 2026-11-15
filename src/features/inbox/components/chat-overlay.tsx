@@ -252,8 +252,9 @@ export function ChatOverlay({
   const pinShape = opened && tall ? "line" : layout.pins;
   const sheetInPlace = opened !== null && !tall;
   // In the chat's place the sheet leaves the composer: the person can still write (the
-  // design: "the composer stays"). A read that failed or is loading has no composer to keep.
-  const composerOnly = sheetInPlace && Boolean(data) && !(groupShown && room);
+  // design: "the composer stays"), the room's as the chat's. A read that failed or is loading
+  // has no composer to keep.
+  const composerOnly = sheetInPlace && Boolean(data);
   // A small or short pane: the one-row composer.
   const compact = layout.width === "XS" || layout.height === "short";
 
@@ -441,6 +442,7 @@ export function ChatOverlay({
                 focusRequest={group.focus}
                 visible={visible}
                 human
+                threadHidden={composerOnly}
               />
             ) : (
               <Conversation

@@ -574,67 +574,73 @@ export function Conversation({
     if (lastOwn !== null && lastOwn !== sentFrom.current) jump();
     sentFrom.current = lastOwn;
   }, [lastOwn, jump]);
+  // Shown again after something took its place (a hidden scroller can lose its place): back at
+  // the newest message when it was following, as it would have stayed.
+  const hiddenBefore = useRef(threadHidden);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    if (threadHidden && !hiddenBefore.current) following.current = !away;
+    if (!threadHidden && hiddenBefore.current && following.current) jump();
+    hiddenBefore.current = threadHidden;
+  }, [threadHidden, away, jump]);
 
   const heads = dayHeads(thread.messages);
   return (
     <>
-      {!threadHidden && (
-        <div className="ibx-scrollwrap">
-          <div
-            className="ibx-msgs"
-            ref={scroller}
-            // Reachable by Tab to scroll with the keys, and where focus lands after a jump.
-            tabIndex={0}
-            role="region"
-            aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
-            data-testid="ibx-msgs"
-            // Esc closes a pin note and ends an Undo.
-            onKeyDown={
-              pins
-                ? (e) => {
-                    if (e.key === "Escape" && pins.note) {
-                      e.stopPropagation();
-                      pins.dismiss();
-                    }
+      {/* Kept mounted while something takes its place, so the scroller keeps its wiring. */}
+      <div className="ibx-scrollwrap" hidden={threadHidden}>
+        <div
+          className="ibx-msgs"
+          ref={scroller}
+          // Reachable by Tab to scroll with the keys, and where focus lands after a jump.
+          tabIndex={0}
+          role="region"
+          aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
+          data-testid="ibx-msgs"
+          // Esc closes a pin note and ends an Undo.
+          onKeyDown={
+            pins
+              ? (e) => {
+                  if (e.key === "Escape" && pins.note) {
+                    e.stopPropagation();
+                    pins.dismiss();
                   }
-                : undefined
-            }
-          >
-            {thread.messages.length === 0 && empty}
-            {thread.messages.map((m, i) => {
-              const head = heads[i];
-              const key = msgKey(m);
-              return (
-                <Fragment key={key}>
-                  {head && <div className="ibx-day">{head}</div>}
-                  {key === newFrom && (
-                    <div className="ibx-new" data-testid="ibx-new">
-                      <span>New</span>
-                    </div>
-                  )}
-                  <Bubble
-                    m={m}
-                    plain={quick}
-                    grouped={
-                      quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)
-                    }
-                    mark={marks?.(m) ?? null}
-                    pins={pins}
-                  />
-                </Fragment>
-              );
-            })}
-          </div>
-          <JumpToLatest
-            unseen={away ? unseen : 0}
-            onJump={() => {
-              jump();
-              // The pill goes away; focus lands on the conversation, not the page body.
-              scroller.current?.focus({ preventScroll: true });
-            }}
-          />
+                }
+              : undefined
+          }
+        >
+          {thread.messages.length === 0 && empty}
+          {thread.messages.map((m, i) => {
+            const head = heads[i];
+            const key = msgKey(m);
+            return (
+              <Fragment key={key}>
+                {head && <div className="ibx-day">{head}</div>}
+                {key === newFrom && (
+                  <div className="ibx-new" data-testid="ibx-new">
+                    <span>New</span>
+                  </div>
+                )}
+                <Bubble
+                  m={m}
+                  plain={quick}
+                  grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
+                  mark={marks?.(m) ?? null}
+                  pins={pins}
+                />
+              </Fragment>
+            );
+          })}
         </div>
-      )}
+        <JumpToLatest
+          unseen={away ? unseen : 0}
+          onJump={() => {
+            jump();
+            // The pill goes away; focus lands on the conversation, not the page body.
+            scroller.current?.focus({ preventScroll: true });
+          }}
+        />
+      </div>
       {pins && <PinLive pins={pins} />}
       <ArrivalsNote note={arrivals} />
       <Composer

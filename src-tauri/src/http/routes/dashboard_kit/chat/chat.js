@@ -175,6 +175,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const statusCache=new Map();
  // A page that reads its thread by source (target.sources): history that could not be read says so with Retry; a refresh that failed after a good read says when, so old mail is not taken as current.
  const retry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{readThread();}},copy.row.retry);
+ // A page that reads its thread with target.read waits on the roster for its first read: a roster read that failed says so, and Retry asks for it again.
+ const rosterRetry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{fails.delete('roster');render();readRoster();}},copy.row.retry);
  const readRows=()=>{
   if(!sources)return [];
   const stale=sources.staleAt();
@@ -183,7 +185,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  function statusItems(){
   const state=launch.state,p=presence(),on=Boolean(terminalTarget()),out=[...readRows()];
-  for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'',what==='thread'?retry():null);row.setAttribute('data-fail',what);return row;}});
+  for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'',what==='thread'?retry():what==='roster'?rosterRetry():null);row.setAttribute('data-fail',what);return row;}});
   if((state==='starting'||state==='slow')&&launch.stuck){
    out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},copy.row.needsTerminal),termButton(ids.term('stuck')))});
   }else if(state==='starting'||state==='slow'){
@@ -347,7 +349,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // The page's empty copy, only once the thread has read empty: while it reads it says so, and a read that failed says that instead (its alert row).
  function emptyItems(){
   if(!layout.empty||thread.length||launch.messages.length)return [];
-  if(fails.has('thread')||(sources&&sources.failedNow()))return [];
+  if(fails.has('thread')||fails.has('roster')||(sources&&sources.failedNow()))return [];
   if(!threadRead||(sources&&!sources.settled()))return [{id:'loading',sig:'l',make:()=>h('div',{class:'empty',role:'status','data-row':'loading'},copy.row.loading)}];
   return [{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}];
  }
@@ -372,6 +374,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  function onRows(next){
   const firstRoster=!gotRows;gotRows=true;
+  fails.delete('roster');
   const before=live();rows=next;const now=live();
   if(now&&now.state==='running'&&(!before||before.state!=='running')&&lastLiveState!==null)runningSince=clock.now();
   lastLiveState=now?now.state:'none';
@@ -393,8 +396,13 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A page that reads by source does not wait on the roster: a sessions read that fails or never answers still settles the first thread read.
  if(sources){started=true;firstRead=readThread(true);}
  // A roster that answered before this mount (a page opened with a session in its address reads it first) is taken as the first one.
- const roster=reads.sessions();
- if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());});
+ function readRoster(){
+  const roster=reads.sessions();
+  if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());},()=>{});
+  // Without sources the first thread read waits on the roster: one that fails is the conversation's failure, said with Retry, not a load that never ends.
+  else Promise.resolve(roster).catch(error=>{if(!gotRows){fails.set('roster',copy.row.unread+' '+((error&&error.message)||String(error)));render();}});
+ }
+ readRoster();
  return {
   unmount(){offs.forEach(off=>off&&off());pin.release();mountSlot.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).

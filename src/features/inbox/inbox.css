@@ -1424,6 +1424,18 @@
   font: 12px var(--ibx-mono);
 }
 /* A scroller with a "Jump to latest" pill over its foot (the Mailspool log, a conversation). */
+/* Kept mounted while a pin takes the thread's place (its stick-to-bottom wiring stays). */
+.ibx-scrollwrap[hidden],
+.ibx-group-pane .ibx-th-head[hidden] {
+  display: none;
+}
+/* The room's log, a box only to be hidden: in the room's flex column it lays out as the log. */
+.ibx-group-log {
+  display: contents;
+}
+.ibx-group-log[hidden] {
+  display: none;
+}
 .ibx-scrollwrap {
   position: relative;
   flex: 1;

@@ -952,6 +952,11 @@
     const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
       readThread();
     } }, copy.row.retry);
+    const rosterRetry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
+      fails.delete("roster");
+      render();
+      readRoster();
+    } }, copy.row.retry);
     const readRows = () => {
       if (!sources) return [];
       const stale = sources.staleAt();
@@ -961,7 +966,7 @@
     function statusItems() {
       const state2 = launch.state, p = presence(), on = Boolean(terminalTarget()), out = [...readRows()];
       for (const [what, text] of fails) out.push({ id: "fail-" + what, sig: "x|" + what + "|" + text, make: () => {
-        const row = alertRow("act-failed", text, "", what === "thread" ? retry() : null);
+        const row = alertRow("act-failed", text, "", what === "thread" ? retry() : what === "roster" ? rosterRetry() : null);
         row.setAttribute("data-fail", what);
         return row;
       } });
@@ -1188,7 +1193,7 @@
     }
     function emptyItems() {
       if (!layout.empty || thread.length || launch.messages.length) return [];
-      if (fails.has("thread") || sources && sources.failedNow()) return [];
+      if (fails.has("thread") || fails.has("roster") || sources && sources.failedNow()) return [];
       if (!threadRead || sources && !sources.settled()) return [{ id: "loading", sig: "l", make: () => h("div", { class: "empty", role: "status", "data-row": "loading" }, copy.row.loading) }];
       return [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }];
     }
@@ -1221,6 +1226,7 @@
     function onRows(next2) {
       const firstRoster = !gotRows;
       gotRows = true;
+      fails.delete("roster");
       const before = live();
       rows = next2;
       const now = live();
@@ -1261,10 +1267,20 @@
       started = true;
       firstRead = readThread(true);
     }
-    const roster = reads.sessions();
-    if (sources) roster.then(() => {
-      if (!gotRows) onRows(reads.latestSessions());
-    });
+    function readRoster() {
+      const roster = reads.sessions();
+      if (sources) roster.then(() => {
+        if (!gotRows) onRows(reads.latestSessions());
+      }, () => {
+      });
+      else Promise.resolve(roster).catch((error) => {
+        if (!gotRows) {
+          fails.set("roster", copy.row.unread + " " + (error && error.message || String(error)));
+          render();
+        }
+      });
+    }
+    readRoster();
     return {
       unmount() {
         offs.forEach((off) => off && off());

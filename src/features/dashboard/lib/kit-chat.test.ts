@@ -525,6 +525,27 @@ describe("kit.chat", () => {
       expect(failed.el.textContent).toContain("No messages yet");
     });
 
+    it("a roster read that fails says so with Retry, not loading for good; Retry reads it again", async () => {
+      const s = setup([lead("idle")]);
+      let fail = true;
+      const sessions = s.reads.sessions.bind(s.reads);
+      s.reads.sessions = async () => {
+        if (fail) throw new Error("denied: grant");
+        return sessions();
+      };
+      mountOn(s, { target: target(), layout: { empty: "No messages yet" } });
+      await flush();
+      expect(s.el.querySelector('[data-row="loading"]')).toBeNull();
+      const alert = s.el.querySelector<HTMLElement>('[data-fail="roster"]')!;
+      expect(alert).toHaveTextContent("Couldn't load the conversation.");
+      expect(alert).toHaveTextContent("denied: grant");
+      fail = false;
+      alert.querySelector<HTMLButtonElement>("[data-thread-retry]")!.click();
+      await flush();
+      expect(s.el.querySelector('[data-fail="roster"]')).toBeNull();
+      expect(s.el.textContent).toContain("No messages yet");
+    });
+
     it("copy overrides the words it names and keeps the rest", async () => {
       const s = setup([lead("idle")]);
       mountOn(s, {

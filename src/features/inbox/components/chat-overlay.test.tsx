@@ -56,8 +56,14 @@ vi.mock("./group-chat", async (orig) => ({
     room: { workspaceId: string };
     onBack?: () => void;
     focusRequest?: number;
+    threadHidden?: boolean;
   }) => (
-    <div data-testid="group-pane" data-room={p.room.workspaceId} data-focus={p.focusRequest}>
+    <div
+      data-testid="group-pane"
+      data-room={p.room.workspaceId}
+      data-focus={p.focusRequest}
+      data-thread-hidden={p.threadHidden ? "true" : "false"}
+    >
       <button onClick={p.onBack}>Back to the inbox</button>
     </div>
   ),
@@ -362,14 +368,33 @@ describe("ChatOverlay", () => {
     async (w, h) => {
       await renderOverlay(w, h);
       fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
-      expect(screen.queryByTestId("ibx-msgs")).toBeNull();
+      expect(screen.getByTestId("ibx-msgs")).not.toBeVisible();
       const box = composerBox();
       expect(box).toBeInTheDocument();
       expect(box).toBeEnabled();
       fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
-      expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+      expect(screen.getByTestId("ibx-msgs")).toBeVisible();
     },
   );
+
+  it("closing a pin opened in the chat's place puts the thread back at its newest message, still following", async () => {
+    await renderOverlay(250, 250);
+    const msgs = screen.getByTestId("ibx-msgs");
+    const height = { value: 1000 };
+    Object.defineProperty(msgs, "scrollHeight", { configurable: true, get: () => height.value });
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
+    // A hidden scroller can lose its place.
+    msgs.scrollTop = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
+    // The same scroller, not a new one without its stick-to-bottom wiring.
+    expect(screen.getByTestId("ibx-msgs")).toBe(msgs);
+    expect(msgs.scrollTop).toBe(1000);
+    // Still following: a message that lands keeps it at its end.
+    height.value = 1400;
+    arrive(msg(9, LEAD, "human", "Merged."));
+    await screen.findByText("Merged.");
+    expect(msgs.scrollTop).toBe(1400);
+  });
 
   it("Escape in an empty composer closes an open pin; with a draft it leaves the pin open", async () => {
     await renderOverlay(300, 700);
@@ -581,6 +606,19 @@ describe("ChatOverlay", () => {
       ask();
       fireEvent.click(await screen.findByRole("button", { name: "Back to the inbox" }));
       expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+    });
+
+    it("a pin opened in the room's place keeps the room's composer", async () => {
+      roster(room);
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(250, 250);
+      ask();
+      const pane = await screen.findByTestId("group-pane");
+      expect(pane).toHaveAttribute("data-thread-hidden", "false");
+      fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
+      expect(screen.getByTestId("group-pane")).toHaveAttribute("data-thread-hidden", "true");
+      fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
+      expect(screen.getByTestId("group-pane")).toHaveAttribute("data-thread-hidden", "false");
     });
 
     it("has nothing to open for a session with no room, and says it handled the request", async () => {

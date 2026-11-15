@@ -153,12 +153,16 @@ export function GroupChatPane({
   focusRequest = 0,
   visible = true,
   human = false,
+  threadHidden = false,
 }: {
   room: GroupRoom;
   onBack?: () => void;
   focusRequest?: number;
   visible?: boolean;
   human?: boolean;
+  /** Something else takes the room's place (a pin opened on a short pane): its head and log
+   *  are hidden, still mounted, and its composer stays. */
+  threadHidden?: boolean;
 }) {
   const label = useRoomLabel(room.workspaceId);
   const chat = useWorkspaceChat(room.workspaceId);
@@ -228,8 +232,8 @@ export function GroupChatPane({
       root.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true });
   }, [focusRequest, loaded]);
   return (
-    <div className="ibx-group-pane" ref={root}>
-      <div className="ibx-th-head">
+    <div className="ibx-group-pane" ref={root} data-thread-hidden={threadHidden || undefined}>
+      <div className="ibx-th-head" hidden={threadHidden}>
         {onBack && (
           <button
             type="button"
@@ -256,42 +260,44 @@ export function GroupChatPane({
         </div>
       </div>
       <section className="wc" data-density="b" aria-label={`${label.short} group chat`}>
-        <WorkspaceChatBody
-          messages={chat.messages}
-          loading={chat.loading}
-          error={chat.error}
-          density="b"
-          emptyState={
-            <div className="wc-newchat">
-              <strong>New chat</strong>
-              <span>
-                {agents
-                  ? `Everything posted here goes to everyone working in ${label.short}: you and ${agents} agent${agents === 1 ? "" : "s"} now, plus any agent that joins later.`
-                  : `Everything posted here goes to every agent that works in ${label.short}, including ones that join later.`}
-              </span>
-            </div>
-          }
-          unreadAfter={human ? humanAfter : reader?.readId}
-          unreadExclude={human ? "human" : reader?.handle}
-          unreadLabel={
-            human
-              ? "New since you looked"
-              : unread
-                ? `${unread} unread by ${reader?.name ?? names}`
-                : undefined
-          }
-          identify={(from, fromName) => {
-            const p = participant(view.dir, from);
-            const name = view.dir.has(from) ? p.name : fromName || p.name;
-            return {
-              name,
-              color: p.color,
-              initials: initials(name),
-              tag: view.me === from ? "this session" : undefined,
-              machine: p.machine ?? undefined,
-            };
-          }}
-        />
+        <div className="ibx-group-log" hidden={threadHidden}>
+          <WorkspaceChatBody
+            messages={chat.messages}
+            loading={chat.loading}
+            error={chat.error}
+            density="b"
+            emptyState={
+              <div className="wc-newchat">
+                <strong>New chat</strong>
+                <span>
+                  {agents
+                    ? `Everything posted here goes to everyone working in ${label.short}: you and ${agents} agent${agents === 1 ? "" : "s"} now, plus any agent that joins later.`
+                    : `Everything posted here goes to every agent that works in ${label.short}, including ones that join later.`}
+                </span>
+              </div>
+            }
+            unreadAfter={human ? humanAfter : reader?.readId}
+            unreadExclude={human ? "human" : reader?.handle}
+            unreadLabel={
+              human
+                ? "New since you looked"
+                : unread
+                  ? `${unread} unread by ${reader?.name ?? names}`
+                  : undefined
+            }
+            identify={(from, fromName) => {
+              const p = participant(view.dir, from);
+              const name = view.dir.has(from) ? p.name : fromName || p.name;
+              return {
+                name,
+                color: p.color,
+                initials: initials(name),
+                tag: view.me === from ? "this session" : undefined,
+                machine: p.machine ?? undefined,
+              };
+            }}
+          />
+        </div>
         {chat.archived ? (
           <WorkspaceChatArchiveBanner
             displayName={label.name}
