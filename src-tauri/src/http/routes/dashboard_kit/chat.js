@@ -946,9 +946,9 @@
       node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
       mark(open.current);
     }
-    function after() {
+    function after(was = false) {
       if (!open || !open.node.isConnected) return;
-      const had = within();
+      const had = was || within();
       paint();
       if (!had && !focusWant) return;
       focusWant = false;
@@ -1003,7 +1003,12 @@
       },
       sync,
       after,
-      foot
+      foot,
+      within: () => Boolean(within()),
+      /** Unmount: the page's pins lose the chooser's mark. */
+      release() {
+        close(false);
+      }
     };
   }
 
@@ -1495,6 +1500,7 @@
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
       if (replacer) replacer.sync();
+      const inChooser = replacer ? replacer.within() : false;
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       reconcile(log, cache, want);
       paintChips();
@@ -1506,7 +1512,7 @@
           pinState.refocus = null;
         }
       }
-      if (replacer) replacer.after();
+      if (replacer) replacer.after(inChooser);
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
         if (done2) {
@@ -1617,6 +1623,7 @@
         gone = true;
         offs.forEach((off) => off && off());
         pin.release();
+        if (replacer) replacer.release();
         mountSlot.release();
         if (sendOpt) detach();
         else send.dispose();

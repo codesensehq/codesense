@@ -344,13 +344,14 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
   if(replacer)replacer.sync();
+  const inChooser=replacer?replacer.within():false;
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
   if(pinState.refocus!==null){const pinButton=log.querySelector(`.pin-b[data-pin-mid="${pinState.refocus}"]`);if(pinButton){pinButton.focus();pinState.refocus=null;}}
-  if(replacer)replacer.after();
+  if(replacer)replacer.after(inChooser);
   if(refocusCard!==null){const done=log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);if(done){done.focus();refocusCard=null;}}
   if(refocus&&launch.state!=='starting'&&launch.state!=='slow'){refocus=false;const retry=status.querySelector('[data-retry]');if(retry&&(!el.ownerDocument.activeElement||el.ownerDocument.activeElement===el.ownerDocument.body||el.ownerDocument.activeElement===status))retry.focus();}
   composer.update({placeholder:p.placeholder,disabled:isDone,...(layout.composer?layout.composer(here):{})});
@@ -420,7 +421,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),

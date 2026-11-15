@@ -124,10 +124,11 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   mark(open.current);
  }
  /** After a render (or a move): the chooser is drawn in place, and focus that was in it, or that a move or a change wants there, goes to the current row, else the change
-  *  line when the row the person was on left, else the room's Pin. */
- function after(){
+  *  line when the row the person was on left, else the room's Pin. `was` is within() from before the render: a render that rebuilt the message (a busy replace) moved
+  *  the chooser and dropped its focus. */
+ function after(was=false){
   if(!open||!open.node.isConnected)return;
-  const had=within();
+  const had=was||within();
   paint();
   if(!had&&!focusWant)return;
   focusWant=false;
@@ -164,5 +165,8 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   // A pin, unpin or replace elsewhere ends the chooser, as it ends an Undo.
   closeFor(mid){if(open&&open.item.id!==mid)close(false);},
   sync,after,foot,
+  within:()=>Boolean(within()),
+  /** Unmount: the page's pins lose the chooser's mark. */
+  release(){close(false);},
  };
 }
