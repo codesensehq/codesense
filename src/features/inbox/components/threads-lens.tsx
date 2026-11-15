@@ -533,6 +533,7 @@ export function Conversation({
   empty = null,
   marks,
   pins = null,
+  avatars = false,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -546,6 +547,9 @@ export function Conversation({
   marks?: (m: ConversationMessage) => DeliveryMark | null;
   /** The person's pins of this conversation's agent thread: each message gets a Pin. */
   pins?: PersonPins | null;
+  /** The quick chat on a pane with room for them: the sender's avatar starts each run of the
+   *  other side's messages. */
+  avatars?: boolean;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -596,6 +600,7 @@ export function Conversation({
           {thread.messages.map((m, i) => {
             const head = heads[i];
             const key = msgKey(m);
+            const grouped = quick && !head && key !== newFrom && follows(thread.messages[i - 1], m);
             return (
               <Fragment key={key}>
                 {head && <div className="ibx-day">{head}</div>}
@@ -607,7 +612,8 @@ export function Conversation({
                 <Bubble
                   m={m}
                   plain={quick}
-                  grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
+                  grouped={grouped}
+                  avatar={avatars && quick}
                   mark={marks?.(m) ?? null}
                   pins={pins}
                 />
@@ -647,8 +653,12 @@ export function Bubble({
   grouped = false,
   mark = null,
   pins = null,
+  avatar = false,
 }: {
   m: ConversationMessage;
+  /** Draw the sender's avatar beside the other side's messages: at a run's start, and its
+   *  column under the rest of the run. */
+  avatar?: boolean;
   /** The person's pins: a Pin in the message's action row, or an HTML message's title bar. */
   pins?: PersonPins | null;
   /** Queued or Delivered, for a message the person sent. */
@@ -676,6 +686,7 @@ export function Bubble({
     term ? "term" : "",
     grouped ? "grouped" : "",
     pinned ? "pinned" : "",
+    avatar && !out ? "av" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -691,6 +702,7 @@ export function Bubble({
       // On touch the action row shows on a tap, as hover shows it for a pointer.
       onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
     >
+      {avatar && !out && !grouped && <Avatar k={m.from} dir={dir} team={m.team} sm />}
       {meta && (
         <div className="meta">
           {grouped ? null : plain ? (

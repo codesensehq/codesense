@@ -467,6 +467,24 @@
   min-height: 0;
   flex-direction: column;
 }
+/* The run-start avatar of the other side's messages, in a column the rest of the run keeps. */
+.ibx-m.in.av {
+  position: relative;
+  padding-left: 28px;
+}
+.ibx-m.in.av > .ibx-av {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+/* The record line's story link. */
+.ibx-ov-story {
+  color: var(--ibx-accent);
+  text-decoration: none;
+}
+.ibx-ov-story:hover {
+  text-decoration: underline;
+}
 /* XS or short: no avatar column; the sender's name and time lead the text. */
 .ibx-ov[data-avatars="false"] .ibx-m .ibx-av {
   display: none;
