@@ -2733,7 +2733,8 @@ button.ibx-media-open {
   display: none;
   font-size: 10px;
   font-weight: 600;
-  color: var(--ibx-accent-ink);
+  /* Accent ink on the pin's light wash; the on-accent ink is only for a full accent fill. */
+  color: var(--ibx-accent);
 }
 @media (prefers-reduced-motion: no-preference) {
   .ibx-pk[data-new="true"] {
