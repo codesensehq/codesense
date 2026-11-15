@@ -677,6 +677,70 @@ describe("ChatOverlay", () => {
   });
 });
 
+describe("ChatOverlay: the thread is one Tab stop", () => {
+  const thread = () => screen.getByTestId("ibx-msgs");
+  const rows = () => [...thread().querySelectorAll<HTMLElement>("[data-mid]")];
+  /** What Tab stops on in the thread: anything focusable with a tabindex of 0 or more. */
+  const stops = () =>
+    [thread(), ...thread().querySelectorAll<HTMLElement>("*")].filter(
+      (el) =>
+        el.tabIndex >= 0 &&
+        (el.matches("button, a[href], iframe, input") || el.hasAttribute("tabindex")),
+    );
+
+  it("stops on the newest message and its own actions, and on nothing in older messages", async () => {
+    await renderOverlay(420, 700);
+    const newest = rows().at(-1)!;
+    expect(newest.tabIndex).toBe(0);
+    expect(thread().tabIndex).toBe(-1);
+    const all = stops();
+    expect(all.length).toBeGreaterThan(1);
+    expect(all.every((el) => el === newest || newest.contains(el))).toBe(true);
+  });
+
+  it("moves between messages with the arrow keys, Home and End, and takes each message's actions along", async () => {
+    await renderOverlay(420, 700);
+    const all = rows();
+    const newest = all.at(-1)!;
+    act(() => newest.focus());
+    fireEvent.keyDown(newest, { key: "ArrowUp" });
+    const before = all.at(-2)!;
+    expect(before).toHaveFocus();
+    expect(before.tabIndex).toBe(0);
+    expect(newest.tabIndex).toBe(-1);
+    expect(stops().every((el) => el === before || before.contains(el))).toBe(true);
+    fireEvent.keyDown(before, { key: "Home" });
+    expect(all[0]).toHaveFocus();
+    fireEvent.keyDown(all[0]!, { key: "ArrowUp" });
+    expect(all[0]).toHaveFocus();
+    fireEvent.keyDown(all[0]!, { key: "End" });
+    expect(newest).toHaveFocus();
+    fireEvent.keyDown(newest, { key: "ArrowDown" });
+    expect(newest).toHaveFocus();
+  });
+
+  it("an action focused in an older message makes that message the thread's stop", async () => {
+    await renderOverlay(420, 700);
+    const first = rows()[0]!;
+    const pin = within(first).getAllByRole("button")[0]!;
+    act(() => pin.focus());
+    expect(first.tabIndex).toBe(0);
+    expect(rows().at(-1)!.tabIndex).toBe(-1);
+    expect(stops().every((el) => el === first || first.contains(el))).toBe(true);
+  });
+
+  it("a message that lands while you read an older one leaves the stop where you are", async () => {
+    await renderOverlay(420, 700);
+    const first = rows()[0]!;
+    act(() => first.focus());
+    arrive(msg(9, LEAD, "human", "Merged."));
+    await screen.findByText("Merged.");
+    expect(first).toHaveFocus();
+    expect(first.tabIndex).toBe(0);
+    expect(rows().at(-1)!.tabIndex).toBe(-1);
+  });
+});
+
 describe("ChatOverlay: the person pins a message", () => {
   // A one-thread engine double: pin, unpin and restore change the list the next read returns.
   let held: AgentPin[];

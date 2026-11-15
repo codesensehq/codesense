@@ -251,8 +251,8 @@ describe("ChatOverlay on a long log", () => {
     fireEvent.click(jump);
     await waitFor(() => expect(atEnd(msgs)).toBe(true));
     expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
-    // Focus lands on the conversation, not the page body, as the pill goes.
-    expect(msgs).toHaveFocus();
+    // Focus lands on the conversation's newest message, not the page body, as the pill goes.
+    expect([...msgs.querySelectorAll<HTMLElement>("[data-mid]")].at(-1)).toHaveFocus();
   });
 
   it("opens 500 messages at the newest, and follows at the cap, where one arrives as the oldest leaves", async () => {
