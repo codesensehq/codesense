@@ -13,7 +13,8 @@ import {
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
+import { isRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
 import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
 import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
 
@@ -864,6 +865,48 @@ describe("ChatOverlay", () => {
     expect(screen.getByRole("textbox")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Full view" })).toBeInTheDocument();
   });
+
+  it.each(REMOTE_LAUNCH_CLIS)(
+    "shows a remote %s session's chat at its newest message, and sends to it from its composer",
+    async (runtime) => {
+      // A session on another machine: its row names the machine and the team it was launched in,
+      // and its agent is known from that host's activity snapshot, not a process on this Mac. Only
+      // the isRunningAgent line below exercises that remote path; the overlay itself reads nothing
+      // remote (the inbox by session id, the team from its prop), so the rest shows a remote row
+      // gets the same chat as a local one. The tab mounting the chat for a remote session is
+      // inbox-split's REMOTE_LAUNCH_CLIS case.
+      roster({ kind: runtime, machineId: "box", launchTeamKey: TEAM_KEY });
+      useAgentStateStore.setState({ processAgentBySession: {} });
+      useAgentStateStore.getState().recordActivity(
+        {
+          session: SESSION,
+          identity: { hostBootId: "box", sessionIncarnation: "shell", invocationId: "agent" },
+          revision: 1,
+          turnGeneration: 0,
+          provider: runtime as never,
+          state: "idle",
+          observed: true,
+          limited: false,
+          exit: null,
+          asks: [],
+        },
+        0,
+      );
+      expect(isRunningAgent(useAgentStateStore.getState(), SESSION)).toBe(true);
+      await renderOverlay(420, 700, "dock");
+      expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION);
+      const shown = Array.from(screen.getByTestId("ibx-msgs").querySelectorAll(".ibx-m"));
+      expect(shown.at(-1)).toHaveTextContent("Review is clean; merge card is next.");
+      const box = screen.getByRole("textbox");
+      expect(box).toBeEnabled();
+      fireEvent.change(box, { target: { value: "Ship it" } });
+      fireEvent.keyDown(box, { key: "Enter" });
+      await waitFor(() => expect(api.sendAsHuman).toHaveBeenCalled());
+      expect(api.sendAsHuman.mock.calls[0]).toEqual(
+        expect.arrayContaining([expect.objectContaining(TEAM), LEAD, "Ship it"]),
+      );
+    },
+  );
 
   it("covering the tab, takes the keyboard into its composer; docked, leaves it where it is", async () => {
     const { unmount } = await renderOverlay(600, 300, "cover");
