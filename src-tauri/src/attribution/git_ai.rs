@@ -430,6 +430,22 @@ fn same_origin(a: &LineRange, b: &LineRange) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     #[test]
+    fn only_a_story_changes_source_counts_its_git_children() {
+        use crate::shared::invoke_stats::metric_total;
+        assert!(!GitAiSource::new("git").count_story_changes_children);
+        let home = tempfile::tempdir().unwrap();
+        let counted = GitAiSource::for_story_changes(home.path());
+        assert!(counted.count_story_changes_children);
+        assert!(!GitAiSource::for_home(home.path()).count_story_changes_children);
+        // The spawn fails, but the counter moves before it.
+        let before = metric_total("story_changes.git_child");
+        let mut source = GitAiSource::new("/nonexistent-git-for-counter-test");
+        source.count_story_changes_children = true;
+        let _ = source.git(home.path(), &["status"]);
+        assert!(metric_total("story_changes.git_child") > before);
+    }
+
+    #[test]
     fn a_renamed_drain_binary_runs_as_git_ai() {
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("git-ai-macos-arm64");

@@ -162,14 +162,60 @@ fn context_index_changes_refresh_agent_definitions() {
 }
 
 #[test]
-fn event_flags_distinguish_activity_only_rebuilds() {
+fn only_agent_state_events_are_activity_causes() {
     use super::*;
-    let activity = event_flags("agent-state-changed");
-    assert_ne!(activity & ACTIVITY_REBUILD, 0);
-    assert_eq!(activity & OTHER_REBUILD, 0);
-    let mixed_cause = event_flags("sessions-waiter-changed");
-    assert_ne!(mixed_cause & OTHER_REBUILD, 0);
-    assert_eq!(mixed_cause & ACTIVITY_REBUILD, 0);
+    for event in [
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
+        "agent-state-changed",
+        "agents-changed",
+    ] {
+        assert_eq!(event_cause(event), CAUSE_ACTIVITY, "{event}");
+    }
+    for event in ["sessions-waiter-changed", "machines-changed", "mcp:agent-done"] {
+        assert_eq!(event_cause(event), CAUSE_OTHER, "{event}");
+    }
+}
+
+#[tokio::test]
+async fn a_terminal_status_update_is_an_activity_only_rebuild_and_a_done_event_is_not() {
+    use super::*;
+    use crate::mcp::session_status::SessionOutcomes;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(LiveHub::default());
+    app.manage(SessionOutcomes::default());
+    listen_sources(app.handle());
+    let hub = app.state::<LiveHub>();
+    assert_eq!(hub.rebuild_cause.load(Ordering::Acquire), 0);
+    // The normal hook payload reaches both the generic and the dedicated listener.
+    app.emit(
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
+        json!({"tab_session_id":"s","status":"running"}),
+    )
+    .unwrap();
+    hub.next_batch().await;
+    assert_eq!(hub.rebuild_cause.swap(0, Ordering::AcqRel), CAUSE_ACTIVITY);
+    app.emit("mcp:agent-done", json!({"sessionId":"s","status":"done"}))
+        .unwrap();
+    hub.next_batch().await;
+    assert_eq!(hub.rebuild_cause.swap(0, Ordering::AcqRel), CAUSE_OTHER);
+}
+
+#[test]
+fn rebuilds_are_counted_and_only_activity_rebuilds_count_as_activity_only() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let (rebuilds, activity) = (
+        metric_total("live_hub.rebuild"),
+        metric_total("live_hub.rebuild.activity_only"),
+    );
+    count_rebuild(CAUSE_OTHER);
+    count_rebuild(CAUSE_ACTIVITY | CAUSE_OTHER);
+    assert!(metric_total("live_hub.rebuild") >= rebuilds + 2);
+    assert_eq!(metric_total("live_hub.rebuild.activity_only"), activity);
+    count_rebuild(CAUSE_ACTIVITY);
+    assert_eq!(metric_total("live_hub.rebuild.activity_only"), activity + 1);
 }
 
 #[test]
@@ -177,7 +223,10 @@ fn projection_metrics_include_message_delivery_and_change_with_deltas() {
     let mut registry = TopicRegistry::default();
     let (entries, subscriptions, topics) = registry.metrics_snapshot();
     assert_eq!((entries, subscriptions), (0, 0));
-    let delivery = topics.iter().find(|(topic, _, _)| topic == "messageDelivery").unwrap();
+    let delivery = topics
+        .iter()
+        .find(|(topic, _, _)| topic == "messageDelivery")
+        .unwrap();
     assert_eq!(delivery.1, 0);
     registry
         .replace_view(
@@ -188,7 +237,10 @@ fn projection_metrics_include_message_delivery_and_change_with_deltas() {
         .unwrap();
     let (entries, _, topics) = registry.metrics_snapshot();
     assert_eq!(entries, 1);
-    let delivery = topics.iter().find(|(topic, _, _)| topic == "messageDelivery").unwrap();
+    let delivery = topics
+        .iter()
+        .find(|(topic, _, _)| topic == "messageDelivery")
+        .unwrap();
     assert_eq!((delivery.1, delivery.2), (1, 1));
 }
 
@@ -204,14 +256,7 @@ async fn every_domain_source_invalidates_the_projection_and_bursts_coalesce() {
     assert!(started.elapsed() >= COALESCE);
     assert_eq!(
         flags,
-        REBUILD
-            | INBOX
-            | HOSTS
-            | FOOTPRINT
-            | DEFINITIONS
-            | MACHINE_STATS
-            | ACTIVITY_REBUILD
-            | OTHER_REBUILD
+        REBUILD | INBOX | HOSTS | FOOTPRINT | DEFINITIONS | MACHINE_STATS
     );
     assert_eq!(hub.dirty.load(Ordering::Acquire), 0);
     for event in DOMAIN_EVENTS {

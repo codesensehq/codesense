@@ -2383,9 +2383,7 @@ fn the_retired_preview_has_no_writer_exception() {
 /// graph, so none reaches a write primitive. A rise means the resolver lost track
 /// of something: run with `X1_PRINT_UNRESOLVED=1` and read the list. The ceiling
 /// is a growth tripwire; raise it only after reviewing every added site.
-/// The small increment covers the added low-cardinality runtime diagnostics;
-/// their new call sites do not reach any write primitive.
-const MAX_UNRESOLVED_PATHS: usize = 278;
+const MAX_UNRESOLVED_PATHS: usize = 277;
 /// The most method calls that several crate types define and that resolve to
 /// none of them, because the caller names none of those types (`.name()`, `.id()`
 /// on a value whose type is inferred). This is the walk's main blind spot; the
@@ -2398,8 +2396,7 @@ const MAX_UNRESOLVED_PATHS: usize = 278;
 /// collisions are covered by the SQL review). This cap is a growth tripwire:
 /// raise it only after reviewing the added sites, never by adding sink
 /// exceptions or slack.
-/// The added diagnostics use standard collection and serialization methods.
-const MAX_UNRESOLVED_METHODS: usize = 6_500;
+const MAX_UNRESOLVED_METHODS: usize = 6_495;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

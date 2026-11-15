@@ -275,8 +275,10 @@ pub fn install_app_emitter(app: tauri::AppHandle) {
 
 fn emit(session_id: &str, events: Vec<StreamEvent>) {
     let Some(sink) = EMIT.get() else { return };
+    if !events.is_empty() {
+        crate::shared::invoke_stats::metric_add("session_text.emit", events.len());
+    }
     for event in &events {
-        crate::shared::invoke_stats::metric_count("session_text.emit");
         sink(session_id, event);
     }
 }
@@ -419,6 +421,18 @@ mod tests {
 
     fn events(format: TranscriptFormat, line: &str) -> Vec<ProseEvent> {
         prose::events(format, line)
+    }
+
+    #[test]
+    fn emitting_events_moves_the_emit_counter_and_an_empty_batch_leaves_it() {
+        use crate::shared::invoke_stats::metric_total;
+        let _ = EMIT.set(Box::new(|_, _| {}));
+        let before = metric_total("session_text.emit");
+        emit("s", Vec::new());
+        // Parallel tests may add emits, so an empty batch is checked by the guard in `emit`.
+        assert!(metric_total("session_text.emit") >= before);
+        emit("s", vec![StreamEvent::Tool { turn: "t".into() }; 3]);
+        assert!(metric_total("session_text.emit") >= before + 3);
     }
 
     #[test]

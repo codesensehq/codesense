@@ -36,7 +36,7 @@ use crate::mcp::{
 use projection::{FieldProviders, Snapshot, SubscriptionReply, TopicRegistry};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
+    atomic::{AtomicU8, Ordering},
     Mutex,
 };
 use std::time::Duration;
@@ -47,15 +47,18 @@ fn now_ms() -> u64 {
 }
 
 pub const COALESCE: Duration = Duration::from_millis(50);
-const REBUILD: u16 = 1;
-const MACHINE_STATS: u16 = 32;
-const DEFINITIONS: u16 = 16;
-const FILES: u16 = 64;
-const ACTIVITY_REBUILD: u16 = 128;
-const OTHER_REBUILD: u16 = 256;
-const INBOX: u16 = 2;
-const HOSTS: u16 = 4;
-const FOOTPRINT: u16 = 8;
+const REBUILD: u8 = 1;
+const MACHINE_STATS: u8 = 32;
+const DEFINITIONS: u8 = 16;
+const FILES: u8 = 64;
+const INBOX: u8 = 2;
+const HOSTS: u8 = 4;
+const FOOTPRINT: u8 = 8;
+/// What woke a rebuild, kept apart from the dirty flags so `next_batch` flags stay exact.
+/// Activity is the churn of an agent's own state: `terminal-status-update`,
+/// `agent-state-changed` and `agents-changed`. Every other source is `CAUSE_OTHER`.
+const CAUSE_ACTIVITY: u8 = 1;
+const CAUSE_OTHER: u8 = 2;
 const DOMAIN_EVENTS: &[&str] = &[
     crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
     "sessions-waiter-changed",
@@ -95,19 +98,18 @@ fn definition_membership_event(event: &str) -> bool {
             | crate::commands::scratch_use::SCRATCH_USE_CHANGED_EVENT
     )
 }
-fn event_flags(event: &str) -> u16 {
-    let cause = if matches!(
+fn event_cause(event: &str) -> u8 {
+    if matches!(
         event,
-        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT
-            | "agent-state-changed"
-            | "agents-changed"
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT | "agent-state-changed" | "agents-changed"
     ) {
-        ACTIVITY_REBUILD
+        CAUSE_ACTIVITY
     } else {
-        OTHER_REBUILD
-    };
+        CAUSE_OTHER
+    }
+}
+fn event_flags(event: &str) -> u8 {
     REBUILD
-        | cause
         | if matches!(
             event,
             "machines-changed" | "terminal-layout-admission-changed"
@@ -233,7 +235,8 @@ impl Model {
 }
 pub struct LiveHub {
     model: Mutex<Model>,
-    dirty: AtomicU16,
+    dirty: AtomicU8,
+    rebuild_cause: AtomicU8,
     wake: std::sync::Arc<tokio::sync::Notify>,
     run_review: std::sync::Arc<Mutex<run_review::Owner>>,
     changes: tokio::sync::watch::Sender<u64>,
@@ -320,7 +323,8 @@ impl Default for LiveHub {
         effective_status::register(&mut providers);
         Self {
             model: Mutex::new(Model::default()),
-            dirty: AtomicU16::new(0),
+            dirty: AtomicU8::new(0),
+            rebuild_cause: AtomicU8::new(0),
             wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             run_review: Default::default(),
             changes: tokio::sync::watch::channel(0).0,
@@ -356,20 +360,24 @@ impl LiveHub {
     pub(crate) fn invalidate_sessions(&self) {
         self.invalidate(REBUILD | HOSTS);
     }
-    fn invalidate(&self, mut flags: u16) {
-        if flags & REBUILD != 0 && flags & (ACTIVITY_REBUILD | OTHER_REBUILD) == 0 {
-            flags |= OTHER_REBUILD;
+    fn invalidate(&self, flags: u8) {
+        self.invalidate_cause(flags, CAUSE_OTHER);
+    }
+    fn invalidate_cause(&self, flags: u8, cause: u8) {
+        if flags & REBUILD != 0 {
+            self.rebuild_cause.fetch_or(cause, Ordering::Release);
         }
         self.dirty.fetch_or(flags, Ordering::Release);
         self.wake.notify_one();
     }
-    async fn next_batch(&self) -> u16 {
+    async fn next_batch(&self) -> u8 {
         let deadline = self.model.lock().unwrap().stall_deadline;
         tokio::select! {
             () = self.wake.notified() => {},
             () = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                 self.model.lock().unwrap().stall_deadline = None;
-                self.dirty.fetch_or(REBUILD | HOSTS | OTHER_REBUILD, Ordering::Release);
+                self.rebuild_cause.fetch_or(CAUSE_OTHER, Ordering::Release);
+                self.dirty.fetch_or(REBUILD | HOSTS, Ordering::Release);
             }
         }
         tokio::time::sleep(COALESCE).await;
@@ -388,11 +396,7 @@ impl LiveHub {
         if topic == "agentList" && model.agent_views.insert(key.to_owned()) {
             project_agent_views(&mut model)?;
         }
-        let result = model.projections.snapshot(topic, key);
-        let agent_views = model.agent_views.len();
-        drop(model);
-        crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", agent_views);
-        result
+        model.projections.snapshot(topic, key)
     }
     pub(crate) fn with_effective_status(&self, source: &[SessionListRow]) -> serde_json::Value {
         let owner = self.snapshot("all", "sessions").unwrap().snapshot;
@@ -531,8 +535,9 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                     .agent_definitions
                     .note_activity();
             }
-            let flags = event_flags(event);
-            handle.state::<LiveHub>().invalidate(flags);
+            handle
+                .state::<LiveHub>()
+                .invalidate_cause(event_flags(event), event_cause(event));
         });
     }
     let handle = app.clone();
@@ -585,7 +590,9 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         },
                     );
                 }
-                handle.state::<LiveHub>().invalidate(REBUILD);
+                handle
+                    .state::<LiveHub>()
+                    .invalidate_cause(REBUILD, CAUSE_ACTIVITY);
             }
         }
     });
@@ -714,7 +721,7 @@ pub fn start(app: &tauri::AppHandle) {
         };
         let mut inbox_gate = InboxGate::default();
         loop {
-            let flags = next_updates(&handle).await;
+            let (flags, cause) = next_updates(&handle).await;
             if flags & MACHINE_STATS != 0 {
                 machine_stats::reconcile(&handle);
             }
@@ -730,7 +737,7 @@ pub fn start(app: &tauri::AppHandle) {
                 refresh_definitions(&handle).await;
             }
             if flags & REBUILD != 0 {
-                if let Err(e) = rebuild(&handle, flags).await {
+                if let Err(e) = rebuild(&handle, cause).await {
                     log::warn!("sessions projection: {e}");
                 }
             }
@@ -741,12 +748,14 @@ pub fn start(app: &tauri::AppHandle) {
     });
 }
 
-async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> u16 {
-    let flags = app.state::<LiveHub>().next_batch().await;
+async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (u8, u8) {
+    let hub = app.state::<LiveHub>();
+    let flags = hub.next_batch().await;
+    let cause = hub.rebuild_cause.swap(0, Ordering::AcqRel);
     if let Err(error) = run_review::refresh(app) {
         log::warn!("run review projection: {error}");
     }
-    flags
+    (flags, cause)
 }
 
 async fn refresh_hosts(app: &tauri::AppHandle) {
@@ -1125,11 +1134,16 @@ async fn refresh_definitions<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-async fn rebuild(app: &tauri::AppHandle, flags: u16) -> Result<(), String> {
+/// One rebuild, and whether only agent activity (see [`CAUSE_ACTIVITY`]) asked for it.
+fn count_rebuild(cause: u8) {
     crate::shared::invoke_stats::metric_count("live_hub.rebuild");
-    if flags & ACTIVITY_REBUILD != 0 && flags & OTHER_REBUILD == 0 {
+    if cause == CAUSE_ACTIVITY {
         crate::shared::invoke_stats::metric_count("live_hub.rebuild.activity_only");
     }
+}
+
+async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
+    count_rebuild(cause);
     use crate::commands::agent_inbox::InboxHost;
     let hub = app.state::<LiveHub>();
     let live = hub.model.lock().unwrap().live_tabs();
@@ -1765,28 +1779,55 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, deltas: Vec<projection:
     publish_subscriptions(app, sent);
     for delta in deltas {
         if delta.topic != "inbox" {
-            let topic = delta.topic.as_str();
-            if let Ok(bytes) = serde_json::to_vec(&delta) {
-                crate::shared::invoke_stats::metric_add(
-                    &format!("live_hub.delta.bytes.{topic}"),
-                    bytes.len(),
-                );
+            // One serialization serves the byte count and the emit. The count is the
+            // delta payload only: it leaves out Tauri's event envelope.
+            match serde_json::value::to_raw_value(&delta) {
+                Ok(raw) => {
+                    crate::shared::invoke_stats::metric_add(
+                        &format!("live_hub.delta.bytes.{}", metric_topic(&delta.topic)),
+                        raw.get().len(),
+                    );
+                    let _ = app.emit("codesense:delta", raw);
+                }
+                Err(_) => {
+                    let _ = app.emit("codesense:delta", delta);
+                }
             }
-            let _ = app.emit("codesense:delta", delta);
         }
     }
     record_projection_metrics(app);
 }
 
+/// Page-created `ui:<x>` topics share one metric name so they cannot fill the metrics map.
+fn metric_topic(topic: &str) -> &str {
+    if topic.starts_with("ui:") {
+        "ui"
+    } else {
+        topic
+    }
+}
+
+/// Sample the retained-size gauges at most once per reporting window, and record them
+/// after the model lock is released.
 fn record_projection_metrics<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if !crate::shared::invoke_stats::gauge_window_open() {
+        return;
+    }
     let hub = app.state::<LiveHub>();
-    let model = hub.model.lock().unwrap_or_else(|e| e.into_inner());
-    crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", model.agent_views.len());
-    let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+    let (agent_views, entries, subscriptions, topics) = {
+        let model = hub.model.lock().unwrap_or_else(|e| e.into_inner());
+        let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+        (model.agent_views.len(), entries, subscriptions, topics)
+    };
+    crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", agent_views);
     crate::shared::invoke_stats::metric_gauge("live_hub.delta_log_entries", entries);
     crate::shared::invoke_stats::metric_gauge("live_hub.subscriptions", subscriptions);
-    for (topic, views, _) in topics {
-        crate::shared::invoke_stats::metric_gauge(&format!("live_hub.views.{topic}"), views);
+    let mut views = BTreeMap::<&str, usize>::new();
+    for (topic, count, _) in &topics {
+        *views.entry(metric_topic(topic)).or_default() += count;
+    }
+    for (topic, count) in views {
+        crate::shared::invoke_stats::metric_gauge(&format!("live_hub.views.{topic}"), count);
     }
 }
 
@@ -1857,7 +1898,7 @@ struct InboxGate {
 async fn inbox_pass<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     host: &dyn crate::commands::agent_inbox::InboxHost,
-    flags: u16,
+    flags: u8,
     gate: &mut InboxGate,
 ) -> Result<(), String> {
     let inputs = inbox_inputs(app);
