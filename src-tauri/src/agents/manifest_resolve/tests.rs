@@ -106,7 +106,7 @@ fn agent(runtime: AgentCli, startup: &[&str]) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
-        skills: None,
+        skill_allowlist: None,
         budget_usd: None,
         revision: 1,
         archived_at: None,

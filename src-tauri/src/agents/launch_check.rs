@@ -284,12 +284,12 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
     out
 }
 
-/// The warning for an agent whose `skills` list names skills its startup does not place:
+/// The warning for an agent whose `skill_allowlist` names skills its startup does not place:
 /// a launch offers one only where the workspace already has it (a context worktree).
 fn skills_warning(resolved: &ResolvedAgent) -> Option<LaunchWarning> {
     let missing: Vec<&str> = resolved
         .launch
-        .skills
+        .skill_allowlist
         .iter()
         .flatten()
         .filter(|name| !resolved.provides.skills.contains(name))
@@ -298,20 +298,21 @@ fn skills_warning(resolved: &ResolvedAgent) -> Option<LaunchWarning> {
     (!missing.is_empty()).then(|| LaunchWarning {
         code: LaunchWarningCode::SkillsNotInManifest,
         message: format!(
-            "skills lists {} that its startup does not place; a launch offers them only where the workspace already has them",
+            "skill_allowlist lists {} that its startup does not place; a launch offers them only where the workspace already has them",
             missing.join(", ")
         ),
     })
 }
 
-/// The warning for an agent with a `skills` list on a runtime that cannot turn the
+/// The warning for an agent with a `skill_allowlist` on a runtime that cannot turn the
 /// other skills off.
 pub fn skills_not_enforced_warning(agent: &super::model::Agent) -> Option<LaunchWarning> {
-    (agent.skills.is_some() && !super::adapter::desktop(agent.runtime).enforces_skill_allowlist)
+    (agent.skill_allowlist.is_some()
+        && !super::adapter::desktop(agent.runtime).enforces_skill_allowlist)
         .then(|| LaunchWarning {
             code: LaunchWarningCode::SkillsNotEnforced,
             message: format!(
-                "skills is not enforced by {}; a launch offers every skill",
+                "skill_allowlist is not enforced by {}; a launch offers every skill",
                 agent.runtime
             ),
         })
@@ -734,7 +735,7 @@ mod tests {
             avatar: None,
             allow_wake: false,
             resume_after_restart: false,
-            skills: None,
+            skill_allowlist: None,
             budget_usd: None,
             revision: 1,
             archived_at: None,

@@ -360,15 +360,17 @@ pub struct AgentDraft {
     )]
     pub mcp_bridge_tools: Option<Option<Vec<String>>>,
     /// The skills a launch offers, by name (e.g. `["bmad-build"]`); null/omitted
-    /// offers every skill the workspace has. A Claude launch turns every other
-    /// skill it finds off (its startup's and the workspace's `.claude/skills/`),
-    /// context worktrees included; other runtimes warn and offer every skill.
-    /// Names are 1-128 ASCII letters, digits, `_`, `-` or `:`, each once.
+    /// offers every skill the workspace has. A Claude launch turns off every other
+    /// skill its startup places or the workspace's `.claude/skills/` holds, context
+    /// worktrees included; personal (`~/.claude/skills`) and plugin skills stay on.
+    /// Other runtimes warn and offer every skill. Names are 1-128 ASCII letters,
+    /// digits, `_`, `-` or `:`, each once. Stored as agent.yaml `skill_allowlist`;
+    /// a `skills` key there is not this field and does nothing.
     #[serde(
         default,
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
-    pub skills: Option<Option<Vec<String>>>,
+    pub skill_allowlist: Option<Option<Vec<String>>>,
     /// Ordered plain content-relative paths the agent starts with (default none: only
     /// what CodeSense itself needs): each a file, or a directory that brings
     /// everything under it, e.g. `CLAUDE.md`, `.claude/skills/bmad-build/`,
@@ -552,7 +554,7 @@ pub struct AgentUpdateParams {
         default,
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
-    pub skills: Option<Option<Vec<String>>>,
+    pub skill_allowlist: Option<Option<Vec<String>>>,
     #[serde(default)]
     pub startup: Option<Vec<String>>,
     /// Replaces `context`; `null` returns it to the runtime default.
@@ -986,7 +988,9 @@ fn field_of(e: &ValidationError) -> Option<String> {
         ValidationError::InvalidBridgeTool(_)
         | ValidationError::DuplicateBridgeTool(_)
         | ValidationError::BridgeToolsUnsupported => "mcpBridgeTools".into(),
-        ValidationError::InvalidSkill(_) | ValidationError::DuplicateSkill(_) => "skills".into(),
+        ValidationError::InvalidSkill(_) | ValidationError::DuplicateSkill(_) => {
+            "skillAllowlist".into()
+        }
         ValidationError::InvalidStartupPath(_)
         | ValidationError::DuplicateStartupPath(_)
         | ValidationError::OverlappingStartupPath { .. } => "startup".into(),
@@ -1242,7 +1246,7 @@ fn draft_agent(
             ..McpAccess::default()
         },
         startup: draft.startup.unwrap_or_default(),
-        skills: draft.skills.flatten(),
+        skill_allowlist: draft.skill_allowlist.flatten(),
         context: draft
             .context
             .map(|entries| entries.into_iter().map(ContextEntry::from).collect()),
@@ -1646,7 +1650,7 @@ fn draft_fields(draft: &AgentDraft) -> Vec<&'static str> {
     given(draft.launch.is_some(), "launch");
     given(draft.mcp_servers.is_some(), "mcpServers");
     given(draft.mcp_bridge_tools.is_some(), "mcpBridgeTools");
-    given(draft.skills.is_some(), "skills");
+    given(draft.skill_allowlist.is_some(), "skillAllowlist");
     given(draft.startup.is_some(), "startup");
     given(draft.context.is_some(), "context");
     given(draft.repo_overrides.is_some(), "repoOverrides");
@@ -1888,8 +1892,8 @@ fn patched(mut agent: Agent, params: AgentUpdateParams) -> Result<Agent, Refusal
     if let Some(tools) = params.mcp_bridge_tools {
         agent.mcp.bridge_tools = tools;
     }
-    if let Some(skills) = params.skills {
-        agent.skills = skills;
+    if let Some(skills) = params.skill_allowlist {
+        agent.skill_allowlist = skills;
     }
     if let Some(startup) = params.startup {
         agent.startup = startup;

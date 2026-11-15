@@ -172,7 +172,7 @@ fn codex_bridge_tools_round_trip_and_preview_the_effective_set() {
 }
 
 #[test]
-fn a_skills_list_round_trips_and_previews_the_effective_skills() {
+fn a_skill_allowlist_round_trips_and_previews_the_effective_skills() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     write_org(home, &alice());
@@ -180,11 +180,11 @@ fn a_skills_list_round_trips_and_previews_the_effective_skills() {
         home,
         &alice(),
         team(),
-        json!({"name": "Lean lead", "runtime": "claude", "skills": ["bmad-build"]}),
+        json!({"name": "Lean lead", "runtime": "claude", "skillAllowlist": ["bmad-build"]}),
     ));
     let id = saved["id"].as_str().unwrap();
     let got = ok(get(home, &alice(), params(json!({"id": id}))));
-    assert_eq!(got["definition"]["skills"], json!(["bmad-build"]));
+    assert_eq!(got["definition"]["skill_allowlist"], json!(["bmad-build"]));
     let previewed = ok(preview(
         home,
         &alice(),
@@ -192,7 +192,10 @@ fn a_skills_list_round_trips_and_previews_the_effective_skills() {
         &local(&alice()),
         params(json!({"agent": id})),
     ));
-    assert_eq!(previewed["launch"]["skills"], json!(["bmad-build"]));
+    assert_eq!(
+        previewed["launch"]["skill_allowlist"],
+        json!(["bmad-build"])
+    );
 
     // Omitted keeps the list; null removes it, and the launch offers every skill.
     ok(update(
@@ -202,15 +205,15 @@ fn a_skills_list_round_trips_and_previews_the_effective_skills() {
         params(json!({"id": id, "baseRevision": 1, "description": "kept"})),
     ));
     let kept = ok(get(home, &alice(), params(json!({"id": id}))));
-    assert_eq!(kept["definition"]["skills"], json!(["bmad-build"]));
+    assert_eq!(kept["definition"]["skill_allowlist"], json!(["bmad-build"]));
     ok(update(
         home,
         &alice(),
         &local(&alice()),
-        params(json!({"id": id, "baseRevision": 2, "skills": null})),
+        params(json!({"id": id, "baseRevision": 2, "skillAllowlist": null})),
     ));
     let cleared = ok(get(home, &alice(), params(json!({"id": id}))));
-    assert!(cleared["definition"].get("skills").is_none());
+    assert!(cleared["definition"].get("skill_allowlist").is_none());
     let p = ok(preview(
         home,
         &alice(),
@@ -218,7 +221,7 @@ fn a_skills_list_round_trips_and_previews_the_effective_skills() {
         &local(&alice()),
         params(json!({"agent": id})),
     ));
-    assert!(p["launch"].get("skills").is_none());
+    assert!(p["launch"].get("skill_allowlist").is_none());
 
     for skills in [json!(["bmad build"]), json!(["a", "a"])] {
         let error = refused_with(
@@ -226,11 +229,11 @@ fn a_skills_list_round_trips_and_previews_the_effective_skills() {
                 home,
                 &alice(),
                 team(),
-                json!({"name": "Bad skills", "runtime": "claude", "skills": skills}),
+                json!({"name": "Bad skills", "runtime": "claude", "skillAllowlist": skills}),
             ),
             "invalid",
         );
-        assert_eq!(error["field"], "skills");
+        assert_eq!(error["field"], "skillAllowlist");
     }
 }
 

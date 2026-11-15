@@ -1598,7 +1598,7 @@ fn a_launch_records_its_cli_version_and_warns_only_outside_the_range() {
 
 fn claude_with_skills(id: &str, skills: &[&str]) -> Agent {
     Agent {
-        skills: Some(skills.iter().map(|s| s.to_string()).collect()),
+        skill_allowlist: Some(skills.iter().map(|s| s.to_string()).collect()),
         ..draft(id, AgentCli::Claude)
     }
 }
@@ -1612,7 +1612,7 @@ fn skill(cwd: &Path, name: &str) {
 }
 
 #[test]
-fn a_skills_list_turns_off_every_other_skill_the_launch_finds() {
+fn a_skill_allowlist_turns_off_every_other_skill_the_launch_finds() {
     let _home_env = crate::routines::test_support::TempHome::new();
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
@@ -1624,13 +1624,20 @@ fn a_skills_list_turns_off_every_other_skill_the_launch_finds() {
     );
     let launch = prep(home, &alice(), &key, PrepareOptions::default());
     assert_eq!(
-        launch.launch.skills,
+        launch.launch.skill_allowlist,
         Some(vec!["bmad-code-review".to_string()])
     );
     // The startup places bmad-build, which the list leaves out.
     assert_eq!(
         launch.generated[0].content["skillOverrides"],
         json!({ "bmad-build": "off" })
+    );
+    // So the session record and the task layers don't name it either.
+    assert!(launch.provided_skills().is_empty());
+    assert!(
+        crate::session_usage::task_capture::TaskInputs::from_launch(&launch, None)
+            .skills
+            .is_empty()
     );
     assert!(launch
         .warnings
@@ -1652,7 +1659,7 @@ fn a_skills_list_turns_off_every_other_skill_the_launch_finds() {
 }
 
 #[test]
-fn a_skills_list_survives_a_mode_override() {
+fn a_skill_allowlist_survives_a_mode_override() {
     let _home_env = crate::routines::test_support::TempHome::new();
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
@@ -1674,14 +1681,15 @@ fn a_skills_list_survives_a_mode_override() {
 }
 
 #[test]
-fn without_a_skills_list_a_launch_turns_no_skill_off() {
+fn without_a_skill_allowlist_a_launch_turns_no_skill_off() {
     let _home_env = crate::routines::test_support::TempHome::new();
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     team_content(home, &alice());
     let key = save(home, &alice(), draft("open", AgentCli::Claude));
     let launch = prep(home, &alice(), &key, PrepareOptions::default());
-    assert_eq!(launch.launch.skills, None);
+    assert_eq!(launch.launch.skill_allowlist, None);
+    assert_eq!(launch.provided_skills(), vec!["bmad-build"]);
     assert!(launch.generated[0].content.get("skillOverrides").is_none());
 
     let cwd = tmp.path().join("context-worktree");

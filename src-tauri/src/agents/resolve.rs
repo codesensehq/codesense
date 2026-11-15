@@ -342,11 +342,11 @@ fn compose_with_reader(
             reader, home, principal, agent, &reference, target, generated, errors,
         )
     };
-    let provides = provides::derive(agent.runtime, &manifest);
-    if let Some(listed) = &launch.skills {
-        permissions::turn_off_unlisted_manifest_skills(&mut manifest, listed, &provides.skills);
+    if let Some(listed) = &launch.skill_allowlist {
+        permissions::turn_off_unlisted_manifest_skills(&mut manifest, agent.runtime, listed);
     }
-    let provides = provides.allowing(launch.skills.as_deref());
+    let provides =
+        provides::derive(agent.runtime, &manifest).allowing(launch.skill_allowlist.as_deref());
 
     let launch_admission = adapter::launch_admission(
         agent.runtime,
@@ -497,9 +497,9 @@ fn launch_profile(agent: &Agent, key: &AgentKey) -> ResolvedLaunchProfile {
     );
     ResolvedLaunchProfile {
         env: agent.env.vars().clone(),
-        skills: desktop
+        skill_allowlist: desktop
             .enforces_skill_allowlist
-            .then(|| agent.skills.clone())
+            .then(|| agent.skill_allowlist.clone())
             .flatten(),
         bridge_tools: projects_bridge_tool_allowlist
             .then(|| agent.mcp.bridge_tools.clone())

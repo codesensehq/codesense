@@ -77,7 +77,7 @@ pub struct DesktopCli {
     pub permissions: PermissionBlock,
     /// Whether the CLI can enforce a saved agent's bridge tool allowlist.
     pub enforces_bridge_tool_allowlist: bool,
-    /// Whether the CLI can turn off the skills a saved agent's `skills` list leaves out.
+    /// Whether the CLI can turn off the skills a saved agent's `skill_allowlist` leaves out.
     pub enforces_skill_allowlist: bool,
     /// Adapter-owned notes for advisory posture that cannot be expressed as a rule.
     pub launch_notes: fn(&[String]) -> Vec<String>,
@@ -390,10 +390,10 @@ pub struct ResolvedLaunchProfile {
     pub bridge_tools: Option<Vec<String>>,
     /// Registered bridge tools this launch can call, after the restriction.
     pub effective_bridge_tools: Vec<String>,
-    /// The agent's skill allowlist, where the runtime enforces one: every other skill
+    /// The agent's `skill_allowlist`, where the runtime enforces one: every other skill
     /// the launch finds is turned off. `None` offers every skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
+    pub skill_allowlist: Option<Vec<String>>,
     /// The effective execution model.
     #[serde(default)]
     pub mode: LaunchMode,
@@ -439,7 +439,7 @@ impl ResolvedLaunchProfile {
             mcp_allow: Some(mcp_allow),
             bridge_tools: None,
             effective_bridge_tools: Vec::new(),
-            skills: None,
+            skill_allowlist: None,
             mode,
             mcp_scope: descriptor.mcp_scope.clone(),
             env_suppress: descriptor.env_suppress.clone(),

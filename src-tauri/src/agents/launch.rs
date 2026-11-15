@@ -120,9 +120,12 @@ pub struct AgentLaunch {
 }
 
 impl AgentLaunch {
-    /// The skill names this launch's startup manifest provides to its CLI.
+    /// The skill names this launch's startup manifest provides to its CLI and its
+    /// `skill_allowlist` leaves on.
     pub fn provided_skills(&self) -> Vec<String> {
-        super::provides::derive(self.runtime, &self.manifest).skills
+        super::provides::derive(self.runtime, &self.manifest)
+            .allowing(self.launch.skill_allowlist.as_deref())
+            .skills
     }
 
     /// Records the release of the CLI this launch spawns, and warns when it is outside the
@@ -339,10 +342,13 @@ fn prepare_resolved(
             .collect();
         resolved.manifest.generated = permissions::generate(&agent, agent.runtime, effective);
         resolved.manifest.generated.extend(workspace_files);
-        resolved.manifest.manifest_hash = resolved.manifest.compute_hash();
-        if let Some(listed) = &launch.skills {
-            let found = super::provides::derive(agent.runtime, &resolved.manifest).skills;
-            permissions::turn_off_unlisted_manifest_skills(&mut resolved.manifest, listed, &found);
+        match &launch.skill_allowlist {
+            Some(listed) => permissions::turn_off_unlisted_manifest_skills(
+                &mut resolved.manifest,
+                agent.runtime,
+                listed,
+            ),
+            None => resolved.manifest.manifest_hash = resolved.manifest.compute_hash(),
         }
     }
     // Checked against what this launch actually writes and starts with.
@@ -683,7 +689,7 @@ pub fn apply_generated(
                             launch.runtime,
                         );
                     }
-                    if let Some(listed) = &launch.launch.skills {
+                    if let Some(listed) = &launch.launch.skill_allowlist {
                         let found = workspace_skills(cwd, launch.runtime);
                         permissions::turn_off_unlisted_skills(
                             &mut content,

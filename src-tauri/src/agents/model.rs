@@ -190,10 +190,12 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub startup: Vec<String>,
     /// The skills a launch offers, by name. Omitted means every skill the
-    /// workspace has; a list turns every other skill off for the launch, where
-    /// its runtime enforces that (`enforces_skill_allowlist`).
+    /// workspace has. A list turns off, for the launch, every other skill its
+    /// startup places or the workspace's `.claude/skills/` holds, where its runtime
+    /// enforces that (`enforces_skill_allowlist`); personal and plugin skills stay
+    /// on. A `skills` key is not this field: it stays in `extra`, unenforced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
+    pub skill_allowlist: Option<Vec<String>>,
     /// The bulk content sets a workspace gets for this agent.
     /// Absent means the runtime's default, resolved at launch and never
     /// written back ([`super::context::default_context`]); `[]` means none.
@@ -701,7 +703,7 @@ impl Agent {
                 }
             }
         }
-        if let Some(skills) = &self.skills {
+        if let Some(skills) = &self.skill_allowlist {
             let mut seen = BTreeSet::new();
             for name in skills {
                 if !is_plain_name(name, b"_-:") {

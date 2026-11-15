@@ -38,7 +38,7 @@ impl AgentProvides {
     pub fn has(&self, name: &str) -> bool {
         self.commands.iter().any(|c| c == name) || self.skills.iter().any(|s| s == name)
     }
-    /// These names with the skills narrowed to `allowlist`, the agent's `skills` list
+    /// These names with the skills narrowed to `allowlist`, the agent's `skill_allowlist`
     /// where its runtime enforces one; `None` keeps every skill.
     pub fn allowing(mut self, allowlist: Option<&[String]>) -> Self {
         if let Some(listed) = allowlist {
@@ -105,9 +105,15 @@ pub fn skill_hash(runtime: AgentCli, manifest: &StartupManifest, name: &str) -> 
     (!files.is_empty()).then(|| entry_hash(&files))
 }
 
-/// Every skill `manifest` provides to `runtime`, each with its own hash.
-pub fn skill_hashes(runtime: AgentCli, manifest: &StartupManifest) -> Vec<SkillHash> {
+/// Every skill `manifest` provides to `runtime` and `allowlist` leaves on (as
+/// [`AgentProvides::allowing`]), each with its own hash.
+pub fn skill_hashes(
+    runtime: AgentCli,
+    manifest: &StartupManifest,
+    allowlist: Option<&[String]>,
+) -> Vec<SkillHash> {
     derive(runtime, manifest)
+        .allowing(allowlist)
         .skills
         .into_iter()
         .map(|name| SkillHash {
@@ -311,7 +317,7 @@ mod tests {
                 ],
             )],
         );
-        let hashes = skill_hashes(AgentCli::Claude, &m);
+        let hashes = skill_hashes(AgentCli::Claude, &m, None);
         assert_eq!(hashes.len(), 1);
         assert_eq!(hashes[0].name, "bmad-build");
         assert!(hashes[0].hash.is_some());
@@ -333,6 +339,7 @@ mod tests {
             skill_hashes(
                 AgentCli::Claude,
                 &hashed(AgentCli::Claude, &[(".claude/skills", files)]),
+                None,
             )
         };
         let (b0, a0) = (by_name(&before), by_name(&after));

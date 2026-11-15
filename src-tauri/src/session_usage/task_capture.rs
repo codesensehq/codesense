@@ -48,7 +48,8 @@ pub struct RoutineBrief {
 pub struct TaskInputs {
     /// The initial prompt.
     pub brief: Option<String>,
-    /// Every skill the launch's manifest provides, each with the hash of its own files.
+    /// Every skill the launch's manifest provides and its `skill_allowlist` leaves on,
+    /// each with the hash of its own files.
     pub skills: Vec<SkillVersion>,
     /// The team content folder the launch resolved against: where the policy and the context
     /// commit are read from.
@@ -70,17 +71,21 @@ pub struct TaskInputs {
 impl TaskInputs {
     /// The inputs of a prepared agent launch and its brief.
     pub fn from_launch(agent: &crate::agents::launch::AgentLaunch, brief: Option<&str>) -> Self {
-        let skills = crate::agents::provides::skill_hashes(agent.runtime, &agent.manifest)
-            .into_iter()
-            .map(|s| SkillVersion {
-                reason: s
-                    .hash
-                    .is_none()
-                    .then(|| "unhashed: no manifest file backs this skill".to_string()),
-                name: s.name,
-                hash: s.hash,
-            })
-            .collect();
+        let skills = crate::agents::provides::skill_hashes(
+            agent.runtime,
+            &agent.manifest,
+            agent.launch.skill_allowlist.as_deref(),
+        )
+        .into_iter()
+        .map(|s| SkillVersion {
+            reason: s
+                .hash
+                .is_none()
+                .then(|| "unhashed: no manifest file backs this skill".to_string()),
+            name: s.name,
+            hash: s.hash,
+        })
+        .collect();
         let ctx = &agent.startup_context;
         let policy_dir = Some(&ctx.target)
             .filter(|t| !t.org.is_empty() && !t.team.is_empty())

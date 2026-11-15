@@ -209,14 +209,15 @@ pub fn turn_off_unlisted_skills<'a>(
     }
 }
 
-/// Turn off, in `manifest`'s launch settings, every skill in `found` (the skills its
-/// files provide) that `listed` does not name, and rehash. The launch adds the skills
-/// it finds in its workspace ([`super::launch::apply_generated`]).
+/// Turn off, in `manifest`'s launch settings, every skill its files provide to `runtime`
+/// that `listed` does not name, and rehash. The launch adds the skills it finds in its
+/// workspace ([`super::launch::apply_generated`]).
 pub fn turn_off_unlisted_manifest_skills(
     manifest: &mut super::manifest::StartupManifest,
+    runtime: AgentCli,
     listed: &[String],
-    found: &[String],
 ) {
+    let found = super::provides::derive(runtime, manifest).skills;
     for entry in manifest
         .generated
         .iter_mut()
@@ -520,7 +521,7 @@ mod tests {
             avatar: None,
             allow_wake: false,
             resume_after_restart: false,
-            skills: None,
+            skill_allowlist: None,
             budget_usd: None,
             revision: 1,
             archived_at: None,
