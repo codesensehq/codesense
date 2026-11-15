@@ -1023,7 +1023,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
   });
 
-  function openPng(sides: unknown, width = 1200) {
+  function openPng(sides: unknown, width = 1200, redlineError: string | null = null) {
     const ro = stubResizeObserver(width);
     const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
     URL.createObjectURL = vi.fn(() => "blob:side");
@@ -1036,7 +1036,11 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     });
     imageSidesMock.mockReturnValue(sides);
     stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
-    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    stubRedline(
+      redlineError
+        ? { redline: null, error: redlineError }
+        : { redline: { status: "modified", binary: true, before: "", after: "" } },
+    );
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
     render(
       <SourceDiffOverlay
@@ -1067,6 +1071,26 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
       "An image has no text diff. Side by side compares it.",
     );
     expect(images()).toEqual([]);
+  });
+
+  it("a changed PNG whose diff read fails but whose bytes read still draws, and Side by side works", () => {
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } }, 1200, "git show failed");
+    const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toHaveAttribute("aria-pressed", "true");
+    expect(sideBySide).toBeEnabled();
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.queryByText(/Couldn.t read the image/)).toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+        name: "Source",
+      }),
+    );
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
   });
 
   it("a changed PNG shows one side at a time below 900 px", () => {

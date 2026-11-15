@@ -41,6 +41,9 @@ import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-fi
  */
 
 /** Why a raster image's sides aren't drawn here: the switch's tooltip and the Source line. */
+/** Why an image the surface read nothing of won't draw: its diff's read failed, and says how. */
+export const diffFailed = (message: string) =>
+  message ? `Couldn't read the diff (${message})` : "Couldn't read the diff";
 export const IMAGE_UNAVAILABLE = {
   tooLarge: "Over the 8 MB limit for drawing here",
   failed: "Couldn't read the image",
@@ -515,9 +518,15 @@ function CodeSkeleton({
   return (
     <div
       data-testid={`${prefix}-code-skeleton`}
-      className="flex h-full w-full items-center justify-center rounded bg-muted/40 motion-safe:animate-pulse"
+      className="relative flex h-full w-full items-center justify-center"
     >
-      <span role="status" className={shown ? "text-xs text-muted-foreground" : "sr-only"}>
+      {/* Only the placeholder pulses: a label that fades with it drops under AA. */}
+      <div
+        aria-hidden="true"
+        data-skeleton-pulse=""
+        className="absolute inset-0 rounded bg-muted/40 motion-safe:animate-pulse"
+      />
+      <span role="status" className={shown ? "relative text-xs text-muted-foreground" : "sr-only"}>
         {label}
       </span>
     </div>
@@ -727,7 +736,8 @@ function RenderedFileDiff({
     : sides.imageState?.kind === "unavailable"
       ? sides.imageState.reason
       : state.kind === "error"
-        ? IMAGE_UNAVAILABLE.failed
+        ? // Nothing of the image was read here: the reason is the diff's own error, not the image.
+          diffFailed(state.message)
         : null;
   // Off Files the sides are drawn from what the surface holds; a type it can't
   // draw that way (a raster image it has no bytes for) has Source only.
@@ -739,7 +749,11 @@ function RenderedFileDiff({
   if (mode === "source" && raster) {
     // One line for an image's Source mode, whichever surface shows it.
     body = (
-      <OverlayCenteredState testId={`${prefix}-image-source`}>
+      <OverlayCenteredState
+        testId={`${prefix}-image-source`}
+        // A reason it won't draw replaces the reading state: it is announced.
+        role={cannotDraw ? "status" : undefined}
+      >
         An image has no text diff. {cannotDraw ? `${cannotDraw}.` : "Side by side compares it."}
       </OverlayCenteredState>
     );

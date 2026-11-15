@@ -1578,7 +1578,10 @@ export function SourceDiffPane({
       testId="source-diff-binary-placeholder"
     />
   );
-  if (binary) {
+  // A raster image the surface has read (its bytes, or what became of the read) is drawn from
+  // that, whatever its text redline did: a redline read that failed doesn't make the image fail.
+  const imageRead = isRasterImage(filePath) && (!!imageSides.imageState || !!imageSides.imageBytes);
+  if (binary || imageRead) {
     // A raster image goes through the dispatch: drawn from its bytes, read, or with its
     // reason; any other binary file is the binary note.
     if (!isRasterImage(filePath)) return binaryNote;
