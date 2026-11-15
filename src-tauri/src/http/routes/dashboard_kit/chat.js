@@ -963,10 +963,10 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/pin-replace.js
-  var ALERT_NS = "http://www.w3.org/2000/svg";
+  var GLYPH_NS = "http://www.w3.org/2000/svg";
   var OWN_PATH = { quote: "M3 6h4v4l-2 3M9 6h4v4l-2 3", name: "M2 3h12v10H2zM2 7h12M7 7v6" };
   function ownGlyph(kind) {
-    const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
+    const svg = document.createElementNS(GLYPH_NS, "svg"), path = document.createElementNS(GLYPH_NS, "path");
     svg.setAttribute("viewBox", "0 0 16 16");
     svg.setAttribute("class", "ico");
     svg.setAttribute("aria-hidden", "true");
@@ -1283,9 +1283,9 @@
     return wrap;
   }
   var face = (state, label) => h("span", { class: "av", "aria-hidden": "true", "data-face": state, "data-label": label });
-  var ALERT_NS2 = "http://www.w3.org/2000/svg";
+  var ALERT_NS = "http://www.w3.org/2000/svg";
   var alertIcon = () => {
-    const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
+    const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
     svg.setAttribute("viewBox", "0 0 16 16");
     svg.setAttribute("class", "ico alert");
     svg.setAttribute("aria-hidden", "true");
@@ -1467,7 +1467,7 @@
     const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
     const nextOpt = next ? typeof next === "object" ? next : {} : null;
     const pencil = () => {
-      const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
+      const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("class", "ico");
       svg.setAttribute("aria-hidden", "true");
