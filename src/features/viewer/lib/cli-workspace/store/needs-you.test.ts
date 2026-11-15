@@ -26,7 +26,7 @@ import {
   isNeedsYouNews,
   NEEDS_YOU_STATUSES,
   type NeedsYouListState,
-  selectScopeMarkKey,
+  selectScopeMarkFacts,
   selectNeedsYouKind,
   selectSessionNeedsYou,
   selectSessionsNeedingYou,
@@ -286,7 +286,7 @@ describe("selectSessionsNeedingYou — every resolvable tab, once, oldest first"
   });
 });
 
-describe("selectScopeMarkKey — the one roll-up over sessions", () => {
+describe("selectScopeMarkFacts — the one roll-up over sessions", () => {
   const sources = { aiStatusBySession: stored };
   const agent = (seen: SeenSources) => ({
     ...seen,
@@ -294,17 +294,11 @@ describe("selectScopeMarkKey — the one roll-up over sessions", () => {
     exitBySession: {},
   });
   const top = (seen: SeenSources, ids: string[]) =>
-    (
-      JSON.parse(
-        selectScopeMarkKey(
-          sources,
-          agentDots,
-          agent(seen),
-          ids.map((sessionId) => ({ sessionId })),
-        ),
-      ) as {
-        mark?: string;
-      }
+    selectScopeMarkFacts(
+      sources,
+      agentDots,
+      agent(seen),
+      ids.map((sessionId) => ({ sessionId })),
     ).mark;
 
   it("needs you outranks a crash, a crash outranks work, seen or not", () => {
