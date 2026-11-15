@@ -1932,29 +1932,15 @@ pub(crate) async fn prune_worktree_locked(
 /// (renders as neither dirty nor a false "clean"); the auto-teardown gate folds
 /// `None → true` via [`worktree_git_dirty`] (never auto-destroy on an ambiguous read).
 pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
-    let out = Command::new(git_bin())
-        .args(["status", "--porcelain"])
-        .current_dir(worktree)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+    let out = super::worktree_probe::git_stdout(worktree, &["status", "--porcelain"])?;
+    Some(!out.trim().is_empty())
 }
 
 /// SLW-RS-4 (review M6/L9): the worktree's currently checked-out branch
 /// (`git rev-parse --abbrev-ref HEAD`), or `None` on a detached HEAD / git error.
 pub(crate) fn current_branch_of_worktree(worktree: &Path) -> Option<String> {
-    let out = Command::new(git_bin())
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(worktree)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let branch = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    let out = super::worktree_probe::git_stdout(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = out.trim().to_string();
     if branch.is_empty() || branch == "HEAD" {
         return None; // detached HEAD
     }
@@ -1985,15 +1971,11 @@ pub(crate) fn verify_worktree_branch(worktree: &Path, expected_branch: &str) -> 
 /// worktree or git is unavailable — the caller skips the auto-teardown (the manual
 /// path, which is handed an explicit `repo_path`, is unaffected).
 pub(crate) fn main_repo_of_worktree(worktree: &Path) -> Option<PathBuf> {
-    let out = Command::new(git_bin())
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .current_dir(worktree)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let common_dir = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
+    let out = super::worktree_probe::git_stdout(
+        worktree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common_dir = PathBuf::from(out.trim());
     // `<main>/.git` → `<main>`. A bare/edge layout without a parent is skipped.
     common_dir.parent().map(Path::to_path_buf)
 }
