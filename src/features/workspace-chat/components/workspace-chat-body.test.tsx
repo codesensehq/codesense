@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@/test-utils";
+import { fireEvent, render, screen } from "@/test-utils";
 import type { WorkspaceChatMessage } from "@/tauri/commands";
 import { WorkspaceChatBody } from "./workspace-chat-body";
 
@@ -26,41 +26,65 @@ function chatMsg(id: number, overrides: Partial<WorkspaceChatMessage> = {}): Wor
 }
 
 describe("WorkspaceChatBody", () => {
-  it("hidden while something takes its place, it comes back at its newest message when it was following", () => {
+  /** The room's log as the room draws it: inside the `.ibx-group-log` wrapper the room hides.
+   *  The body reads its scroll the way a browser does: nothing under a hidden ancestor. */
+  function roomLog() {
     const messages = Array.from({ length: 30 }, (_, i) => chatMsg(i + 1));
-    const view = render(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
+    const draw = (hidden: boolean) => (
+      <div className="ibx-group-log" hidden={hidden}>
+        <WorkspaceChatBody
+          messages={messages}
+          loading={false}
+          error={null}
+          density="b"
+          hidden={hidden}
+        />
+      </div>
     );
+    const view = render(draw(false));
     const body = screen.getByTestId("workspace-chat-body");
-    Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => 1000 });
-    body.scrollTop = 1000;
-    view.rerender(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" hidden />,
-    );
-    // A hidden scroller can lose its place.
-    body.scrollTop = 0;
-    view.rerender(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
-    );
-    expect(screen.getByTestId("workspace-chat-body")).toBe(body);
-    expect(body.scrollTop).toBe(1000);
+    let top = 0;
+    const shown = () => !body.closest("[hidden]");
+    Object.defineProperty(body, "scrollHeight", {
+      configurable: true,
+      get: () => (shown() ? 1000 : 0),
+    });
+    Object.defineProperty(body, "scrollTop", {
+      configurable: true,
+      get: () => (shown() ? top : 0),
+      set: (value: number) => {
+        // A hidden scroller loses its place.
+        if (shown()) top = value;
+      },
+    });
+    const scrollTo = (value: number) => {
+      top = value;
+      fireEvent.scroll(body);
+    };
+    return {
+      body,
+      scrollTo,
+      top: () => top,
+      hide: () => view.rerender(draw(true)),
+      show: () => view.rerender(draw(false)),
+    };
+  }
+
+  it("hidden while something takes its place, it comes back at its newest message when it was following", () => {
+    const log = roomLog();
+    log.scrollTo(1000);
+    log.hide();
+    log.show();
+    expect(screen.getByTestId("workspace-chat-body")).toBe(log.body);
+    expect(log.top()).toBe(1000);
   });
 
-  it("hidden while the reader had scrolled up, it comes back where they were", () => {
-    const messages = Array.from({ length: 30 }, (_, i) => chatMsg(i + 1));
-    const view = render(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
-    );
-    const body = screen.getByTestId("workspace-chat-body");
-    Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => 1000 });
-    body.scrollTop = 200;
-    view.rerender(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" hidden />,
-    );
-    view.rerender(
-      <WorkspaceChatBody messages={messages} loading={false} error={null} density="b" />,
-    );
-    expect(body.scrollTop).toBe(200);
+  it("hidden while the reader had scrolled up, it is not sent to the newest message on show", () => {
+    const log = roomLog();
+    log.scrollTo(200);
+    log.hide();
+    log.show();
+    expect(log.top()).toBe(200);
   });
 
   it("shows loading feedback until the first chat read completes", () => {

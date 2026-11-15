@@ -100,14 +100,13 @@ export function WorkspaceChatBody({
     }
   }, [annotated, messages]);
 
-  // Hidden, the log can lose its place: shown again, it goes back to the tail if it was
-  // following when it was hidden, and leaves a reader who had scrolled up where they were.
+  // Hidden, the log can lose its place: shown again, it goes back to the tail if its reader was
+  // following, and does not send one who had scrolled up there. Where the reader is comes from
+  // the log's scrolls while it is shown (hidden, it measures as scrolled to nothing).
   const hiddenBefore = useRef(hidden);
   const following = useRef(true);
   useLayoutEffect(() => {
     const el = bodyRef.current;
-    if (el && hidden && !hiddenBefore.current)
-      following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (el && !hidden && hiddenBefore.current && following.current) el.scrollTop = el.scrollHeight;
     hiddenBefore.current = hidden;
   }, [hidden]);
@@ -154,6 +153,12 @@ export function WorkspaceChatBody({
       aria-live="polite"
       aria-label="Workspace chat messages"
       data-testid="workspace-chat-body"
+      onScroll={(e) => {
+        // Only a shown log says where its reader is; hidden, it reads as scrolled to nothing.
+        if (hidden) return;
+        const el = e.currentTarget;
+        following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      }}
     >
       {annotated.map((msg) => {
         if (msg.kind === "system") {
