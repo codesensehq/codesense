@@ -8,14 +8,18 @@ import { renderViewer } from "@/shared/lib/render-viewer";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { readFile } from "@/tauri/commands";
 
-import { NO_STORY_PAGE_NOTE } from "./story-aware-markdown";
+import { NO_STORY_PAGE_NOTE, missingStoryPageNote } from "./story-aware-markdown";
 
 // The viewers are stubs that show what they were given: this tests the choice, not the pages.
 const html = vi.hoisted(() => vi.fn());
+// When set, the page's file is gone: the stub renders what the viewer would on a 404.
+const page = vi.hoisted(() => ({ missing: false }));
 vi.mock("@/features/dashboard/components/html-viewer", () => ({
   HtmlViewer: (props: Record<string, unknown>) => {
     html(props);
-    return createElement("div", { "data-stub": "html" });
+    const missing = props.renderMissing as (() => unknown) | undefined;
+    if (page.missing && missing) return missing();
+    return createElement("div", { "data-stub": page.missing ? "deleted" : "html" });
   },
 }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({
@@ -46,6 +50,7 @@ const files = (map: Record<string, string>) =>
   });
 
 beforeEach(() => {
+  page.missing = false;
   html.mockClear();
   vi.mocked(readFile).mockReset();
   fileContentCache.clear();
@@ -53,6 +58,18 @@ beforeEach(() => {
 });
 
 describe("a story file in an .md tab", () => {
+  it("opens as markdown and says why when the team's story page isn't there", async () => {
+    page.missing = true;
+    files({ [STORY]: "---\ntype: story\n---\n# One\n" });
+    const { container } = open();
+    await waitFor(() => expect(container.querySelector('[data-stub="markdown"]')).not.toBeNull());
+    expect(container.querySelector('[data-stub="deleted"]')).toBeNull();
+    const note = screen.getByTestId("story-page-missing");
+    expect(note).toHaveAttribute("role", "note");
+    expect(note).toHaveTextContent(missingStoryPageNote("pages/story.html"));
+    expect(note).toHaveTextContent("pages/story.html");
+  });
+
   it("opens the team's story page in the same tab, naming the file in the fragment", async () => {
     files({ [STORY]: "---\ntype: story\ntitle: One\n---\n# One\n" });
     const { container } = open();

@@ -21,6 +21,11 @@ import { MarkdownViewer, type MarkdownExtras } from "./markdown-viewer";
 export const NO_STORY_PAGE_NOTE =
   "This is a story file, but its team has no story page (story_page in teams.yml), so it opens as markdown.";
 
+/** A story file whose team's story page can't be found (a page missing from this checkout, or a
+ *  mistyped story_page): it opens as markdown, and says which page it looked for. */
+export const missingStoryPageNote = (page: string) =>
+  `This is a story file, but its team's story page (${page}, the story_page in teams.yml) isn't there, so it opens as markdown.`;
+
 /**
  * The story type of the `.md` at `filePath`, read from its front matter: `undefined` until it is
  * first read, then the type or `null`. A current entry in the viewer's file cache answers on the first
@@ -141,24 +146,32 @@ function TeamMarkdown({
         viewStateKey={props.viewStateKey}
         pendingHash={hash}
         onFrameShortcut={onFrameShortcut}
+        // The page isn't there: this tab is the md's, so it shows the md and says why, rather
+        // than a deleted-file placeholder for a page the tab never opened.
+        renderMissing={() => (
+          <NotedMarkdown note={missingStoryPageNote(page)} testId="story-page-missing" {...props} />
+        )}
       />
     );
   }
-  if (type) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <p
-          role="note"
-          data-testid="story-no-page"
-          className="border-b px-4 py-2 text-xs text-muted-foreground"
-        >
-          {NO_STORY_PAGE_NOTE}
-        </p>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <MarkdownViewer {...props} />
-        </div>
-      </div>
-    );
-  }
+  if (type) return <NotedMarkdown note={NO_STORY_PAGE_NOTE} testId="story-no-page" {...props} />;
   return <MarkdownViewer {...props} />;
+}
+
+/** The markdown viewer under a one-line note that says why the file opens as markdown. */
+function NotedMarkdown({ note, testId, ...props }: Props & { note: string; testId: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <p
+        role="note"
+        data-testid={testId}
+        className="border-b px-4 py-2 text-xs text-muted-foreground"
+      >
+        {note}
+      </p>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <MarkdownViewer {...props} />
+      </div>
+    </div>
+  );
 }
