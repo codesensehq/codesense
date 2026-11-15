@@ -1447,10 +1447,10 @@ describe("kit.chat faces", () => {
       () => ({ face: "builtin-funny:coffee-bot", name: "Story lead" }),
     ],
     ["an image", false, () => ({ src: "/img/lead.png", name: "Story lead" })],
-    ["an emoji name", false, () => ({ name: "🦊 Story lead" })],
+    ["an emoji name", false, () => ({ name: "🦊 Story lead" }), "🦊 Story lead, "],
   ])(
     "with faces on (%s) the meta line reads only the name and the time, and the face is read by no one",
-    async (_kind, kitAvatar, faces) => {
+    async (_kind, kitAvatar, faces, said = "") => {
       if (kitAvatar) withAvatar();
       const thread = THREAD.slice(0, 1);
       const [expected] = await plainMetas(thread);
@@ -1463,12 +1463,32 @@ describe("kit.chat faces", () => {
       // the face sits beside the meta line, not inside it
       expect(msg.querySelector(".meta .cs-avatar")).toBeNull();
       expect(msg.querySelector(".meta")!.textContent).toBe(expected);
-      // the name is said once, by the meta line: no initials, no alt, no title read before it
-      expect(spoken(msg)).toBe(`${expected}first`);
+      // no initials, alt or title is read; a face name the line doesn't show is said once, before it
+      expect(spoken(msg)).toBe(`${said}${expected}first`);
       const img = msg.querySelector("img");
       if (img) expect(img.getAttribute("alt")).toBe("");
     },
   );
+
+  it("a face name the meta line doesn't show is said before the line, and one it shows is not said twice", async () => {
+    const thread = THREAD.slice(0, 1);
+    const [line] = await plainMetas(thread);
+    const s = setup([lead("idle")], thread);
+    mountOn(s, { faces: () => ({ name: "Ada", label: "Story lead" }) });
+    await flush();
+    const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+    // the visible line is unchanged; only a screen reader hears the name
+    expect(msg.querySelector(".meta")!.textContent).toBe(line);
+    expect(msg.querySelector(".who .sr")!.textContent).toBe("Ada, ");
+    expect(spoken(msg)).toBe(`Ada, ${line}first`);
+
+    const same = setup([lead("idle")], thread);
+    mountOn(same, { faces: () => ({ name: "Story lead", label: "Story lead" }) });
+    await flush();
+    const once = same.el.querySelector<HTMLElement>(".log .msg")!;
+    expect(once.querySelector(".sr")).toBeNull();
+    expect(spoken(once)).toBe(`${line}first`);
+  });
 
   it("a face swapped in for an image that fails to load is hidden as well", async () => {
     const [expected] = await plainMetas(THREAD.slice(0, 1));
