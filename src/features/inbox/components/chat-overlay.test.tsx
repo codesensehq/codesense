@@ -1542,6 +1542,10 @@ describe("ChatOverlay for the Foreman", () => {
   const LIVE_MAIL = [fm(2, FOREMAN, "human", "Hello from the live Foreman.", NOW - 60_000)];
   // The Foreman page's shared UI state (`ui:foreman`): its sender set, newest first.
   let senders: string[];
+  // Its live hosted setup sessions (`setupLive`), which the page publishes there too.
+  let setupLive: string[];
+  const SETUP = "_worker/codesense/docs/getting-started/setup";
+  let setupAlive: boolean | null;
   const realWatch = liveHub.watch.bind(liveHub);
 
   // The view key the host files the page's `ui:foreman` state under: "all" under the Open
@@ -1576,6 +1580,20 @@ describe("ChatOverlay for the Foreman", () => {
           role: null,
           startedAtMs: NOW - 5 * 60_000,
         } as unknown as AgentSessionRow,
+        ...(setupAlive === null
+          ? []
+          : [
+              {
+                handle: SETUP,
+                sessionId: "sess-setup",
+                kind: "claude",
+                alive: setupAlive,
+                displayName: "Setup",
+                story: null,
+                role: null,
+                startedAtMs: NOW - 60_000,
+              } as unknown as AgentSessionRow,
+            ]),
       ],
     });
     useAgentStateStore.setState({
@@ -1592,7 +1610,7 @@ describe("ChatOverlay for the Foreman", () => {
       if (topic !== "ui:foreman") return realWatch(topic, viewKey, callback, options);
       uiWatches.push(viewKey);
       if (viewKey !== viewKeyOf()) return () => {};
-      callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders }] } as never);
+      callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders, setupLive }] } as never);
       return () => {};
     });
   }
@@ -1613,6 +1631,8 @@ describe("ChatOverlay for the Foreman", () => {
 
   beforeEach(() => {
     senders = [FOREMAN, EARLIER];
+    setupLive = [];
+    setupAlive = null;
     preset = "open";
     uiWatches.length = 0;
   });
@@ -1716,6 +1736,32 @@ describe("ChatOverlay for the Foreman", () => {
       { newTab: true },
     );
     expect(openFullView).not.toHaveBeenCalled();
+  });
+
+  it("while the page's hosted setup runs, says so with Open full view, which opens the Foreman tab", async () => {
+    setupLive = [SETUP];
+    setupAlive = true;
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    const row = await screen.findByTestId("chat-overlay-setup");
+    expect(row).toHaveAttribute("role", "status");
+    expect(row).toHaveTextContent("Setup is running");
+    fireEvent.click(within(row).getByRole("button", { name: "Open full view" }));
+    expect(openFile).toHaveBeenCalledWith(
+      { ...DOCS_TEAM, path: `${DOCS_ROOT}/getting-started/content/foreman/index.html` },
+      { newTab: true },
+    );
+  });
+
+  it.each([
+    ["none is published", [] as string[], true],
+    ["the published session has ended", ["_worker/codesense/docs/getting-started/setup"], false],
+  ])("shows no setup row when %s", async (_why, live, alive) => {
+    setupLive = live;
+    setupAlive = alive;
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    expect(screen.queryByTestId("chat-overlay-setup")).toBeNull();
   });
 
   it("a send in the overlay goes to the live Foreman, shows in its thread, and is a handle the page's thread reads", async () => {
