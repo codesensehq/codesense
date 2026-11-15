@@ -323,6 +323,29 @@ pub(super) fn collect(
     collect_refs(home, store, story, &refs, scopes, false, None)
 }
 
+/// [`collect`] kept like a story read's git half: a second collect at the same refs (a task read
+/// after the story's facts were read) reuses the walk until origin's head or a story branch tip
+/// moves, or for at most the kept bound.
+pub(super) fn collect_kept(
+    home: &Path,
+    store: &UsageStore,
+    story: &str,
+    sessions: &[Value],
+    scopes: &[CallerScope],
+) -> Result<GitFacts, String> {
+    let refs: Vec<SessionRef> = Iterator::collect(Iterator::map(
+        <[Value]>::iter(sessions),
+        SessionRef::of_read,
+    ));
+    let key = super::cache::walk_key(home, story, scopes, &refs);
+    if let Some(kept) = super::cache::get_walk(&key) {
+        return Ok(kept);
+    }
+    let git = collect_refs(home, store, story, &refs, scopes, true, None)?;
+    super::cache::put_walk(key, &git);
+    Ok(git)
+}
+
 /// The error a walk ends with when its cancel flag is set (a hosted read past its deadline).
 const CANCELLED: &str = "cancelled";
 
@@ -1084,10 +1107,9 @@ fn read_notes(
                     }
                     let ids = note
                         .and_then(|note| {
-                            crate::attribution::authorship::Authorship::parse(
+                            Result::ok(crate::attribution::authorship::Authorship::parse(
                                 git2::Note::message(&note).unwrap_or_default(),
-                            )
-                            .ok()
+                            ))
                         })
                         .map(|mut note| {
                             note.normalize_sessions(store)?;
