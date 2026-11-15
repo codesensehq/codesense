@@ -77,6 +77,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  let started=false,gotRows=false,firstRead=Promise.resolve(),rows=[],thread=[],model=null,joinedAt=null,runningSince=0,lastLiveState=null,launchSessionId=null,isDone=done,awaitBase=null,gen=0,refocus=false;
  const streams=new Map(),watched=new Set(),listeners=new Set(),cache=new Map();
  const fails=new Map();
+ // The thread has been read once: until then an empty thread is unknown, not empty.
+ let threadRead=false;
  const wrapped={launch:async prompt=>{const result=await transport.launch(prompt);if(result&&result.sessionId)launchSessionId=result.sessionId;return result;},send:(handle,text)=>transport.send(handle,text)};
  const launch=createLaunch({transport:wrapped,clock,storyId,leadRole,timers,card,onChange:()=>render(),rowsOf:target.rows,queue:target.queue,pickLive:target.pick,bindLaunched:target.bindLaunched,keepUnsent:target.keepUnsent});
  // The live row for presence: the launched row while it can be joined (bindLaunched), else the page's rule over the peer rows.
@@ -172,15 +174,18 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // Status rows are reconciled by signature, like the thread: a pushed event that changes nothing leaves the node (focus on its button, the role=alert announcement) alone.
  const statusCache=new Map();
  // A page that reads its thread by source (target.sources): history that could not be read says so with Retry; a refresh that failed after a good read says when, so old mail is not taken as current.
+ const retry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{readThread();}},copy.row.retry);
+ // A page that reads its thread with target.read waits on the roster for its first read: a roster read that failed says so, and Retry asks for it again.
+ const rosterRetry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{fails.delete('roster');render();readRoster();}},copy.row.retry);
  const readRows=()=>{
   if(!sources)return [];
-  const retry=()=>h('button',{type:'button',class:'btn sm','data-thread-retry':'1',onclick:()=>{readThread();}},copy.row.retry),stale=sources.staleAt();
+  const stale=sources.staleAt();
   if(sources.failedNow())return [{id:'unread',sig:'u',make:()=>alertRow('unread',copy.row.unread,'',retry())}];
   return stale===null?[]:[{id:'stale',sig:'st|'+stale,make:()=>h('div',{class:'sys warn',role:'status','data-row':'stale'},h('span',{},copy.row.stale(timeLabel(stale))),retry())}];
  };
  function statusItems(){
   const state=launch.state,p=presence(),on=Boolean(terminalTarget()),out=[...readRows()];
-  for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'');row.setAttribute('data-fail',what);return row;}});
+  for(const [what,text] of fails)out.push({id:'fail-'+what,sig:'x|'+what+'|'+text,make:()=>{const row=alertRow('act-failed',text,'',what==='thread'?retry():what==='roster'?rosterRetry():null);row.setAttribute('data-fail',what);return row;}});
   if((state==='starting'||state==='slow')&&launch.stuck){
    out.push({id:'stuck',sig:'stuck|'+on,make:()=>h('div',{class:'sys warn','data-row':'stuck'},h('span',{},copy.row.needsTerminal),termButton(ids.term('stuck')))});
   }else if(state==='starting'||state==='slow'){
@@ -323,7 +328,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const here=state();
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
-  const act=activityItem(),want=[...(layout.empty&&!thread.length&&!launch.messages.length?[{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}]:[]),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   reconcile(log,cache,want);
   paintChips();
   pin.onContentChanged();
@@ -341,9 +346,17 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   for(const row of peers)watched.add(row.sessionId);
   took(await sources.read(mine,onlyNew,early=>{thread=early;render();}));
  }
+ // The page's empty copy, only once the thread has read empty: while it reads it says so, and a read that failed says that instead (its alert row).
+ function emptyItems(){
+  if(!layout.empty||thread.length||launch.messages.length)return [];
+  if(fails.has('thread')||fails.has('roster')||(sources&&sources.failedNow()))return [];
+  if(!threadRead||(sources&&!sources.settled()))return [{id:'loading',sig:'l',make:()=>h('div',{class:'empty',role:'status','data-row':'loading'},copy.row.loading)}];
+  return [{id:'empty',sig:'e',make:()=>h('div',{class:'empty'},layout.empty)}];
+ }
  // A thread read landed: it settles the running time, the streamed rows it now holds and the wait for a reply.
  function took(next){
   thread=next;
+  threadRead=true;
   if(runningSince===0)runningSince=newestFrom(thread,leadHandles());
   for(const row of thread)streams.delete(row.messageId);
   if(awaitBase!==null&&leadCount()>awaitBase)awaitBase=null;
@@ -361,6 +374,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  function onRows(next){
   const firstRoster=!gotRows;gotRows=true;
+  fails.delete('roster');
   const before=live();rows=next;const now=live();
   if(now&&now.state==='running'&&(!before||before.state!=='running')&&lastLiveState!==null)runningSince=clock.now();
   lastLiveState=now?now.state:'none';
@@ -382,8 +396,13 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A page that reads by source does not wait on the roster: a sessions read that fails or never answers still settles the first thread read.
  if(sources){started=true;firstRead=readThread(true);}
  // A roster that answered before this mount (a page opened with a session in its address reads it first) is taken as the first one.
- const roster=reads.sessions();
- if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());});
+ function readRoster(){
+  const roster=reads.sessions();
+  if(sources)roster.then(()=>{if(!gotRows)onRows(reads.latestSessions());},()=>{});
+  // Without sources the first thread read waits on the roster: one that fails is the conversation's failure, said with Retry, not a load that never ends.
+  else Promise.resolve(roster).catch(error=>{if(!gotRows){fails.set('roster',copy.row.unread+' '+((error&&error.message)||String(error)));render();}});
+ }
+ readRoster();
  return {
   unmount(){offs.forEach(off=>off&&off());pin.release();mountSlot.release();launch.dispose();win.removeEventListener('beforeunload',onUnload);el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).

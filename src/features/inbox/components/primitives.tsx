@@ -130,13 +130,22 @@ export function ReadFailure({
   );
 }
 
-/** A refresh failed after an earlier read landed: keep that read on screen and say it is stale. */
-export function StaleNotice({ error, onRetry }: { error: string; onRetry: () => void }) {
+/** A refresh failed after an earlier read landed: keep that read on screen and say it is stale.
+ *  `what` names what failed to refresh, in the words of the place it shows. */
+export function StaleNotice({
+  error,
+  onRetry,
+  what = "the inbox",
+}: {
+  error: string;
+  onRetry: () => void;
+  what?: string;
+}) {
   return (
     <div className="ibx-stale" role="alert">
       <Ico icon={AlertTriangle} sm />
       <span className="tx" title={error}>
-        Couldn’t refresh the inbox: {error}. Showing the last read.
+        Couldn’t refresh {what}: {error}. Showing the last read.
       </span>
       <button type="button" className="ibx-gobtn" onClick={onRetry}>
         Retry

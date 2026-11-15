@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, fireEvent, render, screen, waitFor, within } from "@/test-utils";
@@ -55,8 +58,14 @@ vi.mock("./group-chat", async (orig) => ({
     room: { workspaceId: string };
     onBack?: () => void;
     focusRequest?: number;
+    threadHidden?: boolean;
   }) => (
-    <div data-testid="group-pane" data-room={p.room.workspaceId} data-focus={p.focusRequest}>
+    <div
+      data-testid="group-pane"
+      data-room={p.room.workspaceId}
+      data-focus={p.focusRequest}
+      data-thread-hidden={p.threadHidden ? "true" : "false"}
+    >
       <button onClick={p.onBack}>Back to the inbox</button>
     </div>
   ),
@@ -165,6 +174,33 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
   await screen.findByText("Review is clean; merge card is next.");
   return utils;
 }
+
+const composerBox = () =>
+  screen.getByTestId("chat-overlay").querySelector<HTMLTextAreaElement>(".ibx-comp textarea")!;
+
+const INBOX_CSS = readFileSync(resolve(__dirname, "../inbox.css"), "utf-8");
+/** The declarations of `selector`'s own rule in inbox.css. */
+const ruleOf = (selector: string) => {
+  const at = INBOX_CSS.indexOf(`\n${selector} {`);
+  expect(at, selector).toBeGreaterThanOrEqual(0);
+  return INBOX_CSS.slice(at, INBOX_CSS.indexOf("}", at));
+};
+
+describe("ChatOverlay contrast and focus (inbox.css)", () => {
+  it("draws the composer's hint, placeholder and key words in the muted ink that reads at 4.5:1", () => {
+    expect(ruleOf(".ibx-box textarea::placeholder")).toContain("color: var(--ibx-mfg)");
+    expect(ruleOf(".ibx-comp-foot")).toContain("color: var(--ibx-mfg)");
+    expect(ruleOf(".ibx-comp-foot .ibx-tohint")).toContain("color: var(--ibx-mfg)");
+  });
+  it("rings the focused thread with the 2 px accent outline the pins and buttons use", () => {
+    const ring = ruleOf(".ibx-msgs:focus-visible");
+    expect(ring).toContain("outline: 2px solid var(--ibx-accent)");
+    expect(ring).not.toContain("outline: none");
+  });
+  it("sets the key hints at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-comp-keys kbd")).toContain("font-size: 11px");
+  });
+});
 
 const AGENT_PAGE = "pages/agent.html";
 /** The registry's view of the team: `agent_page` is what teams.yml declares (absent ⇒ no page). */
@@ -543,12 +579,92 @@ describe("ChatOverlay", () => {
     expect(screen.getByTestId("chat-overlay-pin-3")).toHaveFocus();
   });
 
-  it("opens a pin in the chat's place on a short pane, until it is closed", async () => {
+  it.each([
+    [250, 250],
+    [640, 480],
+  ])(
+    "opens a pin in the chat's place on a %i × %i pane, until it is closed, and keeps the composer",
+    async (w, h) => {
+      await renderOverlay(w, h);
+      fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
+      expect(screen.getByTestId("ibx-msgs")).not.toBeVisible();
+      const box = composerBox();
+      expect(box).toBeInTheDocument();
+      expect(box).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
+      expect(screen.getByTestId("ibx-msgs")).toBeVisible();
+    },
+  );
+
+  it("closing a pin opened in the chat's place puts the thread back at its newest message, still following", async () => {
     await renderOverlay(250, 250);
+    const msgs = screen.getByTestId("ibx-msgs");
+    const height = { value: 1000 };
+    Object.defineProperty(msgs, "scrollHeight", { configurable: true, get: () => height.value });
     fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
-    expect(screen.queryByTestId("ibx-msgs")).toBeNull();
+    // A hidden scroller can lose its place.
+    msgs.scrollTop = 0;
     fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
-    expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+    // The same scroller, not a new one without its stick-to-bottom wiring.
+    expect(screen.getByTestId("ibx-msgs")).toBe(msgs);
+    expect(msgs.scrollTop).toBe(1000);
+    // Still following: a message that lands keeps it at its end.
+    height.value = 1400;
+    arrive(msg(9, LEAD, "human", "Merged."));
+    await screen.findByText("Merged.");
+    expect(msgs.scrollTop).toBe(1400);
+  });
+
+  it("Escape in an empty composer closes an open pin; with a draft it leaves the pin open", async () => {
+    await renderOverlay(300, 700);
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
+    const box = composerBox();
+    fireEvent.change(box, { target: { value: "half a thought" } });
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(screen.getByRole("region", { name: /QA/ })).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: "" } });
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(screen.queryByRole("region", { name: /QA/ })).toBeNull();
+    // The chat itself stays open: Escape closed the pin, not the overlay.
+    expect(screen.getByTestId("chat-overlay")).toBeInTheDocument();
+  });
+
+  it.each([
+    [250, 250, false],
+    [900, 250, false],
+    [300, 700, false],
+    [420, 700, true],
+  ])("a %i × %i pane keeps the composer's route and key hints: %s", async (w, h, hinted) => {
+    await renderOverlay(w, h);
+    const comp = composerBox().closest(".ibx-comp")!;
+    expect(comp.classList.contains("compact")).toBe(!hinted);
+    if (hinted) expect(screen.getByTestId("ibx-route-hint")).toBeInTheDocument();
+    else expect(screen.queryByTestId("ibx-route-hint")).toBeNull();
+    expect(comp.querySelector(".ibx-comp-keys") !== null).toBe(hinted);
+  });
+
+  it("an empty chat says so once; a refresh that fails says the chat could not refresh", async () => {
+    api.loadSessionInbox.mockResolvedValue({
+      dto: { handle: LEAD, roles: [], messages: [] },
+      source: "live",
+    });
+    render(
+      <ChatOverlay
+        tabId="tab-1"
+        sessionId={SESSION}
+        teamKey={TEAM_KEY}
+        composeRequest={0}
+        size={{ width: 420, height: 700 }}
+        placement="cover"
+      />,
+    );
+    const empty = await screen.findByTestId("chat-overlay-empty");
+    expect(empty).toHaveTextContent("No messages yet");
+    expect(empty).not.toHaveTextContent("inbox");
+    api.loadSessionInbox.mockRejectedValue(new Error("store locked"));
+    act(() => listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null })));
+    const stale = await screen.findByRole("alert");
+    expect(stale).toHaveTextContent("Couldn’t refresh the chat: store locked");
   });
 
   it("Full view opens the team's declared agent page for its session, in the agent's team", async () => {
@@ -709,6 +825,19 @@ describe("ChatOverlay", () => {
       ask();
       fireEvent.click(await screen.findByRole("button", { name: "Back to the inbox" }));
       expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
+    });
+
+    it("a pin opened in the room's place keeps the room's composer", async () => {
+      roster(room);
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(250, 250);
+      ask();
+      const pane = await screen.findByTestId("group-pane");
+      expect(pane).toHaveAttribute("data-thread-hidden", "false");
+      fireEvent.click(await screen.findByTestId("chat-overlay-pin-3"));
+      expect(screen.getByTestId("group-pane")).toHaveAttribute("data-thread-hidden", "true");
+      fireEvent.click(screen.getByRole("button", { name: "Close QA" }));
+      expect(screen.getByTestId("group-pane")).toHaveAttribute("data-thread-hidden", "false");
     });
 
     it("has nothing to open for a session with no room, and says it handled the request", async () => {
