@@ -877,18 +877,11 @@ pub fn install(app: tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         loop {
-            if let Err(error) = refresh(&app).await {
+            let recheck = refresh(&app).await.unwrap_or_else(|error| {
                 log::warn!(target:"spend_caps","spend evaluation: {error}");
-            }
-            let now = chrono::Local::now();
-            let next = now
-                .date_naive()
-                .succ_opt()
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .and_then(|d| d.and_local_timezone(chrono::Local).earliest());
-            let wait = next
-                .map(|t| (t - now).to_std().unwrap_or_default())
-                .unwrap_or(std::time::Duration::from_secs(60));
+                true
+            });
+            let wait = next_refresh(chrono::Local::now(), recheck);
             tokio::select! { _ = wake().notified() => {}, _ = tokio::time::sleep(wait) => {} }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
@@ -957,7 +950,30 @@ pub(crate) async fn evaluate_and_publish<R: tauri::Runtime>(
     Ok((caller, result))
 }
 
-async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
+/// How soon a decision that could not be made is made again: one notice cycle, so no
+/// session's mail waits on it longer.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long after `now` to evaluate again with no event: at local midnight (a new day's
+/// spend), or within [`RECHECK`] when the last evaluation left a decision unavailable.
+fn next_refresh(now: chrono::DateTime<chrono::Local>, recheck: bool) -> std::time::Duration {
+    let midnight = now
+        .date_naive()
+        .succ_opt()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|d| d.and_local_timezone(chrono::Local).earliest())
+        .map(|t| (t - now).to_std().unwrap_or_default())
+        .unwrap_or(RECHECK);
+    if recheck {
+        midnight.min(RECHECK)
+    } else {
+        midnight
+    }
+}
+
+/// Evaluates spend and pushes each live session's wake decision: whether a decision was
+/// unavailable, so the next evaluation comes within [`RECHECK`].
+async fn refresh(app: &tauri::AppHandle) -> Result<bool, String> {
     use tauri::Manager;
     let layouts = crate::commands::pty_layout::webview_local_layout_snapshots(app.clone()).await;
     let launches = app
@@ -971,10 +987,12 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
     let (caller, result) = evaluate_and_publish(app, &decisions).await?;
     let hosts = crate::commands::host_inbox::local_hosts(app);
     let app_holds = app.clone();
-    let value = crate::commands::await_blocking("spend_caps.holds", move || {
-        if let Err(error) = push_session_holds(&result, decisions.clone(), &hosts) {
-            log::warn!(target:"spend_caps", "spend hold propagation: {error}");
-        }
+    let (value, recheck) = crate::commands::await_blocking("spend_caps.holds", move || {
+        let recheck =
+            push_session_holds(&result, decisions.clone(), &hosts).unwrap_or_else(|error| {
+                log::warn!(target:"spend_caps", "spend hold propagation: {error}");
+                true
+            });
         let value = result?;
         let mut unavailable = std::collections::BTreeMap::new();
         for (session, revision) in decisions {
@@ -995,7 +1013,7 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
                 }
             }
         }
-        Ok(with_hold_result(value, unavailable))
+        Ok((with_hold_result(value, unavailable), recheck))
     })
     .await?;
     let notify = crate::routines::wake_app::AppWakeEnv::new(app.clone());
@@ -1003,7 +1021,8 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
         let usage = UsageStore::open(&caller.home.join("usage.sqlite"))?;
         notify_evaluation(&usage, &value, &notify)
     })
-    .await
+    .await?;
+    Ok(recheck)
 }
 
 fn with_hold_result(
@@ -1021,26 +1040,37 @@ fn with_hold_result(
     value
 }
 
-/// Production propagation boundary: current evaluation and live session ownership go to hosts.
+/// Production propagation boundary: current evaluation and live session ownership go to
+/// hosts. A cap's refusal holds its sessions, and so does an agent the evaluation could
+/// not see (it would otherwise dodge its cap). A failed evaluation holds none: it fails
+/// open, with a warning. Whether any decision was unavailable, so it is made again soon.
 pub(crate) fn push_session_holds(
     result: &Result<Evaluation, String>,
     sessions: impl IntoIterator<Item = (String, Option<String>)>,
     hosts: &[std::sync::Arc<dyn codesense_pty_core::domain::TerminalDomain>],
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut unavailable = false;
     let holds: Vec<_> = sessions
         .into_iter()
         .map(|(session, revision)| {
             let reason = revision.as_deref().and_then(|revision| {
                 let key = revision.split('@').next().unwrap_or(revision);
                 match result {
-                    Ok(value) => value
-                        .agents
-                        .get(key)
-                        .map(|s| s.refusal.clone())
-                        .unwrap_or_else(|| {
+                    Ok(value) => match value.agents.get(key) {
+                        Some(status) => status.refusal.clone(),
+                        None => {
+                            unavailable = true;
                             Some(format!("agent {key}: spend cap could not be evaluated"))
-                        }),
-                    Err(error) => Some(format!("agent {key}: spend unavailable: {error}")),
+                        }
+                    },
+                    Err(error) => {
+                        unavailable = true;
+                        log::warn!(
+                            target:"spend_caps",
+                            "agent {key}: spend unavailable, mail is not held: {error}"
+                        );
+                        None
+                    }
                 }
             });
             codesense_pty_core::inbox_host::WakeHold { session, reason }
@@ -1059,7 +1089,7 @@ pub(crate) fn push_session_holds(
             failure = Some(error.to_string());
         }
     }
-    failure.map_or(Ok(()), Err)
+    failure.map_or(Ok(unavailable), Err)
 }
 
 pub(crate) fn notify_evaluation(
@@ -2171,13 +2201,43 @@ mod live_identity_seams {
             .unwrap()
             .agents
             .contains_key(&missing.to_string()));
-        push_session_holds(&result, sessions.clone(), &[]).unwrap();
+        assert!(push_session_holds(&result, sessions.clone(), &[]).unwrap());
         assert!(refuse_held_session(&session)
             .unwrap_err()
             .contains("could not be evaluated"));
-        push_session_holds(&Err("usage unavailable".into()), sessions, &[]).unwrap();
+        // An evaluation that fails holds no mail (it fails open, and is re-evaluated
+        // within a cycle); an agent hidden from evaluation stays refused when it is.
+        assert!(
+            push_session_holds(&Err("usage unavailable".into()), sessions.clone(), &[]).unwrap()
+        );
+        refuse_held_session(&session).unwrap();
+        assert!(push_session_holds(&result, sessions, &[]).unwrap());
         assert!(refuse_held_session(&session)
             .unwrap_err()
-            .contains("spend unavailable"));
+            .contains("could not be evaluated"));
+    }
+
+    /// An unavailable decision (a failed evaluation, or an agent it could not see) asks for
+    /// the next evaluation within one cycle; otherwise the next is at local midnight.
+    #[test]
+    fn an_unavailable_spend_decision_is_re_evaluated_within_one_cycle() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 15, 22, 0, 0)
+            .earliest()
+            .unwrap();
+        assert_eq!(next_refresh(now, true), RECHECK);
+        assert_eq!(
+            next_refresh(now, false),
+            std::time::Duration::from_secs(2 * 3600)
+        );
+        let late = chrono::Local
+            .with_ymd_and_hms(2026, 11, 15, 23, 59, 30)
+            .earliest()
+            .unwrap();
+        assert_eq!(next_refresh(late, true), std::time::Duration::from_secs(30));
+        // A session with no agent revision has nothing to decide.
+        let sessions = [(uuid::Uuid::new_v4().to_string(), None)];
+        assert!(!push_session_holds(&Err("usage unavailable".into()), sessions, &[]).unwrap());
     }
 }

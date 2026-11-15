@@ -99,9 +99,24 @@ impl HostInbox {
         self.report(outlet, session);
         let deadline = Instant::now() + INBOX_WAIT_HOLD;
         let mut no_stream: Option<(String, Instant)> = None;
+        let cycle = lock(&self.cycle).0;
+        // The gate holding the waiting notice back, since when, and whether it was logged.
+        let mut gated: Option<(String, Instant, bool)> = None;
         let (end, reason) = loop {
             if !crate::activity::peer::runs(owner) {
                 break (Some(InboxWait::Replaced), "parent-gone");
+            }
+            match self.held_gate(outlet, session) {
+                None => gated = None,
+                Some(gate) => match &mut gated {
+                    Some((held, since, logged)) if *held == gate => {
+                        if !*logged && since.elapsed() >= cycle {
+                            outlet.waiter_lifecycle(session, "held", &gate);
+                            *logged = true;
+                        }
+                    }
+                    _ => gated = Some((gate, Instant::now(), false)),
+                },
             }
             let taken = self.take(session, |token| match outlet.has_tools(session) {
                 Some(tools) => {

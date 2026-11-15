@@ -795,3 +795,67 @@ fn an_agent_that_only_just_stopped_is_covered_by_its_grace_and_its_mail_stays_he
     assert!(inbox.waiter_covers("S1", REARM_SETTLE / 2));
     assert!(inbox.holds("S1"));
 }
+
+/// A notice held past one cycle is logged once with its gate: an undecided wake hold
+/// while holds are required, then a dead tools bridge. Once the desktop's refresh lifts
+/// the hold and the tools return, the waiter hands it over within the cycle.
+#[test]
+fn a_waiter_with_no_hold_decision_is_handed_mail_within_one_cycle_after_refresh() {
+    let (inbox, outlet) = new();
+    *lock(&inbox.cycle) = Cycle(Duration::from_millis(50));
+    inbox.require_wake_holds();
+    let (served, helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "You have 1 new message.".into(), "t1".into());
+    let held = |gate: &str| {
+        lock(&outlet.lifecycle)
+            .iter()
+            .filter(|(event, reason)| event == "held" && reason == gate)
+            .count()
+    };
+    until(|| held("hold: undecided") == 1);
+    *lock(&outlet.tools) = Some(Some(false));
+    inbox.set_wake_holds(
+        1,
+        vec![WakeHold {
+            session: "S1".into(),
+            reason: None,
+        }],
+    );
+    until(|| held("tools") == 1);
+    std::thread::sleep(Duration::from_millis(120));
+    assert_eq!(
+        (held("hold: undecided"), held("tools")),
+        (1, 1),
+        "logged once"
+    );
+    *lock(&outlet.tools) = Some(Some(true));
+    assert_eq!(next(&helper), "mail t1");
+    assert_eq!(next(&helper), "You have 1 new message.");
+    printed(&helper, "t1");
+    served.join().unwrap();
+    assert_eq!(outlet.told(), vec!["t1"]);
+}
+
+/// A real hold names its reason in the held log.
+#[test]
+fn a_notice_held_by_a_cap_logs_its_reason() {
+    let (inbox, outlet) = new();
+    *lock(&inbox.cycle) = Cycle(Duration::from_millis(50));
+    inbox.set_wake_holds(
+        1,
+        vec![WakeHold {
+            session: "S1".into(),
+            reason: Some("day cap reached".into()),
+        }],
+    );
+    let (_served, _helper) = waiter(&inbox, &outlet, WaitArm::Replace, false, None);
+    until(|| inbox.state("S1").waiting);
+    inbox.mail("S1", "You have 1 new message.".into(), "t1".into());
+    until(|| {
+        lock(&outlet.lifecycle)
+            .iter()
+            .any(|(event, reason)| event == "held" && reason == "hold: day cap reached")
+    });
+    assert!(outlet.told().is_empty());
+}

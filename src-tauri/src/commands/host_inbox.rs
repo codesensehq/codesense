@@ -624,8 +624,12 @@ where
 {
     if let Err(reason) = host.admit_automatic_input(session).await {
         log::debug!(target: "inbox", "holding automatic input for {session}: {reason}");
+        if refused_past_a_cycle(session, std::time::Instant::now()) {
+            log::info!(target: "inbox", "session={session} waiter=held reason=refusal: {reason}");
+        }
         return Some((RETRY_PUSH, 0));
     }
+    lock_refused().remove(session);
     let reoffer = why == Offer::Restored;
     match agent_inbox::check_for_mail(host, session, reoffer).await {
         Ok(Check::Offer { notice, token }) => match push(notice, token.clone()).await {
@@ -644,6 +648,30 @@ where
         Ok(Check::Nothing | Check::Held) => None,
         Err(()) => (attempt + 1 < PUSH_ATTEMPTS).then_some((RETRY_PUSH, attempt + 1)),
     }
+}
+
+/// Since when each session's automatic input has been refused, and whether that was
+/// logged: a refusal is logged once, when it outlasts one notice cycle.
+fn lock_refused() -> std::sync::MutexGuard<'static, HashMap<String, (std::time::Instant, bool)>> {
+    static REFUSED: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, (std::time::Instant, bool)>>,
+    > = std::sync::OnceLock::new();
+    REFUSED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// `session`'s input was refused at `now`: whether its refusal just outlasted one notice
+/// cycle, so it is logged (once per refused stretch).
+fn refused_past_a_cycle(session: &str, now: std::time::Instant) -> bool {
+    let mut refused = lock_refused();
+    let (since, logged) = refused.entry(session.to_string()).or_insert((now, false));
+    if *logged || now.saturating_duration_since(*since) < ttl() {
+        return false;
+    }
+    *logged = true;
+    true
 }
 
 /// How long after a push its reservation has lapsed.
@@ -744,6 +772,19 @@ fn schedule(app: &AppHandle, session: &str, wait: Duration, attempt: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused notice is logged once, when the refusal outlasts one cycle (fixed clock).
+    #[test]
+    fn a_refusal_is_logged_once_when_it_outlasts_a_cycle() {
+        let t0 = std::time::Instant::now();
+        assert!(!refused_past_a_cycle("refused-1", t0));
+        assert!(!refused_past_a_cycle(
+            "refused-1",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(refused_past_a_cycle("refused-1", t0 + ttl()));
+        assert!(!refused_past_a_cycle("refused-1", t0 + ttl() * 2), "once");
+    }
 
     pub(super) fn state(session: &str, waiting: bool, grace_ms: Option<u64>) -> InboxWaiterState {
         InboxWaiterState {
