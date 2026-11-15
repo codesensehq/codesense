@@ -3,8 +3,9 @@
 // The active message, by default the newest, and that message's own actions are in the Tab order; every other message and its controls are not. Up and Down move between messages,
 // Home and End go to the first and the newest, and focusing anything inside a message makes it the active one (so a Pin's note and Undo stay reachable where the person acted).
 // Messages are the log's [data-mid] rows; a log with none stays a Tab stop itself, so it still scrolls by keyboard.
-/** What a message can hold that Tab would stop on: its actions, links and framed dashboards. */
-const FOCUSABLE='button, a[href], input, select, textarea, iframe, [tabindex]';
+/** What a message can hold that Tab would stop on: its actions, links and framed dashboards, and the code blocks and tables Chromium makes keyboard-focusable when
+ *  they scroll (with no tabindex), as the overlay's hook holds them. */
+const FOCUSABLE='button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll';
 /** The tabindex a control had before the thread took it out of the Tab order ("" for none). */
 const HELD='data-roving-tabindex';
 const ROW='[data-mid]';

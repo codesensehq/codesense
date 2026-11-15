@@ -2385,12 +2385,16 @@ button.ibx-media-open {
 .ibx-m .bub {
   position: relative;
 }
+/* Hidden by opacity, not display: none: a redrawn Pin… or Unpin must be able to take focus back (after a
+   replace, its Undo, or Esc in the chooser), and then focus-within shows it. */
 .ibx-acts {
   position: absolute;
   top: -14px;
   right: 6px;
   z-index: 2;
-  display: none;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
   padding: 1px;
   border: 1px solid var(--ibx-border);
   border-radius: 6px;
@@ -2404,7 +2408,8 @@ button.ibx-media-open {
 .ibx-m:hover .ibx-acts,
 .ibx-m:focus-within .ibx-acts,
 .ibx-m[data-tapped] .ibx-acts {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 .ibx-pin-b {
   display: inline-flex;
@@ -2482,7 +2487,7 @@ button.ibx-media-open {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--ibx-mfg);
 }
 .ibx-pin-tag svg {

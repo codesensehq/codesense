@@ -2313,6 +2313,24 @@ describe("kit.chat: the thread is one Tab stop", () => {
     expect(only(row(1))).toBe(true);
   });
 
+  it("holds an older message's scrolling code block or table out of the Tab order, as its controls are", async () => {
+    // Chromium makes an overflowing pre or table scroller keyboard-focusable with no tabindex, so one a
+    // message draws would leak out of the thread's one stop.
+    const { row, only } = await mountThread();
+    const pre = document.createElement("pre");
+    const table = document.createElement("div");
+    table.className = "inbox-table-scroll";
+    row(1).append(pre, table);
+    await flush();
+    expect(pre.getAttribute("tabindex")).toBe("-1");
+    expect(table.getAttribute("tabindex")).toBe("-1");
+    expect(only(row(3))).toBe(true);
+    // its message becomes the stop: they are as the browser made them again
+    row(1).focus();
+    expect(pre.hasAttribute("tabindex")).toBe(false);
+    expect(table.hasAttribute("tabindex")).toBe(false);
+  });
+
   it("a message that lands while you read an older one leaves the stop where you are", async () => {
     const { s, row, rows, thread } = await mountThread();
     row(1).focus();

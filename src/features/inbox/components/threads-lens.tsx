@@ -739,6 +739,13 @@ export function Bubble({
       // On touch the action row shows on a tap, as hover shows it for a pointer.
       onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
     >
+      {grouped && roving && (
+        // A follow-on message drops who and when from its line; as an item of the chat's thread it
+        // is still read sender and time first, as the message it follows is.
+        <span className="ibx-sr">
+          {m.from === HUMAN ? "You" : labelOf(dir, m.from)} · {formatClock(m.createdAtMs)}
+        </span>
+      )}
       {avatar && !out && !grouped && <Avatar k={m.from} dir={dir} team={m.team} sm />}
       {meta && (
         <div className="meta">
@@ -787,7 +794,9 @@ export function Bubble({
       <div className="bub">
         {pins && !html && (
           <div className="ibx-acts" role="group" aria-label="Message actions">
-            <PinButton pins={pins} m={m} />
+            {/* The row is hidden by opacity, so outside the chat's roving thread (which holds every
+                Pin but the stop's) its Pin is out of the Tab order, as it was hidden. */}
+            <PinButton pins={pins} m={m} tabStop={roving} />
           </div>
         )}
         <MessageBody m={m} liveDashboards={me === HUMAN && !view.self} />
