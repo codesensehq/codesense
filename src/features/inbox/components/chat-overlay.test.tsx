@@ -227,6 +227,17 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("draws a pinned message's pressed Unpin in the accent, which shows on the page with no fill behind it", () => {
+    // The on-accent ink is for text on an accent fill; on the bare page it drew the icon at 1:1.
+    const pressed = ruleOf('.ibx-pin-b[aria-pressed="true"]');
+    expect(pressed).toContain("color: var(--ibx-accent);");
+    expect(pressed).not.toContain("--ibx-accent-ink");
+  });
+  it("draws a fresh pin's reduced-motion New in the accent, which shows on the pin's light wash", () => {
+    const fresh = ruleOf(".ibx-pk-new");
+    expect(fresh).toContain("color: var(--ibx-accent);");
+    expect(fresh).not.toContain("--ibx-accent-ink");
+  });
   it("sets the Pinned by tag at the 11 px meta floor", () => {
     expect(ruleOf(".ibx-pin-tag")).toContain("font-size: 11px");
   });

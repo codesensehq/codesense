@@ -16,6 +16,7 @@
     node.append(...kids.flat(Infinity).filter((kid) => kid !== null && kid !== void 0 && kid !== false));
     return node;
   }
+  var imeKey = (event) => Boolean(event && (event.isComposing || event.keyCode === 229));
 
   // src-tauri/src/http/routes/dashboard_kit/chat/copy.js
   var CHAT_COPY = {
@@ -786,7 +787,7 @@
   function createComposer({ ids = idsOf(1), onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
     const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
     const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
-    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: ids.hint }, hint));
+    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, h("div", { class: "box-foot" }, h("div", { class: "hint", id: ids.hint }, hint), send)));
     let pending = false, disabled = false;
     const setPending = (on) => {
       pending = on;
@@ -815,7 +816,7 @@
       });
     };
     input.addEventListener("keydown", (event) => {
-      if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !event.isComposing) {
+      if ((event.code === "Enter" || event.code === "NumpadEnter") && (!event.shiftKey || event.metaKey || event.ctrlKey) && !imeKey(event)) {
         event.preventDefault();
         submit();
       }
@@ -1237,7 +1238,7 @@
       };
       input.addEventListener("input", () => onDraft(input.value));
       input.addEventListener("keydown", (event) => {
-        if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !event.isComposing) {
+        if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !imeKey(event)) {
           event.preventDefault();
           send();
         }

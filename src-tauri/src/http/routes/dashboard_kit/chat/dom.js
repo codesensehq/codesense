@@ -9,3 +9,5 @@ export function h(tag,props={},...kids){
  }
  node.append(...kids.flat(Infinity).filter(kid=>kid!==null&&kid!==undefined&&kid!==false));return node;
 }
+// A key that belongs to an input method: still composing, or (WebKit) the Enter that commits a candidate, whose keydown has isComposing false and keyCode 229. It never sends.
+export const imeKey=event=>Boolean(event&&(event.isComposing||event.keyCode===229));
