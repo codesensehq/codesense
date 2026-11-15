@@ -96,3 +96,23 @@ describe("what is announced", () => {
     expect(liveText("restored", "Ship it", 2)).toBe('Restored "Ship it". 2 of 3 pinned.');
   });
 });
+
+describe("the chooser's words", () => {
+  it("are chat-core's, so the overlay and the kit's chat say the same", async () => {
+    const pins = await import("./person-pins");
+    const core = await import("./chat-core");
+    expect(pins.replaceLabel).toBe(core.pinReplaceLabel);
+    expect(pins.chooserHeading).toBe(core.pinChooserHeading);
+    expect(pins.pinnedAtLine).toBe(core.pinPinnedAtLine);
+    expect(pins.replacedText).toBe(core.pinReplacedText);
+    expect(pins.newRowText).toBe(core.pinNewRowText);
+    expect(pins.listChangeText).toBe(core.pinListChangeText);
+    expect(pins.pinnedMeanwhileText).toBe(core.pinPinnedMeanwhileText);
+    expect(pins.REPLACE_FAILED).toBe(core.PIN_REPLACE_FAILED);
+    expect(pins.ROOM_NOW).toBe(core.PIN_ROOM_NOW);
+    expect(pins.UNDO_FULL).toBe(core.PIN_UNDO_FULL);
+    expect(pins.UNDO_GONE).toBe(core.PIN_UNDO_GONE);
+    expect(core.pinReplacedText("you", "Tests")).toBe("Replaced your pin “Tests”.");
+    expect(core.pinReplacedText("Story lead", "Tests")).toBe("Replaced Story lead's pin “Tests”.");
+  });
+});
