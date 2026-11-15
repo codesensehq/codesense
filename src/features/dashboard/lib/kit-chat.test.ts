@@ -1943,6 +1943,25 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     expect(chooser()).toBeNull();
   });
 
+  it("with the thread one Tab stop, only the stop's Pin… and one chooser row are Tab stops, not every message's", async () => {
+    // The action row is hidden by opacity (so a redrawn Pin… can take focus back), which leaves every
+    // message's Pin focusable; the roving thread keeps all but the stop's out of the Tab order.
+    const { s, row, pinOf, choices } = await mountReplace();
+    const log = s.el.querySelector<HTMLElement>(".log")!;
+    const stops = () =>
+      [log, ...log.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tabIndex >= 0 && (el.matches("button, a[href], input") || el.hasAttribute("tabindex")),
+      );
+    const only = (owner: HTMLElement) => stops().every((el) => el === owner || owner.contains(el));
+    expect(only(row(5))).toBe(true);
+    for (const id of [1, 2, 3]) expect(pinOf(id).tabIndex).toBe(-1);
+    pinOf(5).click();
+    await flush();
+    expect(only(row(5))).toBe(true);
+    expect(choices().filter((c) => c.tabIndex >= 0)).toHaveLength(1);
+  });
+
   it("unmounting with the chooser open takes the page's mark off its pin", async () => {
     const { chat, onPin, pinOf } = await mountReplace();
     pinOf(5).click();
