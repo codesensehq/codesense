@@ -432,6 +432,70 @@ describe("ChatOverlay", () => {
       );
     });
 
+    it("a cost or file count the record has only in part says so, with the record's reason", async () => {
+      withRecord({
+        ...RECORD,
+        unpricedModels: ["gpt-5.5-codex"],
+        unavailable: {
+          cost: "costUsd is the priced part only: a model of this session has no rate",
+          files: "only the first 10000 commits were read",
+        },
+      });
+      await renderOverlay(640, 480);
+      const line = await screen.findByTestId("chat-overlay-record");
+      await waitFor(() => expect(line).toHaveTextContent("≥ $1.26"));
+      expect(line).toHaveTextContent("≥ 3 files");
+      expect(within(line).getByText("≥ $1.26")).toHaveAttribute(
+        "title",
+        "costUsd is the priced part only: a model of this session has no rate",
+      );
+      expect(within(line).getByText("≥ 3 files")).toHaveAttribute(
+        "title",
+        "only the first 10000 commits were read",
+      );
+    });
+
+    it("an unpriced model alone marks the cost as part of it, naming the model", async () => {
+      withRecord({ ...RECORD, unpricedModels: ["gpt-5.5-codex"] });
+      await renderOverlay(640, 480);
+      const line = await screen.findByTestId("chat-overlay-record");
+      await waitFor(() => expect(line).toHaveTextContent("≥ $1.26"));
+      expect(within(line).getByText("≥ $1.26").getAttribute("title")).toContain("gpt-5.5-codex");
+    });
+
+    it("reads the record one at a time: events while a read runs queue one more read, not many", async () => {
+      let release!: () => void;
+      let reads = 0;
+      vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+        if (cmd === "session_record") {
+          reads++;
+          if (reads === 2) await new Promise<void>((resolve) => (release = resolve));
+          return RECORD;
+        }
+        return cmd === "agent_pins"
+          ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
+          : undefined;
+      });
+      await renderOverlay(640, 480);
+      await recordText();
+      const usage = () =>
+        act(() =>
+          listeners
+            .get("session-usage-changed")
+            ?.forEach((h) => h({ payload: { sessionId: SESSION } })),
+        );
+      usage();
+      await waitFor(() => expect(reads).toBe(2));
+      usage();
+      usage();
+      usage();
+      expect(reads).toBe(2);
+      await act(async () => release());
+      await waitFor(() => expect(reads).toBe(3));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reads).toBe(3);
+    });
+
     it("a record not read yet, or with no price, shows what it knows and no cost", async () => {
       withRecord({ ...RECORD, costUsd: null, model: null, files: null });
       await renderOverlay(640, 480);

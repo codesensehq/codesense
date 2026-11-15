@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, SquareTerminal, X } from "lucide-react";
 
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
@@ -289,22 +289,33 @@ export function ChatOverlay({
   // is left out, never guessed.
   const facts = useSessionRecord(handle || null, sessionId);
   const storyId = row?.story ?? facts?.story ?? null;
-  const recordText: Partial<Record<OverlayRecordField, string | null>> = {
-    model: facts?.model ? modelLabel(facts.model) : null,
-    cost: facts?.costUsd != null ? formatCost(facts.costUsd) : null,
-    files: facts?.files ? `${facts.files} ${facts.files === 1 ? "file" : "files"}` : null,
-    time: formatElapsed(row?.startedAtMs ?? null, now),
+  // A figure the record has only in part says so ("≥"), with the record's reason as its title.
+  type RecordPart = { text: string; title?: string };
+  const partial = (text: string, why: string | null): RecordPart =>
+    why ? { text: `≥ ${text}`, title: why } : { text };
+  const recordText: Partial<Record<OverlayRecordField, RecordPart | null>> = {
+    model: facts?.model ? { text: modelLabel(facts.model) } : null,
+    cost: facts?.costUsd != null ? partial(formatCost(facts.costUsd), facts.costPartial) : null,
+    files: facts?.files
+      ? partial(`${facts.files} ${facts.files === 1 ? "file" : "files"}`, facts.filesPartial)
+      : null,
+    time: ((t) => (t ? { text: t } : null))(formatElapsed(row?.startedAtMs ?? null, now)),
   };
-  const recordParts = [
-    ...(layout.statusInRecord && statusWord ? [statusWord] : []),
+  const recordParts: RecordPart[] = [
+    ...(layout.statusInRecord && statusWord ? [{ text: statusWord }] : []),
     ...layout.recordFields
       .filter((f) => f !== "story")
       .map((f) => recordText[f])
-      .filter((v): v is string => !!v),
+      .filter((v): v is RecordPart => !!v),
   ];
   const record = (recordParts.length > 0 || storyId) && (
     <span className="ibx-ov-record" data-testid="chat-overlay-record">
-      {recordParts.join(" · ")}
+      {recordParts.map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && " · "}
+          {part.title ? <span title={part.title}>{part.text}</span> : part.text}
+        </Fragment>
+      ))}
       {storyId && (
         <>
           {recordParts.length > 0 && " · "}

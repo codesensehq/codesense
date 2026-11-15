@@ -12,8 +12,12 @@ export interface SessionRecordFacts {
   model: string | null;
   /** The priced cost; null when no part of it has a rate. */
   costUsd: number | null;
-  /** The files the session's commits changed; null when they could not be read. */
-  files: number | null;
+  /** Why `costUsd` is only part of the cost (a model with no rate), else null. */
+  costPartial: string | null;
+  /** How many files the session's commits changed (the record always lists them, maybe none). */
+  files: number;
+  /** Why `files` is only part of them (commits that could not all be read), else null. */
+  filesPartial: string | null;
   story: string | null;
 }
 
@@ -30,13 +34,21 @@ function factsOf(raw: unknown): SessionRecordFacts | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const strings = (v: unknown) =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+  // `{field: reason}` for each figure the record has only in part, or not at all.
+  const unavailable = (
+    r.unavailable && typeof r.unavailable === "object" ? r.unavailable : {}
+  ) as Record<string, unknown>;
+  const unpriced = strings(r.unpricedModels);
   return {
-    sessionIds: Array.isArray(r.sessionIds)
-      ? r.sessionIds.filter((id): id is string => typeof id === "string")
-      : [],
+    sessionIds: strings(r.sessionIds),
     model: text(r.model),
     costUsd: typeof r.costUsd === "number" && Number.isFinite(r.costUsd) ? r.costUsd : null,
-    files: Array.isArray(r.files) ? r.files.length : null,
+    costPartial:
+      text(unavailable.cost) ?? (unpriced.length ? `no rate for ${unpriced.join(", ")}` : null),
+    files: Array.isArray(r.files) ? r.files.length : 0,
+    filesPartial: text(unavailable.files),
     story: text(r.story),
   };
 }
@@ -51,21 +63,37 @@ export function useSessionRecord(
   sessionId: string | null,
 ): SessionRecordFacts | null {
   const [state, setState] = useState<{ handle: string; facts: SessionRecordFacts | null }>();
-  const seq = useRef(0);
   const known = useRef<string[]>([]);
+  // One read at a time: an event while one runs asks for one more read after it, not another
+  // read beside it. A read for an older handle gives way to the newer one's.
+  const flight = useRef<{ handle: string; again: boolean } | null>(null);
 
   const reload = useCallback(async () => {
     if (!handle) return;
-    const mine = ++seq.current;
+    if (flight.current?.handle === handle) {
+      flight.current.again = true;
+      return;
+    }
+    const mine = { handle, again: false };
+    flight.current = mine;
     const done = (facts: SessionRecordFacts | null) => {
-      if (mine !== seq.current) return;
       known.current = facts?.sessionIds ?? [];
       setState({ handle, facts });
     };
     try {
-      done(factsOf(await sessionRecord({ handle })));
-    } catch {
-      // Keep what the line showed.
+      do {
+        mine.again = false;
+        let read: { facts: SessionRecordFacts | null } | null = null;
+        try {
+          read = { facts: factsOf(await sessionRecord({ handle })) };
+        } catch {
+          // Keep what the line showed.
+        }
+        if (flight.current !== mine) return;
+        if (read) done(read.facts);
+      } while (mine.again);
+    } finally {
+      if (flight.current === mine) flight.current = null;
     }
   }, [handle]);
 
