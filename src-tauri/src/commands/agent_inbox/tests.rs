@@ -2220,9 +2220,6 @@ async fn mail_waiting_when_an_agent_arms_is_announced_once() {
     assert_eq!(read_messages(&*host, Some("S2")).await.unwrap().len(), 2);
 }
 
-/// Role mail offers each live holder of the role its notice, as a direct message does,
-/// and the notice names the role to claim from; once the holder releases the role, role
-/// mail offers it nothing.
 /// What the app's `role_message_queued` does with each role send: its holders are offered.
 async fn offer_queued(fake: &FakeHost) {
     let queued = std::mem::take(&mut *fake.queued.lock().unwrap());
@@ -2232,6 +2229,9 @@ async fn offer_queued(fake: &FakeHost) {
     }
 }
 
+/// Role mail offers each live holder of the role its notice, as a direct message does,
+/// and the notice names the role to claim from; once the holder releases the role, role
+/// mail offers it nothing.
 #[tokio::test]
 async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
     use crate::weft::role_inbox::{register_role, release_role};
