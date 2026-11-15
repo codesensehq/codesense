@@ -1300,11 +1300,7 @@ fn enrich_rows(
     });
     session_list::with_held(rows, |handle| {
         let (machine, session) = crate::commands::host_inbox::inbox_target(launch, handle)?;
-        let held = launch.host_inboxes().held(&machine, &session)?;
-        Some(session_list::HeldNotice {
-            gate: held.gate,
-            since_ms: held.since_ms,
-        })
+        launch.host_inboxes().held(&machine, &session)
     });
     if let Some(stream) = progress {
         session_list::with_progress(rows, |id| stream.latest_progress(id));
