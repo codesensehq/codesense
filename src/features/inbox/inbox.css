@@ -182,6 +182,23 @@
   border-bottom: 1px solid var(--ibx-border);
   min-width: 0;
 }
+/* A short pane: the mockup's head padding. */
+.ibx-ov[data-height="short"] > .ibx-ov-head {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+/* A short pane's thread starts closer to its top, so more text is in view. */
+.ibx-ov[data-height="short"] .ibx-msgs {
+  padding-top: 6px;
+}
+/* The overlay's small text step: message text at 12 px on a 17 px line. */
+.ibx-ov[data-text="12"] .ibx-m .bub {
+  font-size: 12px;
+  line-height: 17px;
+}
+.ibx-ov[data-text="12"] .ibx-m .bub .inbox-md {
+  line-height: 17px;
+}
 .ibx-ov-line {
   display: flex;
   align-items: center;
@@ -259,10 +276,17 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* The one-line strip keeps to one row, names shortened to their floor, and wraps only when
+   every chip at its floor still doesn't fit (`data-wrap`), rather than drop a pin. */
 .ibx-ov-pins[data-shape="line"] {
   display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.ibx-ov-pins[data-shape="line"][data-wrap="true"] {
   flex-wrap: wrap;
-  gap: 4px 6px;
 }
 /* A pins read that failed: one line in the zone, with Retry. */
 .ibx-ov-pins.ibx-ov-pins-failed {
@@ -418,15 +442,24 @@
 /* Line: chips of dot, short name and value; a third chip wraps rather than hide. */
 .ibx-pk[data-shape="line"] {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  min-width: 0;
   max-width: 100%;
-  padding: 2px 8px;
+  height: 24px;
+  padding: 0 6px;
   border-radius: 999px;
   font-size: 11px;
 }
 .ibx-pk[data-shape="line"] .ibx-pk-t {
-  min-width: 0;
+  min-width: 4ch;
+  flex: 0 1 auto;
+}
+.ibx-pk[data-shape="line"] .ibx-pk-d,
+.ibx-pk[data-shape="line"] .ibx-pk-v,
+.ibx-pk[data-shape="line"] .ibx-pk-s {
+  flex: none;
 }
 
 /* An opened pin: above the chat (≤ 45%) on a tall pane, else in the chat's place. */

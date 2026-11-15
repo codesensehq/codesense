@@ -99,7 +99,9 @@ export const PinPreview = forwardRef<
         {...isNew}
       >
         <Glyph className="ibx-pk-g" aria-hidden size={12} />
-        <span className="ibx-pk-t">{title}</span>
+        <span className="ibx-pk-t" title={title}>
+          {title}
+        </span>
         {newWord}
         {shape !== "line" && (
           <span className="ibx-pk-ls">
@@ -137,7 +139,9 @@ export const PinPreview = forwardRef<
       {...isNew}
     >
       <span className="ibx-pk-d" aria-hidden />
-      <span className="ibx-pk-t">{name}</span>
+      <span className="ibx-pk-t" title={name}>
+        {name}
+      </span>
       {statusWord && <span className="sr-only">, {statusWord},</span>}
       {newWord}
       {p.value && (

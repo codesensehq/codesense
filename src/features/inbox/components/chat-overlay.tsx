@@ -36,7 +36,7 @@ import { useSessionInbox } from "../hooks/use-session-inbox";
 import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
-import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
+import { overlayLayout, pinLineWraps, type OverlayRecordField } from "../lib/overlay-layout";
 import { HUMAN, formatClock, labelOf, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
 import { GroupChatPane, type GroupRoom } from "./group-chat";
@@ -364,6 +364,7 @@ export function ChatOverlay({
         data-record={layout.record}
         data-pins={pinShape}
         data-avatars={layout.avatars ? "true" : "false"}
+        data-text={layout.textPx}
         style={{ ...style, fontSize: layout.textPx }}
         onKeyDown={(e) => {
           const t = e.target as HTMLElement;
@@ -433,6 +434,9 @@ export function ChatOverlay({
           <div
             className="ibx-ov-pins"
             data-shape={pinShape}
+            data-wrap={
+              pinShape === "line" && pinLineWraps(size.width, pins.length) ? "true" : undefined
+            }
             role="group"
             aria-label={`Pinned, ${capLabel(pins.length).replace(" pinned", "")}`}
           >
