@@ -231,7 +231,12 @@ impl Registry {
     /// Record an internal event counter. Names are code-defined and capped to
     /// the same safe character set as invoke names.
     pub fn metric_count_at(&self, name: &str, now: Duration) -> Option<String> {
-        self.update_metric(name, now, |m| m.count = m.count.saturating_add(1));
+        self.metric_add_at(name, 1, now)
+    }
+
+    /// Add an amount to an internal event counter.
+    pub fn metric_add_at(&self, name: &str, amount: u64, now: Duration) -> Option<String> {
+        self.update_metric(name, now, |m| m.count = m.count.saturating_add(amount));
         self.rollover(now.as_secs() / WINDOW_SECS)
     }
 
@@ -356,7 +361,7 @@ impl Registry {
             .collect();
         let metric_counts = metrics
             .iter()
-            .map(|(name, count, _)| (name.as_str(), *count))
+            .map(|(name, count, _)| (name.clone(), *count))
             .collect::<HashMap<_, _>>();
         let mut metric_body = metrics
             .into_iter()
@@ -506,6 +511,11 @@ pub fn snapshot_json(mcp_tool_names: bool) -> serde_json::Value {
 /// Record a low-cardinality internal event in the same sixty-second report.
 pub fn metric_count(name: &str) {
     emit(global().metric_count_at(name, since_start()));
+}
+
+/// Add an amount to a low-cardinality internal event counter.
+pub fn metric_add(name: &str, amount: usize) {
+    emit(global().metric_add_at(name, amount as u64, since_start()));
 }
 
 /// Update a low-cardinality internal gauge in the same sixty-second report.
@@ -757,15 +767,15 @@ mod tests {
     #[test]
     fn m4_event_metrics_change_only_after_their_event_is_recorded() {
         let r = Registry::new();
-        assert_eq!(r.metric_at("session_record.read", 0), None);
-        assert_eq!(r.metric_at("story_changes.git_child", 0), None);
-        assert_eq!(r.metric_at("session_text.emit", 0), None);
+        assert!(r.metric_at("session_record.read", 0).is_none());
+        assert!(r.metric_at("story_changes.git_child", 0).is_none());
+        assert!(r.metric_at("session_text.emit", 0).is_none());
         r.metric_count_at("session_record.read", secs(1));
         r.metric_count_at("story_changes.git_child", secs(1));
         r.metric_count_at("session_text.emit", secs(1));
         assert_eq!(r.metric_at("session_record.read", 0).unwrap().count, 1);
         assert_eq!(r.metric_at("story_changes.git_child", 0).unwrap().count, 1);
         assert_eq!(r.metric_at("session_text.emit", 0).unwrap().count, 1);
-        assert_eq!(r.metric_at("session_record.read", 1), None);
+        assert!(r.metric_at("session_record.read", 1).is_none());
     }
 }
