@@ -2819,7 +2819,10 @@ async fn the_inbox_with_a_story_reads_the_agents_thread_in_its_team_with_the_ses
     let seat = read(Some("STORY-1"), Some("S1")).await;
     assert_eq!(ids(&seat), vec![one, old]);
     // The thread's handles come with it, so a page draws its predecessors' mail as the agent's.
-    assert_eq!(seat.thread_sessions, Some(vec!["H0".to_string(), "H1".to_string()]));
+    assert_eq!(
+        seat.thread_sessions,
+        Some(vec!["S0".to_string(), "H0".to_string(), "S1".to_string(), "H1".to_string()])
+    );
     assert_eq!(read(None, None).await.thread_sessions, None);
     // No seat: the whole thread.
     assert_eq!(read(Some("STORY-1"), None).await.messages.len(), 3);

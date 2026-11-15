@@ -562,8 +562,9 @@ pub(crate) struct InboxView {
     pub matched: usize,
     pub messages: Vec<InboxRow>,
     pub human_unread: u32,
-    /// When the read named a saved agent's thread (`agentId` with `storyId`): the handles of
-    /// the thread's sessions it read, so a page tells the agent's own mail from other senders.
+    /// When the read named a saved agent's thread (`agentId` with `storyId`): every address of
+    /// the thread's sessions it read (handles and tab session ids), so a page tells the agent's
+    /// own mail from other senders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_sessions: Option<Vec<String>>,
 }
