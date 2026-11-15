@@ -41,6 +41,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { parseCardLine } from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { isMain } from "./lib/is-main.mjs";
 import { SETUP_VERBS, actAllowances, commandInputs } from "./lib/pack-steps.mjs";
@@ -249,13 +250,23 @@ function refused(call) {
 
 /**
  * The fields of a story file's frontmatter the check reads, or undefined for any other file: a
- * story is a file whose frontmatter has `type` story, bug or spike.
+ * story is a file whose frontmatter, read as YAML with its line ends normalised, has `type` story,
+ * bug or spike (quoted or not, LF or CRLF, as the pipeline reads it).
  */
 function storyOf(content) {
-  const head = /^---\n([\s\S]*?)\n---/.exec(content ?? "")?.[1];
-  if (head === undefined || !/^type:\s*(?:story|bug|spike)\s*$/m.test(head)) return undefined;
-  const field = (key) => new RegExp(`^${key}:\\s*(\\S+)\\s*$`, "m").exec(head)?.[1];
-  return { id: field("story_id"), repo: field("source_repo") };
+  const text = String(content ?? "").replace(/\r\n?/g, "\n");
+  const head = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text)?.[1];
+  if (head === undefined) return undefined;
+  let meta;
+  try {
+    meta = parseYaml(head);
+  } catch {
+    return undefined;
+  }
+  if (!meta || typeof meta !== "object" || !["story", "bug", "spike"].includes(meta.type))
+    return undefined;
+  const text1 = (v) => (v === undefined || v === null ? undefined : String(v));
+  return { id: text1(meta.story_id), repo: text1(meta.source_repo) };
 }
 
 /** Whether a `validate_story` result says the story is clean: no blocking finding, and a verdict. */
@@ -528,7 +539,16 @@ export function checkConsent(
           // A story is written once, after one clean validate_story of exactly this path and
           // content, keeping the step's `onCollision: "fail"`, in the folder of a team that
           // tracks the repo it names, under the id its path carries.
-          const story = name === "create_content_file" ? storyOf(input.content) : undefined;
+          // Under a first-story click every write is a story, judged by the step and not by how
+          // its frontmatter is spelled; elsewhere a file is a story when its frontmatter says so.
+          const ownStory = name === "create_content_file" && entry.step === "first-story";
+          const story =
+            name === "create_content_file"
+              ? (storyOf(input.content) ??
+                (ownStory ? { id: undefined, repo: undefined } : undefined))
+              : undefined;
+          if (ownStory && !storyOf(input.content))
+            errors.push(`turn ${index}: first-story wrote a file that is not a story: ${file}`);
           if (story) {
             const same = validations.filter(
               (v) => v.path === input.path && v.content === input.content,

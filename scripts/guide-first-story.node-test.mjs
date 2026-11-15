@@ -178,3 +178,18 @@ test("a create before the click fails, and so does a story in a repo the team do
         c.input = c.input.replace("source_repo: acme/web", "source_repo: acme/other");
   assert.match(checkConsent(other, GUIDE).errors.join("\n"), /source_repo acme\/other/);
 });
+
+test("core-steps.md carries the probe rules the command points to", () => {
+  const doc = read("content/guide/core-steps.md");
+  const section = doc.slice(doc.indexOf("## Reading a step file"));
+  for (const rule of [
+    /calls its `check` tool with the other keys as arguments/,
+    /`pick` takes `\{not: value\}`/,
+    /ask which one if several match/i,
+    /from a fresh probe after the earlier act/,
+    /`none` means no match yet/,
+    /`unreadable` means the probe failed/,
+    /a `list` input goes in as a list/i,
+  ])
+    assert.match(section, rule);
+});

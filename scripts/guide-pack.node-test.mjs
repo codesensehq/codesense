@@ -57,7 +57,7 @@ const PHASE_1 = [
 ];
 const sorted = (list) => [...list].sort();
 
-test("the phase 1 list is DESIGN's 24 tools plus the two epic-repo verbs, set_active_team, the hand-back verb and the clone step's three", () => {
+test("the phase 1 list is DESIGN's 24 tools less open_workspace (the page opens a story, so 23), plus the two epic-repo verbs, set_active_team, the hand-back verb and the clone step's three: 30", () => {
   assert.equal(PHASE_1.length, 30);
   assert.equal(new Set(PHASE_1).size, 30);
 });

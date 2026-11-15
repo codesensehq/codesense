@@ -1428,3 +1428,23 @@ test("the CLI runs, and fails a bad export, when it is started through a symlink
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the story rules bind every write a first-story click allows, whatever its frontmatter looks like", () => {
+  const plain = body();
+  const bypass = (content) => storyErrors([written(content, { onCollision: "overwrite" })]);
+  // A quoted type, and CRLF line ends, are stories to the pipeline's YAML reader.
+  assert.match(
+    bypass(plain.replace("type: story", 'type: "story"')),
+    /no validate_story of exactly/,
+  );
+  assert.match(bypass(plain.replace(/\n/g, "\r\n")), /no validate_story of exactly/);
+  assert.match(bypass(plain.replace("type: story", "type: 'bug'")), /onCollision "fail"/);
+  // A write under this click that is no story at all is refused too.
+  assert.match(bypass("# just a note\n"), /first-story wrote a file that is not a story/);
+  // The same writes done right pass.
+  for (const content of [
+    plain.replace("type: story", 'type: "story"'),
+    plain.replace(/\n/g, "\r\n"),
+  ])
+    assert.equal(storyErrors([validated(content)], [written(content)]), "", content);
+});

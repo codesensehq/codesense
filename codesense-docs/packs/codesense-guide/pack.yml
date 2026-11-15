@@ -50,7 +50,7 @@ files:
     sha256: 8b65930cc96c6c9ba15a2d48cbfcb17e26340c47ad29111ecfe635968b0332af
     exec: false
   - path: content/guide/core-steps.md
-    sha256: f2be299d01b890b05c769731da0dfc35a6186ece0586bc283e6457019860cc2f
+    sha256: 4aabd2bdd2b5780134d1cf985525743bb1949c32134143464180db93a056ade2
     exec: false
   - path: content/guide/guide.js
     sha256: c0d782a041a4c3bcf2d22af2f7c5cf7081586cd01e7866286b151e64628daf0b
