@@ -175,6 +175,10 @@ async function renderOverlay(width: number, height: number, placement: "dock" | 
   return utils;
 }
 
+/** An elapsed time as the record line says it (`formatElapsed`): "45s", "41m", "65h" or
+ *  "2h 5m". It runs on the real clock. */
+const ELAPSED = /\b\d+(?:s|m|h(?: \d+m)?)\b/;
+
 const composerBox = () =>
   screen.getByTestId("chat-overlay").querySelector<HTMLTextAreaElement>(".ibx-comp textarea")!;
 
@@ -463,7 +467,7 @@ describe("ChatOverlay", () => {
         withRecord();
         await renderOverlay(w, h);
         // The elapsed time runs on the real clock.
-        const text = (await recordText())?.replace(/\s*↗/, "").replace(/\b(\d+h )?\d+m\b/, "TIME");
+        const text = (await recordText())?.replace(/\s*↗/, "").replace(ELAPSED, "TIME");
         expect(text).toBe(want);
         expect(invoke).toHaveBeenCalledWith("session_record", { params: { handle: LEAD } });
       },
@@ -580,7 +584,7 @@ describe("ChatOverlay", () => {
         expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "session_record")).toBe(true),
       );
       const line = screen.getByTestId("chat-overlay-record");
-      expect(line.textContent).toMatch(/^\d+(h \d+)?m · BUG-142/);
+      expect(line.textContent).toMatch(new RegExp(`^${ELAPSED.source} · BUG-142`));
       expect(line).not.toHaveTextContent("$");
     });
   });
