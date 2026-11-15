@@ -609,15 +609,13 @@ export function Conversation({
           role="region"
           aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
           data-testid="ibx-msgs"
-          onFocus={roving.onFocus}
           onKeyDown={(e) => {
-            // Esc closes a pin note and ends an Undo.
+            // Esc closes a pin note and ends an Undo. The arrows, Home and End are the thread's
+            // own (useRovingThread).
             if (pins && e.key === "Escape" && pins.note) {
               e.stopPropagation();
               pins.dismiss();
-              return;
             }
-            roving.onKeyDown(e);
           }}
         >
           {thread.messages.length === 0 && empty}

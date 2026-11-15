@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { createPtyWriteBuffer } from "./pty-write-buffer";
+import { createPtyOutputRing, createPtyWriteBuffer } from "./pty-write-buffer";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -91,6 +91,35 @@ describe("createPtyWriteBuffer", () => {
 
     expect(cancelRaf).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("takes pending bytes without writing or leaving a scheduled frame", () => {
+    const cancelRaf = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", () => 42);
+    vi.stubGlobal("cancelAnimationFrame", cancelRaf);
+    const write = vi.fn();
+    const buf = createPtyWriteBuffer(write);
+    buf.append("pending");
+    expect(buf.take()).toBe("pending");
+    expect(cancelRaf).toHaveBeenCalledWith(42);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("bounds parked output by UTF-8 bytes and reports truncation", () => {
+    const ring = createPtyOutputRing(5);
+    expect(ring.append("abc", 3)).toBe(false);
+    expect(ring.append("éxy", 8)).toBe(true);
+    expect(ring.drain()).toEqual({ events: [], overflowed: true });
+  });
+
+  it("reports what it holds, and overflows on resizes alone", () => {
+    const ring = createPtyOutputRing(100);
+    ring.append("abc", 3);
+    expect(ring.size()).toBe(3);
+    for (let i = 0; i < 1023; i++) expect(ring.resize(80, 24, i)).toBe(false);
+    expect(ring.resize(80, 24, 1023)).toBe(true);
+    expect(ring.drain()).toEqual({ events: [], overflowed: true });
+    expect(ring.size()).toBe(0);
   });
 
   it("separate instances do not share buffer state", () => {

@@ -227,6 +227,17 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("draws a pinned message's pressed Unpin in the accent, which shows on the page with no fill behind it", () => {
+    // The on-accent ink is for text on an accent fill; on the bare page it drew the icon at 1:1.
+    const pressed = ruleOf('.ibx-pin-b[aria-pressed="true"]');
+    expect(pressed).toContain("color: var(--ibx-accent);");
+    expect(pressed).not.toContain("--ibx-accent-ink");
+  });
+  it("draws a fresh pin's reduced-motion New in the accent, which shows on the pin's light wash", () => {
+    const fresh = ruleOf(".ibx-pk-new");
+    expect(fresh).toContain("color: var(--ibx-accent);");
+    expect(fresh).not.toContain("--ibx-accent-ink");
+  });
   it("sets the Pinned by tag at the 11 px meta floor", () => {
     expect(ruleOf(".ibx-pin-tag")).toContain("font-size: 11px");
   });
@@ -1057,6 +1068,26 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
       // it comes first, so the article is read sender and time, then the text
       expect(row.firstElementChild).toBe(said);
     }
+  });
+
+  it("a message you are on that leaves the thread hands focus to the newest, never to the page", async () => {
+    await renderOverlay(420, 700);
+    const first = rows()[0]!;
+    act(() => first.focus());
+    // The thread is trimmed at its cap: the message focus is on leaves as a new one lands.
+    api.loadSessionInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        roles: [],
+        messages: [...MESSAGES.slice(1), msg(9, LEAD, "human", "Merged.")],
+      },
+      source: "live",
+    });
+    act(() => listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null })));
+    await screen.findByText("Merged.");
+    const newest = rows().at(-1)!;
+    expect(newest).toHaveFocus();
+    expect(newest.tabIndex).toBe(0);
   });
 
   it("a message that lands while you read an older one leaves the stop where you are", async () => {

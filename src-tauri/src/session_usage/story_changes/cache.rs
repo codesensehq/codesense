@@ -5,9 +5,15 @@
 use super::*;
 
 /// The longest a kept half is trusted: the worktree and planned facts in it have no ref to watch.
+/// It is also how long a new note on a kept commit may go unread: the stamp watches
+/// origin's head and the story's branch tips, never the notes refs, so a note git-ai writes after
+/// the read that kept the half shows on the first read after a tip moves or within this bound.
 const KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(300);
 /// The most stories kept at once; the oldest goes first.
 const KEPT_STORIES: usize = 16;
+/// The most task walks kept at once, apart from the read halves: a task list over many stories
+/// does not push out the halves the story pages and record lines read.
+const KEPT_WALKS: usize = 32;
 
 struct Kept {
     at: std::time::Instant,
@@ -18,14 +24,19 @@ struct Kept {
     part: GitTotals,
 }
 
-/// The kept halves by key (tests keep their own).
-struct Store(std::sync::Mutex<std::collections::BTreeMap<String, Kept>>);
+/// The kept halves by key, and how many it holds (tests keep their own).
+struct Store(std::sync::Mutex<std::collections::BTreeMap<String, Kept>>, usize);
 
 static KEPT: Store = Store::new();
+static WALKS: Store = Store::keeping(KEPT_WALKS);
 
 impl Store {
     const fn new() -> Self {
-        Store(std::sync::Mutex::new(std::collections::BTreeMap::new()))
+        Store::keeping(KEPT_STORIES)
+    }
+
+    const fn keeping(most: usize) -> Self {
+        Store(std::sync::Mutex::new(std::collections::BTreeMap::new()), most)
     }
 }
 
@@ -97,6 +108,33 @@ pub(super) async fn get(key: &str) -> Option<(git::GitFacts, planned::PlannedFac
     KEPT.get_at(key, std::time::Instant::now()).await
 }
 
+/// What a story walk alone (no planned or totals half: a task's evidence) was read from: the
+/// home, the story, the scopes it admits and the sessions' links. Never a read's [`key`].
+pub(super) fn walk_key(home: &Path, story: &str, scopes: &[CallerScope], refs: &[git::SessionRef]) -> String {
+    format!(
+        "walk\n{}\n{}\n{:?}\n{:?}",
+        std::path::Path::display(home),
+        str::to_ascii_uppercase(story),
+        scopes,
+        refs
+    )
+}
+
+/// [`get`] for a caller already off the async runtime, of a walk kept by [`put_walk`].
+pub(super) fn get_walk(key: &str) -> Option<git::GitFacts> {
+    let (spec, kept_stamp) = Store::fresh(&WALKS, key, std::time::Instant::now())?;
+    if stamp_of(&spec) != kept_stamp {
+        return None;
+    }
+    Option::map(Store::renew(&WALKS, key, std::time::Instant::now()), |(git, _, _)| git)
+}
+
+/// [`put`] for a caller already off the async runtime: keeps a story walk alone.
+pub(super) fn put_walk(key: String, git: &git::GitFacts) {
+    let seen = stamp_of(&git.stamp_spec);
+    Store::insert(&WALKS, key, seen, git, &Default::default(), &Default::default(), std::time::Instant::now());
+}
+
 /// Keep a half just read for `key`, unless a ref it read moved while the walk ran (`git.refs_stamp`
 /// was taken before the walk): that answer is served, not kept.
 pub(super) async fn put(
@@ -115,14 +153,7 @@ impl Store {
         key: &str,
         now: std::time::Instant,
     ) -> Option<(git::GitFacts, planned::PlannedFacts, GitTotals)> {
-        let (spec, kept_stamp) = {
-            let kept = Result::ok(self.0.lock())?;
-            let entry = std::collections::BTreeMap::get(&kept, key)?;
-            if std::time::Instant::saturating_duration_since(&now, entry.at) > KEPT_FOR {
-                return None;
-            }
-            (entry.git.stamp_spec.clone(), entry.stamp.clone())
-        };
+        let (spec, kept_stamp) = self.fresh(key, now)?;
         let seen = Result::ok(
             crate::commands::await_blocking("story_changes.cache", move || Ok(stamp_of(&spec)))
                 .await,
@@ -130,6 +161,25 @@ impl Store {
         if seen != kept_stamp {
             return None;
         }
+        self.renew(key, now)
+    }
+
+    /// The stamp spec and stamp of `key`'s half while it is young enough to trust.
+    fn fresh(&self, key: &str, now: std::time::Instant) -> Option<(StampSpec, String)> {
+        let kept = Result::ok(self.0.lock())?;
+        let entry = std::collections::BTreeMap::get(&kept, key)?;
+        if std::time::Instant::saturating_duration_since(&now, entry.at) > KEPT_FOR {
+            return None;
+        }
+        Some((entry.git.stamp_spec.clone(), entry.stamp.clone()))
+    }
+
+    /// `key`'s half, marked used at `now`.
+    fn renew(
+        &self,
+        key: &str,
+        now: std::time::Instant,
+    ) -> Option<(git::GitFacts, planned::PlannedFacts, GitTotals)> {
         let mut kept = Result::ok(self.0.lock())?;
         let entry = std::collections::BTreeMap::get_mut(&mut kept, key)?;
         entry.used = now;
@@ -151,13 +201,26 @@ impl Store {
         else {
             return;
         };
+        self.insert(key, seen, git, planned, part, now);
+    }
+
+    /// Keep a half whose refs read `seen` now, unless they moved since the walk began.
+    fn insert(
+        &self,
+        key: String,
+        seen: String,
+        git: &git::GitFacts,
+        planned: &planned::PlannedFacts,
+        part: &GitTotals,
+        now: std::time::Instant,
+    ) {
         if seen != git.refs_stamp {
             return;
         }
         let Ok(mut kept) = self.0.lock() else {
             return;
         };
-        if std::collections::BTreeMap::len(&kept) >= KEPT_STORIES
+        if std::collections::BTreeMap::len(&kept) >= self.1
             && !std::collections::BTreeMap::contains_key(&kept, &key)
         {
             let oldest = Option::map(

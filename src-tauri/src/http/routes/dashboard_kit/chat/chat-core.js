@@ -139,6 +139,33 @@ export const PIN_ROOM_NOW="There's room now.";
 // An Undo of a replace that can't happen any more, and why.
 export const PIN_UNDO_FULL="Can't undo: the list is full again.";
 export const PIN_UNDO_GONE="Can't undo: that message was archived or withdrawn.";
+// The replace chooser's rules, without the DOM: the kit's chooser (pin-replace.js) and the app's overlay both run them. A chooser's state is {known, last, current, change, error}:
+// the pins it opened on plus the rows the person has arrived on since, the list as last drawn, the current row's message id, the line that says what changed, and a failed replace.
+export const pinChooserOpen=pins=>({known:new Set(pins.map(p=>p.messageId)),last:pins,current:pins.length?pins[0].messageId:null,change:null,error:null});
+// The row a key moves the current row to, of count rows (at: the current row's index), or null for any other key. From the change line (the row the person was on left), down is the first row and up the last.
+export function pinChooserStep(key,at,count,fromChange){
+ if(key==='ArrowDown')return fromChange?0:at+1;
+ if(key==='ArrowUp')return fromChange?count-1:at-1;
+ return key==='Home'?0:key==='End'?count-1:null;
+}
+// The person arrived on a row: it is current and known (it can now be replaced), and a failed replace's line goes.
+export const pinChooserArrive=(state,id)=>({...state,known:new Set([...state.known,id]),current:id,error:null});
+// Choosing a row replaces it only if the person has arrived on it: a row the agent added since the chooser opened is arrived on first and says so, so nothing is replaced unseen.
+export function pinChooserChoose(state,pin,titleOf){
+ if(state.known.has(pin.messageId))return {state,replace:true};
+ return {state:{...pinChooserArrive(state,pin.messageId),change:pinNewRowText(titleOf(pin))},replace:false};
+}
+// The chooser follows the live list: null when nothing changed; {pinned} when the agent pinned this message (messageId), which closes the chooser (pinPinnedMeanwhileText says so);
+// else the next state, which says what changed and drops the current row if it left.
+export function pinChooserSync(state,pins,messageId,titleOf){
+ const ids=new Set(pins.map(p=>p.messageId)),before=new Set(state.last.map(p=>p.messageId));
+ if(ids.has(messageId)&&!before.has(messageId))return {pinned:pins.find(p=>p.messageId===messageId)};
+ const added=pins.filter(p=>!before.has(p.messageId)),left=state.last.filter(p=>!ids.has(p.messageId));
+ if(!added.length&&!left.length)return null;
+ return {state:{...state,last:pins,current:state.current!==null&&ids.has(state.current)?state.current:null,change:pinListChangeText(added.map(titleOf),left.map(titleOf)),error:null}};
+}
+// Below the cap (a pin left) the chooser has room: a plain Pin pins, and it says so.
+export const pinChooserRoom=count=>count>=PIN_CAP?null:PIN_ROOM_NOW;
 // A message's text with its tags dropped and its entities read, as a heading or title shows it: no DOM, so the kit and the app name pins the same way.
 const ENTITIES={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
 function plainText(markup){return squashSpace(String(markup||'').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,code)=>{if(code[0]==='#'){const n=code[1].toLowerCase()==='x'?parseInt(code.slice(2),16):parseInt(code.slice(1),10);return Number.isInteger(n)&&n>=0&&n<=0x10ffff&&!(n>=0xd800&&n<=0xdfff)?String.fromCodePoint(n):all;}const named=ENTITIES[code.toLowerCase()];return named===undefined?all:named;}));}

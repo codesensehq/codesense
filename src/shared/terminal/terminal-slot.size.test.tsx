@@ -308,6 +308,11 @@ describe("the slot is the one size owner", () => {
     manager.requestResize("s1", 120, 30);
     expect(transport.resizePty.mock.calls).toEqual([["s1", 120, 30]]);
     await settle();
+    // Unmounted, the display is parked: the Resized waits for the next show.
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    manager.attach("s1", target, { focus: false });
+    await settle();
     expect(manager.terminal("s1")!.cols).toBe(120);
   });
 
