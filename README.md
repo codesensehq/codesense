@@ -68,6 +68,28 @@ dashboard publishing. The DMG from codesense.ai/download includes dashboard
 publishing; see [PRIVACY.md](PRIVACY.md) for the calls it makes. If you redistribute a
 build, see [Building your own release](#building-your-own-release).
 
+## Test builds
+
+A maintainer can build a test app from `main` without a local build: run the
+**Test build** workflow from the Actions tab, or
+`gh workflow run test-build.yml --repo codesensehq/codesense --ref main`. It
+takes about an hour. When it finishes, the run page has two artifacts, kept for
+7 days: `codesense-app-<sha>` (the zipped `CodeSense.app`) and
+`codesense-dmg-<sha>` (the DMG).
+
+The test build is unsigned (ad-hoc signed only) and not notarized, so macOS
+blocks it until you clear its quarantine flag. Download either artifact and
+unzip it: the app artifact holds `CodeSense.app.zip`, which you unzip again, and
+the DMG artifact holds the DMG, which you open. Move `CodeSense.app` to
+Applications, then run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CodeSense.app
+```
+
+It is a source build like the one above: the `internal` channel, no update
+checks and no dashboard publishing.
+
 ## Building your own release
 
 If you give a build to other people, [TRADEMARKS.md](TRADEMARKS.md) asks you to
