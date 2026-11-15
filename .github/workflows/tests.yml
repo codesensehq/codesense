@@ -77,10 +77,11 @@ jobs:
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
       # Real-browser layout of the agent chat in the mock backend's agents world: its boot, the
-      # chat's fit at the design's pane sizes, long logs and reduced motion.
+      # chat's fit at the design's pane sizes, long logs and reduced motion. One worker: the
+      # chat's open-time budget is measured, and parallel boots would skew it.
       - name: Run the mock layout specs
         run: >-
-          pnpm exec playwright test -c playwright.mock.config.ts --project=chromium
+          pnpm exec playwright test -c playwright.mock.config.ts --project=chromium --workers=1
           tests/e2e-mock/agents-world-boot.spec.ts
           tests/e2e-mock/agent-inbox-pane-alignment.spec.ts
           tests/e2e-mock/inbox-long-log.spec.ts
