@@ -2976,6 +2976,41 @@ describe("kit.chat recipient, composer slot and row label", () => {
     expect(s.send).toHaveBeenCalledWith("helper-1", "line");
   });
 
+  it("the composer is a two-row box: the textarea, then the hint, its keys and Send on one row under it", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    const box = s.el.querySelector<HTMLElement>(".composer .box")!;
+    expect(box.firstElementChild).toBe(input(s.el));
+    const foot = box.querySelector<HTMLElement>(".box-foot")!;
+    expect(foot).not.toBeNull();
+    const hint = foot.querySelector<HTMLElement>(".hint")!;
+    expect(input(s.el).getAttribute("aria-describedby")).toBe(hint.id);
+    const keys = foot.querySelector<HTMLElement>(".keys")!;
+    expect(keys.getAttribute("aria-hidden")).toBe("true");
+    expect(keys.textContent).toMatch(/^(⌘|Ctrl)↵$/);
+    expect(foot.querySelector("button")!.textContent).toBeTruthy();
+    expect(s.el.querySelectorAll(".composer .hint").length).toBe(1);
+  });
+
+  it("⌘↵ and Ctrl↵ send, with Shift held too; Shift+Enter alone is a newline", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    input(s.el).value = "one";
+    key(s.el, { code: "Enter", metaKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "one");
+    input(s.el).value = "two";
+    key(s.el, { code: "Enter", ctrlKey: true, shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "two");
+    input(s.el).value = "three";
+    key(s.el, { code: "Enter", shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(2);
+  });
+
   it("a second Enter while the send is in flight sends nothing more", async () => {
     const s = setup([helper]);
     mountOn(s, {

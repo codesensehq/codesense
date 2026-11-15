@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). Enter sends, Shift+Enter is a newline; typing and focus never launch.
+// The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). It is a two-row box: the textarea, then the hint, its keys and Send on one row under it.
+// Enter sends, Shift+Enter is a newline, and ⌘↵ (Ctrl↵) sends with Shift held too; typing and focus never launch.
 import {h} from './dom.js';
 import {CHAT_COPY} from './copy.js';
 import {idsOf} from './mount-ids.js';
@@ -8,7 +9,10 @@ import {idsOf} from './mount-ids.js';
 export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.composerLabel,hint=CHAT_COPY.hint,send:sendLabel=CHAT_COPY.send}){
  const input=h('textarea',{id:ids.input,rows,'aria-label':label,'aria-describedby':ids.hint,spellcheck:'true'});
  const send=h('button',{id:ids.send,type:'button',class:'btn primary'},sendLabel);
- const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,send),h('div',{class:'hint',id:ids.hint},hint));
+ // The send keys as this platform names them: the label is shown, not read (the hint says it in words).
+ const mac=typeof navigator!=='undefined'&&/Mac|iPhone|iPad/.test(String(navigator.platform||navigator.userAgent||''));
+ const keys=h('span',{class:'keys','aria-hidden':'true'},mac?'⌘↵':'Ctrl↵');
+ const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,h('div',{class:'box-foot'},h('div',{class:'hint',id:ids.hint},hint),keys,send)));
  let pending=false,disabled=false;
  const setPending=on=>{pending=on;send.disabled=on||disabled;if(on)input.setAttribute('aria-busy','true');else input.removeAttribute('aria-busy');};
  const nameInput=name=>{if(name==null)input.removeAttribute('aria-label');else input.setAttribute('aria-label',name);};
@@ -18,7 +22,7 @@ export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.com
   if(!held||typeof held.then!=='function'){input.value='';return;}
   setPending(true);held.then(sent=>{setPending(false);if(sent&&input.value===raw)input.value='';},()=>{setPending(false);});
  };
- input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!event.isComposing){event.preventDefault();submit();}});
+ input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&(!event.shiftKey||event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();submit();}});
  send.addEventListener('click',submit);
  return {region,input,send,
   update({placeholder,disabled:off,hint:nextHint,send:nextSend,label:nextLabel}){

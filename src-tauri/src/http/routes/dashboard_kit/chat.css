@@ -35,11 +35,15 @@
 .cs-chat .sys .code{color:var(--cs-muted-fg)}
 .cs-chat .ico{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .cs-chat .ico.alert{color:var(--cs-danger)}
-.cs-chat .composer{flex:none;height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
+.cs-chat .composer{flex:none;min-height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
 .cs-chat .composer [data-composer-slot]{flex:none}
 .cs-chat .composer [data-composer-slot]:empty{display:none}
 .cs-chat .composer:has([data-composer-slot]:not(:empty)){height:auto;min-height:96px}
-.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:flex;gap:8px;align-items:flex-end;padding:6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:4px;padding:6px 6px 6px 8px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+/* The box's second row: the hint, the send keys and Send (F5). */
+.cs-chat .composer .box-foot{display:flex;align-items:center;gap:8px;min-width:0}
+.cs-chat .composer .box-foot .hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-chat .composer .keys{flex:none;font-size:var(--cs-text-xs);color:var(--cs-muted-fg);font-family:var(--cs-font-mono,inherit)}
 .cs-chat .composer .box:focus-within{border-color:var(--cs-accent)}
 .cs-chat .composer .hint{flex:none;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .composer textarea{flex:1 1 auto;align-self:stretch;resize:none;border:0;outline:0;padding:2px 4px;background:transparent;color:var(--cs-fg)}
