@@ -64,12 +64,21 @@ export function useStickToBottom(
 ): { away: boolean; jump: () => void } {
   const pinned = useRef(true);
   const anchor = useRef<{ node: Element; offset: number } | null>(null);
+  // Where the list was last scrolled to, by the reader or by this hook.
+  const lastTop = useRef(0);
   const away = useAwayFromBottom(ref, resetKey);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const onScroll = () => {
+      const top = el.scrollTop;
+      const movedUp = top < lastTop.current - 1;
+      lastTop.current = top;
+      // A scroll event the reader didn't cause by scrolling up is the layout's (the list's box got
+      // shorter as something above it was drawn, or content grew): a pinned list stays pinned,
+      // and the resize that comes with it puts it back at the end.
+      if (pinned.current && !movedUp) return;
       pinned.current = nearBottom(el);
       anchor.current = pinned.current ? null : topAnchor(el);
     };
@@ -88,12 +97,14 @@ export function useStickToBottom(
     if (!el) return;
     if (pinned.current) {
       el.scrollTop = el.scrollHeight;
+      lastTop.current = el.scrollTop;
       return;
     }
     const a = anchor.current;
     if (!a || !a.node.isConnected || a.node.parentElement !== el) return;
     const delta = a.node.getBoundingClientRect().top - el.getBoundingClientRect().top - a.offset;
     if (delta !== 0) el.scrollTop += delta;
+    lastTop.current = el.scrollTop;
   }, [ref]);
 
   useLayoutEffect(() => {
@@ -118,6 +129,7 @@ export function useStickToBottom(
     pinned.current = true;
     anchor.current = null;
     el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
   }, [ref]);
 
   return { away, jump };
