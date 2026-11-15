@@ -54,9 +54,13 @@ pub(crate) const REPO_OVERRIDES: [&str; 7] = [
 #[cfg(test)]
 static CHILD_PROCESSES: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
 
+/// The `git-ai await` runs per repository (each is also a child process).
 #[cfg(test)]
-fn count_child(repo: &Path) {
-    let mut counts = CHILD_PROCESSES.lock().unwrap();
+static DRAINS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn count_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) {
+    let mut counts = counts.lock().unwrap();
     if let Some((_, count)) = counts.iter_mut().find(|(path, _)| path == repo) {
         *count += 1;
     } else {
@@ -65,14 +69,29 @@ fn count_child(repo: &Path) {
 }
 
 #[cfg(test)]
-pub(crate) fn child_processes(repo: &Path) -> usize {
-    CHILD_PROCESSES
+fn count_child(repo: &Path) {
+    count_in(&CHILD_PROCESSES, repo);
+}
+
+#[cfg(test)]
+fn counted_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) -> usize {
+    counts
         .lock()
         .unwrap()
         .iter()
         .find(|(path, _)| path == repo)
         .map(|(_, count)| *count)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn child_processes(repo: &Path) -> usize {
+    counted_in(&CHILD_PROCESSES, repo)
+}
+
+#[cfg(test)]
+pub(crate) fn drains(repo: &Path) -> usize {
+    counted_in(&DRAINS, repo)
 }
 
 fn local_read_env(command: &mut Command) {
@@ -172,7 +191,10 @@ impl GitAiSource {
             .envs(drain.env.iter().map(|(k, v)| (k, v)));
         local_read_env(&mut command);
         #[cfg(test)]
-        count_child(repo);
+        {
+            count_child(repo);
+            count_in(&DRAINS, repo);
+        }
         let _ = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -188,30 +210,7 @@ impl GitAiSource {
     ) -> Result<Option<String>, AttributionError> {
         let repository = git2::Repository::open(repo)
             .map_err(|error| AttributionError::Git(error.to_string()))?;
-        let oid = git2::Oid::from_str(commit)
-            .map_err(|error| AttributionError::Git(error.to_string()))?;
-        if let Err(_error) = git2::Repository::find_object(&repository, oid, None) {
-            return Err(AttributionError::ObjectsNotLocal);
-        }
-        for notes_ref in NOTES_REFS {
-            match git2::Repository::find_note(
-                &repository,
-                Some(&format!("refs/notes/{notes_ref}")),
-                oid,
-            ) {
-                Ok(note) => {
-                    return Ok(Some(String::from(
-                        git2::Note::message(&note).unwrap_or_default(),
-                    )))
-                }
-                Err(error) if is_missing_object(&error) => {
-                    return Err(AttributionError::ObjectsNotLocal)
-                }
-                Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
-                Err(error) => return Err(AttributionError::Git(error.to_string())),
-            }
-        }
-        Ok(None)
+        raw_note_in(&repository, commit)
     }
 
     /// The parsed note on `commit` ([`Self::raw_note`]); `None` when it has none or it cannot
@@ -222,15 +221,44 @@ impl GitAiSource {
         repo: &Path,
         commit: &str,
     ) -> Result<Option<Authorship>, AttributionError> {
-        let Some(note) = self.raw_note(repo, commit)? else {
-            return Ok(None);
-        };
-        match Authorship::parse(&note) {
-            Ok(note) => Ok(Some(note)),
-            Err(error) => {
-                log::warn!(target: "attribution", "note on {commit} unreadable: {error}");
-                Ok(None)
-            }
+        Ok(parsed_note(commit, self.raw_note(repo, commit)?))
+    }
+}
+
+/// [`GitAiSource::raw_note`] in a repository the caller already opened.
+pub(crate) fn raw_note_in(
+    repository: &git2::Repository,
+    commit: &str,
+) -> Result<Option<String>, AttributionError> {
+    let oid = git2::Oid::from_str(commit).map_err(|error| AttributionError::Git(error.to_string()))?;
+    if let Err(_error) = git2::Repository::find_object(repository, oid, None) {
+        return Err(AttributionError::ObjectsNotLocal);
+    }
+    for notes_ref in NOTES_REFS {
+        match git2::Repository::find_note(repository, Some(&format!("refs/notes/{notes_ref}")), oid) {
+            Ok(note) => return Ok(Some(String::from(git2::Note::message(&note).unwrap_or_default()))),
+            Err(error) if is_missing_object(&error) => return Err(AttributionError::ObjectsNotLocal),
+            Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(AttributionError::Git(error.to_string())),
+        }
+    }
+    Ok(None)
+}
+
+/// [`GitAiSource::note`] in a repository the caller already opened.
+pub(crate) fn note_in(
+    repository: &git2::Repository,
+    commit: &str,
+) -> Result<Option<Authorship>, AttributionError> {
+    Ok(parsed_note(commit, raw_note_in(repository, commit)?))
+}
+
+fn parsed_note(commit: &str, raw: Option<String>) -> Option<Authorship> {
+    match Authorship::parse(&raw?) {
+        Ok(note) => Some(note),
+        Err(error) => {
+            log::warn!(target: "attribution", "note on {commit} unreadable: {error}");
+            None
         }
     }
 }
@@ -490,6 +518,32 @@ pub(crate) mod tests {
     /// commit 2 a human line.
     fn testdata() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/attribution/testdata/git_ai_1_7_5")
+    }
+
+    /// A stand-in managed `git-ai` in `home/bin` that logs each call's arguments, one per line:
+    /// with it [`GitAiSource::for_home`] drains, so a test sees every `git-ai await` a read runs.
+    pub(crate) fn stub_git_ai(home: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let (bin, log) = (home.join("bin"), home.join("git-ai-calls.log"));
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("git-ai");
+        std::fs::write(&script, format!("#!/bin/sh\necho \"$*\" >> \"{}\"\n", log.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log
+    }
+
+    /// The `git-ai await` calls [`stub_git_ai`] logged.
+    pub(crate) fn awaits(log: &Path) -> usize {
+        std::fs::read_to_string(log).unwrap_or_default().lines().filter(|line| line.starts_with("await")).count()
+    }
+
+    #[test]
+    fn the_stub_git_ai_logs_a_drain() {
+        let home = tempfile::tempdir().unwrap();
+        let log = stub_git_ai(home.path());
+        GitAiSource::for_home(home.path()).drain(home.path());
+        assert_eq!(awaits(&log), 1, "the stub must see a drain, or a zero proves nothing");
+        assert_eq!(drains(home.path()), 1);
     }
 
     pub(crate) fn git(repo: &Path, args: &[&str]) -> String {
