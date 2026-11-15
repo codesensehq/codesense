@@ -34,7 +34,7 @@ import { capLabel, pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useMessageDelivery } from "../hooks/use-message-delivery";
-import { useSessionInbox } from "../hooks/use-session-inbox";
+import { useAgentInbox } from "../hooks/use-session-inbox";
 import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
@@ -83,14 +83,27 @@ export function ChatOverlay({
 }) {
   const roster = useAgentListProjectionStore((s) => s.sessions);
   const row = roster?.find((r) => r.sessionId === sessionId) ?? null;
-  const { data, source, error, reload } = useSessionInbox(sessionId);
+  const sessions = useInboxSessions();
+  // The thread the session was launched on, from what is known before its mail is read (the
+  // pins' key): its conversation is the thread's, so a successor opens on its predecessor's mail.
+  // The Foreman's chat merges its earlier sessions itself (useForemanThread).
+  const launched = sessions?.find((s) => s.handle === row?.handle) ?? null;
+  const threadAgent = launched?.agent ?? agentKeyOfRevision(row?.agentRevision);
+  const threadStory = row?.story ?? launched?.story ?? null;
+  const agentThread = useMemo(
+    () =>
+      threadAgent && !isForemanAgent(threadAgent)
+        ? { agentId: threadAgent, storyId: threadStory }
+        : null,
+    [threadAgent, threadStory],
+  );
+  const { data, source, error, reload } = useAgentInbox(sessionId, agentThread);
   const handle = data?.handle ?? row?.handle ?? "";
   const name = row?.displayName || handle || sessionId;
   const statusRows = useMemo(() => (row ? [row] : NO_ROWS), [row]);
   const statusOf = useAgentStatusOf(statusRows);
   const status = row ? statusOf(row) : null;
   const subagents = useSubagentsOpen(sessionId);
-  const sessions = useInboxSessions();
   const rootRef = useRef<HTMLElement>(null);
   const layout = overlayLayout(size.width, size.height);
   const tall = layout.height === "tall";
