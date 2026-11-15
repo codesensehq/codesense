@@ -294,7 +294,15 @@ test.describe("the thread keeps its room", () => {
       const room = await chat.evaluate((root) => {
         const wrap = root.querySelector<HTMLElement>(".ibx-scrollwrap")!;
         const text = root.querySelector<HTMLElement>(".ibx-m .bub")!;
+        const strip = root.querySelector<HTMLElement>(".ibx-ov-pins")!;
         return {
+          // What the strip had to fit, for a failure to say why it wrapped.
+          strip: {
+            width: strip.clientWidth,
+            chips: [
+              ...strip.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]'),
+            ].map((chip) => Math.round(chip.getBoundingClientRect().width * 10) / 10),
+          },
           px: wrap.getBoundingClientRect().height,
           lines:
             wrap.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight),
@@ -305,7 +313,7 @@ test.describe("the thread keeps its room", () => {
           ).size,
         };
       });
-      expect(room.px).toBeGreaterThanOrEqual(size.px);
+      expect(room.px, JSON.stringify(room.strip)).toBeGreaterThanOrEqual(size.px);
       expect(room.lines).toBeGreaterThanOrEqual(size.lines);
       // On the one-line strip, both pins share one row.
       if (size.w === 250) expect(room.rows).toBe(1);

@@ -276,7 +276,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* The one-line strip: each chip's own floor (its dot, 4 characters of its name, its value)
+/* The one-line strip: each chip's own floor (its dot, 3 characters of its name, its value)
    decides when the row wraps, so it keeps to one row while the floors fit, wraps rather than
    drop a pin, and never runs past the pane. */
 .ibx-ov-pins[data-shape="line"] {
@@ -449,11 +449,12 @@
   border-radius: 12px;
   font-size: 11px;
 }
-/* The name's floor is 4 characters; it grows into the row's room. */
+/* The name's floor is 3 characters (its full name is its title and in its accessible name);
+   it grows into the row's room. */
 .ibx-pk[data-shape="line"] .ibx-pk-t {
-  flex: 1 1 4ch;
-  width: 4ch;
-  min-width: 4ch;
+  flex: 1 1 3ch;
+  width: 3ch;
+  min-width: 3ch;
 }
 .ibx-pk[data-shape="line"] .ibx-pk-d {
   flex: none;
