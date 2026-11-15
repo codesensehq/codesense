@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 113 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 115 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -454,6 +454,17 @@ onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscr
 
 Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
 record's `sessionIds` to hear only about that agent's session.
+
+## Surface: onSessionText
+
+```ts
+onSessionText(
+      sessionId: string,
+      cb: (text: { kind: "prose" | "final"; turn: string; key: string; text: string } | null, error?: unknown) => void,
+    ): Unsubscribe;
+```
+
+A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.
 
 ## Surface: onPasteTargetChanged
 
@@ -2124,6 +2135,30 @@ sessions(args?: Record<string, unknown>): Promise<Array<Record<string, unknown>>
 read · sessions:read · MCP twin list_sessions
 
 Class: read; default grant: sessions:read; MCP twin: list_sessions.
+
+## VerbMethods: sessions.unwatchText
+
+```ts
+"sessions.unwatchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+```
+
+read · sessions:read
+
+Class: read; default grant: sessions:read; MCP twin: A page hears a session's assistant prose as it is written; agents read a session's turns with session_read.
+
+## VerbMethods: sessions.watchText
+
+```ts
+"sessions.watchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+```
+
+read · sessions:read
+
+Class: read; default grant: sessions:read; MCP twin: A page hears a session's assistant prose as it is written; agents read a session's turns with session_read.
 
 ## VerbMethods: setField
 

@@ -301,30 +301,6 @@ describe("kit.chat", () => {
     expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
   });
 
-  it("with the messageDelivery topic, the message's own row decides Queued and Delivered", async () => {
-    const roster = [lead("running")];
-    const s = setup(roster);
-    const rows = new Map<number, { state: "queued" | "delivered" }>();
-    const reads = { ...s.reads, delivery: (id: number) => rows.get(id) ?? null };
-    mountOn({ ...s, reads });
-    await flush();
-    await typeAndSend(s.el, "when you can");
-    rows.set(41, { state: "queued" });
-    // The roster alone would say Delivered now; the topic says this message is still queued.
-    roster[0] = {
-      ...roster[0],
-      mailNotice: "told",
-      notifiedAt: new Date(Date.now() + 1000).toISOString(),
-    };
-    await s.reads.sessions();
-    await flush();
-    expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
-    rows.set(41, { state: "delivered" });
-    s.emit("delivery");
-    await flush();
-    expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
-  });
-
   it("a needs-you message is a card; a pick answers it once through the transport", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
     const s = setup(

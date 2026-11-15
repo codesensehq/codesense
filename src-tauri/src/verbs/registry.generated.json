@@ -4223,6 +4223,62 @@
     "module": "agent"
   },
   {
+    "name": "sessions.unwatchText",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+    "audited": false,
+    "action": false,
+    "module": "sessions"
+  },
+  {
+    "name": "sessions.watchText",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+    "audited": false,
+    "action": false,
+    "module": "sessions"
+  },
+  {
     "name": "setField",
     "class": "metadata",
     "argsSchema": {

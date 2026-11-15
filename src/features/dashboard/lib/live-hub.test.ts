@@ -2361,3 +2361,58 @@ it("follows a rebound frame's grant for setup-changed", async () => {
   await vi.advanceTimersByTimeAsync(500);
   expect(setupChanges(post)).toHaveLength(1);
 });
+
+const textMessages = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-text");
+
+it("sends a session's prose only to frames that watch it and hold sessions:read, with one final per turn", async () => {
+  const watching = vi.fn();
+  const other = vi.fn();
+  const ungranted = vi.fn();
+  const read = { grants: ["sessions:read"] };
+  const a = hub.attach("text-a", "all", watching, true, false, undefined, read);
+  const b = hub.attach("text-b", "all", other, true, false, undefined, read);
+  const c = hub.attach("text-c", "all", ungranted, true, false, undefined, { grants: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  a.watchText("s1");
+  b.watchText("s2");
+  c.watchText("s1");
+  const send = (event: unknown) =>
+    events.get("session-text")!({ payload: { sessionId: "s1", event } });
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  send({ kind: "prose", turn: "u1", key: "a3", text: "Green." });
+  send({ kind: "end", turn: "u1" });
+  send({ kind: "end", turn: "u1" });
+  expect(textMessages(watching)).toEqual([
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "prose",
+      turn: "u1",
+      key: "a1",
+      text: "Running the suite.",
+    },
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "prose",
+      turn: "u1",
+      key: "a3",
+      text: "Green.",
+    },
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "final",
+      turn: "u1",
+      key: "a3",
+      text: "Green.",
+    },
+  ]);
+  expect(textMessages(other)).toEqual([]);
+  expect(textMessages(ungranted)).toEqual([]);
+  a.unwatchText("s1");
+  send({ kind: "prose", turn: "u2", key: "a5", text: "More." });
+  expect(textMessages(watching)).toHaveLength(3);
+});

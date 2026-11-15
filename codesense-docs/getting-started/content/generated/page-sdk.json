@@ -14,10 +14,10 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 113,
+    "bridgeMethods": 115,
     "actionVerbs": 58,
-    "readVerbs": 55,
-    "surfaceMembers": 53
+    "readVerbs": 57,
+    "surfaceMembers": 54
   },
   "sdk": [
     {
@@ -409,6 +409,14 @@
       "owner": "Surface",
       "signature": "onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;",
       "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the\nrecord's `sessionIds` to hear only about that agent's session.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "onSessionText",
+      "owner": "Surface",
+      "signature": "onSessionText(\n      sessionId: string,\n      cb: (text: { kind: \"prose\" | \"final\"; turn: string; key: string; text: string } | null, error?: unknown) => void,\n    ): Unsubscribe;",
+      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -1003,6 +1011,14 @@
       "owner": "Surface",
       "signature": "onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;",
       "description": "Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the\nrecord's `sessionIds` to hear only about that agent's session.",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "feature": null
+    },
+    {
+      "name": "onSessionText",
+      "owner": "Surface",
+      "signature": "onSessionText(\n      sessionId: string,\n      cb: (text: { kind: \"prose\" | \"final\"; turn: string; key: string; text: string } | null, error?: unknown) => void,\n    ): Unsubscribe;",
+      "description": "A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now.",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "feature": null
     },
@@ -5623,6 +5639,66 @@
           "type": "object"
         },
         "type": "array"
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "sessions.unwatchText",
+      "owner": "VerbMethods",
+      "signature": "\"sessions.unwatchText\"(args: {\n      sessionId: string;\n    }): Promise<unknown>;",
+      "description": "read · sessions:read",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "sessions:read",
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "sessions.watchText",
+      "owner": "VerbMethods",
+      "signature": "\"sessions.watchText\"(args: {\n      sessionId: string;\n    }): Promise<unknown>;",
+      "description": "read · sessions:read",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "sessions:read",
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "action": false,
       "confirmable": false,
@@ -11748,6 +11824,62 @@
       "module": "agent"
     },
     {
+      "name": "sessions.unwatchText",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+      "audited": false,
+      "action": false,
+      "module": "sessions"
+    },
+    {
+      "name": "sessions.watchText",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+      "audited": false,
+      "action": false,
+      "module": "sessions"
+    },
+    {
       "name": "setField",
       "class": "metadata",
       "argsSchema": {
@@ -14779,6 +14911,52 @@
       "mcpTwin": "list_sessions"
     },
     {
+      "verb": "sessions.unwatchText",
+      "tier": "read",
+      "description": "read · sessions:read",
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "mcpTwin": null
+    },
+    {
+      "verb": "sessions.watchText",
+      "tier": "read",
+      "description": "read · sessions:read",
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "grant": "sessions:read",
+      "mcpTwin": null
+    },
+    {
       "verb": "setup",
       "tier": "read",
       "description": "read · repo:read · MCP twin describe_setup",
@@ -17331,12 +17509,12 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "3cb5d4e1121b32ab12e4759106e9c8e0e6f6e7763bfaad988475a5d499178f31",
-    "src-tauri/src/verbs/registry.generated.json": "87e59ca692396b4329d6ee80d3f07fe1becec38f112f09b66aae4a2d738225b7",
-    "src-tauri/src/verbs/registry.rs": "34401fe140c2187dda4a29012ee0dfdd086bc1dea0a5cb90e45a3d149e5dd00c",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "193cc422be7b69e248647a02680ace7090c2b6d912fd72d1e036f7b117e91acd",
+    "src-tauri/src/verbs/registry.generated.json": "310e811b0f9d6b78714b7036820fe6709f52b3ff4b1dc0700393f51b7a86bb01",
+    "src-tauri/src/verbs/registry.rs": "b4c1f8d5104427c6a1cb963700f255be45dc331c1090c13450799cf0dea5349e",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "d11ec95f319fb30e823098a8669724e0fa3c47cce21c5a6f930407605f590b16",
+    "src-tauri/src/http/routes/viewer.rs": "731a5c291fc4e43f5a328119912aff18e29656fa7c9abf4a2cde25f0dff54fc2",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

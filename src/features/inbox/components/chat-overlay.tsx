@@ -29,7 +29,6 @@ import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
-import { useMessageDelivery } from "../hooks/use-message-delivery";
 import { useSessionInbox } from "../hooks/use-session-inbox";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
@@ -99,17 +98,14 @@ export function ChatOverlay({
     teamKey,
     chatKey,
   });
-  // Queued or Delivered on what you send here, by the kit's rule: each message's own
-  // messageDelivery row where the host pushes it, else the lead's sessions() row.
+  // Queued or Delivered on what you send here, by the kit's rule; the lead is its sessions() row.
   const lead = sessions?.find((s) => s.handle === handle) ?? null;
-  const delivery = useMessageDelivery(team ?? home);
   const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
   if (tracked.chatKey !== chatKey) setTracked({ chatKey, tracker: createDeliveryTracker() });
   const tracker = tracked.tracker;
   // What the chat opens on is history: the tracker reads only once the thread has loaded.
   if (data !== null) tracker.observe(conversation, handle, lead);
-  const marks = (m: ConversationMessage) =>
-    tracker.markOf(m, lead, !team || sameTeam(m.team, team) ? (delivery.get(m.id) ?? null) : null);
+  const marks = (m: ConversationMessage) => tracker.markOf(m, lead);
   const view: InboxView = useMemo(
     () => ({
       me: HUMAN,

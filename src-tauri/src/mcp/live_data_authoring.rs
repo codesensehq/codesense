@@ -484,6 +484,10 @@ pub(crate) const READ_VERBS: &[&str] = &[
     "watchInbox",
     "watchAgentInbox",
     "watchAgentActivity",
+    // A session's assistant prose as it is written, then one final message per turn
+    // (`codesense:session-text`), for a session of the page's own team: `onSessionText` uses them.
+    "sessions.watchText",
+    "sessions.unwatchText",
     // Routines, agent runs, worktrees and machines: the same shapes as the MCP tools
     // routine_list, routine_get, routine_runs, routine_run, list_runs, read_run,
     // list_worktrees and list_machines. The host pushes `codesense:routines-changed`,

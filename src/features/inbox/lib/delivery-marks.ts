@@ -5,9 +5,6 @@ import { createMarkLatch, isBusy, type ChatLeadRow } from "./chat-core";
 
 export type DeliveryMark = "queued" | "delivered";
 
-/** A message's own row on the `messageDelivery` topic, when the host pushes it. */
-export type DeliveryRow = { state: "queued" | "delivered"; deliveredAtMs?: number | null };
-
 /** The lead's sessions() row, as much of it as the marks rule reads. */
 export type LeadSession = {
   state?: string;
@@ -48,14 +45,8 @@ export function createDeliveryTracker() {
       }
       opened = true;
     },
-    /** Queued or Delivered for a message the person sent while this chat was open, else null.
-     *  `delivery` is its own messageDelivery row: it decides when there is one; without it
-     *  (an older host, or no row for this message) the lead's roster row does. */
-    markOf(
-      m: ConversationMessage,
-      lead: LeadSession | null,
-      delivery: DeliveryRow | null = null,
-    ): DeliveryMark | null {
+    /** Queued or Delivered for a message the person sent while this chat was open, else null. */
+    markOf(m: ConversationMessage, lead: LeadSession | null): DeliveryMark | null {
       const key = msgKey(m);
       const busy = busyAtSend.get(key);
       if (busy === undefined) return null;
@@ -64,7 +55,6 @@ export function createDeliveryTracker() {
         busyAtSend: busy,
         lead: rowOf(lead),
         newestLeadAt,
-        delivery,
       });
     },
   };

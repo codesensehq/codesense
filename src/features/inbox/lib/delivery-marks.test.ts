@@ -63,20 +63,3 @@ describe("createDeliveryTracker", () => {
     expect(t.markOf(said, row())).toBeNull();
   });
 });
-
-describe("createDeliveryTracker with the messageDelivery topic", () => {
-  it("the message's own row decides when there is one, else the roster rule stands", () => {
-    const t = createDeliveryTracker();
-    t.observe([], LEAD, row());
-    const sent = msg(1, "human", at(1));
-    t.observe([sent], LEAD, row());
-    const told = row({ mailNotice: "told", notifiedAt: new Date(at(2)).toISOString() });
-    expect(t.markOf(sent, told, { state: "queued" })).toBe("queued");
-    expect(t.markOf(sent, row(), { state: "delivered" })).toBe("delivered");
-    expect(t.markOf(sent, row(), { state: "queued" }), "latched").toBe("delivered");
-    const other = msg(2, "human", at(3));
-    t.observe([sent, other], LEAD, row());
-    const toldLater = row({ mailNotice: "told", notifiedAt: new Date(at(4)).toISOString() });
-    expect(t.markOf(other, toldLater, null)).toBe("delivered");
-  });
-});

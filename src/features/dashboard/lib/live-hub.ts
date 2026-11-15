@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { DEFAULT_APP_THEME, type AppTheme } from "@/themes";
+import { createSessionTextRouter, type SessionTextEvent } from "./session-text";
 import type { ThemeMode } from "@/themes/compiler";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -25,6 +26,10 @@ type BadgeDelivery = {
   /** What the frame's grant allows, so it is told only changes it could read. */
   grants?: readonly string[];
 };
+/** The host event a session's assistant prose arrives on (`session_text.rs`). */
+const SESSION_TEXT_EVENT = "session-text";
+/** A page hears a session's prose only under this grant. */
+const SESSIONS_READ_GRANT = "sessions:read";
 /** `setupState()` reads every org on this Mac, so it takes the machine-wide grant. */
 const SETUP_READ_GRANT = "machines:read";
 
@@ -117,6 +122,8 @@ type Frame = {
   resync: Set<string>;
   waits: Array<() => void>;
   invalidations: Map<string, Record<string, unknown>>;
+  /** The sessions whose assistant prose this frame hears (`onSessionText`). */
+  sessionText: Set<string>;
   themeChanged?: () => void;
 };
 const keyOf = (topic: string, viewKey: string) => JSON.stringify([topic, viewKey]);
@@ -353,6 +360,10 @@ export class LiveHub {
     ];
     for (const [event, type] of nudges)
       this.listen(event, ({ payload }) => this.invalidate(type, payload));
+    // A session's assistant prose as it is written, and one final message per turn, to the
+    // frames that watch it (and hold sessions:read). Prose is not a nudge: it is delivered
+    // as it comes, never held for a hidden frame to reread.
+    this.listen(SESSION_TEXT_EVENT, ({ payload }) => this.sessionText(payload));
     // An agent's session record (tokens, cost, files) moves with its progress and its end, and
     // with usage stored for its session (the host debounces that to about 2 s). Each nudge names
     // its session, so a page reads again only its own agent's record. Commits have no event of
@@ -397,6 +408,18 @@ export class LiveHub {
       this.setupFirstAt = null;
       this.invalidate("setup-changed");
     }, wait);
+  }
+  private textRouter = createSessionTextRouter();
+  private sessionText(payload: unknown) {
+    const { sessionId, event } = (payload ?? {}) as { sessionId?: unknown; event?: unknown };
+    if (typeof sessionId !== "string" || !event || typeof event !== "object") return;
+    for (const message of this.textRouter(sessionId, event as SessionTextEvent)) {
+      for (const frame of this.frames.values()) {
+        if (frame.disposed || !frame.sessionText.has(sessionId)) continue;
+        if (!frame.grants.includes(SESSIONS_READ_GRANT)) continue;
+        frame.post({ type: "codesense:session-text", ...message });
+      }
+    }
   }
   private sessionRecordChanged(sessionIds: string[]) {
     // An event that names no session is one every record may have to reread.
@@ -553,6 +576,7 @@ export class LiveHub {
       resync: new Set(),
       waits: [],
       invalidations: new Map(),
+      sessionText: new Set(),
     };
     this.frames.set(id, frame);
     this.balanceHidden();
@@ -666,6 +690,9 @@ export class LiveHub {
     };
     return {
       subscribe,
+      /** This frame hears `sessionId`'s assistant prose; the bridge checked its grant and team. */
+      watchText: (sessionId: string) => void frame.sessionText.add(sessionId),
+      unwatchText: (sessionId: string) => void frame.sessionText.delete(sessionId),
       unsubscribe: async (topic: string, selector?: ViewSelector) => {
         const scopedViewKey = subscriptionViewKey(frame, topic, selector);
         const scopeKey = subscriptionKey(topic, scopedViewKey);
