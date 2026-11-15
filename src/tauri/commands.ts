@@ -1699,6 +1699,8 @@ export type ThreadInboxDto = SessionInboxDto & {
   storyId: string;
   /** The handles whose mail it holds. */
   sessions: string[];
+  /** Every address it holds the mail of: the handles and the tab session ids. */
+  addresses: string[];
 };
 
 /** A saved agent + story thread's conversation, so a successor opens on its predecessor's mail.

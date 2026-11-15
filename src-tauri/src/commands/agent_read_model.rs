@@ -1329,6 +1329,10 @@ pub(crate) struct ThreadInboxDto {
     pub handle: String,
     /// The handles whose mail the read holds.
     pub sessions: Vec<String>,
+    /// Every address the read holds the mail of: the handles and the tab session ids (a
+    /// recorded handle the roster now gives another thread's session is read by its tab id
+    /// only), so a view can tell the thread's mail from other mail.
+    pub addresses: Vec<String>,
     pub roles: Vec<String>,
     pub messages: Vec<ConversationMessage>,
 }
@@ -1364,7 +1368,13 @@ pub(crate) async fn thread_addresses(
         })
         .map(|(known, _)| known.clone())
         .collect();
-    let recorded = host.thread_sessions(thread).await?;
+    // A no-story thread is its listed sessions only: nothing bounds the no-story sessions a
+    // saved agent ever launched, and a fresh one must not open on all of their mail.
+    let recorded = if thread.story_id.is_empty() {
+        Vec::new()
+    } else {
+        host.thread_sessions(thread).await?
+    };
     let member = |handle: &str| members.iter().any(|m| m.handle == handle);
     let own = seat
         .and_then(|seat| sessions.find(seat))
@@ -1457,13 +1467,14 @@ pub(crate) async fn thread_inbox(
     let (roles, messages) = if addresses.is_empty() {
         (Vec::new(), Vec::new())
     } else {
-        conversation_of(host, &sessions, addresses, also).await?
+        conversation_of(host, &sessions, addresses.clone(), also).await?
     };
     Ok(ThreadInboxDto {
         agent_id: thread.agent_id,
         story_id: thread.story_id,
         handle,
         sessions: handles,
+        addresses,
         roles,
         messages,
     })
