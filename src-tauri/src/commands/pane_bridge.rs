@@ -18,6 +18,7 @@ use crate::context_query::model::Layer;
 
 #[cfg(test)]
 mod caller_scope_tests;
+mod guide_story;
 
 /// Where a page or file sits in the footprint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -267,6 +268,52 @@ pub(crate) fn resolve_open_target_for(
     })
 }
 
+/// What `codesense.openFile` resolves for a page. The pinned setup page (`guide`) may open a
+/// story under a synced team's `stories/` and nothing else, whatever its own scope admits;
+/// every other page takes the scoped route.
+pub(crate) fn resolve_open_target_granted(
+    guide: bool,
+    roots: &[IndexRoot],
+    page: &str,
+    path: &str,
+    team: Option<&str>,
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<OpenTarget, String> {
+    if guide {
+        return guide_story::resolve(roots, path, team);
+    }
+    resolve_open_target_for(roots, page, path, team, scope)
+}
+
+/// Whether the frame is the pinned setup page: its document is read and hashed again here,
+/// so a file replaced since the frame was minted loses the grant.
+async fn holds_guide_grant<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    frame_id: Option<&str>,
+) -> bool {
+    use tauri::Manager;
+    let Some(frame) = frame_id.and_then(|id| {
+        app.try_state::<std::sync::Arc<crate::dashboard_stream::frame::FrameStore>>()
+            .and_then(|frames| frames.by_id(id))
+    }) else {
+        return false;
+    };
+    // The cheap check first, so the common page never resolves the docs checkout.
+    if frame.parent_frame.is_some()
+        || !frame
+            .document_path
+            .replace('\\', "/")
+            .ends_with(crate::verbs::foreman_launch::GUIDE_PAGE)
+    {
+        return false;
+    }
+    let Ok((home, principal)) = super::route_to_context::resolve_ambient(app).await else {
+        return false;
+    };
+    let docs_root = crate::context_repo::codesense_docs::docs_root(&home, &principal.into());
+    crate::verbs::foreman_launch::is_guide_page(&docs_root, &frame.document_path)
+}
+
 /// `codesense.context()`: the content root (org, team, layer) the page at
 /// `page` lives in; `null` for a page outside every known root.
 #[tauri::command]
@@ -291,11 +338,17 @@ pub async fn bridge_resolve_open_target<R: tauri::Runtime>(
     team: Option<String>,
     frame_id: Option<String>,
 ) -> Result<OpenTarget, String> {
-    let scope =
-        crate::context_repo::caller_scope::for_page(&app, Some(&page), frame_id.as_deref())?;
+    use crate::context_repo::caller_scope::CallerScope;
+    let guide = holds_guide_grant(&app, frame_id.as_deref()).await;
+    // The setup page's route never reads a scope, so none is built for it.
+    let scope = if guide {
+        CallerScope::Unknown
+    } else {
+        crate::context_repo::caller_scope::for_page(&app, Some(&page), frame_id.as_deref())?
+    };
     super::await_blocking("bridge_resolve_open_target", move || {
         let roots = crate::context_query::known_roots(&app);
-        resolve_open_target_for(&roots, &page, &path, team.as_deref(), &scope)
+        resolve_open_target_granted(guide, &roots, &page, &path, team.as_deref(), &scope)
     })
     .await
 }
