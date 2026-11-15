@@ -299,8 +299,8 @@ fn session_log_path(session_id: &str) -> Result<(PathBuf, TranscriptFormat), Str
         .ok_or_else(|| format!("no session log with prose for {session_id}"))
 }
 
-/// Start (or count one more watcher of) `session_id`'s stream. Only a local Claude session has a
-/// log to tail.
+/// Start (or count one more watcher of) `session_id`'s stream. Only a local session whose log has
+/// a prose parser (`prose::streams`) has one to tail.
 pub fn watch(session_id: &str) -> Result<(), String> {
     let joined = {
         let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
