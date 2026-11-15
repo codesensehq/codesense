@@ -137,10 +137,14 @@ export const useAgentListProjectionStore = create<{
 useAgentListProjectionStore.subscribe((state, previous) => {
   if (state.sessions === previous.sessions) return;
   const recordOutput = useAgentStateStore.getState().recordOutput;
+  const previousBySession = new Map<string, AgentSessionRow>();
+  for (const row of previous.sessions ?? []) {
+    if (row.sessionId) previousBySession.set(row.sessionId, row);
+  }
   for (const row of state.sessions ?? []) {
     if (!row.sessionId) continue;
     if (row.lastOutputMs != null) recordOutput(row.sessionId, row.lastOutputMs);
-    const previousOwner = previous.sessions?.find((before) => before.sessionId === row.sessionId);
+    const previousOwner = previousBySession.get(row.sessionId);
     if (row.managedState && row.managedState !== previousOwner?.managedState) {
       const managed = useManagedSessionStore.getState();
       const changed = managed.states[row.sessionId] !== row.managedState;
