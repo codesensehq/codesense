@@ -36,6 +36,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
+const openFile = vi.hoisted(() => vi.fn());
+vi.mock("@/shared/lib/open-file-in-team", () => ({ openFileInTeam: openFile }));
 
 const api = vi.hoisted(() => ({
   loadSessionInbox: vi.fn(),
@@ -383,6 +385,179 @@ describe("ChatOverlay", () => {
     expect(await screen.findByTestId("chat-overlay-pin-3")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-overlay-pins-failed")).toBeNull();
   });
+
+  describe("the record line, from the agent's session record", () => {
+    const RECORD = {
+      handle: LEAD,
+      sessionId: SESSION,
+      sessionIds: [SESSION],
+      model: "claude-opus-5-5",
+      costUsd: 1.26,
+      files: [{ path: "a.ts" }, { path: "b.ts" }, { path: "c.ts" }],
+      story: "BUG-142",
+    };
+    const withRecord = (record: Record<string, unknown> = RECORD) =>
+      vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+        if (cmd === "session_record") return record;
+        if (cmd === "resolve_story_path")
+          return { storyFilePath: "/ctx/acme/widgets/content/stories/BUG-142.md", team: "widgets" };
+        return cmd === "agent_pins"
+          ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
+          : undefined;
+      });
+    const recordText = async () => {
+      const line = await screen.findByTestId("chat-overlay-record");
+      await waitFor(() => expect(line).toHaveTextContent("$1.26"));
+      return line.textContent;
+    };
+
+    it.each([
+      [640, 480, "Opus 5.5 · $1.26 · 3 files · TIME · BUG-142"],
+      [450, 700, "Opus 5.5 · $1.26 · 3 files · BUG-142"],
+      [350, 700, "Opus 5.5 · $1.26 · BUG-142"],
+      [250, 700, "$1.26 · BUG-142"],
+    ])(
+      "at %i × %i reads %s: time, then files, then the model drop; cost and the link stay",
+      async (w, h, want) => {
+        withRecord();
+        await renderOverlay(w, h);
+        // The elapsed time runs on the real clock.
+        const text = (await recordText())?.replace(/\s*↗/, "").replace(/\b(\d+h )?\d+m\b/, "TIME");
+        expect(text).toBe(want);
+        expect(invoke).toHaveBeenCalledWith("session_record", { params: { handle: LEAD } });
+      },
+    );
+
+    it("the story is a link that opens its page", async () => {
+      useOrgStore.setState({ activeOrgSlug: "acme" });
+      withRecord();
+      await renderOverlay(640, 480);
+      await recordText();
+      fireEvent.click(screen.getByRole("link", { name: /BUG-142/ }));
+      await waitFor(() =>
+        expect(openFile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            team: "widgets",
+            path: "/ctx/acme/widgets/content/stories/BUG-142.md",
+          }),
+        ),
+      );
+    });
+
+    it("reads the record again when the session's usage changes, and only for its own session", async () => {
+      withRecord();
+      await renderOverlay(640, 480);
+      await recordText();
+      withRecord({ ...RECORD, costUsd: 2.5 });
+      const reads = () =>
+        vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "session_record").length;
+      const before = reads();
+      act(() =>
+        listeners
+          .get("session-usage-changed")
+          ?.forEach((h) => h({ payload: { sessionId: "other" } })),
+      );
+      expect(reads()).toBe(before);
+      act(() =>
+        listeners
+          .get("session-usage-changed")
+          ?.forEach((h) => h({ payload: { sessionId: SESSION } })),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-overlay-record")).toHaveTextContent("$2.50"),
+      );
+    });
+
+    it("a cost or file count the record has only in part says so, with the record's reason", async () => {
+      withRecord({
+        ...RECORD,
+        unpricedModels: ["gpt-5.5-codex"],
+        unavailable: {
+          cost: "costUsd is the priced part only: a model of this session has no rate",
+          files: "only the first 10000 commits were read",
+        },
+      });
+      await renderOverlay(640, 480);
+      const line = await screen.findByTestId("chat-overlay-record");
+      await waitFor(() => expect(line).toHaveTextContent("≥ $1.26"));
+      expect(line).toHaveTextContent("≥ 3 files");
+      expect(within(line).getByText("≥ $1.26")).toHaveAttribute(
+        "title",
+        "costUsd is the priced part only: a model of this session has no rate",
+      );
+      expect(within(line).getByText("≥ 3 files")).toHaveAttribute(
+        "title",
+        "only the first 10000 commits were read",
+      );
+    });
+
+    it("an unpriced model alone marks the cost as part of it, naming the model", async () => {
+      withRecord({ ...RECORD, unpricedModels: ["gpt-5.5-codex"] });
+      await renderOverlay(640, 480);
+      const line = await screen.findByTestId("chat-overlay-record");
+      await waitFor(() => expect(line).toHaveTextContent("≥ $1.26"));
+      expect(within(line).getByText("≥ $1.26").getAttribute("title")).toContain("gpt-5.5-codex");
+    });
+
+    it("reads the record one at a time: events while a read runs queue one more read, not many", async () => {
+      let release!: () => void;
+      let reads = 0;
+      vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+        if (cmd === "session_record") {
+          reads++;
+          if (reads === 2) await new Promise<void>((resolve) => (release = resolve));
+          return RECORD;
+        }
+        return cmd === "agent_pins"
+          ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: PINS }
+          : undefined;
+      });
+      await renderOverlay(640, 480);
+      await recordText();
+      const usage = () =>
+        act(() =>
+          listeners
+            .get("session-usage-changed")
+            ?.forEach((h) => h({ payload: { sessionId: SESSION } })),
+        );
+      usage();
+      await waitFor(() => expect(reads).toBe(2));
+      usage();
+      usage();
+      usage();
+      expect(reads).toBe(2);
+      await act(async () => release());
+      await waitFor(() => expect(reads).toBe(3));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reads).toBe(3);
+    });
+
+    it("a record not read yet, or with no price, shows what it knows and no cost", async () => {
+      withRecord({ ...RECORD, costUsd: null, model: null, files: null });
+      await renderOverlay(640, 480);
+      await waitFor(() =>
+        expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "session_record")).toBe(true),
+      );
+      const line = screen.getByTestId("chat-overlay-record");
+      expect(line.textContent).toMatch(/^\d+(h \d+)?m · BUG-142/);
+      expect(line).not.toHaveTextContent("$");
+    });
+  });
+
+  it.each([
+    [640, 480, true],
+    [250, 250, false],
+  ])(
+    "a %i × %i pane draws the run-start avatar of the agent's messages: %s",
+    async (w, h, drawn) => {
+      await renderOverlay(w, h);
+      const first = document.querySelector(`[data-mid="${msgKey(MESSAGES[0]!)}"]`)!;
+      expect(first.querySelector(".ibx-av") !== null).toBe(drawn);
+      // Your own messages carry no avatar.
+      const own = document.querySelector(`[data-mid="${msgKey(MESSAGES[1]!)}"]`)!;
+      expect(own.querySelector(".ibx-av")).toBeNull();
+    },
+  );
 
   it("puts the status word ahead of the record line in a narrow one-line head", async () => {
     await renderOverlay(250, 250);
