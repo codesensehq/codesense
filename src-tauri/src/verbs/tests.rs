@@ -1042,6 +1042,33 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
             &json!({"status":"invalid","message":"no message 9"})
         ));
     }
+    // Each is registered under the inbox namespace, and its flat name is the same verb: one
+    // entry in every per-name table, so the alias the kit and pages call cannot drift.
+    for name in ["pins", "pin", "unpin", "restorePin", "replacePin", "reorderPins"] {
+        let flat = registry.get(name).expect(name);
+        let spaced = registry
+            .get(&format!("inbox.{name}"))
+            .unwrap_or_else(|| panic!("inbox.{name}"));
+        assert_eq!(table_name(&spaced.name), name);
+        assert_eq!(
+            serde_json::to_value(spaced).unwrap(),
+            serde_json::to_value(VerbSpec {
+                name: spaced.name.clone(),
+                ..flat.clone()
+            })
+            .unwrap(),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        super::dispatcher::action_target(
+            &caller("team"),
+            "inbox.pin",
+            &json!({"messageId":4})
+        )
+        .as_deref(),
+        Some("message 4")
+    );
     let pin = &registry.get("pin").unwrap().args_schema;
     assert!(jsonschema::is_valid(
         pin,

@@ -299,6 +299,12 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
+      "inbox.pin",
+      "inbox.pins",
+      "inbox.reorderPins",
+      "inbox.replacePin",
+      "inbox.restorePin",
+      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -407,6 +413,12 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       /must be an object/,
     );
     expect(READ_VERBS).toContain("queryContext");
+  });
+
+  it("runs each namespaced pin verb with its flat verb's handler", () => {
+    for (const name of ["pins", "pin", "unpin", "restorePin", "replacePin", "reorderPins"]) {
+      expect(HTML_BRIDGE_ALLOWLIST[`inbox.${name}`], name).toBe(HTML_BRIDGE_ALLOWLIST[name]);
+    }
   });
 
   it("does NOT expose the reserved LD-2 proxyFetch yet", () => {

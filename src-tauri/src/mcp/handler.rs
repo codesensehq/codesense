@@ -18904,18 +18904,26 @@ pub(crate) mod tests {
     /// The self-close refusal of `close_terminal_tab` is decided
     /// before it touches its tab. (`close_workspace` has its own outcome tests
     /// over `plan_close`, which refuses a self-close before any teardown.)
+    /// The tool's body is `close_tab_by_handle`, so the order is checked there.
     #[test]
     fn close_terminal_tab_refuses_self_close_before_any_teardown() {
         let source = include_str!("handler.rs");
-        let verb = "close_terminal_tab";
-        let at = source
-            .find(&format!("    async fn {verb}(\n"))
-            .unwrap_or_else(|| panic!("{verb} is a tool"));
-        let next_fn = source[at + 1..]
-            .find("\n    async fn ")
-            .map(|i| at + 1 + i)
-            .unwrap_or(source.len());
-        let body = &source[at..next_fn];
+        let body_of = |name: &str| {
+            let at = source
+                .find(&format!("    async fn {name}("))
+                .unwrap_or_else(|| panic!("{name} is a method"));
+            let next_fn = source[at + 1..]
+                .find("\n    async fn ")
+                .map(|i| at + 1 + i)
+                .unwrap_or(source.len());
+            &source[at..next_fn]
+        };
+        assert!(
+            body_of("close_terminal_tab").contains("self.close_tab_by_handle("),
+            "close_terminal_tab closes through close_tab_by_handle"
+        );
+        let verb = "close_tab_by_handle";
+        let body = body_of(verb);
         let self_close = body
             .find("is_self_closing_tab(")
             .unwrap_or_else(|| panic!("{verb} must call is_self_closing_tab"));
