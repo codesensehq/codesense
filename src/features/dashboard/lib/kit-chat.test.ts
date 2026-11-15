@@ -78,7 +78,8 @@ function setup(roster: Row[], thread: Row[] = []) {
   };
   const el = document.createElement("div");
   document.body.append(el);
-  return { transport, reads, el, send, reply, emit };
+  const listenerCount = (event: string) => listeners.get(event)?.size ?? 0;
+  return { transport, reads, el, send, reply, emit, listenerCount };
 }
 
 const kitOf = () => (window as unknown as { codesense: { kit: Kit } }).codesense.kit;
@@ -1798,20 +1799,45 @@ describe("kit.chat send state", () => {
       send.dispose();
     });
 
-    it("stops listening to the roster once the work settles while hidden, and never paints a hidden chat", async () => {
+    it("listens to the roster only while it has work, and stops once the work settles", async () => {
       const roster: Row[] = [lead("idle")];
       const s = setup(roster);
       const send = makeSend(s, manualClock());
       const chat = mountOn(s, { send });
       await flush();
+      const mounted = s.listenerCount("sessions");
       let finish!: (value: Row) => void;
       s.send.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
       await typeAndSend(s.el, "one");
       chat.unmount();
+      expect(
+        s.listenerCount("sessions"),
+        "the chat's own listener is gone, the state's is in",
+      ).toBe(mounted);
       finish({ status: "sent", messageId: 2 });
       await flush();
-      expect(s.el.childNodes.length, "nothing paints into the old element").toBe(0);
       expect(send.unsettled()).toBe(false);
+      expect(s.listenerCount("sessions"), "settled: no listener left").toBe(mounted - 1);
+      send.dispose();
+    });
+
+    it("never paints a hidden chat: a change while hidden leaves the old element as it was", async () => {
+      const s = setup([lead("idle")]);
+      const send = makeSend(s, manualClock());
+      const chat = mountOn(s, { send });
+      await flush();
+      let refuse!: (error: Error) => void;
+      s.send.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      await typeAndSend(s.el, "one");
+      const log = s.el.querySelector(".log") as HTMLElement;
+      const before = log.innerHTML;
+      expect(marks(s.el)).toEqual(["delivered"]);
+      chat.unmount();
+      refuse(new Error("busy"));
+      await flush();
+      expect(send.launch.messages[0].mark, "the state moved").toBe("kept");
+      expect(log.innerHTML, "the held log was not painted").toBe(before);
+      expect(s.el.childNodes.length).toBe(0);
       send.dispose();
     });
 

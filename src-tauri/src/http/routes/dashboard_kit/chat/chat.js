@@ -315,7 +315,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const awaiting=()=>awaitBase!==null&&leadCount()<=awaitBase&&(launch.state==='joined'||Boolean(live()&&live().state==='running'));
  function render(){
   if(gone)return;
-    const p=presence();
+  const p=presence();
   if(launch.state==='joined'&&joinedAt===null){
    joinedAt=clock.now();const row=live();
    // The model comes from sessionUsage for this lead's own session; the usage row's sessionId is the CLI's id, so rows are never joined by id.
