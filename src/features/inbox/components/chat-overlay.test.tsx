@@ -1382,6 +1382,18 @@ describe("ChatOverlay: the person pins a message", () => {
       expect(screen.getByTestId("chat-overlay-pin-3")).toBeInTheDocument();
     });
 
+    it("Esc on a replace's Undo closes the note and keeps focus on the message's pin button", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.click(choiceOf(3));
+      const note = await within(row(4)).findByTestId("ibx-pin-note");
+      const undo = within(note).getByRole("button", { name: "Undo" });
+      act(() => undo.focus());
+      fireEvent.keyDown(undo, { key: "Escape" });
+      expect(within(row(4)).queryByTestId("ibx-pin-note")).toBeNull();
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
+    });
+
     it("an Undo refused because the list filled again goes away, keeps the new pin, says why and keeps focus on the message", async () => {
       await full();
       fireEvent.click(pinOf(4));

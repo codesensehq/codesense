@@ -102,8 +102,8 @@ export type PersonPins = {
   undo(): void;
   /** Try the failed pin, unpin or Undo again. */
   retry(): void;
-  /** Esc: close the note and end the Undo. */
-  dismiss(): void;
+  /** Esc: close the note and end the Undo. `fromNote`: focus was inside the note, so it goes back to the message's pin button. */
+  dismiss(fromNote?: boolean): void;
   /** Show pins: move focus to the Pinned block. */
   showPins(): void;
   note: PinNote | null;
@@ -400,7 +400,9 @@ export function usePersonPins({
         note.kind === "unpin-failed" ? "unpin" : note.kind === "restore-failed" ? "restore" : "pin";
       void call(note.message, op, note.message.id);
     },
-    dismiss() {
+    dismiss(fromNote = false) {
+      // Closing the note takes its Undo with it; focus that was on it goes back to the message's pin button.
+      if (fromNote && note) setFocusPin(note.mid);
       setNote(null);
     },
     showPins() {
