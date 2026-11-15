@@ -948,6 +948,7 @@
       refresh();
       const row = log.querySelector(`[data-mid="${CSS.escape(key)}"]`);
       if (!row) return;
+      row.tabIndex = 0;
       row.focus({ preventScroll: true });
       if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
     }
@@ -973,6 +974,10 @@
     return {
       focused,
       refresh,
+      // Where focus goes when the thread is entered from outside it (Jump to latest): the newest message.
+      focusNewest() {
+        moveTo(keys().at(-1));
+      },
       release() {
         watch.disconnect();
         log.removeEventListener("keydown", onKeyDown);
