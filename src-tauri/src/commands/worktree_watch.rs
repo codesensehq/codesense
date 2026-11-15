@@ -38,7 +38,10 @@ pub async fn lazy_attach_worktree_watch(
         let state = app.state::<WorktreeWatchState>();
         let cwd_path = PathBuf::from(&cwd);
         let app_for_emit = app.clone();
+        // Resolved once: the listing's cache is keyed by the resolved path.
+        let facts_key = super::worktree_probe::cache_key(&cwd_path);
         let emit = move |change: WorktreeFileChange| {
+            super::worktree::invalidate_listing_facts(&facts_key, &change.changed_path);
             if let Err(e) = app_for_emit.emit("worktree-file-change", change) {
                 warn!(target: "worktree_watch", "worktree-file-change emit failed: {e}");
             }

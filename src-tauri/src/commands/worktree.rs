@@ -1936,6 +1936,31 @@ pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
     Some(!out.trim().is_empty())
 }
 
+/// The listing's git facts for `worktree`: read once and kept until its gitdir `HEAD` or `index`
+/// changes, a file event under it drops them ([`invalidate_listing_facts`]), or they age out.
+/// Only the listing uses this; the teardown gate and the run-launch branch check read git
+/// directly, because a stale answer there could remove work or attribute a run to the wrong branch.
+pub(crate) fn listing_git_facts(worktree: &Path) -> super::worktree_probe::GitFacts {
+    listing_cache().facts_at(worktree, std::time::Instant::now(), || {
+        super::worktree_probe::GitFacts {
+            branch: current_branch_of_worktree(worktree),
+            dirty: worktree_git_dirty_opt(worktree),
+            repo_path: main_repo_of_worktree(worktree),
+        }
+    })
+}
+
+fn listing_cache() -> &'static super::worktree_probe::ProbeCache {
+    static CACHE: OnceLock<super::worktree_probe::ProbeCache> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Drop the listing's facts for the worktree at `key` ([`worktree_probe::cache_key`]): the
+/// existing worktree file watch reports `relative` changed under it.
+pub(crate) fn invalidate_listing_facts(key: &Path, relative: &str) {
+    listing_cache().invalidate_under(key, relative);
+}
+
 /// SLW-RS-4 (review M6/L9): the worktree's currently checked-out branch
 /// (`git rev-parse --abbrev-ref HEAD`), or `None` on a detached HEAD / git error.
 pub(crate) fn current_branch_of_worktree(worktree: &Path) -> Option<String> {
@@ -2397,10 +2422,9 @@ pub(crate) fn managed_row_from_record(
     r: crate::install::worktree_index::WorktreeStoryRecord,
     live_cli_session: bool,
 ) -> ManagedWorktreeRow {
-    let wt = r.code_repo_path.as_path();
-    let branch = current_branch_of_worktree(wt);
-    let dirty = worktree_git_dirty_opt(wt);
-    let repo_path = main_repo_of_worktree(wt).map(|p| p.to_string_lossy().into_owned());
+    let facts = listing_git_facts(r.code_repo_path.as_path());
+    let (branch, dirty) = (facts.branch, facts.dirty);
+    let repo_path = facts.repo_path.map(|p| p.to_string_lossy().into_owned());
     // SW-WM-3 (AC-1/AC-4): orphaned = parent working copy gone (git-link/parent broken →
     // `repo_path` unresolved) OR backing story file gone (registry points at a dead
     // story). Local, non-network signals only — one `exists()` stat on top of the
@@ -2555,14 +2579,15 @@ impl WorktreeRow {
         branch: Option<String>,
         live_cli_session: bool,
     ) -> Self {
+        let facts = listing_git_facts(path);
         WorktreeRow {
             kind,
             context: None,
             workspace_key,
             path: path.to_string_lossy().into_owned(),
             branch,
-            dirty: worktree_git_dirty_opt(path),
-            repo_path: main_repo_of_worktree(path).map(|p| p.to_string_lossy().into_owned()),
+            dirty: facts.dirty,
+            repo_path: facts.repo_path.map(|p| p.to_string_lossy().into_owned()),
             live_cli_session,
             story_id: None,
             source_repo: None,
@@ -2613,7 +2638,8 @@ impl WorktreeRow {
     /// so the row still renders in a stable one-member group. Reveal-only in the
     /// panel — there is no story/epic affordance to offer.
     fn orphan(path: &Path, branch: Option<String>, live: bool) -> Self {
-        let workspace_key = main_repo_of_worktree(path)
+        let workspace_key = listing_git_facts(path)
+            .repo_path
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
         Self::git_only(WorktreeKind::Orphan, workspace_key, path, branch, live)
