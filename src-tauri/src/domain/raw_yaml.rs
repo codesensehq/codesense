@@ -185,6 +185,11 @@ pub struct RawTeamEntry {
     /// no Full view. `skip_serializing_if` keeps teams without one byte-stable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_page: Option<String>,
+    /// The team's story page: the page a `type: story` file opens in, relative to the team's
+    /// content root. Absent ⇒ such a file opens as markdown. `skip_serializing_if` keeps teams
+    /// without one byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_page: Option<String>,
 }
 
 /// serde `skip_serializing_if` predicate: omit `archived` from the emitted
@@ -561,37 +566,28 @@ impl RawTeamEntry {
             }
         }
         team.parent_team = self.parent_team;
-        // A landing page is a convenience, never a reason to refuse the team: one
-        // that would leave the team's content (absolute, `..`) or name a hidden
-        // file or folder is dropped.
-        team.landing_page = match self.landing_page.map(|p| p.trim().to_string()) {
-            Some(page) if is_content_relative(&page) => Some(page),
-            Some(page) => {
-                log::warn!(
-                    target: "domain::raw_yaml",
-                    "ignoring landing_page {page:?} of team {}: it must be a path inside the team's content",
-                    team.name
-                );
-                None
-            }
-            None => None,
-        };
-        // The same rule for the agent page: a path that would leave the team's content is dropped,
-        // never a reason to refuse the team.
-        team.agent_page = match self.agent_page.map(|p| p.trim().to_string()) {
-            Some(page) if is_content_relative(&page) => Some(page),
-            Some(page) => {
-                log::warn!(
-                    target: "domain::raw_yaml",
-                    "ignoring agent_page {page:?} of team {}: it must be a path inside the team's content",
-                    team.name
-                );
-                None
-            }
-            None => None,
-        };
+        // A content page (landing, agent or story page) is a convenience, never a reason to refuse
+        // the team: one that would leave the team's content (absolute, `..`) or name a hidden file
+        // or folder is dropped.
+        team.landing_page = content_page("landing_page", self.landing_page, &team.name);
+        team.agent_page = content_page("agent_page", self.agent_page, &team.name);
+        team.story_page = content_page("story_page", self.story_page, &team.name);
         Ok(team)
     }
+}
+
+/// A team's `field` page path, trimmed, or `None` (with a warning) when it would leave the team's
+/// content.
+fn content_page(field: &str, value: Option<String>, team: &str) -> Option<String> {
+    let page = value?.trim().to_string();
+    if is_content_relative(&page) {
+        return Some(page);
+    }
+    log::warn!(
+        target: "domain::raw_yaml",
+        "ignoring {field} {page:?} of team {team}: it must be a path inside the team's content"
+    );
+    None
 }
 
 /// A relative `/`-separated path with no empty segment and no hidden one (a
@@ -1350,6 +1346,7 @@ teams:
             parent_team: None,
             landing_page: None,
             agent_page: None,
+            story_page: None,
         };
         assert_eq!(
             raw.into_domain(),
@@ -1368,6 +1365,7 @@ teams:
             parent_team: None,
             landing_page: None,
             agent_page: None,
+            story_page: None,
         };
         assert_eq!(
             raw.into_domain(),
@@ -1409,6 +1407,51 @@ teams:
             .unwrap();
             let team = raw.teams[0].clone().into_domain().unwrap();
             assert_eq!(team.agent_page, None, "{bad:?} should be dropped");
+        }
+    }
+
+    // ---------- story_page: the page a story file opens in ----------
+
+    #[test]
+    fn story_page_loads_onto_the_domain_team_and_round_trips() {
+        let raw: RawTeamsYml = serde_yaml::from_str(
+            "teams:\n  - name: web\n    source_repos: []\n    story_page: pages/story.html\n  - name: docs\n    source_repos: []\n",
+        )
+        .unwrap();
+        assert_eq!(
+            raw.teams[0].story_page.as_deref(),
+            Some("pages/story.html")
+        );
+        assert_eq!(raw.teams[1].story_page, None);
+        let team = raw.teams[0].clone().into_domain().unwrap();
+        assert_eq!(
+            team.story_page.as_deref(),
+            Some("pages/story.html")
+        );
+        assert_eq!(raw.teams[1].clone().into_domain().unwrap().story_page, None);
+        let bare = serde_yaml::to_string(&raw.teams[1]).unwrap();
+        assert!(!bare.contains("story_page"), "{bare}");
+        let back = serde_yaml::to_string(&raw.teams[0]).unwrap();
+        assert!(
+            back.contains("story_page: pages/story.html"),
+            "{back}"
+        );
+    }
+
+    #[test]
+    fn story_page_outside_the_team_content_is_dropped_not_fatal() {
+        for bad in [
+            "/abs/app.html",
+            "../app.html",
+            "pages/../../app.html",
+            ".hidden/app.html",
+        ] {
+            let raw: RawTeamsYml = serde_yaml::from_str(&format!(
+                "teams:\n  - name: web\n    source_repos: []\n    story_page: {bad}\n"
+            ))
+            .unwrap();
+            let team = raw.teams[0].clone().into_domain().unwrap();
+            assert_eq!(team.story_page, None, "{bad:?} should be dropped");
         }
     }
 
@@ -1553,6 +1596,7 @@ teams:
                 parent_team: None,
                 landing_page: None,
                 agent_page: None,
+                story_page: None,
             }],
         };
         let out = serde_yaml::to_string(&raw).unwrap();
@@ -1632,6 +1676,7 @@ teams:
                 parent_team: None,
                 landing_page: None,
                 agent_page: None,
+                story_page: None,
             }],
         };
         let yaml_str = serde_yaml::to_string(&raw).unwrap();
@@ -1652,6 +1697,7 @@ teams:
                 parent_team: Some("platform".into()),
                 landing_page: None,
                 agent_page: None,
+                story_page: None,
             }],
         };
         let yaml_str = serde_yaml::to_string(&raw).unwrap();
@@ -1671,6 +1717,7 @@ teams:
             parent_team: Some("Bad Name".into()),
             landing_page: None,
             agent_page: None,
+            story_page: None,
         };
         let err = raw.into_domain().unwrap_err();
         assert_eq!(err, DomainError::InvalidParentTeam("Bad Name".into()));
@@ -1689,6 +1736,7 @@ teams:
             parent_team: Some("ghost".into()),
             landing_page: None,
             agent_page: None,
+            story_page: None,
         };
         let team = raw.into_domain().unwrap();
         assert_eq!(team.parent_team, Some("ghost".to_string()));
@@ -1706,6 +1754,7 @@ teams:
             parent_team: None,
             landing_page: None,
             agent_page: None,
+            story_page: None,
         };
         let team = raw.into_domain().unwrap();
         assert_eq!(team.source_repos.len(), 1);
@@ -1815,6 +1864,7 @@ teams:
                     parent_team: None,
                     landing_page: None,
                     agent_page: None,
+                    story_page: None,
                 }],
             }),
         };

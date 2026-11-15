@@ -2094,6 +2094,54 @@ it("carries the committed inbox change's message ids only to frames that can see
   expect(inboxChanges(other)).toEqual([{ type: "codesense:inbox-changed" }]);
 });
 
+const recordNudges = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-record-changed");
+
+it("nudges a session record with the session an agent's progress, end or exit names", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  for (const [event, payload] of [
+    ["mcp:agent-progress", { sessionId: "tab-1" }],
+    ["mcp:agent-done", { sessionId: "tab-1" }],
+    ["pty-exit", { session_id: "tab-1" }],
+  ] as const) {
+    post.mockClear();
+    events.get(event)!({ payload });
+    expect(recordNudges(post), event).toEqual([
+      { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    ]);
+  }
+  // An event that names no session is broad, and progress still nudges the activity listeners.
+  post.mockClear();
+  events.get("mcp:agent-progress")!({ payload: null });
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
+  expect(post.mock.calls.map(([m]) => m.type)).toContain("codesense:agent-activity-changed");
+});
+
+it("nudges a session record on usage stored for its sessions, one nudge per session", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("session-usage-changed")!({ payload: { sessionIds: ["tab-1", "tab-2"] } });
+  expect(recordNudges(post)).toEqual([
+    { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    { type: "codesense:session-record-changed", sessionId: "tab-2" },
+  ]);
+});
+
+it("a hidden frame holds one broad record nudge when two sessions changed while it was away", async () => {
+  const post = vi.fn();
+  const frame = hub.attach("record", "all", post, false);
+  await vi.advanceTimersByTimeAsync(0);
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-1" } });
+  events.get("mcp:agent-done")!({ payload: { sessionId: "tab-2" } });
+  expect(recordNudges(post)).toEqual([]);
+  frame.visible(true);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
+});
+
 it.each(["before", "after"])(
   "a hidden live team frame keeps broad changes arriving %s named rows on its timed flush",
   async (order) => {
@@ -2312,4 +2360,113 @@ it("follows a rebound frame's grant for setup-changed", async () => {
   events.get("org-registry-changed")!({ payload: null });
   await vi.advanceTimersByTimeAsync(500);
   expect(setupChanges(post)).toHaveLength(1);
+});
+
+const textMessages = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:session-text");
+
+it("sends a session's prose only to frames that watch it and hold sessions:read, with one final per turn", async () => {
+  const watching = vi.fn();
+  const other = vi.fn();
+  const ungranted = vi.fn();
+  const read = { grants: ["sessions:read"] };
+  const a = hub.attach("text-a", "all", watching, true, false, undefined, read);
+  const b = hub.attach("text-b", "all", other, true, false, undefined, read);
+  const c = hub.attach("text-c", "all", ungranted, true, false, undefined, { grants: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  await a.watchText("s1");
+  await b.watchText("s2");
+  await c.watchText("s1");
+  const send = (event: unknown) =>
+    events.get("session-text")!({ payload: { sessionId: "s1", event } });
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  send({ kind: "prose", turn: "u1", key: "a3", text: "Green." });
+  send({ kind: "end", turn: "u1" });
+  send({ kind: "end", turn: "u1" });
+  expect(textMessages(watching)).toEqual([
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "prose",
+      turn: "u1",
+      key: "a1",
+      text: "Running the suite.",
+    },
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "prose",
+      turn: "u1",
+      key: "a3",
+      text: "Green.",
+    },
+    {
+      type: "codesense:session-text",
+      sessionId: "s1",
+      kind: "final",
+      turn: "u1",
+      key: "a3",
+      text: "Green.",
+    },
+  ]);
+  expect(textMessages(other)).toEqual([]);
+  expect(textMessages(ungranted)).toEqual([]);
+  await a.unwatchText("s1");
+  send({ kind: "prose", turn: "u2", key: "a5", text: "More." });
+  expect(textMessages(watching)).toHaveLength(3);
+});
+
+it("holds one host watch per frame and session, and a disposed frame releases its watches", async () => {
+  hub.dispose();
+  const watchText = vi.fn(async () => {});
+  const unwatchText = vi.fn(async () => {});
+  hub = new LiveHub({
+    read,
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_key, patch) => patch,
+    watchText,
+    unwatchText,
+  });
+  const frame = hub.attach("text-own", "all", vi.fn(), true, false, undefined, {
+    grants: ["sessions:read"],
+  });
+  await frame.watchText("s1");
+  await frame.watchText("s1");
+  await frame.watchText("s2");
+  expect(watchText.mock.calls).toEqual([["s1"], ["s2"]]);
+  await frame.unwatchText("s2");
+  await frame.unwatchText("s2");
+  expect(unwatchText.mock.calls).toEqual([["s2"]]);
+  frame.dispose();
+  expect(unwatchText.mock.calls).toEqual([["s2"], ["s1"]]);
+});
+
+it("a frame that joins mid-turn hears the turn so far, and the frame already watching hears nothing twice", async () => {
+  const read = { grants: ["sessions:read"] };
+  const early = vi.fn();
+  const late = vi.fn();
+  const a = hub.attach("text-early", "all", early, true, false, undefined, read);
+  await vi.advanceTimersByTimeAsync(0);
+  await a.watchText("s1");
+  const send = (event: unknown) =>
+    events.get("session-text")!({ payload: { sessionId: "s1", event } });
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  const b = hub.attach("text-late", "all", late, true, false, undefined, read);
+  await b.watchText("s1");
+  // The host replays the turn so far for the joiner.
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  send({ kind: "prose", turn: "u1", key: "a3", text: "Green." });
+  send({ kind: "end", turn: "u1" });
+  const heard = (post: typeof early) => textMessages(post).map((m) => [m.kind, m.key]);
+  const turn = [
+    ["prose", "a1"],
+    ["prose", "a3"],
+    ["final", "a3"],
+  ];
+  expect(heard(early)).toEqual(turn);
+  expect(heard(late)).toEqual(turn);
 });

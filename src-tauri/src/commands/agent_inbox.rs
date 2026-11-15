@@ -2443,7 +2443,8 @@ async fn reserved_notice(
 pub(crate) const RESERVE_RECHECK_MARGIN_MS: u64 = 50;
 
 /// The notice reserved under `token` for `session_id` was handed to its agent's hook:
-/// what it told about is marked announced (see [`inbox::inbox_confirm_announcement`]).
+/// what it told about is marked announced and each message it told about first is marked
+/// told (see [`inbox::inbox_confirm_told`]).
 /// The reservation is looked for in the store of the handle the session is bound to,
 /// then (if the session was bound since it was offered) in its own. Idempotent; a stale or
 /// unknown token, or a session with no inbox here, confirms nothing.
@@ -2478,23 +2479,29 @@ pub(crate) async fn confirm_notice(
         }
         let (session, token) = (session_id.to_string(), token.to_string());
         let confirmed = with_store("inbox_ack", path, move |store| {
-            inbox::inbox_confirm_announcement(store, &session, &token)
+            inbox::inbox_confirm_told(store, &session, &token)
         })
         .await??;
-        if confirmed {
-            let recipient = recipient.to_string();
-            let ids = with_store(
-                "inbox_confirmed_ids",
-                tried.clone().unwrap(),
-                move |store| {
-                    Ok(inbox::inbox_announced(store)?
-                        .get(&recipient)
-                        .map(|notice| notice.through_id)
-                        .into_iter()
-                        .collect::<Vec<_>>())
-                },
-            )
-            .await??;
+        if let Some(told) = confirmed {
+            // The messages told now change their delivery; a notice that told nothing new
+            // still refreshes the recipient's mark through its newest covered message.
+            let ids = if Vec::is_empty(&told) {
+                let recipient = recipient.to_string();
+                with_store(
+                    "inbox_confirmed_ids",
+                    tried.clone().unwrap(),
+                    move |store| {
+                        Ok(inbox::inbox_announced(store)?
+                            .get(&recipient)
+                            .map(|notice| notice.through_id)
+                            .into_iter()
+                            .collect::<Vec<_>>())
+                    },
+                )
+                .await??
+            } else {
+                told
+            };
             host.inbox_event(InboxEvent::new(InboxChange::NoticeConfirmed, &team, ids));
             return Ok(true);
         }

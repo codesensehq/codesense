@@ -1782,6 +1782,8 @@
                 "pinned",
                 "updated",
                 "unpinned",
+                "restored",
+                "replaced",
                 "unchanged"
               ]
             },
@@ -2029,6 +2031,8 @@
                 "pinned",
                 "updated",
                 "unpinned",
+                "restored",
+                "replaced",
                 "unchanged"
               ]
             },
@@ -3319,6 +3323,8 @@
                 "pinned",
                 "updated",
                 "unpinned",
+                "restored",
+                "replaced",
                 "unchanged"
               ]
             },
@@ -3528,6 +3534,267 @@
     "module": "inbox"
   },
   {
+    "name": "replacePin",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        },
+        "replaces": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "messageId",
+        "replaces"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "updated",
+                "unpinned",
+                "restored",
+                "replaced",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "preview": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "chart": {
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "segments"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "segments": {
+                                "items": {
+                                  "enum": [
+                                    "on-track",
+                                    "running",
+                                    "needs-you",
+                                    "not-updating"
+                                  ]
+                                },
+                                "maxItems": 24,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "segments",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "progress"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "percent": {
+                                "maximum": 100,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "percent",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "stack"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "parts": {
+                                "items": {
+                                  "properties": {
+                                    "label": {
+                                      "maxLength": 32,
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "minimum": 0,
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 8,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parts",
+                              "label"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "lines": {
+                        "items": {
+                          "maxLength": 160,
+                          "type": "string"
+                        },
+                        "maxItems": 3,
+                        "type": "array"
+                      },
+                      "shortName": {
+                        "maxLength": 24,
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "on-track",
+                          "running",
+                          "needs-you",
+                          "not-updating"
+                        ]
+                      },
+                      "unit": {
+                        "maxLength": 64,
+                        "type": "string"
+                      },
+                      "value": {
+                        "maxLength": 32,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "previewAtMs": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "replyAsHuman",
     "class": "send",
     "argsSchema": {
@@ -3550,6 +3817,266 @@
     "inboxTarget": true,
     "confirmable": true,
     "mcpTwin": "reply",
+    "presentationOnlyReason": null,
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
+    "name": "restorePin",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        },
+        "replacing": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "storyId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "pinned",
+                "updated",
+                "unpinned",
+                "restored",
+                "replaced",
+                "unchanged"
+              ]
+            },
+            "pins": {
+              "items": {
+                "properties": {
+                  "messageId": {
+                    "type": "integer"
+                  },
+                  "pinnedAtMs": {
+                    "type": "integer"
+                  },
+                  "pinnedBy": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "preview": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "chart": {
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "segments"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "segments": {
+                                "items": {
+                                  "enum": [
+                                    "on-track",
+                                    "running",
+                                    "needs-you",
+                                    "not-updating"
+                                  ]
+                                },
+                                "maxItems": 24,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "segments",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "progress"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "percent": {
+                                "maximum": 100,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "percent",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "kind": {
+                                "const": "stack"
+                              },
+                              "label": {
+                                "maxLength": 160,
+                                "type": "string"
+                              },
+                              "parts": {
+                                "items": {
+                                  "properties": {
+                                    "label": {
+                                      "maxLength": 32,
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "minimum": 0,
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 8,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parts",
+                              "label"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "lines": {
+                        "items": {
+                          "maxLength": 160,
+                          "type": "string"
+                        },
+                        "maxItems": 3,
+                        "type": "array"
+                      },
+                      "shortName": {
+                        "maxLength": 24,
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "on-track",
+                          "running",
+                          "needs-you",
+                          "not-updating"
+                        ]
+                      },
+                      "unit": {
+                        "maxLength": 64,
+                        "type": "string"
+                      },
+                      "value": {
+                        "maxLength": 32,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "previewAtMs": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "position",
+                  "pinnedBy",
+                  "pinnedAtMs"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "pins"
+            },
+            "storyId": {
+              "type": "string"
+            },
+            "team": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "org",
+            "team",
+            "agentId",
+            "storyId",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "invalid"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": "pin",
     "presentationOnlyReason": null,
     "audited": true,
     "action": true,
@@ -4150,6 +4677,34 @@
     "module": "agent"
   },
   {
+    "name": "sessionRecord",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly.",
+    "audited": false,
+    "action": false,
+    "module": "agent"
+  },
+  {
     "name": "sessionUsage",
     "class": "read",
     "argsSchema": {
@@ -4193,6 +4748,62 @@
     "audited": false,
     "action": false,
     "module": "agent"
+  },
+  {
+    "name": "sessions.unwatchText",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+    "audited": false,
+    "action": false,
+    "module": "sessions"
+  },
+  {
+    "name": "sessions.watchText",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+    },
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+    "audited": false,
+    "action": false,
+    "module": "sessions"
   },
   {
     "name": "setField",
@@ -5181,6 +5792,8 @@
                 "pinned",
                 "updated",
                 "unpinned",
+                "restored",
+                "replaced",
                 "unchanged"
               ]
             },

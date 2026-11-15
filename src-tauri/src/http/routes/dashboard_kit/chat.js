@@ -23,11 +23,11 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", stale: (time) => `Couldn't refresh · ${time}` },
+    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
-    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
+    card: { needs: "Needs you", answered: "Answered", answeredInbox: "Answered in your Inbox", alsoInbox: "Also in your Inbox", from: (who, time) => `from ${who} · ${time}`, recommended: "recommended", why: (lead, pick, reason) => `${lead} recommends ${pick} because ${String(reason).replace(/^because\s+/i, "").replace(/[.!?\s]+$/, "")}.`, consent: { read: "read", "local-write": "local change", "install-or-sign-in": "install or sign-in", "external-write": "external write" }, options: "Answers", replyLabel: "Your answer to the lead", reply: "Send answer", chose: "You chose", here: "here", inbox: "in Inbox", failed: (why) => `Couldn't send your answer: ${why}.` },
     send: "Send",
     hint: "Enter to send · Shift+Enter for a new line",
     who: { you: "You" },
@@ -36,7 +36,8 @@
     unloadKept: "Some messages weren't sent.",
     logLabel: "Story lead chat",
     chips: "Quick replies",
-    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" }
+    chipEdit: { label: (text) => `Edit “${text}” before sending`, title: "Edit before sending" },
+    pin: { pin: "Pin", unpin: "Unpin", actions: "Message actions", by: (who) => `Pinned by ${who}`, unpinned: "Unpinned.", undo: "Undo", showPins: "Show pins", failed: "Couldn't pin. Try again. If it keeps failing, reload the page.", unpinFailed: "Couldn't unpin. Try again. If it keeps failing, reload the page.", tryAgain: "Try again", pinMore: "Pin…", cancel: "Cancel", isNew: "New", replace: "Replace", undoReplaceFailed: "Couldn't undo the replace. Try again. If it keeps failing, reload the page." }
   };
   var failureText = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.busy : failure.kind === "denied" ? copy.failure.denied(failure.why) : failure.kind === "unavailable" ? copy.failure.unavailable(failure.why) : failure.kind === "timeout" ? copy.failure.timeout : failure.kind === "exited" ? copy.failure.exited : failure.kind === "refused" && copy.failure.refused ? copy.failure.refused(failure.why) : copy.failure.other(failure.code);
   var failureReason = (failure, copy = CHAT_COPY) => failure.kind === "busy" ? copy.failure.reasonBusy : failure.kind === "timeout" ? copy.failure.reasonTimeout : failure.kind === "exited" ? copy.failure.reasonExited : failure.kind === "refused" && !copy.failure.refused ? failure.code : failure.why || failure.code;
@@ -89,8 +90,9 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js
   var isBusy = (lead) => Boolean(lead) && lead.state !== "idle";
-  function deliveryMark({ sentAt, busyAtSend, lead, newestLeadAt = 0 }) {
+  function deliveryMark({ sentAt, busyAtSend, lead, newestLeadAt = 0, delivery = null }) {
     if (!busyAtSend) return "delivered";
+    if (delivery && typeof delivery.state === "string") return delivery.state === "delivered" ? "delivered" : "queued";
     if (Number.isFinite(newestLeadAt) && newestLeadAt > sentAt) return "delivered";
     if (!lead) return "queued";
     const notified = Date.parse(lead.notifiedAt);
@@ -119,8 +121,8 @@
     if (at < 1) return null;
     const question = lines.slice(0, at).join("\n").trim();
     if (!question) return null;
-    const rest = lines[at].replace(/^\s*Options:\s*/i, ""), split = rest.search(/My pick:/i);
-    const listed = split < 0 ? rest : rest.slice(0, split), after = split < 0 ? "" : rest.slice(split).replace(/^My pick:\s*/i, "");
+    const rest = lines[at].replace(/^\s*Options:\s*/i, ""), split2 = rest.search(/My pick:/i);
+    const listed = split2 < 0 ? rest : rest.slice(0, split2), after = split2 < 0 ? "" : rest.slice(split2).replace(/^My pick:\s*/i, "");
     const options = [...listed.matchAll(/`([^`]+)`/g)].map((match) => match[1].trim());
     const distinct = new Set(options.map((option) => option.toLowerCase()));
     if (options.length < 2 || options.length > MAX_OPTIONS || distinct.size !== options.length) return null;
@@ -177,6 +179,69 @@
     const row = (Array.isArray(thread) ? thread : []).find((item) => item && item.from === "human" && item.inReplyTo === cardId);
     return row ? { text: row.text || "", at: row.createdAtMs || 0 } : null;
   }
+  var PIN_CAP = 3;
+  var squashSpace = (text) => String(text || "").replace(/\s+/g, " ").trim();
+  function pinFirstSentence(text) {
+    const line = String(text || "").split("\n").find((l) => l.trim()) || "";
+    const end = /^.*?[.!?](?=\s|$)/.exec(line.trim());
+    return squashSpace(end ? end[0] : line);
+  }
+  var pinWho = (pinnedBy, nameOf) => pinnedBy === "human" ? "you" : nameOf(pinnedBy);
+  var pinCapLabel = (count) => `${count} of ${PIN_CAP} pinned`;
+  function pinCapNote(pins, nameOf) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const p of pins) {
+      const who = pinWho(p.pinnedBy, nameOf);
+      counts.set(who, (counts.get(who) || 0) + 1);
+    }
+    const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([who, n]) => `${n} by ${who}`).join(", ");
+    return `${pinCapLabel(pins.length)} (${parts}). Unpin one to pin this.`;
+  }
+  function pinFirstWords(text, words = 4) {
+    const all = squashSpace(text).split(" ");
+    return all.length <= words ? all.join(" ") : `${all.slice(0, words).join(" ")}…`;
+  }
+  function pinLiveText(done, title, count) {
+    const verb = done === "pinned" ? "Pinned" : done === "unpinned" ? "Unpinned" : "Restored";
+    return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;
+  }
+  var pinReplaceLabel = (count) => `Pin, replacing one (${pinCapLabel(count)})`;
+  var pinChooserHeading = (count) => `Replace a pin with this message · ${pinCapLabel(count)}`;
+  var pinPinnedAtLine = (who, at) => `Pinned by ${who} at ${at}`;
+  var pinReplacedText = (who, title) => `Replaced ${who === "you" ? "your" : `${who}'s`} pin “${title}”.`;
+  var pinNewRowText = (title) => `“${title}” is new. Choose it again to replace it.`;
+  var pinListChangeText = (added, left) => [...added.map((t) => `“${t}” is new.`), ...left.map((t) => `“${t}” left the list.`)].join(" ");
+  var pinPinnedMeanwhileText = (who) => `${who} pinned this message. Nothing was replaced.`;
+  var PIN_REPLACE_FAILED = "Couldn't replace. Nothing changed.";
+  var PIN_ROOM_NOW = "There's room now.";
+  var PIN_UNDO_FULL = "Can't undo: the list is full again.";
+  var PIN_UNDO_GONE = "Can't undo: that message was archived or withdrawn.";
+  var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  function plainText(markup) {
+    return squashSpace(String(markup || "").replace(/<[^>]*>/g, " ").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
+      if (code[0] === "#") {
+        const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+        return Number.isInteger(n) && n >= 0 && n <= 1114111 && !(n >= 55296 && n <= 57343) ? String.fromCodePoint(n) : all;
+      }
+      const named = ENTITIES[code.toLowerCase()];
+      return named === void 0 ? all : named;
+    }));
+  }
+  function pinTitleOf(m, sender) {
+    const summary = squashSpace(m && m.summary);
+    if (summary) return summary;
+    const text = String(m && m.text || "");
+    if (m && m.contentType === "html") {
+      const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+      if (title && plainText(title[1])) return plainText(title[1]);
+      for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+        const name = plainText(heading[2]);
+        if (name) return name;
+      }
+      return `Dashboard from ${sender}`;
+    }
+    return pinFirstSentence(text) || `Message from ${sender}`;
+  }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
   var parseFailure = (error) => {
@@ -192,8 +257,10 @@
   var firstJoinable = (list) => list.find(joinable) || null;
   function createLaunch({ transport, clock, storyId, leadRole, timers, card, onChange = () => {
   }, rowsOf: rowsOf2 = (sessions) => leadRowsOf(sessions, storyId, leadRole), queue = null, pickLive = firstJoinable, bindLaunched = false, keepUnsent = false }) {
-    let promptItems = /* @__PURE__ */ new Set(), state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Map();
-    const messages = [], outbox = [], peerRows = () => rowsOf2(rows), emit = () => onChange();
+    let promptItems = /* @__PURE__ */ new Set(), launchedId = null, inflight = 0, listener = onChange, state = "idle", failure = null, sendFailure = null, rows = [], launchResult = null, settled = false, stuck = false, seq = 0, ids = 0, chain = Promise.resolve(), slowTimer = null, failTimer = null, staleDead = /* @__PURE__ */ new Map();
+    const messages = [], outbox = [], peerRows = () => rowsOf2(rows), emit = () => {
+      if (listener) listener();
+    };
     const identity = (row) => row.sessionId || row.handle;
     const rank = (row) => (staleDead.has(identity(row)) ? 2 : 0) + (row.state === "exited" ? 1 : 0);
     const launchedIn = (list) => {
@@ -222,6 +289,7 @@
       return chain;
     };
     const texts = (list) => list.map((item) => item.text).join("\n\n");
+    const statusFailure = (result) => result && result.status !== void 0 && result.status !== "sent" ? { kind: "other", code: String(result.status), why: result.message || String(result.status) } : null;
     const deliver = (list, handle) => {
       const busy = handle === queue || isBusy(peerRows().find((row) => row.handle === handle));
       list.forEach((item) => {
@@ -230,18 +298,21 @@
       });
       sendFailure = null;
       emit();
+      inflight++;
       return enqueue(() => transport.send(handle, texts(list))).then((result) => {
-        if (result && result.status !== void 0 && result.status !== "sent") {
+        inflight--;
+        if (statusFailure(result)) {
           list.forEach((item) => {
             item.mark = "kept";
           });
-          sendFailure = { kind: "other", code: String(result.status), why: result.message || String(result.status) };
+          sendFailure = statusFailure(result);
           emit();
           return;
         }
         if (result && result.messageId !== void 0) for (const item of list) item.messageId = result.messageId;
         emit();
       }, (error) => {
+        inflight--;
         list.forEach((item) => {
           item.mark = "kept";
         });
@@ -345,6 +416,7 @@
       return enqueue(() => Promise.resolve().then(() => transport.launch(card(texts(list))))).then((result) => {
         if (mine !== seq) return;
         launchResult = result || {};
+        if (launchResult.sessionId) launchedId = launchResult.sessionId;
         settled = true;
         if (!inspect()) {
           if (!stuck) startTimers();
@@ -379,8 +451,23 @@
       hasHeld: () => outbox.length > 0 || hasKept(),
       // Some message a failed launch or send kept (keepUnsent): it was not sent, which the unload warning says rather than "still waiting".
       hasKept,
+      // The send state still has work: a launch starting or failed, a held, kept or in-flight message. The one predicate a hidden page keeps listening for (send-state.js).
+      unsettled: () => starting() || state === "failed" || outbox.length > 0 || messages.some((item) => item.mark === "kept") || inflight > 0,
       launchedRow,
       launchedIn,
+      // The session the launch opened (its result's id, or the launched row's once a handle-only result binds): Show terminal's target after a failed start.
+      sessionId() {
+        const row = bindLaunched ? launchedRow() : null;
+        if (row) launchedId = row.sessionId;
+        return launchedId;
+      },
+      // The one change listener: a mounted chat's render. Replaces the previous one (onChange is the first); detach() leaves none, so a hidden page's launch changes without painting.
+      attach(fn) {
+        listener = fn;
+        return () => {
+          if (listener === fn) listener = null;
+        };
+      },
       // Enter or Send. Typing, focus and Shift+Enter never reach here.
       send(text) {
         const item = { id: ++ids, text, mark: null, sentAt: clock.now() };
@@ -402,6 +489,27 @@
         if (row) return deliver([...messages.filter((other) => other !== item && other.mark === "kept"), item], row.handle);
         if (queue) return deliver([...messages.filter((other) => other !== item && other.mark === "kept"), item], queue);
         return startLaunch([...messages.filter((other) => other !== item && other.mark === "kept"), item]);
+      },
+      // A message to another agent (the page's target.recipient, {handle, name}): straight to its handle, never a launch, the outbox or a kept message. Only a sent one joins the messages, with its recipient (to), so its bubble carries the mark;
+      // a failure rejects with parseFailure's shape and leaves no message behind (the composer keeps the text).
+      sendTo(to, text) {
+        const sentAt = clock.now(), busy = isBusy(rows.find((row) => row.handle === to.handle));
+        inflight++;
+        emit();
+        return enqueue(() => transport.send(to.handle, text)).then((result) => {
+          inflight--;
+          const failed = statusFailure(result);
+          if (failed) {
+            emit();
+            throw failed;
+          }
+          messages.push({ id: ++ids, text, mark: "sent", busyAtSend: busy, sentAt, to, messageId: result && result.messageId });
+          emit();
+        }, (error) => {
+          inflight--;
+          emit();
+          throw parseFailure(error);
+        });
       },
       // Launch from the header, with no message of its own: kept text rides along as it does on a send. A live or starting lead needs nothing.
       start() {
@@ -433,6 +541,114 @@
       dispose() {
         seq++;
         clearTimers();
+      }
+    };
+  }
+
+  // src-tauri/src/http/routes/dashboard_kit/chat/send-state.js
+  var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
+  var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
+  function createSendState({ transport, reads, clock = systemClock(), timers = DEFAULT_TIMERS, card = (text) => text, target, storyId = null, leadRole = null, win = window, copy: words = null }) {
+    const copy = words ? mergeCopy(words) : CHAT_COPY;
+    let attached = null, feed = null, ended = false;
+    const stopFeed = () => {
+      if (feed) {
+        feed();
+        feed = null;
+      }
+    };
+    const sync = () => {
+      if (attached || ended) return;
+      if (launch.unsettled()) {
+        if (!feed) feed = reads.on("sessions", () => launch.rows(reads.latestSessions()));
+      } else stopFeed();
+    };
+    const launch = createLaunch({ transport, clock, storyId, leadRole, timers, card, onChange: sync, rowsOf: target.rows, queue: target.queue, pickLive: target.pick, bindLaunched: target.bindLaunched, keepUnsent: target.keepUnsent });
+    const cards = /* @__PURE__ */ new Map();
+    const onUnload = (event) => {
+      if (launch.hasHeld()) {
+        const text = launch.hasKept() ? copy.unloadKept : copy.unload;
+        event.preventDefault();
+        event.returnValue = text;
+        return text;
+      }
+    };
+    win.addEventListener("beforeunload", onUnload);
+    return {
+      launch,
+      cards,
+      unsettled: () => launch.unsettled(),
+      // The mounted chat's render takes the launch's changes; the returned detach hands them back to the state, which keeps listening only while it has work.
+      attach(render) {
+        stopFeed();
+        attached = render;
+        launch.attach(render);
+        return () => {
+          if (attached !== render) return;
+          attached = null;
+          launch.attach(sync);
+          sync();
+        };
+      },
+      dispose() {
+        ended = true;
+        attached = null;
+        stopFeed();
+        launch.attach(null);
+        launch.dispose();
+        win.removeEventListener("beforeunload", onUnload);
+      }
+    };
+  }
+
+  // src-tauri/src/http/routes/dashboard_kit/chat/prose.js
+  var FENCE = /^(?:`{3,}|~{3,})/;
+  var TABLE = /^\|/;
+  var plain = (line) => line.replace(/^(?:>\s*)+/, "").replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/`/g, "").trim();
+  function proseLines(text) {
+    let inFence = false;
+    return String(text || "").split("\n").map((part) => part.trim()).filter((part) => {
+      if (FENCE.test(part)) {
+        inFence = !inFence;
+        return false;
+      }
+      return part && !inFence && !TABLE.test(part);
+    });
+  }
+  function lastSentence(text) {
+    const lines = proseLines(text).map(plain).filter(Boolean);
+    const sentences = (lines.pop() || "").split(/(?<=[.!?])\s+/).filter(Boolean);
+    return sentences.length ? sentences[sentences.length - 1] : "";
+  }
+  function createProse({ win, clock, render }) {
+    let sid = null, off = null, now = null;
+    function follow(next) {
+      if (next === sid) return;
+      if (typeof off === "function") off();
+      off = null;
+      sid = next;
+      now = null;
+      const host = win.codesense;
+      if (!next || !host || typeof host.onSessionText !== "function") return;
+      try {
+        off = host.onSessionText(next, (said, error) => {
+          if (sid !== next) return;
+          now = !said || error || said.kind === "final" ? null : { text: said.text, line: lastSentence(said.text), at: clock.now() };
+          render();
+        });
+      } catch {
+        off = null;
+      }
+    }
+    return {
+      follow,
+      /** The prose to show now: none once a lead message newer than it is in the thread. */
+      current(newestLeadAt) {
+        if (now && newestLeadAt > now.at) now = null;
+        return now;
+      },
+      release() {
+        follow(null);
       }
     };
   }
@@ -519,17 +735,65 @@
     return { read, seen, settled, failedNow, staleAt };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/mount-ids.js
+  function idsOf(n) {
+    const tail = n > 1 ? `-${n}` : "";
+    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}` };
+  }
+  var claims = /* @__PURE__ */ new WeakMap();
+  function mountIds(doc, el) {
+    const held = claims.get(doc) || /* @__PURE__ */ new Map();
+    claims.set(doc, held);
+    for (let n = 1; ; n++) {
+      const ids = idsOf(n), other = held.get(n), used = doc.getElementById(ids.region);
+      if (other && other !== el || used && !el.contains(used)) continue;
+      held.set(n, el);
+      return { ids, release() {
+        if (held.get(n) === el) held.delete(n);
+      } };
+    }
+  }
+  var CHAT_CSS_HREF = "/kit/v1/chat.css";
+  function linkChatStyles(doc) {
+    if (!doc.head || doc.head.querySelector("link[data-codesense-chat]")) return;
+    const link = doc.createElement("link");
+    link.rel = "stylesheet";
+    link.href = CHAT_CSS_HREF;
+    link.setAttribute("data-codesense-chat", "");
+    doc.head.append(link);
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/composer.js
-  var COMPOSER_IDS = { region: "sv-composer", input: "sv-composer-input", send: "sv-send", hint: "sv-composer-hint" };
-  function createComposer({ onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
-    const input = h("textarea", { id: COMPOSER_IDS.input, rows, "aria-label": label, "aria-describedby": COMPOSER_IDS.hint, spellcheck: "true" });
-    const send = h("button", { id: COMPOSER_IDS.send, type: "button", class: "btn primary" }, sendLabel);
-    const region = h("div", { id: COMPOSER_IDS.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: COMPOSER_IDS.hint }, hint));
+  function createComposer({ ids = idsOf(1), onSend, rows = "2", label = CHAT_COPY.composerLabel, hint = CHAT_COPY.hint, send: sendLabel = CHAT_COPY.send }) {
+    const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
+    const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
+    const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: ids.hint }, hint));
+    let pending = false, disabled = false;
+    const setPending = (on) => {
+      pending = on;
+      send.disabled = on || disabled;
+      if (on) input.setAttribute("aria-busy", "true");
+      else input.removeAttribute("aria-busy");
+    };
+    const nameInput = (name) => {
+      if (name == null) input.removeAttribute("aria-label");
+      else input.setAttribute("aria-label", name);
+    };
     const submit = () => {
-      const text = input.value.trim();
-      if (!text || input.disabled) return;
-      input.value = "";
-      onSend(text);
+      const raw = input.value, text = raw.trim();
+      if (!text || input.disabled || pending) return;
+      const held = onSend(text);
+      if (!held || typeof held.then !== "function") {
+        input.value = "";
+        return;
+      }
+      setPending(true);
+      held.then((sent) => {
+        setPending(false);
+        if (sent && input.value === raw) input.value = "";
+      }, () => {
+        setPending(false);
+      });
     };
     input.addEventListener("keydown", (event) => {
       if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !event.isComposing) {
@@ -542,10 +806,12 @@
       region,
       input,
       send,
-      update({ placeholder, disabled, hint: nextHint, send: nextSend }) {
+      update({ placeholder, disabled: off, hint: nextHint, send: nextSend, label: nextLabel }) {
+        disabled = Boolean(off);
         input.placeholder = placeholder;
-        input.disabled = Boolean(disabled);
-        send.disabled = Boolean(disabled);
+        nameInput(nextLabel == null ? label : nextLabel);
+        input.disabled = disabled;
+        send.disabled = disabled || pending;
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
       },
@@ -572,7 +838,7 @@
     let following = true, released = false;
     const near = () => log.scrollHeight - log.scrollTop - log.clientHeight < PIN_NEAR;
     const follow = () => {
-      if (following && !released) log.scrollTop = log.scrollHeight;
+      if (following && !released && log.firstChild) log.scrollTop = log.scrollHeight;
     };
     const onScroll = () => {
       following = near();
@@ -604,13 +870,345 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
+  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
+  var HELD = "data-roving-tabindex";
+  var ROW = "[data-mid]";
+  function setControl(el, on) {
+    if (on && el.hasAttribute(HELD)) {
+      const was = el.getAttribute(HELD);
+      el.removeAttribute(HELD);
+      if (was === "") el.removeAttribute("tabindex");
+      else el.setAttribute("tabindex", was);
+    } else if (!on && !el.hasAttribute(HELD)) {
+      el.setAttribute(HELD, el.getAttribute("tabindex") ?? "");
+      el.setAttribute("tabindex", "-1");
+    }
+  }
+  function applyTo(node, active) {
+    const rows = node.matches(ROW) ? [node, ...node.querySelectorAll(ROW)] : node.querySelectorAll(ROW);
+    for (const row of rows) {
+      row.tabIndex = row.dataset.mid === active ? 0 : -1;
+      if (!row.hasAttribute("role")) row.setAttribute("role", "article");
+    }
+    const controls = node.matches(FOCUSABLE) && !node.matches(ROW) ? [node] : [];
+    for (const el of [...controls, ...node.querySelectorAll(FOCUSABLE)]) {
+      if (el.matches(ROW)) continue;
+      const row = el.closest(ROW);
+      if (row) setControl(el, row.dataset.mid === active);
+    }
+  }
+  function rovingThread(log) {
+    let picked = null, active = null;
+    const keys = () => [...log.querySelectorAll(ROW)].map((row) => row.dataset.mid);
+    const focused = () => {
+      const at = log.ownerDocument.activeElement, row = at && log.contains(at) && at.closest(ROW);
+      return row ? row.dataset.mid : null;
+    };
+    function refresh(held = null) {
+      const all = keys();
+      const next = picked !== null && all.includes(picked) ? picked : all.length ? all[all.length - 1] : null;
+      log.tabIndex = all.length ? -1 : 0;
+      if (next !== active) {
+        active = next;
+        applyTo(log, active);
+      }
+      if (held === null || active === null || log.contains(log.ownerDocument.activeElement)) return;
+      const row = log.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+      if (!row) return;
+      applyTo(row, active);
+      row.focus({ preventScroll: true });
+    }
+    const watch = new MutationObserver((changes) => {
+      for (const change of changes) for (const node of change.addedNodes) if (node.nodeType === 1) applyTo(node, active);
+    });
+    watch.observe(log, { childList: true, subtree: true });
+    function moveTo(key) {
+      if (key === void 0) return;
+      picked = key;
+      refresh();
+      const row = log.querySelector(`[data-mid="${CSS.escape(key)}"]`);
+      if (!row) return;
+      row.focus({ preventScroll: true });
+      if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+    const onKeyDown = (event) => {
+      const row = event.target;
+      if (!row.matches || !row.matches(ROW) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const all = keys(), at = all.indexOf(row.dataset.mid);
+      if (at < 0) return;
+      const to = event.key === "ArrowUp" ? Math.max(0, at - 1) : event.key === "ArrowDown" ? Math.min(all.length - 1, at + 1) : event.key === "Home" ? 0 : event.key === "End" ? all.length - 1 : null;
+      if (to === null) return;
+      event.preventDefault();
+      moveTo(all[to]);
+    };
+    const onFocusIn = (event) => {
+      const row = event.target.closest && event.target.closest(ROW);
+      if (row && log.contains(row) && row.dataset.mid !== active) {
+        picked = row.dataset.mid;
+        refresh();
+      }
+    };
+    log.addEventListener("keydown", onKeyDown);
+    log.addEventListener("focusin", onFocusIn);
+    return {
+      focused,
+      refresh,
+      release() {
+        watch.disconnect();
+        log.removeEventListener("keydown", onKeyDown);
+        log.removeEventListener("focusin", onFocusIn);
+      }
+    };
+  }
+
+  // src-tauri/src/http/routes/dashboard_kit/chat/pin-replace.js
+  var GLYPH_NS = "http://www.w3.org/2000/svg";
+  var OWN_PATH = { quote: "M3 6h4v4l-2 3M9 6h4v4l-2 3", name: "M2 3h12v10H2zM2 7h12M7 7v6" };
+  function ownGlyph(kind) {
+    const svg = document.createElementNS(GLYPH_NS, "svg"), path = document.createElementNS(GLYPH_NS, "path");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("class", "ico");
+    svg.setAttribute("aria-hidden", "true");
+    path.setAttribute("d", OWN_PATH[kind]);
+    svg.append(path);
+    return svg;
+  }
+  function createPinReplace({ onPin, state, live, list, nameOf, titleOf, ownOf, idOf, copy, render, pinNow }) {
+    let open = null, marked = null, focusWant = false;
+    const el = () => open && open.node;
+    const mark = (id) => {
+      if (id === marked) return;
+      marked = id;
+      if (typeof onPin.mark === "function") onPin.mark(id);
+    };
+    const close = (refocus) => {
+      if (!open) return;
+      if (refocus) state.refocus = open.item.id;
+      open = null;
+      mark(null);
+    };
+    function openFor(item) {
+      const pins = list();
+      state.note = null;
+      open = { item, known: new Set(pins.map((p) => p.messageId)), last: pins, current: pins.length ? pins[0].messageId : null, change: null, error: null, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
+      open.node.addEventListener("keydown", onKey);
+      focusWant = true;
+    }
+    function sync() {
+      if (!open) return;
+      const pins = list(), ids = new Set(pins.map((p) => p.messageId)), before = new Set(open.last.map((p) => p.messageId));
+      if (ids.has(open.item.id) && !before.has(open.item.id)) {
+        const pin = pins.find((p) => p.messageId === open.item.id), mid = open.item.id;
+        close(false);
+        state.note = { mid, kind: "info", text: pinPinnedMeanwhileText(pinWho(pin.pinnedBy, nameOf)) };
+        return;
+      }
+      const added = pins.filter((p) => !before.has(p.messageId)), left = open.last.filter((p) => !ids.has(p.messageId));
+      if (!added.length && !left.length) return;
+      open.last = pins;
+      if (open.current !== null && !ids.has(open.current)) open.current = null;
+      open.change = pinListChangeText(added.map(titleOf), left.map(titleOf));
+      open.error = null;
+      focusWant = true;
+    }
+    const rowEl = (id) => el() && el().querySelector(`.choice[data-pin-id="${CSS.escape(String(id))}"]`);
+    const within = () => el() && el().contains(el().ownerDocument.activeElement);
+    function goTo(index) {
+      const pins = list(), pin = pins[Math.max(0, Math.min(pins.length - 1, index))];
+      if (!pin || !open) return;
+      open.known.add(pin.messageId);
+      open.current = pin.messageId;
+      open.error = null;
+      focusWant = true;
+      after();
+    }
+    async function replace(old) {
+      const item = open.item;
+      state.busy = item.id;
+      render();
+      try {
+        await onPin.change("replace", item.id, { replaces: old.messageId });
+        const text = pinReplacedText(pinWho(old.pinnedBy, nameOf), titleOf(old));
+        close(false);
+        state.note = { mid: item.id, kind: "replaced", item, old, text };
+        live.textContent = text;
+        state.refocus = item.id;
+      } catch {
+        if (open) {
+          open.error = PIN_REPLACE_FAILED;
+          focusWant = true;
+        }
+      }
+      state.busy = null;
+      render();
+    }
+    function choose(id) {
+      if (!open || state.busy !== null) return;
+      const pin = list().find((p) => p.messageId === id);
+      if (!pin) return;
+      if (!open.known.has(id)) {
+        open.known.add(id);
+        open.current = id;
+        open.change = pinNewRowText(titleOf(pin));
+        focusWant = true;
+        after();
+        return;
+      }
+      replace(pin);
+    }
+    function onKey(event) {
+      if (!open) return;
+      const pins = list(), fromChange = event.target.classList && event.target.classList.contains("chg"), at = pins.findIndex((p) => p.messageId === open.current);
+      const step = event.key === "ArrowDown" ? fromChange ? 0 : at + 1 : event.key === "ArrowUp" ? fromChange ? pins.length - 1 : at - 1 : event.key === "Home" ? 0 : event.key === "End" ? pins.length - 1 : null;
+      if (step !== null && !open.room) {
+        event.preventDefault();
+        event.stopPropagation();
+        goTo(step);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+        render();
+        return;
+      }
+      if (event.key === "Enter" && event.target.classList && event.target.classList.contains("choice")) {
+        event.preventDefault();
+        event.stopPropagation();
+        choose(Number(event.target.getAttribute("data-pin-id")));
+      }
+    }
+    function paint() {
+      if (!open) return;
+      const pins = list(), full = pins.length >= PIN_CAP, id = idOf(open.item.id), node = open.node;
+      open.room = !full;
+      node.setAttribute("aria-busy", state.busy === open.item.id ? "true" : "false");
+      const head = h("div", { class: "hd", id: id + "-h" }, pinChooserHeading(pins.length));
+      const cancel = h("button", { type: "button", class: "btn sm quiet cancel", onclick: () => {
+        close(true);
+        render();
+      } }, copy.cancel);
+      if (!full) {
+        const pin = h("button", { type: "button", class: "btn sm room-pin", onclick: () => {
+          const item = open.item;
+          close(false);
+          pinNow(item);
+        } }, copy.pin);
+        node.replaceChildren(head, h("div", { class: "room" }, h("span", {}, PIN_ROOM_NOW), pin), cancel);
+        mark(null);
+        return;
+      }
+      const rows = pins.map((pin, i) => {
+        const current = pin.messageId === open.current, isNew = !open.known.has(pin.messageId), own = pin.preview ? null : ownOf(pin), value = pin.preview && pin.preview.value;
+        const by = pinPinnedAtLine(pinWho(pin.pinnedBy, nameOf), timeLabel(pin.pinnedAtMs));
+        return h(
+          "button",
+          {
+            type: "button",
+            class: "choice",
+            "data-pin-id": String(pin.messageId),
+            "data-current": current ? "true" : null,
+            "data-new": isNew ? "true" : null,
+            "data-own": own,
+            tabindex: current || open.current === null && i === 0 ? "0" : "-1",
+            onpointerenter: () => {
+              if (within() && open.current !== pin.messageId) goTo(i);
+            },
+            onclick: () => {
+              if (!open.known.has(pin.messageId)) return choose(pin.messageId);
+              if (open.current !== pin.messageId) return goTo(i);
+              choose(pin.messageId);
+            }
+          },
+          own ? h("span", { class: "dot own" }, ownGlyph(own)) : h("span", { class: "dot", "data-status": pin.preview && pin.preview.status || "none", "aria-hidden": "true" }),
+          h("span", { class: "t" }, titleOf(pin)),
+          value ? h("b", { class: "v" }, value) : null,
+          isNew ? h("span", { class: "new" }, copy.isNew) : null,
+          h("span", { class: "by" }, by),
+          current && !isNew ? h("span", { class: "go", "aria-hidden": "true" }, copy.replace) : null
+        );
+      });
+      const change = open.change ? h("div", { class: "chg", tabindex: "-1", role: "status" }, open.change) : null;
+      const error = open.error ? h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, open.error)) : null;
+      node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
+      mark(open.current);
+    }
+    function after(was = false) {
+      if (!open || !open.node.isConnected) return;
+      const had = was || within();
+      paint();
+      if (!had && !focusWant) return;
+      focusWant = false;
+      const target = open.room ? el().querySelector(".room-pin") : open.current !== null ? rowEl(open.current) : el().querySelector(".chg");
+      if (target) target.focus();
+    }
+    async function undo(note) {
+      if (state.busy !== null) return;
+      state.busy = note.mid;
+      render();
+      try {
+        const pins = await onPin.change("restore", note.old.messageId, { replacing: note.item.id });
+        state.note = null;
+        live.textContent = pinLiveText("restored", titleOf(note.old), (pins || list()).length);
+        state.refocus = note.mid;
+      } catch (error) {
+        if (error && error.refused) {
+          const text = list().length >= PIN_CAP ? PIN_UNDO_FULL : PIN_UNDO_GONE;
+          state.note = { mid: note.mid, kind: "info", text };
+          live.textContent = text;
+        } else state.note = { ...note, kind: "replace-undo-failed" };
+      }
+      state.busy = null;
+      render();
+    }
+    function foot(note) {
+      if (note.kind === "replaced") return h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => undo(note) }, copy.undo));
+      if (note.kind === "replace-undo-failed") return h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, copy.undoReplaceFailed), h("button", { type: "button", class: "btn sm", onclick: () => undo({ ...note, kind: "replaced" }) }, copy.tryAgain));
+      if (note.kind === "info") return h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text));
+      return null;
+    }
+    return {
+      isOpen: (mid) => Boolean(open && open.item.id === mid),
+      toggle(item) {
+        if (state.busy !== null) return;
+        if (open && open.item.id === item.id) {
+          close(true);
+          render();
+          return;
+        }
+        close(false);
+        openFor(item);
+        render();
+      },
+      /** The chooser for this message, or null; drawn fresh into its bubble. */
+      node(item) {
+        return open && open.item.id === item.id ? open.node : null;
+      },
+      // A pin, unpin or replace elsewhere ends the chooser, as it ends an Undo.
+      closeFor(mid) {
+        if (open && open.item.id !== mid) close(false);
+      },
+      sync,
+      after,
+      foot,
+      within: () => Boolean(within()),
+      /** Unmount: the page's pins lose the chooser's mark. */
+      release() {
+        close(false);
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/card.js
   var CARD_COPY = CHAT_COPY.card;
   function cardNode({ id, text, parsed, meta = null, at, state, answer, failure, draft, onAnswer, onDraft, lead = CHAT_COPY.lead }) {
     const answered = state === "answered", busy = state === "pending", inInbox = answered && answer.where === "inbox";
     const head = h("div", { class: "card-h" }, h("b", {}, answered ? inInbox ? CARD_COPY.answeredInbox : CARD_COPY.answered : CARD_COPY.needs), meta ? h("span", { class: "cls", "data-consent": meta.consent }, CARD_COPY.consent[meta.consent]) : null, h("span", {}, CARD_COPY.from(lead, timeLabel(at))), h("span", { class: "sp" }), answered ? null : h("span", {}, CARD_COPY.alsoInbox));
     const body = h("div", { class: "body" }, parsed ? parsed.question : text);
-    const parts = [head, body];
+    const why = parsed && parsed.pick && parsed.reason && !(answered && !inInbox) ? h("p", { class: "why" }, CARD_COPY.why(lead, parsed.pick, parsed.reason)) : null;
+    const parts = [head, body, why];
     if (parsed && !(answered && !inInbox)) {
       parts.push(h("div", { class: "opts", role: "group", "aria-label": CARD_COPY.options }, ...parsed.options.map((option) => h("button", { type: "button", class: (option === parsed.pick || option === parsed.primary) && !answered ? "btn primary" : "btn", "data-ans": option, "data-act": meta ? (meta.acts.find((item) => item.label === option) || {}).act : null, disabled: answered || busy ? "" : null, onclick: () => onAnswer(option) }, option, option === parsed.pick && !answered ? h("span", { class: "rec" }, ` · ${CARD_COPY.recommended}`) : null))));
     } else if (!parsed && !answered) {
@@ -634,8 +1232,33 @@
     return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state, "data-step": meta ? meta.step : null, "data-consent": meta ? meta.consent : null }, ...parts));
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/inline.js
+  var CODE = /`([^`\n]+)`/g;
+  var STRONG = /\*\*(?=\S)([^*\n]*?\S)\*\*/g;
+  var EM = /(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<!\w)_(?=\S)([^_\n]*?\S)_(?!\w)/g;
+  function split(parts, re, make) {
+    return parts.flatMap((part) => {
+      if (typeof part !== "string") return [part];
+      const out = [];
+      let at = 0;
+      for (const match of part.matchAll(re)) {
+        if (match.index > at) out.push(part.slice(at, match.index));
+        out.push(make(match.slice(1).find((group) => group !== void 0)));
+        at = match.index + match[0].length;
+      }
+      if (at < part.length) out.push(part.slice(at));
+      return out;
+    });
+  }
+  function inlineNodes(text) {
+    let parts = [String(text ?? "")];
+    parts = split(parts, CODE, (inner) => h("code", {}, inner));
+    parts = split(parts, STRONG, (inner) => h("strong", {}, inner));
+    parts = split(parts, EM, (inner) => h("em", {}, inner));
+    return parts;
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
-  var systemClock = () => ({ now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id) });
   var initialsOf = (name) => {
     const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
     return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
@@ -645,11 +1268,15 @@
     if (kit && typeof kit.avatar === "function") return kit.avatar({ face: info.face, name: info.name, size: 24 });
     return h("span", { class: "cs-avatar", title: info.name }, initialsOf(info.name));
   }
+  var unspoken = (node) => {
+    node.setAttribute("aria-hidden", "true");
+    return node;
+  };
   function faceNode(info) {
-    if (!info.src) return avatarOf(info);
-    const img = h("img", { src: info.src, alt: info.name }), wrap = h("span", { class: "cs-avatar", title: info.name }, img);
+    if (!info.src) return unspoken(avatarOf(info));
+    const img = h("img", { src: info.src, alt: "" }), wrap = unspoken(h("span", { class: "cs-avatar", title: info.name }, img));
     img.addEventListener("error", () => {
-      const next = avatarOf(info);
+      const next = unspoken(avatarOf(info));
       if (wrap.parentNode) wrap.replaceWith(next);
       else wrap.replaceChildren(next);
     }, { once: true });
@@ -695,20 +1322,17 @@
     follow: false,
     leadName: () => CHAT_COPY.lead
   });
-  var DEFAULT_TIMERS = { slowMs: 2e4, failMs: 12e4 };
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null }) {
-    const target = own || storyTarget(storyId, leadRole), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
-    const cardState = /* @__PURE__ */ new Map(), drafts = /* @__PURE__ */ new Map();
+  var targetOf = ({ target = null, storyId = null, leadRole = null }) => target || storyTarget(storyId, leadRole);
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, send: sendOpt = null }) {
+    const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
+    if (styles) linkChatStyles(win.document);
+    const target = targetOf({ target: own, storyId, leadRole }), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
+    const send = sendOpt || createSendState({ transport, reads, clock, timers, card, target, storyId, leadRole, win, copy: words }), launch = send.launch, cardState = send.cards, drafts = /* @__PURE__ */ new Map();
     let refocusCard = null;
-    let started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, launchSessionId = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
+    let gone = false, started = false, gotRows = false, firstRead = Promise.resolve(), rows = [], thread = [], model = null, joinedAt = null, runningSince = 0, lastLiveState = null, isDone = done, awaitBase = null, gen = 0, refocus = false;
     const streams = /* @__PURE__ */ new Map(), watched = /* @__PURE__ */ new Set(), listeners = /* @__PURE__ */ new Set(), cache = /* @__PURE__ */ new Map();
     const fails = /* @__PURE__ */ new Map();
-    const wrapped = { launch: async (prompt) => {
-      const result = await transport.launch(prompt);
-      if (result && result.sessionId) launchSessionId = result.sessionId;
-      return result;
-    }, send: (handle, text) => transport.send(handle, text) };
-    const launch = createLaunch({ transport: wrapped, clock, storyId, leadRole, timers, card, onChange: () => render(), rowsOf: target.rows, queue: target.queue, pickLive: target.pick, bindLaunched: target.bindLaunched, keepUnsent: target.keepUnsent });
+    let threadRead = false;
     const live = () => {
       const own2 = target.bindLaunched ? launch.launchedIn(rows) : null;
       return joinable(own2) ? own2 : (target.pick || liveOf)(target.rows(rows));
@@ -721,25 +1345,126 @@
     };
     const presence = () => presenceOf(live(), { launch: { state: launch.state, failure: launch.failure, stuck: launch.stuck }, runningSince, done: isDone }, copy);
     const launchedFirst = () => launch.stuck || launch.state === "failed" && launch.failure.kind === "exited";
-    const terminalTarget = () => launchedFirst() && launchSessionId || live() && live().sessionId || launchSessionId || null;
+    const terminalTarget = () => launchedFirst() && launch.sessionId() || live() && live().sessionId || launch.sessionId() || null;
     const showTerminal = () => {
       const target2 = terminalTarget();
       if (target2) transport.gotoAgent(target2);
     };
     const log = h("div", { class: "log", role: "log", tabindex: "0", "aria-live": "polite", "aria-label": layout.logLabel || copy.logLabel });
-    const pin = pinToBottom(log, { win });
-    const status = h("div", { class: "status-slot", id: "sv-status", tabindex: "-1" });
-    const composer = createComposer({ onSend: (text) => {
-      awaitBase = leadCount();
-      fails.clear();
-      launch.send(text);
-    }, rows: layout.composerRows, label: layout.composerLabel === void 0 ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
-    const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
-    const sendChip = (text) => {
-      awaitBase = leadCount();
-      fails.clear();
-      launch.send(text);
+    const actFoot = activity ? h("div", { class: "act-foot" }) : null, actCache = /* @__PURE__ */ new Map();
+    const pinCopy = copy.pin || CHAT_COPY.pin, pinState = { note: null, busy: null, refocus: null };
+    const pinLive = onPin ? h("div", { class: "pin-live", role: "status", "aria-live": "polite" }) : null;
+    const pinList = () => onPin && typeof onPin.pins === "function" && onPin.pins() || [];
+    const pinName = (by) => onPin && typeof onPin.name === "function" ? onPin.name(by) : by;
+    const pinTitle = (item) => pinTitleOf({ text: item.said || item.text, contentType: item.contentType, summary: item.summary }, item.who);
+    const capNoteOn = (item) => {
+      const text = pinCapNote(pinList(), pinName);
+      pinState.note = { mid: item.id, kind: "cap", text };
+      pinLive.textContent = text;
     };
+    async function pinChange(item, action) {
+      if (pinState.busy !== null) return;
+      if (replacer) replacer.closeFor(item.id);
+      pinState.busy = item.id;
+      pinState.refocus = item.id;
+      render();
+      try {
+        const list = await onPin.change(action, item.id);
+        const done2 = action === "pin" ? "pinned" : action === "unpin" ? "unpinned" : "restored";
+        pinLive.textContent = pinLiveText(done2, pinTitle(item), (list || pinList()).length);
+        pinState.note = action === "unpin" ? { mid: item.id, kind: "undo", item } : null;
+      } catch (error) {
+        if (action === "restore" && /at most \d+ pins/.test(String(error && error.message || error))) capNoteOn(item);
+        else pinState.note = { mid: item.id, kind: action === "unpin" ? "unpin-failed" : "failed", item, action };
+      }
+      pinState.busy = null;
+      pinState.refocus = item.id;
+      render();
+    }
+    function pinToggle(item) {
+      const pins = pinList(), pinned = pins.some((p) => p.messageId === item.id);
+      if (pinned) return pinChange(item, "unpin");
+      if (pins.length >= PIN_CAP) {
+        if (replacer) return replacer.toggle(item);
+        capNoteOn(item);
+        pinState.refocus = item.id;
+        render();
+        return;
+      }
+      return pinChange(item, "pin");
+    }
+    const threadRow = (id) => thread.find((row) => row.messageId === id);
+    const pinTitleOfPin = (pin2) => {
+      const named = typeof onPin.title === "function" && onPin.title(pin2);
+      if (named) return named;
+      if (pin2.preview && pin2.preview.shortName) return pin2.preview.shortName;
+      const row = threadRow(pin2.messageId);
+      return row ? pinTitleOf(row, row.fromName || row.from || "") : String(pin2.messageId);
+    };
+    const chooserId = (mid) => `${ids.status}-pin-chooser-${mid}`;
+    const replacer = onPin && onPin.replace ? createPinReplace({ onPin, state: pinState, live: pinLive, list: pinList, nameOf: pinName, titleOf: pinTitleOfPin, ownOf: (pin2) => {
+      const row = threadRow(pin2.messageId);
+      return row && row.contentType === "html" ? "name" : "quote";
+    }, idOf: chooserId, copy: pinCopy, render: () => render(), pinNow: (item) => pinChange(item, "pin") }) : null;
+    function pinParts(item) {
+      if (!onPin || item.id === void 0 || item.id === null) return null;
+      const pins = pinList(), pin2 = pins.find((p) => p.messageId === item.id), atCap = !pin2 && pins.length >= PIN_CAP, note = pinState.note && pinState.note.mid === item.id ? pinState.note : null;
+      const more = Boolean(atCap && replacer), choosing = Boolean(replacer && replacer.isOpen(item.id));
+      const label = pin2 ? pinCopy.unpin : more ? pinReplaceLabel(pins.length) : atCap ? `${pinCopy.pin} (${pinCapLabel(pins.length)})` : pinCopy.pin, busy = pinState.busy === item.id;
+      const sig = ["p", pin2 ? pin2.pinnedBy : "", atCap, busy, note ? note.kind + (note.text || "") : "", more ? pins.length : "", choosing].join(":");
+      const make = () => {
+        const button = h(
+          "button",
+          { type: "button", class: "pin-b", "aria-label": label, "aria-pressed": pin2 ? "true" : "false", "aria-disabled": atCap && !more || busy ? "true" : null, "aria-expanded": more || choosing ? String(choosing) : null, "aria-controls": choosing ? chooserId(item.id) : null, title: label, "data-pin": pin2 ? "pinned" : atCap ? "cap" : "pin", "data-pin-mid": String(item.id), onclick: () => pinToggle(item) },
+          pin2 ? pinCopy.unpin : more ? [pinCopy.pinMore, h("span", { class: "pin-cap", "aria-hidden": "true" }, String(pins.length))] : pinCopy.pin
+        );
+        const acts = h("div", { class: "pin-acts", role: "group", "aria-label": pinCopy.actions }, button);
+        const tag = pin2 ? h("div", { class: "pin-tag" }, pinCopy.by(pinWho(pin2.pinnedBy, pinName))) : null;
+        let foot = replacer && note ? replacer.foot(note) : null;
+        if (foot) ;
+        else if (note && note.kind === "cap") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, note.text), h("button", { type: "button", class: "btn sm", onclick: () => {
+          pinState.note = null;
+          render();
+          if (typeof onPin.showPins === "function") onPin.showPins();
+        } }, pinCopy.showPins));
+        else if (note && note.kind === "undo") foot = h("div", { class: "pin-note", role: "note" }, h("span", {}, pinCopy.unpinned), h("button", { type: "button", class: "btn sm", onclick: () => {
+          if (pinList().length >= PIN_CAP) {
+            capNoteOn(note.item);
+            render();
+          } else pinChange(note.item, "restore");
+        } }, pinCopy.undo));
+        else if (note) foot = h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, note.kind === "unpin-failed" ? pinCopy.unpinFailed : pinCopy.failed), h("button", { type: "button", class: "btn sm", onclick: () => pinChange(note.item, note.kind === "unpin-failed" ? "unpin" : note.action || "pin") }, pinCopy.tryAgain));
+        return { acts, tag, foot: [choosing ? replacer.node(item) : null, foot], pinned: Boolean(pin2) };
+      };
+      return { sig, make };
+    }
+    if (onPin) log.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && pinState.note) {
+        pinState.note = null;
+        render();
+      }
+    });
+    const pin = pinToBottom(log, { win });
+    const roving = rovingThread(log);
+    const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
+    const sendPeer = (text) => {
+      fails.clear();
+      awaitBase = leadCount();
+      launch.send(text);
+      return void 0;
+    };
+    const sendText = (text) => {
+      const to = target.recipient ? target.recipient() : null;
+      if (!to) return sendPeer(text);
+      fails.clear();
+      return launch.sendTo(to, text).then(() => true, (failure) => {
+        fails.set("send", copy.failure.send(failure.why || failure.code));
+        render();
+        return false;
+      });
+    };
+    const composer = createComposer({ ids, onSend: sendText, rows: layout.composerRows, label: layout.composerLabel == null ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
+    const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
     const nextOpt = next ? typeof next === "object" ? next : {} : null;
     const pencil = () => {
       const svg = document.createElementNS(ALERT_NS, "svg"), path = document.createElementNS(ALERT_NS, "path");
@@ -752,7 +1477,7 @@
     };
     const chipNode = (chip) => {
       const main = h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
-        if (!isDone) sendChip(chip.text);
+        if (!isDone) (chip.peer ? sendPeer : sendText)(chip.text);
       } }, chip.label);
       return chip.edit ? h("span", { class: "pchip" }, main, h("button", { type: "button", class: "btn sm ed", "data-chip-edit": chip.label, "aria-label": copy.chipEdit.label(chip.label), title: copy.chipEdit.title, onclick: () => {
         if (!isDone) composer.setText(chip.text);
@@ -760,7 +1485,9 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
-    el.replaceChildren(h("div", { class: variant ? `chatcol ${variant}` : "chatcol", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, chipsBox, composer.region));
+    const composerSlot = layout.composerSlot ? h("div", { "data-composer-slot": "" }) : null;
+    if (composerSlot) composer.region.insertBefore(composerSlot, composer.region.firstChild);
+    el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, actFoot, pinLive, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
       render();
@@ -773,14 +1500,22 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const bubble = (item, side, first = true, info = null) => h(
-      "div",
-      { class: `msg ${side}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
-      first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
-      h("div", { class: "body" }, item.text),
-      item.note ? h("div", { class: "note" }, item.note) : null,
-      item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null
-    );
+    const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
+    const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
+    const bubble = (item, side, first = true, info = null) => {
+      const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
+      return h(
+        "div",
+        { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
+        first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
+        pin2 ? pin2.acts : null,
+        h("div", { class: "body" }, item.contentType === "html" ? item.text : inlineNodes(item.text)),
+        item.note ? h("div", { class: "note" }, item.note) : null,
+        item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null,
+        pin2 ? pin2.tag : null,
+        pin2 ? pin2.foot : null
+      );
+    };
     const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
       const on = Boolean(terminalTarget());
@@ -788,33 +1523,39 @@
     };
     const alertRow = (kind, why, code, ...extra) => h("div", { class: "sys danger", role: "alert", "data-row": kind }, alertIcon(), h("span", { class: "why" }, why), code ? h("code", { class: "code" }, code) : null, ...extra);
     const statusCache = /* @__PURE__ */ new Map();
+    const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
+      readThread();
+    } }, copy.row.retry);
+    const rosterRetry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
+      fails.delete("roster");
+      render();
+      readRoster();
+    } }, copy.row.retry);
     const readRows = () => {
       if (!sources) return [];
-      const retry = () => h("button", { type: "button", class: "btn sm", "data-thread-retry": "1", onclick: () => {
-        readThread();
-      } }, copy.row.retry), stale = sources.staleAt();
+      const stale = sources.staleAt();
       if (sources.failedNow()) return [{ id: "unread", sig: "u", make: () => alertRow("unread", copy.row.unread, "", retry()) }];
       return stale === null ? [] : [{ id: "stale", sig: "st|" + stale, make: () => h("div", { class: "sys warn", role: "status", "data-row": "stale" }, h("span", {}, copy.row.stale(timeLabel(stale))), retry()) }];
     };
     function statusItems() {
       const state2 = launch.state, p = presence(), on = Boolean(terminalTarget()), out = [...readRows()];
       for (const [what, text] of fails) out.push({ id: "fail-" + what, sig: "x|" + what + "|" + text, make: () => {
-        const row = alertRow("act-failed", text, "");
+        const row = alertRow("act-failed", text, "", what === "thread" ? retry() : what === "roster" ? rosterRetry() : null);
         row.setAttribute("data-fail", what);
         return row;
       } });
       if ((state2 === "starting" || state2 === "slow") && launch.stuck) {
-        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, copy.row.needsTerminal), termButton("sv-term-stuck")) });
+        out.push({ id: "stuck", sig: "stuck|" + on, make: () => h("div", { class: "sys warn", "data-row": "stuck" }, h("span", {}, copy.row.needsTerminal), termButton(ids.term("stuck"))) });
       } else if (state2 === "starting" || state2 === "slow") {
         out.push({ id: "starting", sig: "s", make: () => h("div", { class: "sys", "data-row": "starting" }, face("starting", `${copy.lead} · ${copy.header.starting}`), h("span", {}, copy.row.starting)) });
-        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, copy.row.slow), termButton("sv-term-slow")) });
+        if (state2 === "slow") out.push({ id: "slow", sig: "slow|" + on, make: () => h("div", { class: "sys warn", "data-row": "slow" }, h("span", {}, copy.row.slow), termButton(ids.term("slow"))) });
       } else if (state2 === "failed") {
         const failure = launch.failure;
         out.push({ id: "failed", sig: ["f", failure.kind, failure.code, failureText(failure, copy), on].join("|"), make: () => alertRow(
           "failed",
           failureText(failure, copy),
           failure.code,
-          failure.kind === "timeout" || failure.kind === "exited" ? termButton("sv-term-failed") : null,
+          failure.kind === "timeout" || failure.kind === "exited" ? termButton(ids.term("failed")) : null,
           h("button", { type: "button", class: "btn sm", "data-retry": "1", onclick: () => {
             refocus = true;
             launch.retry();
@@ -868,15 +1609,30 @@
         make: () => cardNode({ lead: target.leadName(row), id, text, parsed, meta: line, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
       };
     }
+    const deliveryRow = (id) => id !== void 0 && typeof reads.delivery === "function" ? reads.delivery(id) : null;
     const deliveryOf = createMarkLatch();
     function markOfItem(item) {
       if (item.mark === "starting" && launch.stuck) return "stuck";
       if (item.mark !== "sent") return item.mark;
-      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()) });
+      const to = item.to ? item.to.handle : null, lead = to ? rows.find((row) => row.handle === to) || null : live();
+      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead, newestLeadAt: newestFrom(thread, to ? /* @__PURE__ */ new Set([to]) : leadHandles()), delivery: deliveryRow(item.messageId) });
+    }
+    const prose = activity ? createProse({ win, clock, render: () => render() }) : null;
+    let proseRow = null;
+    function proseItem(said) {
+      if (!proseRow) proseRow = h("div", { class: "act", "data-row": "activity" }, face("working", copy.row.working), h("span", { class: "sr", role: "status", "aria-live": "polite" }, copy.row.working), h("span", { class: "prose" }));
+      const line = proseRow.querySelector(".prose");
+      line.textContent = said.line;
+      line.title = said.text;
+      return { id: "activity", node: proseRow };
     }
     function activityItem() {
       if (!activity) return null;
       const here = state(), own2 = activity.text ? activity.text(here) : null, p = presence();
+      prose.follow(live() ? live().sessionId : null);
+      const said = own2 ? null : prose.current(newestFrom(thread, leadHandles()));
+      if (said) return proseItem(said);
+      proseRow = null;
       const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
       return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
     }
@@ -893,7 +1649,7 @@
       for (const item of launch.messages) mine = Math.max(mine, item.sentAt);
       if (!newest || newest.at < mine || cards !== false && newest.row.kind === "needs-you") return [];
       const parsed = parseNext(newest.row.text || newest.row.summary || "");
-      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit) })) : [];
+      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit), peer: true })) : [];
     }
     function paintChips() {
       if (!chipsBox) return;
@@ -910,6 +1666,8 @@
       const given = typeof faces === "function" ? faces(row) : null;
       return { name: given && given.name || who, label: given && given.label || null, src: given && given.src || null, face: given && given.face || null };
     }
+    const toLabel = (item) => item && item.to ? copy.row.to(item.to.name) : null;
+    const youKey = (item) => item && item.to ? "you|" + item.to.handle : "you";
     function threadItems() {
       let lastLead = null;
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
@@ -923,20 +1681,21 @@
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
         const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
         if (nextOpt && side === "lead" && row.text && !shown) continue;
-        const item = { id: row.messageId, text: shown, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        const label = toLabel(own2), item = { id: row.messageId, text: shown, said, contentType: row.contentType, summary: row.summary, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs, label }, info = faceInfo(row, side, who);
+        item.pin = pinParts(item);
         entries.push({
           t: row.createdAtMs || 0,
           id: "m" + row.messageId,
-          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark].join("|"),
+          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark, label, item.pin ? item.pin.sig : ""].join("|"),
           make: () => bubble(item, side),
-          run: faces ? { key: side === "you" ? "you" : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
+          run: faces ? { key: side === "you" ? youKey(own2) : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
         });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt };
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: "you", info: null, make: (first) => bubble(sent, "you", first) } : null });
+        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt, label: toLabel(item) };
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text, sent.label].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: youKey(item), info: null, make: (first) => bubble(sent, "you", first) } : null });
       }
       entries.sort((a, b) => a.t - b.t);
       for (const [id, text] of streams) {
@@ -964,13 +1723,8 @@
       return entries;
     }
     const awaiting = () => awaitBase !== null && leadCount() <= awaitBase && (launch.state === "joined" || Boolean(live() && live().state === "running"));
-    function noteLaunched() {
-      if (!target.bindLaunched) return;
-      const row = launch.launchedRow();
-      if (row) launchSessionId = row.sessionId;
-    }
     function render() {
-      noteLaunched();
+      if (gone) return;
       const p = presence();
       if (launch.state === "joined" && joinedAt === null) {
         joinedAt = clock.now();
@@ -988,10 +1742,23 @@
       const here = state();
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
-      const act = activityItem(), want = [...layout.empty && !thread.length && !launch.messages.length ? [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }] : [], ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      if (replacer) replacer.sync();
+      const inChooser = replacer ? replacer.within() : false;
+      const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const held = roving.focused();
       reconcile(log, cache, want);
+      roving.refresh(held);
+      if (actFoot) reconcile(actFoot, actCache, act ? [act] : []);
       paintChips();
       pin.onContentChanged();
+      if (pinState.refocus !== null) {
+        const pinButton = log.querySelector(`.pin-b[data-pin-mid="${pinState.refocus}"]`);
+        if (pinButton) {
+          pinButton.focus();
+          pinState.refocus = null;
+        }
+      }
+      if (replacer) replacer.after(inChooser);
       if (refocusCard !== null) {
         const done2 = log.querySelector(`[data-card="${refocusCard}"][data-state=answered] .chosen`);
         if (done2) {
@@ -1001,8 +1768,8 @@
       }
       if (refocus && launch.state !== "starting" && launch.state !== "slow") {
         refocus = false;
-        const retry = status.querySelector("[data-retry]");
-        if (retry && (!el.ownerDocument.activeElement || el.ownerDocument.activeElement === el.ownerDocument.body || el.ownerDocument.activeElement === status)) retry.focus();
+        const retry2 = status.querySelector("[data-retry]");
+        if (retry2 && (!el.ownerDocument.activeElement || el.ownerDocument.activeElement === el.ownerDocument.body || el.ownerDocument.activeElement === status)) retry2.focus();
       }
       composer.update({ placeholder: p.placeholder, disabled: isDone, ...layout.composer ? layout.composer(here) : {} });
       for (const fn of listeners) fn();
@@ -1015,8 +1782,15 @@
         render();
       }));
     }
+    function emptyItems() {
+      if (!layout.empty || thread.length || launch.messages.length) return [];
+      if (fails.has("thread") || fails.has("roster") || sources && sources.failedNow()) return [];
+      if (!threadRead || sources && !sources.settled()) return [{ id: "loading", sig: "l", make: () => h("div", { class: "empty", role: "status", "data-row": "loading" }, copy.row.loading) }];
+      return [{ id: "empty", sig: "e", make: () => h("div", { class: "empty" }, layout.empty) }];
+    }
     function took(next2) {
       thread = next2;
+      threadRead = true;
       if (runningSince === 0) runningSince = newestFrom(thread, leadHandles());
       for (const row of thread) streams.delete(row.messageId);
       if (awaitBase !== null && leadCount() > awaitBase) awaitBase = null;
@@ -1043,6 +1817,7 @@
     function onRows(next2) {
       const firstRoster = !gotRows;
       gotRows = true;
+      fails.delete("roster");
       const before = live();
       rows = next2;
       const now = live();
@@ -1059,38 +1834,49 @@
         started = true;
       } else render();
     }
+    const detach = send.attach(render);
     const offs = [reads.on("sessions", () => onRows(reads.latestSessions())), reads.on("inbox", () => {
       readThread();
     }), reads.on("activity", () => render())];
+    if (onPin && typeof onPin.subscribe === "function") offs.push(onPin.subscribe(() => render()));
+    if (typeof reads.delivery === "function") offs.push(reads.on("delivery", () => render()));
     if (typeof transport.stream === "function") offs.push(transport.stream((chunk) => {
       streams.set(chunk.messageId, (streams.get(chunk.messageId) || "") + chunk.text);
       render();
     }));
-    const onUnload = (event) => {
-      if (launch.hasHeld()) {
-        const text = launch.hasKept() ? copy.unloadKept : copy.unload;
-        event.preventDefault();
-        event.returnValue = text;
-        return text;
-      }
-    };
-    win.addEventListener("beforeunload", onUnload);
+    const releaseSlot = composerSlot ? layout.composerSlot(composerSlot) : null;
     render();
     if (layout.autofocus !== false) composer.input.focus();
     if (sources) {
       started = true;
       firstRead = readThread(true);
     }
-    const roster = reads.sessions();
-    if (sources) roster.then(() => {
-      if (!gotRows) onRows(reads.latestSessions());
-    });
+    function readRoster() {
+      const roster = reads.sessions();
+      if (sources) roster.then(() => {
+        if (!gotRows) onRows(reads.latestSessions());
+      }, () => {
+      });
+      else Promise.resolve(roster).catch((error) => {
+        if (!gotRows) {
+          fails.set("roster", copy.row.unread + " " + (error && error.message || String(error)));
+          render();
+        }
+      });
+    }
+    readRoster();
     return {
       unmount() {
+        gone = true;
         offs.forEach((off) => off && off());
+        if (prose) prose.release();
+        if (typeof releaseSlot === "function") releaseSlot();
         pin.release();
-        launch.dispose();
-        win.removeEventListener("beforeunload", onUnload);
+        roving.release();
+        if (replacer) replacer.release();
+        mountSlot.release();
+        if (sendOpt) detach();
+        else send.dispose();
         el.replaceChildren();
       },
       // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
@@ -1122,6 +1908,7 @@
         isDone = Boolean(value);
         render();
       },
+      repaint: () => render(),
       subscribe(fn) {
         listeners.add(fn);
         return () => listeners.delete(fn);
@@ -1132,6 +1919,6 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho, pinReplaceLabel, pinChooserHeading, pinPinnedAtLine, pinReplacedText, pinNewRowText, pinListChangeText, pinPinnedMeanwhileText, PIN_REPLACE_FAILED, PIN_ROOM_NOW, PIN_UNDO_FULL, PIN_UNDO_GONE }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
   }
 })();

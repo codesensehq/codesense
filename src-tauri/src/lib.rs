@@ -12,6 +12,7 @@ mod commands;
 mod queue_roles;
 pub mod records;
 mod session_conversation;
+mod session_text;
 mod session_usage;
 pub mod verbs;
 
@@ -1023,6 +1024,9 @@ pub fn run() {
 
             // Every agent write, from the tab or an agent's MCP tools, tells the app.
             agents::events::install_app_emitter(app.handle().clone());
+            // A stored usage call tells pages showing that agent's record to reread it.
+            session_usage::ingest_notice::install_app_emitter(app.handle().clone());
+            session_text::install_app_emitter(tauri::App::handle(app).clone());
             // Routines run on their own scheduler thread and their own agent-done intake. The
             // intake offers each finished session to routines first, then to its registered
             // consumers; they register before it starts so none misses an early signal.
@@ -1327,8 +1331,10 @@ pub fn run() {
             commands::data_read_model::setup_state,
             commands::data_read_model::why_line,
             commands::data_read_model::open_diff_read,
+            commands::data_read_model::open_diff_image_read,
             commands::data_read_model::setup,
             commands::data_read_model::story_changes,
+            commands::data_read_model::session_record,
             commands::data_read_model::story_totals,
             commands::data_read_model::session_set_model_rate,
             commands::data_read_model::spend_cap_set,
@@ -1395,6 +1401,7 @@ pub fn run() {
             commands::tools::open_editor,
             commands::files::check_path_exists,
             commands::files::read_file,
+            commands::files::read_image_file,
             commands::file_surface::file_surface_call,
             live_hub::files::file_surface_prepare_view,
             live_hub::stories::nav_model_publish,
@@ -1454,6 +1461,9 @@ pub fn run() {
             commands::git_sync::source_commit_graph,
             commands::git_sync::source_commit_changeset,
             commands::git_sync::source_commit_file_redline,
+            commands::git_sync::source_image_sides,
+            commands::session_text::session_text_watch,
+            commands::session_text::session_text_unwatch,
             // SLW-WD-4: app-side bridge to WD-3's route/un-route verbs (the "→ context"
             // affordance in the source-diff overlay). Shares one orchestration with the
             // MCP `#[tool]`s.
@@ -1718,6 +1728,7 @@ pub fn run() {
             commands::remote_source::source_remote_list_files,
             commands::remote_source::source_remote_changeset,
             commands::remote_source::source_remote_file_redline,
+            commands::remote_source::source_remote_image_sides,
             commands::remote_source::source_remote_watch_start,
             commands::remote_source::source_remote_watch_stop,
             commands::remote_source::source_remote_tracked_count,

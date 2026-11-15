@@ -18,8 +18,6 @@ they just use it. Make it Private (Only me) only when it's just for you.
 
 ## Recipes
 
-- [CodeSense setup agent](codesense-setup-agent.md): walks you through your workspace, teams,
-  source repos, agents and routines.
 - [Machine setup agent](machine-setup-agent.md): gets a remote machine ready for CodeSense and
   adds teammates to it.
 - [Build a manager agent](manager-agent.md): an agent that holds a `manager` role queue,

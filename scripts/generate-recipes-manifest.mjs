@@ -14,12 +14,12 @@
 //     "generatedAt": "deterministic",
 //     "recipes": [
 //       {
-//         "id": "agent-codesense-setup",
+//         "id": "agent-manager",
 //         "kind": "agent" | "routine" | "dashboard" | "skill",
-//         "name": "codesense-setup",
-//         "title": "codesense-setup",
+//         "name": "manager",
+//         "title": "manager",
 //         "summary": "…",
-//         "path": "examples/agents/codesense-setup/agent.yaml",
+//         "path": "examples/agents/manager/agent.yaml",
 //         "lang": "yaml" | "html" | "markdown",
 //         "role": "setup" | "builder" | …,
 //         "surface": ["local" | "remote"],
@@ -63,12 +63,6 @@ const OUTPUT = join(CONTENT, "generated", "recipes.json");
 /** @type {Record<string, { role?: string | null, surface: string[], useCase: string[], ships: boolean, trigger?: string | null }>} */
 const META = {
   // ---- agents ----
-  "agent-codesense-setup": {
-    role: "setup",
-    surface: ["local"],
-    useCase: ["setup"],
-    ships: true,
-  },
   "agent-machine-setup": {
     role: "setup",
     surface: ["local", "remote"],
@@ -171,12 +165,6 @@ const META = {
     role: null,
     surface: ["local"],
     useCase: ["build"],
-    ships: true,
-  },
-  "skill-codesense-setup": {
-    role: "setup",
-    surface: ["local"],
-    useCase: ["setup"],
     ships: true,
   },
   "skill-context-sync": {

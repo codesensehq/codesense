@@ -62,6 +62,7 @@ const NO_IDENTITY_TOOLS: &[&str] = &[
     "cancel_context_operation",
     "cancel_remote_agent_task",
     "capture_machine_passphrase",
+    "clone_repo",
     "close_terminal_tab",
     "close_workspace",
     "codesense_call_tool",

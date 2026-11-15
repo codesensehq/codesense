@@ -275,6 +275,7 @@ export const META = {
   add_source_repo: { arc: "L", write: true },
   archive_team: { arc: "L", write: false },
   attach_source_repo_path: { arc: "L", write: false },
+  clone_repo: { arc: "L", write: true },
   commit_registry_edit_local: { arc: "L", write: true },
   create_local_organization: { arc: "L", write: true },
   create_team: { arc: "L", write: true },

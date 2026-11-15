@@ -1556,15 +1556,15 @@ mod tests {
             .join("content/.claude/skills/update-codesense-docs/SKILL.md")
             .is_file());
         // The example skills and dashboards are inert, copyable examples: none is a live
-        // skill in the docs team, and no automations ship.
+        // skill in the docs team, and no automations ship. The setup agent's own skill is
+        // the one live exception, built from the `codesense-guide` pack.
         let examples = team.join("content/examples");
         assert!(examples.join("README.md").is_file());
-        for skill in [
-            "routine",
-            "agent",
-            "codesense-setup",
-            "worker-exit-contract",
-        ] {
+        assert!(team
+            .join("content/.claude/skills/codesense-setup/SKILL.md")
+            .is_file());
+        assert!(!examples.join("skills/codesense-setup").exists());
+        for skill in ["routine", "agent", "worker-exit-contract"] {
             assert!(examples.join(format!("skills/{skill}/SKILL.md")).is_file());
             assert!(!team
                 .join(format!("content/.claude/skills/{skill}"))
@@ -2026,7 +2026,7 @@ mod tests {
         assert!(dest.join("teams.yml").is_file());
         assert!(team.join("content/README.md").is_file());
         assert!(team
-            .join("content/examples/skills/codesense-setup/SKILL.md")
+            .join("content/examples/skills/routine/SKILL.md")
             .is_file());
         assert!(!dest.join("org.yml").exists());
         assert!(!dest.join(".git").exists());

@@ -347,6 +347,16 @@
       ],
       "type": "string"
     },
+    "skills": {
+      "description": "The skills a launch offers, by name. Omitted means every skill the\nworkspace has; a list turns every other skill off for the launch, where\nits runtime enforces that (`enforces_skill_allowlist`).",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "startup": {
       "description": "Ordered content-relative paths, stored normalized by every save. Kept as\nwritten on read so one bad hand edit is a typed validation error, not\nan unreadable definition.",
       "items": {

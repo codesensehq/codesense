@@ -10,10 +10,18 @@ import {
 } from "@/components/ui/dialog";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
-import { renderFileDiff, type FileDiffState } from "@/shared/lib/render-file-diff";
+import {
+  IMAGE_UNAVAILABLE,
+  renderFileDiff,
+  rendersInline,
+  type FileDiffSides,
+  type FileDiffState,
+} from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import {
   readFile,
+  readImageFile,
   sourceRemoteFileRead,
   type TeamFileEdit,
   type TeamFileEditsWorkspace,
@@ -21,16 +29,23 @@ import {
 
 import { baseName, dirName } from "../lib/team-edits";
 
-type Side = { text: string } | { missing: true } | { binary: true } | { error: string };
+/** `bytes`: a raster image read on its machine, kept as base64 to draw. */
+type Side =
+  | { text: string }
+  | { bytes: string }
+  | { missing: true }
+  | { binary: true }
+  | { error: string };
 
 function looksBinary(text: string): boolean {
   return text.includes("\u0000");
 }
 
-async function readSide(read: () => Promise<string>): Promise<Side> {
+async function readSide(read: () => Promise<string | Side>): Promise<Side> {
   try {
-    const text = await read();
-    return looksBinary(text) ? { binary: true } : { text };
+    const value = await read();
+    if (typeof value !== "string") return value;
+    return looksBinary(value) ? { binary: true } : { text: value };
   } catch (e) {
     const message = getErrorMessage(e);
     // A file that isn't there is a side of the comparison, not a failure.
@@ -45,21 +60,39 @@ function decodeBase64(base64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** A copy on This Mac: a raster image as its bytes (past the size cap it is a binary
+ *  side), anything else as text. */
+function readThisMacSide(path: string): Promise<Side> {
+  if (!isRasterImage(path)) return readSide(() => readFile(path));
+  return readSide(async () => {
+    const { base64, tooLarge } = await readImageFile(path);
+    return tooLarge || base64 == null ? { binary: true } : { bytes: base64 };
+  });
+}
+
 /** The workspace's copy of `file`: on This Mac, or read on its machine. */
 function readWorkspaceSide(ws: TeamFileEditsWorkspace, file: TeamFileEdit): Promise<Side> {
   if (file.kind === "removed") return Promise.resolve({ missing: true });
   if (ws.target.kind === "local") {
     const root = ws.target.codeRepoPath.replace(/\/+$/, "");
-    return readSide(() => readFile(`${root}/${file.path}`));
+    return readThisMacSide(`${root}/${file.path}`);
   }
   const { machineId, workspaceHandle } = ws.target;
-  return readSide(async () =>
-    decodeBase64((await sourceRemoteFileRead(machineId, workspaceHandle, file.path)).base64),
-  );
+  const read = () => sourceRemoteFileRead(machineId, workspaceHandle, file.path);
+  if (isRasterImage(file.path))
+    return readSide(async () => {
+      const { base64, truncated } = await read();
+      return truncated ? { binary: true } : { bytes: base64 };
+    });
+  return readSide(async () => decodeBase64((await read()).base64));
 }
 
 function sideText(side: Side | null): string {
   return side && "text" in side ? side.text : "";
+}
+
+function sideBytes(side: Side | null): string | undefined {
+  return side && "bytes" in side ? side.bytes : undefined;
 }
 
 /** What the diff body shows: an unreadable side is an error (not the whole
@@ -67,7 +100,9 @@ function sideText(side: Side | null): string {
 function diffState(team: Side, mine: Side): FileDiffState {
   const failed = "error" in team ? team : "error" in mine ? mine : null;
   if (failed) return { kind: "error", message: failed.error };
-  if ("binary" in team || "binary" in mine) return { kind: "binary" };
+  // Image bytes are no text either: they only draw as a rendered side.
+  if ("binary" in team || "binary" in mine || "bytes" in team || "bytes" in mine)
+    return { kind: "binary" };
   return { kind: "ready" };
 }
 
@@ -80,12 +115,16 @@ function sideStatus(team: Side | null, mine: Side | null) {
 }
 
 /** Tall enough for the longer side (about 20px a code line, more for rendered
- *  markdown), never past the dialog. */
-function diffHeight(team: Side | null, mine: Side | null, rendered: boolean): string {
+ *  markdown), never past the dialog; a rendered page takes the room it may. */
+function diffHeight(team: Side | null, mine: Side | null, body: "code" | "prose" | "page") {
+  if (body === "page") return "60vh";
+  const rendered = body === "prose";
   const lines = Math.max(sideText(team).split("\n").length, sideText(mine).split("\n").length);
   const px = rendered ? Math.max(240, lines * 36 + 48) : Math.max(120, lines * 20 + 48);
   return `min(60vh, ${px}px)`;
 }
+
+const BINARY_NOTE = "Not a text file: no line-by-line view.";
 
 function sideNote(side: Side | null, which: "team" | "workspace"): string | null {
   if (!side) return null;
@@ -93,7 +132,7 @@ function sideNote(side: Side | null, which: "team" | "workspace"): string | null
     return which === "team"
       ? "The team has no copy of this file."
       : "This workspace no longer has the file.";
-  if ("binary" in side) return "Not a text file: no line-by-line view.";
+  if ("binary" in side) return BINARY_NOTE;
   if ("error" in side)
     return `Couldn't read the ${which === "team" ? "team's" : "workspace's"} copy: ${side.error}`;
   return null;
@@ -124,7 +163,7 @@ export function TeamEditDiffDialog({
     if (!file) return;
     // A new file remounts the dialog (its `key`), so both sides start unread.
     let cancelled = false;
-    void readSide(() => readFile(file.teamPath)).then((s) => !cancelled && setTeam(s));
+    void readThisMacSide(file.teamPath).then((s) => !cancelled && setTeam(s));
     void readWorkspaceSide(workspace, file).then((s) => !cancelled && setMine(s));
     return () => {
       cancelled = true;
@@ -132,14 +171,38 @@ export function TeamEditDiffDialog({
   }, [workspace, file]);
 
   const ready = team !== null && mine !== null;
-  const notes = [sideNote(team, "team"), sideNote(mine, "workspace")].filter(Boolean);
+  // A raster image reads as binary only past the size cap; the diff says that in its one
+  // image line, so it gets no separate binary note.
+  const raster = !!file && isRasterImage(file.path);
+  const tooLarge = raster && [team, mine].some((side) => !!side && "binary" in side);
+  const notes = [sideNote(team, "team"), sideNote(mine, "workspace")]
+    .filter((note) => !(raster && note === BINARY_NOTE))
+    .filter(Boolean);
   const conflict = file?.kind === "conflict";
-  const teamLabel = conflict ? "Team's version now" : "Team's version";
+  const teamLabel = conflict ? "Team\u2019s version now" : "Team\u2019s version";
   const mineLabel = `${workspace.name}\u2019s version`;
+  const sides: FileDiffSides = {
+    before: sideText(team),
+    after: sideText(mine),
+    status: sideStatus(team, mine),
+    beforeLabel: teamLabel,
+    afterLabel: mineLabel,
+    imageBytes: { before: sideBytes(team), after: sideBytes(mine) },
+    ...(tooLarge
+      ? { imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.tooLarge } }
+      : {}),
+  };
+  const state = ready ? diffState(team, mine) : null;
   // Rendered markdown is one column (the redline) or labels its own panes (side
-  // by side); every other body is a two-column text diff.
+  // by side), as do rendered pages; every other body is a two-column text diff.
   const markdownMode = file && getViewerFileType(file.path) === "markdown" ? modes.markdown : null;
-  const rendered = markdownMode === "redline" || markdownMode === "side-by-side";
+  const pages =
+    !!file && !!state && modes.html === "side-by-side" && rendersInline(file.path, sides, state);
+  const body = pages
+    ? "page"
+    : markdownMode === "redline" || markdownMode === "side-by-side"
+      ? "prose"
+      : "code";
   return (
     <Dialog open={!!file} onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent
@@ -177,7 +240,7 @@ export function TeamEditDiffDialog({
             >
               {teamLabel} <span className="font-normal text-muted-foreground">→</span> {mineLabel}
             </div>
-          ) : markdownMode === "side-by-side" ? null : (
+          ) : markdownMode === "side-by-side" || pages ? null : (
             <div
               className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
               data-testid="team-edit-diff-sides"
@@ -186,23 +249,17 @@ export function TeamEditDiffDialog({
               <span className="border-l border-border px-3 py-1.5">{mineLabel}</span>
             </div>
           )}
-          {ready && file ? (
+          {state && file ? (
             // The strip adds a row above the diff, so the body grows with it.
             <div
               className="min-h-0"
-              style={{ height: `calc(${diffHeight(team, mine, rendered)} + 30px)` }}
+              style={{ height: `calc(${diffHeight(team, mine, body)} + 30px)` }}
             >
               {renderFileDiff({
                 fileType: getViewerFileType(file.path),
                 filePath: file.path,
-                sides: {
-                  before: sideText(team),
-                  after: sideText(mine),
-                  status: sideStatus(team, mine),
-                  beforeLabel: teamLabel,
-                  afterLabel: mineLabel,
-                },
-                state: diffState(team, mine),
+                sides,
+                state,
                 prefs: {
                   modes,
                   onModeChange: setMode,

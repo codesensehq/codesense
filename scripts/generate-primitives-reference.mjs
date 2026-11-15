@@ -165,6 +165,21 @@ const INVOKE_META = {
     description: "Take a message out of an agent thread's pin list; the pins after it move up.",
     examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
   },
+  restorePin: {
+    description:
+      "Undo an unpin: the message's unpinned pin comes back as it was (who pinned it, when, its preview and its place). With replacing, the Undo of a replacePin: the pin that took its place goes in the same step.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } },
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42, replacing: 51 } },
+    ],
+  },
+  replacePin: {
+    description:
+      "At the cap, pin a message in place of the shown pin replaces, in one step; nothing else moves. restorePin with replacing undoes it.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 51, replaces: 42 } },
+    ],
+  },
   reorderPins: {
     description:
       "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
@@ -281,6 +296,16 @@ const INVOKE_META = {
     description: 'Handshake — resolves `{subscribed: "codesense:agent-activity-changed"}`.',
     examples: [{ args: {}, result: { subscribed: "codesense:agent-activity-changed" } }],
   },
+  "sessions.watchText": {
+    description:
+      "Starts a session's assistant-prose stream for this page (under `sessions:read`, a session of the page's own team only); `onSessionText(sessionId, cb)` calls it and listens for `codesense:session-text`.",
+    examples: [{ args: { sessionId: "tab-1" }, result: { watching: "tab-1" } }],
+  },
+  "sessions.unwatchText": {
+    description:
+      "Stops this page's stream of a session's prose; `onSessionText`'s unsubscribe calls it.",
+    examples: [{ args: { sessionId: "tab-1" }, result: null }],
+  },
   routines: {
     description: "Every routine this user sees. Pairs with `onRoutinesChanged(cb)` for push.",
     examples: [{ args: {}, result: [{ id: "acme/web/rt-nightly", name: "nightly sweep" }] }],
@@ -382,6 +407,27 @@ const INVOKE_META = {
     description:
       "Per-session token usage and spend for the sessions CodeSense launched, on this Mac and the remote machines it connects to, with per-day totals. Each session's `machineId` is the machine it ran on, as `machines()` names it (`local` for this Mac). Takes optional `sinceMs` and `untilMs` (local days: `sinceMs`'s day included, `untilMs`'s day excluded), `sessionId`, `cwd`, `story` (one story id) and `limit`. `costUsd` is `null` only when a call used tokens on a model with no rate. Every call the CLI reports counts, including Codex's start-up cache warm-up, which Codex's own total leaves out.",
     examples: [{ args: {}, result: { sessions: [], days: [], totals: {} } }],
+  },
+  sessionRecord: {
+    description:
+      "One agent's session record by launch `handle`: `{handle, sessionId, sessionIds, chain, cli, model, models, tokens, costUsd, unpricedModels, durationMs, firstAtMs, lastAtMs, story, runId, worktree, files, unavailable}`. Tokens, cost and the story are what `sessionUsage` returns for that session; when a saved agent handed the story off from earlier sessions, `tokens`, `costUsd`, `durationMs` and `files` sum that chain, and `chain` lists its session ids, oldest first (one id when there is no handoff); `files` are the files of the story's commits made by that session, as `storyChanges` lists them, each with its commits. `costUsd` is the priced sum when some models have no rate (`unpricedModels` names them, as `sessionUsage` does) and `null` only when none has, and `unavailable` says why a field is empty (no story, no commits, no usage yet). Pairs with `onSessionRecordChanged(cb, sessionIds)`.",
+    examples: [
+      {
+        args: { handle: "agent-1" },
+        result: {
+          handle: "agent-1",
+          sessionId: "s_1",
+          cli: "claude",
+          model: "claude-sonnet-5-5",
+          tokens: { input: 1200, output: 340, cacheRead: 0, cacheWrite: 0 },
+          costUsd: 0.42,
+          durationMs: 360000,
+          story: { id: "DEMO-1" },
+          files: [{ path: "src/main.rs", commits: ["abc1234"] }],
+          unavailable: {},
+        },
+      },
+    ],
   },
   modelRates: {
     description:
@@ -1158,6 +1204,14 @@ const KIT = [
     example: "const { sessions, totals } = await codesense.sessionUsage({ limit: 20 });",
   },
   {
+    name: "codesense.sessionRecord",
+    category: "data-read",
+    wraps: "invoke('sessionRecord', args)",
+    description:
+      "One agent's session record by launch handle: model, tokens, cost, duration, files and story.",
+    example: "const record = await codesense.sessionRecord({ handle: 'agent-1' });",
+  },
+  {
     name: "codesense.modelRates",
     category: "data-read",
     wraps: "invoke('modelRates')",
@@ -1186,6 +1240,15 @@ const KIT = [
     wraps: "codesense:worktrees-changed listener",
     description: "Nudge callback for managed worktree changes.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  {
+    name: "codesense.onSessionRecordChanged",
+    category: "data-read",
+    wraps: "codesense:session-record-changed listener",
+    description:
+      "Nudge callback for when an agent's session record may have changed. Pass the record's `sessionIds` as the second argument to hear only about that agent's session.",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
   },
   {
     name: "codesense.onPasteTargetChanged",
@@ -1891,6 +1954,27 @@ const EVENT_META = {
     timing: "On managed worktree change",
     description: "Nudge for `worktrees()` listeners.",
     example: "codesense.onWorktreesChanged(() => codesense.worktrees().then(render));",
+  },
+  "codesense:session-record-changed": {
+    direction: "parent-to-doc",
+    payload: "`{sessionId?}`: the session that changed; absent when the host cannot tell which",
+    timing:
+      "On the agent's progress, completion or exit, and about 2 s after usage is stored for its session. Files from commits have no event of their own; they refresh on progress, completion and exit",
+    description:
+      "Nudge for `sessionRecord()` listeners. `onSessionRecordChanged(cb, sessionIds)` runs `cb` only for those sessions (and for a nudge that names none).",
+    example:
+      "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
+  },
+  "codesense:session-text": {
+    direction: "parent-to-doc",
+    payload:
+      "`{sessionId, kind: 'prose'|'final', turn, key, text}`: a session's assistant prose, or the turn's one final message (the last prose after its last tool call)",
+    timing:
+      "As the session writes each prose block of a turn (no 60 s capture wait), and once when the turn stops; only to a page that watches the session",
+    description:
+      "A session's assistant prose as it is written, never a tool call or the model's thinking. `onSessionText(sessionId, cb)` starts and stops the stream.",
+    example:
+      "const off = codesense.onSessionText(sessionId, (t, error) => t && (t.kind === 'final' ? showFinal(t.text) : showProse(t.text)));",
   },
   "codesense:setup-changed": {
     direction: "parent-to-doc",

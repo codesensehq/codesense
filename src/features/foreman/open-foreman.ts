@@ -4,7 +4,10 @@
  * team. App start, the identity menu and the palette all come through here, so there is
  * never more than one (a tab opens by its path, and an open one is focused).
  */
-import { openCodesenseDocsLanding } from "@/features/org/lib/codesense-docs-landing";
+import {
+  openCodesenseDocsLanding,
+  openCodesenseSetup,
+} from "@/features/org/lib/codesense-docs-landing";
 import {
   CODESENSE_DOCS_FOREMAN_PAGE,
   CODESENSE_DOCS_SLUG,
@@ -18,6 +21,17 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 
 /** The role the Foreman reads its mail from. */
 export const FOREMAN_ROLE = "codesense-foreman";
+
+/** The saved agent the Foreman runs as: what a session is known as the Foreman's by (a live
+ *  Foreman has no role, and a display name is never matched). */
+export const FOREMAN_AGENT = "foreman-claude";
+
+/** Whether `agent`, a saved agent id (bare or qualified, with or without `@revision`), is the
+ *  Foreman's: the page's own rule (`runsAny` in its identity module). */
+export function isForemanAgent(agent: string | null | undefined): boolean {
+  const id = agent?.split("@")[0]?.trim();
+  return !!id && (id === FOREMAN_AGENT || id.endsWith(`/${FOREMAN_AGENT}`));
+}
 
 function foremanPagePath(): string | null {
   const docs = useOrgStore.getState().orgs.find((o) => o.slug === CODESENSE_DOCS_SLUG);
@@ -44,14 +58,19 @@ export function resetStartLanding(): void {
 
 /**
  * Open what a start lands on (see `pickStartLanding`), once per app start: a later org
- * refresh (a repo attached) must not pull the user back to it.
+ * refresh (a repo attached) must not pull the user back to it. The very first launch
+ * (`firstLaunch`) opens the setup page instead, whatever the Foreman setting says.
  */
-export function openStartLanding(readmePath: string): void {
+export function openStartLanding(readmePath: string, firstLaunch = false): void {
   // Both landings open in the docs team: wait for a discovery that has loaded it.
   if (startLandingDone) return;
   const foremanPath = foremanPagePath();
   if (!foremanPath) return;
   startLandingDone = true;
+  if (firstLaunch) {
+    openCodesenseSetup({ landing: true });
+    return;
+  }
   const landing = pickStartLanding({
     orgs: useOrgStore.getState().orgs,
     openForemanOnStart: useViewerStore.getState().settings.openForemanOnStart,

@@ -16,8 +16,6 @@ anywhere in your content. To install a slot pane, write its complete HTML into t
   scheduled tasks: wake it or start a new one) and timers (temporary routines for one
   session).
 - [`agent`](skills/agent/SKILL.md): set up and manage named, reusable agents.
-- [`codesense-setup`](skills/codesense-setup/SKILL.md): walk through workspace, teams,
-  repos, agents and routines.
 - [`setup-machine`](skills/setup-machine/SKILL.md): get a remote machine ready for
   CodeSense over SSH, then test it.
 - [`add-machine-user`](skills/add-machine-user/SKILL.md): give a teammate access to a
@@ -43,8 +41,6 @@ agent can do all of this without a skill. A skill only adds a shortcut such as `
 Agent files that go with the [Setting up agents](../setting-up-agents/README.md) recipes.
 Copy one to your team's `config/agents/<id>/agent.yaml`, with the skills it starts with.
 
-- [`codesense-setup`](agents/codesense-setup/agent.yaml): runs `/codesense-setup`. See the
-  [recipe](../setting-up-agents/codesense-setup-agent.md).
 - [`machine-setup`](agents/machine-setup/agent.yaml): runs `/setup-machine` and
   `/add-machine-user`. See the [recipe](../setting-up-agents/machine-setup-agent.md).
 - [`manager`](agents/manager/agent.yaml): runs `/manage-team`. See the

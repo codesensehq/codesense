@@ -155,7 +155,15 @@ export const mockCodesenseOrg: Org = {
   remote_url: null,
   config_flags: {},
   people: [],
-  teams: [{ name: CODESENSE_DOCS_TEAM, source_repos: [], landing_page: "README.html" }],
+  teams: [
+    {
+      name: CODESENSE_DOCS_TEAM,
+      source_repos: [],
+      landing_page: "README.html",
+      // The page a story file opens in (`?nav=demo` serves it).
+      story_page: "dashboards/story.html",
+    },
+  ],
   org_root: `/mock/.codesense/users/${MOCK_USER.userId}/codesense-docs`,
 };
 

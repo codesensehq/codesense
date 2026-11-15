@@ -1171,7 +1171,7 @@ where
 
 /// A user message's blocks without what Codex injects ahead of the person's words: the project
 /// instructions and the environment context ride in as user-role blocks.
-fn without_injected_context(content: &Value) -> Value {
+pub(super) fn without_injected_context(content: &Value) -> Value {
     const INJECTED: [&str; 2] = ["# AGENTS.md instructions for", "<environment_context>"];
     let Value::Array(blocks) = content else {
         return content.clone();

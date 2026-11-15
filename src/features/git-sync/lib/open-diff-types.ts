@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import type { ImageSides } from "@/tauri/commands";
+
 import type { FileRedline, PublishFile } from "./types";
 
 export interface OpenDiffParams {
@@ -17,3 +19,8 @@ export type OpenDiffResult =
 export type OpenDiffRead =
   | Exclude<OpenDiffResult, { status: "opened" }>
   | { status: "opened"; redline: FileRedline; files: PublishFile[]; resolvedRev: string };
+
+/** The open-diff tab's raster sides: the same states as {@link OpenDiffRead}. */
+export type OpenDiffImageRead =
+  | Exclude<OpenDiffResult, { status: "opened" }>
+  | { status: "opened"; images: ImageSides; resolvedRev: string };

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { DEFAULT_APP_THEME, type AppTheme } from "@/themes";
+import { createSessionTextRouter, type SessionTextEvent } from "./session-text";
 import type { ThemeMode } from "@/themes/compiler";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -10,6 +11,8 @@ import {
   liveHubViewKey,
   type FrameRecord,
   agentReadSessions,
+  sessionTextUnwatch,
+  sessionTextWatch,
   type SessionListRow,
 } from "@/tauri/commands";
 import { ORG_REGISTRY_CHANGED_EVENT, SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT } from "@/tauri/events";
@@ -25,6 +28,10 @@ type BadgeDelivery = {
   /** What the frame's grant allows, so it is told only changes it could read. */
   grants?: readonly string[];
 };
+/** The host event a session's assistant prose arrives on (`session_text.rs`). */
+const SESSION_TEXT_EVENT = "session-text";
+/** A page hears a session's prose only under this grant. */
+const SESSIONS_READ_GRANT = "sessions:read";
 /** `setupState()` reads every org on this Mac, so it takes the machine-wide grant. */
 const SETUP_READ_GRANT = "machines:read";
 
@@ -97,6 +104,9 @@ type Dependencies = {
   watchPasteTarget?: (changed: () => void) => UnlistenFn;
   readUi: (key: string) => Promise<Record<string, unknown>>;
   writeUi: (key: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /** Start and stop the host's stream of a session's prose (`session_text_watch`). */
+  watchText?: (sessionId: string) => Promise<void>;
+  unwatchText?: (sessionId: string) => Promise<void>;
 };
 type Frame = {
   viewKey: string;
@@ -117,6 +127,9 @@ type Frame = {
   resync: Set<string>;
   waits: Array<() => void>;
   invalidations: Map<string, Record<string, unknown>>;
+  /** The sessions whose assistant prose this frame hears (`onSessionText`), each with the prose
+   *  keys of its current turn already posted: a joiner's replay repeats nothing to this frame. */
+  sessionText: Map<string, { turn: string; heard: Set<string> }>;
   themeChanged?: () => void;
 };
 const keyOf = (topic: string, viewKey: string) => JSON.stringify([topic, viewKey]);
@@ -188,6 +201,13 @@ function canDeliver(frame: Frame, message: Record<string, unknown>) {
     (sub) => sub.topic === message.topic && !sub.order && sub.viewKey === message.viewKey,
   );
 }
+/** The session ids an event names: a progress or done event's `sessionId`, a pty-exit's
+ *  `session_id`, or a usage notice's `sessionIds`. */
+const sessionIdsOf = (payload: unknown): string[] => {
+  const p = (payload ?? {}) as { sessionId?: unknown; session_id?: unknown; sessionIds?: unknown };
+  const ids = Array.isArray(p.sessionIds) ? p.sessionIds : [p.sessionId ?? p.session_id];
+  return ids.filter((id): id is string => typeof id === "string" && id !== "");
+};
 const rowId = (row: HubRow) => row.id ?? String(row.handle);
 
 export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
@@ -336,16 +356,33 @@ export class LiveHub {
       this.queueDelta(subscription.frame, delta);
       this.schedule();
     });
-    for (const [event, type] of [
+    const nudges: [event: string, type: string][] = [
       ["agent-inbox-changed", "inbox-changed"],
       ["routines:changed", "routines-changed"],
       ["machines-changed", "machines-changed"],
       ["worktree-changed", "worktrees-changed"],
       ["context-index-changed", "context-changed"],
       ["mcp:agent-message", "agent-activity-changed"],
-      ["mcp:agent-progress", "agent-activity-changed"],
-    ])
+    ];
+    for (const [event, type] of nudges)
       this.listen(event, ({ payload }) => this.invalidate(type, payload));
+    // A session's assistant prose as it is written, and one final message per turn, to the
+    // frames that watch it (and hold sessions:read). Prose is not a nudge: it is delivered
+    // as it comes, never held for a hidden frame to reread.
+    this.listen(SESSION_TEXT_EVENT, ({ payload }) => this.sessionText(payload));
+    // An agent's session record (tokens, cost, files) moves with its progress and its end, and
+    // with usage stored for its session (the host debounces that to about 2 s). Each nudge names
+    // its session, so a page reads again only its own agent's record. Commits have no event of
+    // their own: a record's files refresh on progress, done and exit.
+    this.listen("mcp:agent-progress", ({ payload }) => {
+      this.invalidate("agent-activity-changed", payload);
+      this.sessionRecordChanged(sessionIdsOf(payload));
+    });
+    for (const event of ["mcp:agent-done", "pty-exit"])
+      this.listen(event, ({ payload }) => this.sessionRecordChanged(sessionIdsOf(payload)));
+    this.listen("session-usage-changed", ({ payload }) =>
+      this.sessionRecordChanged(sessionIdsOf(payload)),
+    );
     // Any change to orgs, teams or source repos (creating or deleting a team, attaching a
     // context repo, adding a source repo) raises one or more of these; a burst folds into one
     // page event.
@@ -378,6 +415,36 @@ export class LiveHub {
       this.invalidate("setup-changed");
     }, wait);
   }
+  private textRouter = createSessionTextRouter();
+  private sessionText(payload: unknown) {
+    const { sessionId, event } = (payload ?? {}) as { sessionId?: unknown; event?: unknown };
+    if (typeof sessionId !== "string" || !event || typeof event !== "object") return;
+    for (const message of this.textRouter(sessionId, event as SessionTextEvent)) {
+      for (const frame of this.frames.values()) {
+        const watch = frame.sessionText.get(sessionId);
+        if (frame.disposed || !watch) continue;
+        if (!frame.grants.includes(SESSIONS_READ_GRANT)) continue;
+        if (watch.turn !== message.turn) watch.heard = new Set();
+        watch.turn = message.turn;
+        if (message.kind === "prose") {
+          if (watch.heard.has(message.key)) continue;
+          watch.heard.add(message.key);
+        }
+        frame.post({ type: "codesense:session-text", ...message });
+      }
+    }
+  }
+  /** A gone frame's prose streams stop. */
+  private releaseText(frame: Frame) {
+    for (const sessionId of frame.sessionText.keys())
+      void this.deps.unwatchText?.(sessionId).catch(() => {});
+    frame.sessionText.clear();
+  }
+  private sessionRecordChanged(sessionIds: string[]) {
+    // An event that names no session is one every record may have to reread.
+    for (const sessionId of sessionIds.length ? sessionIds : [undefined])
+      this.invalidate("session-record-changed", { sessionId });
+  }
   /** Posts a payloadless (or context/inbox) change nudge to every frame; a hidden frame
    *  holds it until shown, since consumers must reread. */
   private invalidate(type: string, payload?: unknown) {
@@ -386,6 +453,9 @@ export class LiveHub {
       type: `codesense:${type}`,
       ...(type === "context-changed"
         ? { orgs: [], allOrgs: true, truncated: true, ...(payload as object) }
+        : {}),
+      ...(type === "session-record-changed" && sessionIdsOf(payload).length
+        ? { sessionId: sessionIdsOf(payload)[0] }
         : {}),
     };
     const changes = type === "inbox-changed" ? inboxChangesOf(payload) : [];
@@ -403,15 +473,17 @@ export class LiveHub {
           key,
           type === "context-changed" && held
             ? { ...message, allOrgs: true }
-            : type === "inbox-changed" && changes.length
-              ? {
-                  ...message,
-                  changes: unionChanges(
-                    (held?.changes as InboxChange[] | undefined) ?? [],
-                    changes,
-                  ),
-                }
-              : message,
+            : type === "session-record-changed" && held && held.sessionId !== message.sessionId
+              ? { type: message.type }
+              : type === "inbox-changed" && changes.length
+                ? {
+                    ...message,
+                    changes: unionChanges(
+                      (held?.changes as InboxChange[] | undefined) ?? [],
+                      changes,
+                    ),
+                  }
+                : message,
         );
         // A paste-target flip changes no hub data, so it never makes a hidden page resync.
         if (type === "paste-target-changed") continue;
@@ -523,6 +595,7 @@ export class LiveHub {
       resync: new Set(),
       waits: [],
       invalidations: new Map(),
+      sessionText: new Map(),
     };
     this.frames.set(id, frame);
     this.balanceHidden();
@@ -636,6 +709,22 @@ export class LiveHub {
     };
     return {
       subscribe,
+      /** This frame hears `sessionId`'s assistant prose; the bridge checked its grant and team.
+       *  One host watch per frame and session, however often the page asks. */
+      watchText: async (sessionId: string) => {
+        if (frame.disposed || frame.sessionText.has(sessionId)) return;
+        frame.sessionText.set(sessionId, { turn: "", heard: new Set() });
+        try {
+          await this.deps.watchText?.(sessionId);
+        } catch (error) {
+          frame.sessionText.delete(sessionId);
+          throw error;
+        }
+      },
+      unwatchText: async (sessionId: string) => {
+        if (!frame.sessionText.delete(sessionId)) return;
+        await this.deps.unwatchText?.(sessionId);
+      },
       unsubscribe: async (topic: string, selector?: ViewSelector) => {
         const scopedViewKey = subscriptionViewKey(frame, topic, selector);
         const scopeKey = subscriptionKey(topic, scopedViewKey);
@@ -782,6 +871,7 @@ export class LiveHub {
           } else void this.deps.unsubscribe?.(subscription.id).catch(() => {});
         }
         frame.scoped.clear();
+        this.releaseText(frame);
         if (!this.frames.size && this.timer) {
           clearTimeout(this.timer);
           this.timer = null;
@@ -1156,6 +1246,7 @@ export class LiveHub {
     for (const frame of this.frames.values()) {
       if (frame.hiddenTimer) clearTimeout(frame.hiddenTimer);
       frame.disposed = true;
+      this.releaseText(frame);
       frame.waits.splice(0).forEach((resolve) => resolve());
     }
     for (const subscription of this.scoped.values())
@@ -1185,6 +1276,9 @@ export const liveHub = new LiveHub({
   readUi: readSharedUiState,
   writeUi: writeSharedUiState,
   watchUi: watchSharedUiState,
+  // Read when called, so a test that mocks the commands without these still loads the hub.
+  watchText: (sessionId) => sessionTextWatch(sessionId),
+  unwatchText: (sessionId) => sessionTextUnwatch(sessionId),
   // Loaded when the hub starts: a static import of send-to-terminal (which reaches the viewer
   // and org stores) puts live-hub in their import cycle and breaks the app's boot order.
   watchPasteTarget: (changed) => {

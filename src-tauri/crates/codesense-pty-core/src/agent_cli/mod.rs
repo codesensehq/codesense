@@ -38,6 +38,7 @@ mod opencode;
 #[cfg(any(test, feature = "test-support"))]
 pub mod orion;
 pub mod output;
+pub mod prose;
 pub mod version_cache;
 
 pub use codesense_host_proto::agent_cli::{AgentCli, NativeLaunch};

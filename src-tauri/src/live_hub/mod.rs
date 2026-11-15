@@ -1989,6 +1989,8 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         updates.retain(|(scope, _)| scope.as_ref().is_some_and(|key| allowed.contains(key)));
     }
     inbox.fill_session_fields(&rows);
+    // Each projected message the human sent to a session patches its delivery row.
+    let (deliveries, undelivered) = inbox.delivery_patch(&updates, &removes);
     let counts = inbox.count_rows();
     // What inbox readers show changed, whether or not an inbox view is open. Agent-list
     // deltas published below are not news to them.
@@ -2004,6 +2006,12 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;
+        deltas.extend(model.projections.patch_view(
+            inbox::DELIVERY_TOPIC,
+            deliveries,
+            undelivered,
+            None,
+        )?);
         deltas.extend(project_agent_views(&mut model)?);
         if hydrated {
             // Initial history is loaded through bounded snapshots, never arrival deltas.

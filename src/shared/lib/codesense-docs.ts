@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /**
  * The bundled CodeSense docs context repo (SW-OC-16): the read-only context repo every
- * install ships, that the very first launch lands in. Mirrors `codesense-docs/bundle.json`
+ * install ships, that the very first launch lands in (on its setup page). Mirrors `codesense-docs/bundle.json`
  * (a test keeps them equal); the backend places and connects it (`ensureCodesenseDocs`).
  */
 import type { Org } from "@/shared/types/domain";
@@ -11,8 +11,10 @@ export const CODESENSE_DOCS_TEAM = "getting-started";
 /** The name the switcher, chip and headers show. Not plain "CodeSense", which reads as
  *  a duplicate of a user's own repo named after the product. */
 export const CODESENSE_DOCS_DISPLAY_NAME = "CodeSense Docs";
-/** The README the first launch opens, relative to the repo root. */
+/** The README, relative to the repo root. It stays reachable from the repo's own tree. */
 export const CODESENSE_DOCS_README = "getting-started/content/README.html";
+/** The CodeSense setup page the first launch opens, relative to the repo root. */
+export const CODESENSE_DOCS_SETUP = "getting-started/content/guide/index.html";
 /** The bundled Foreman page, relative to the repo root. */
 export const CODESENSE_DOCS_FOREMAN_PAGE = "getting-started/content/foreman/index.html";
 
@@ -29,18 +31,28 @@ export function isCodesenseDocs(slug: string | null | undefined): boolean {
  * - The persisted last-opened repo when it is still connected (every later launch).
  * - A newly connected one, when a connect/create just happened.
  * - Otherwise (the very first launch, or the last-opened repo is gone) the CodeSense
- *   docs, so there is never a dead end.
+ *   docs, so there is never a dead end. `firstLaunch` (nothing opened before and no
+ *   context repo of the person's own) asks the caller to open the setup page.
  */
 export function pickLaunchOrg(input: {
   orgs: readonly Pick<Org, "slug">[];
   activeOrgSlug: string | null;
   newlyConnected?: string | null;
-}): string | null {
+}): { slug: string | null; firstLaunch: boolean } {
   const { orgs, activeOrgSlug, newlyConnected } = input;
-  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) return newlyConnected;
-  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) return activeOrgSlug;
-  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) return CODESENSE_DOCS_SLUG;
-  return orgs[0]?.slug ?? null;
+  if (newlyConnected && orgs.some((o) => o.slug === newlyConnected)) {
+    return { slug: newlyConnected, firstLaunch: false };
+  }
+  if (activeOrgSlug && orgs.some((o) => o.slug === activeOrgSlug)) {
+    return { slug: activeOrgSlug, firstLaunch: false };
+  }
+  if (orgs.some((o) => o.slug === CODESENSE_DOCS_SLUG)) {
+    return {
+      slug: CODESENSE_DOCS_SLUG,
+      firstLaunch: activeOrgSlug === null && orgs.every((o) => o.slug === CODESENSE_DOCS_SLUG),
+    };
+  }
+  return { slug: orgs[0]?.slug ?? null, firstLaunch: false };
 }
 
 /**

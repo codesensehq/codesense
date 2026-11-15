@@ -5,8 +5,11 @@
 export const isBusy=lead=>Boolean(lead)&&lead.state!=='idle';
 // Queued or Delivered for one sent message. busyAtSend is whether the lead was busy when it went (read once, at the send); lead is its sessions() row now; newestLeadAt is the time of the lead's newest thread message.
 // A busy send is Queued until the lead's inbox notice says it was told after the send (mailNotice 'told' with notifiedAt at or after sentAt), or the notice came at or after the send and the unread count is back to 0 (told, then read: mailNotice is null again), or the lead has written since.
-export function deliveryMark({sentAt,busyAtSend,lead,newestLeadAt=0}){
+// delivery is the message's own row on the messageDelivery topic ({state:'queued'|'delivered'}), when the host pushes it: then it alone decides after the idle-send shortcut, not the roster's notice nor a later lead message. Without one (an older host, or a message the topic does not list) the roster rule above stands.
+export function deliveryMark({sentAt,busyAtSend,lead,newestLeadAt=0,delivery=null}){
  if(!busyAtSend)return 'delivered';
+ // Delivered means told: with the message's own row, only the row decides (a busy lead posting mid-turn has not been told yet).
+ if(delivery&&typeof delivery.state==='string')return delivery.state==='delivered'?'delivered':'queued';
  if(Number.isFinite(newestLeadAt)&&newestLeadAt>sentAt)return 'delivered';
  if(!lead)return 'queued';
  const notified=Date.parse(lead.notifiedAt);
@@ -94,4 +97,61 @@ export function parseCardLine(text){
 export function cardAnswer(cardId,thread){
  const row=(Array.isArray(thread)?thread:[]).find(item=>item&&item.from==='human'&&item.inReplyTo===cardId);
  return row?{text:row.text||'',at:row.createdAtMs||0}:null;
+}
+// The person's pins of a chat's messages: the words the kit's chat and the app's overlay both say. A thread shows at most PIN_CAP pins, the person's and its agent's together.
+export const PIN_CAP=3;
+const squashSpace=text=>String(text||'').replace(/\s+/g,' ').trim();
+// The first sentence of a message's first non-empty line: up to its first . ! or ?.
+export function pinFirstSentence(text){const line=String(text||'').split('\n').find(l=>l.trim())||'';const end=/^.*?[.!?](?=\s|$)/.exec(line.trim());return squashSpace(end?end[0]:line);}
+// "you" for the person, else the agent's name.
+export const pinWho=(pinnedBy,nameOf)=>pinnedBy==='human'?'you':nameOf(pinnedBy);
+// The dimmed Pin's accessible name and tooltip at the cap.
+export const pinCapLabel=count=>`${count} of ${PIN_CAP} pinned`;
+// The note at the cap: whose pins fill the list, the most first. Nothing is replaced.
+export function pinCapNote(pins,nameOf){
+ const counts=new Map();
+ for(const p of pins){const who=pinWho(p.pinnedBy,nameOf);counts.set(who,(counts.get(who)||0)+1);}
+ const parts=[...counts].sort((a,b)=>b[1]-a[1]).map(([who,n])=>`${n} by ${who}`).join(', ');
+ return `${pinCapLabel(pins.length)} (${parts}). Unpin one to pin this.`;
+}
+// A message named by its first words, as the line chip and the live region show it.
+export function pinFirstWords(text,words=4){const all=squashSpace(text).split(' ');return all.length<=words?all.join(' '):`${all.slice(0,words).join(' ')}…`;}
+// What the polite live region says after a pin, an unpin or an Undo.
+export function pinLiveText(done,title,count){const verb=done==='pinned'?'Pinned':done==='unpinned'?'Unpinned':'Restored';return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;}
+// At the cap, Pin… asks which pin to replace: the chooser's words, which the kit's chat and the app's overlay both say.
+// Pin…'s accessible name and tooltip at the cap.
+export const pinReplaceLabel=count=>`Pin, replacing one (${pinCapLabel(count)})`;
+// The chooser's heading, which names its group.
+export const pinChooserHeading=count=>`Replace a pin with this message · ${pinCapLabel(count)}`;
+// A row's line: who pinned it, and when (the pin, not the message).
+export const pinPinnedAtLine=(who,at)=>`Pinned by ${who} at ${at}`;
+// The note and live line after a replace: "your" for the person, else the agent's name with 's.
+export const pinReplacedText=(who,title)=>`Replaced ${who==='you'?'your':`${who}'s`} pin “${title}”.`;
+// A row the agent added while the chooser was open, before the person arrives on it.
+export const pinNewRowText=title=>`“${title}” is new. Choose it again to replace it.`;
+// What changed in the list while the chooser was open.
+export const pinListChangeText=(added,left)=>[...added.map(t=>`“${t}” is new.`),...left.map(t=>`“${t}” left the list.`)].join(' ');
+// The agent pinned this message while the chooser was open.
+export const pinPinnedMeanwhileText=who=>`${who} pinned this message. Nothing was replaced.`;
+export const PIN_REPLACE_FAILED="Couldn't replace. Nothing changed.";
+// The chooser when a pin left and there's room.
+export const PIN_ROOM_NOW="There's room now.";
+// An Undo of a replace that can't happen any more, and why.
+export const PIN_UNDO_FULL="Can't undo: the list is full again.";
+export const PIN_UNDO_GONE="Can't undo: that message was archived or withdrawn.";
+// A message's text with its tags dropped and its entities read, as a heading or title shows it: no DOM, so the kit and the app name pins the same way.
+const ENTITIES={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
+function plainText(markup){return squashSpace(String(markup||'').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,code)=>{if(code[0]==='#'){const n=code[1].toLowerCase()==='x'?parseInt(code.slice(2),16):parseInt(code.slice(1),10);return Number.isInteger(n)&&n>=0&&n<=0x10ffff&&!(n>=0xd800&&n<=0xdfff)?String.fromCodePoint(n):all;}const named=ENTITIES[code.toLowerCase()];return named===undefined?all:named;}));}
+// What a pin of this message is called. An HTML message: its summary, then its <title>, then its first heading, then "Dashboard from <sender>"; never its markup. Any other message: its summary, else its first sentence, else "Message from <sender>".
+export function pinTitleOf(m,sender){
+ const summary=squashSpace(m&&m.summary);
+ if(summary)return summary;
+ const text=String((m&&m.text)||'');
+ if(m&&m.contentType==='html'){
+  const title=/<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+  if(title&&plainText(title[1]))return plainText(title[1]);
+  for(const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)){const name=plainText(heading[2]);if(name)return name;}
+  return `Dashboard from ${sender}`;
+ }
+ return pinFirstSentence(text)||`Message from ${sender}`;
 }

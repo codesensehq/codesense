@@ -1282,3 +1282,6 @@ fn a_skills_list_on_a_runtime_that_cannot_enforce_it_warns_and_offers_everything
 
 #[path = "launch_cwd_tests.rs"]
 mod launch_cwd_tests;
+
+#[path = "guide_agent_tests.rs"]
+mod guide_agent_tests;
