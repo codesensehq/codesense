@@ -259,7 +259,6 @@ fn plan_for(request: &Request<'_>, path_var: Option<&OsStr>, attribution_hook_tr
         };
         return Plan::without(status, Some(version));
     }
-    super::metrics_db::prune_if_due(managed.root(), &managed.git_ai_home());
     Plan {
         status: AttributionStatus::Active,
         git_ai_version: Some(version),

@@ -908,6 +908,7 @@ pub fn run() {
                     std::env::var_os("PATH").as_deref(),
                     attribution::install::Trigger::Startup,
                 );
+                attribution::metrics_db::start(&home);
                 attribution::watcher::start(app.handle(), home);
             }
 
