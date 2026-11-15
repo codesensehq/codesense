@@ -1527,8 +1527,20 @@
       const open = htmlOpen.get(id);
       if (!open) return;
       htmlOpen.delete(id);
+      open.closed = true;
       open.slot.remove();
       if (typeof open.release === "function") open.release();
+    };
+    const keepOpen = (id, fresh) => {
+      const open = htmlOpen.get(id), old = open && open.slot.isConnected ? open.slot.closest(".msg") : null, body = old && old.querySelector(":scope > .body"), freshBody = fresh.querySelector(":scope > .body");
+      if (!body || !freshBody) return fresh;
+      for (const child of [...old.childNodes]) if (child !== body) child.remove();
+      const kids = [...fresh.childNodes], at = kids.indexOf(freshBody);
+      body.before(...kids.slice(0, at));
+      body.after(...kids.slice(at + 1));
+      for (const { name } of [...old.attributes]) if (!fresh.hasAttribute(name)) old.removeAttribute(name);
+      for (const { name, value } of [...fresh.attributes]) old.setAttribute(name, value);
+      return old;
     };
     const htmlToggle = (item, title) => {
       if (!html || typeof html.open !== "function") return null;
@@ -1543,9 +1555,22 @@
           show(false);
           return;
         }
-        const slot = h("div", { class: "html-slot", id: slotId });
+        const slot = h("div", { class: "html-slot", id: slotId }), open = { slot, release: null, closed: false };
         button.parentNode.append(slot);
-        htmlOpen.set(item.id, { slot, release: html.open({ messageId: item.id, title, contentType: "html" }, slot) });
+        let answer;
+        try {
+          answer = html.open({ messageId: item.id, title, contentType: "html" }, slot);
+        } catch {
+          slot.remove();
+          return;
+        }
+        htmlOpen.set(item.id, open);
+        if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
+          if (!open.closed) open.release = release;
+          else if (typeof release === "function") release();
+        }, () => {
+        });
+        else open.release = answer;
         show(true);
       });
       show(htmlOpen.has(item.id));
@@ -1553,11 +1578,11 @@
     };
     const htmlName = (item, who) => {
       const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary }), open = htmlOpen.get(item.id);
-      return [...name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from], htmlToggle(item, name || from), open ? open.slot : null];
+      return [...name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from], htmlToggle(item, name || from), open && !open.slot.isConnected ? open.slot : null];
     };
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
-      return h(
+      const node = h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
         first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
@@ -1568,6 +1593,7 @@
         pin2 ? pin2.tag : null,
         pin2 ? pin2.foot : null
       );
+      return item.contentType === "html" && htmlOpen.has(item.id) ? keepOpen(item.id, node) : node;
     };
     const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
