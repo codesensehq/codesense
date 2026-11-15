@@ -803,8 +803,11 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       notify(entry, (l) => l.output?.(item.data));
       if (overflowed) dropParked(entry);
       // A program waiting on a reply gets it now, not on the next show.
-      else if (TERMINAL_QUERY.test(d.queryTail + item.data)) writeParked(entry, d);
-      d.queryTail = item.data.slice(-QUERY_TAIL_CHARS);
+      else if (TERMINAL_QUERY.test(d.queryTail + item.data)) {
+        writeParked(entry, d);
+        // The question is answered: the next chunk must not match it again.
+        d.queryTail = "";
+      } else d.queryTail = (d.queryTail + item.data).slice(-QUERY_TAIL_CHARS);
       return;
     }
     d.coalescer.append(item.data);
@@ -949,8 +952,9 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     for (const item of parked.events) {
       if (item.kind === "output") {
         d.pendingSeqEnd = item.seqEnd;
-        enqueue(d, { kind: "output", data: item.data, seqEnd: item.seqEnd, replay: false });
+        d.coalescer.append(item.data);
       } else {
+        // enqueue flushes the coalesced output before a resize, so the order holds.
         enqueue(d, {
           kind: "resize",
           cols: item.cols,
@@ -959,6 +963,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         });
       }
     }
+    d.coalescer.flush();
   }
 
   /** The parked ring overflowed: release the display, so the next show rebuilds it

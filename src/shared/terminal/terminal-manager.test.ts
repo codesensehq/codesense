@@ -606,6 +606,20 @@ describe("a parked display matches the reference (I4)", () => {
     expect(transport.writePty).toHaveBeenCalledTimes(1);
   });
 
+  it("a plain chunk after an answered query is not written while parked", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    m.detach("s1", target);
+    fake.server.produce("s1", "ask\x1b[6n");
+    await vi.advanceTimersByTimeAsync(200);
+    const writes = vi.spyOn(m.terminal("s1")!, "write");
+    fake.server.produce("s1", "plain\r\n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
   it("detaching a display whose pending output overflows the ring leaves nothing in the parking container", async () => {
     const m = newManager();
     await open(m);
