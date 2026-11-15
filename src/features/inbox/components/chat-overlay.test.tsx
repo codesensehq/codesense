@@ -1086,6 +1086,42 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     }
   });
 
+  it("measures only the active message's blocks, and names an older one's when focus moves into it", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const measured: Element[] = [];
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        if (!this.matches(BLOCK)) return 0;
+        measured.push(this);
+        return 400;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            msg(1, LEAD, "human", "Here:\n\n```\nlong line of code\n```"),
+            ...MESSAGES.slice(1),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const older = rows()[0]!;
+      const code = older.querySelector<HTMLElement>("pre")!;
+      // An older message's block is out of the Tab order: it is neither measured nor named.
+      expect(measured).not.toContain(code);
+      expect(code).not.toHaveAttribute("role");
+      act(() => older.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("names a grouped follow-on message by its sender and time, as the message it follows is", async () => {
     await renderOverlay(420, 700);
     const grouped = rows().filter((r) => r.classList.contains("grouped"));

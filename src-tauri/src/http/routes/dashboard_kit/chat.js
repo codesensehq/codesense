@@ -893,11 +893,21 @@
   var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
   var SCROLLER = "pre, .inbox-table-scroll";
   var SCROLLER_NAME = { code: "Code", table: "Table" };
-  function nameScroller(el) {
-    if (el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby")) return;
-    if (el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight) return;
-    if (!el.hasAttribute("role")) el.setAttribute("role", "region");
-    el.setAttribute("aria-label", el.matches("pre") ? SCROLLER_NAME.code : SCROLLER_NAME.table);
+  function scrollerNames(node, active) {
+    if (active === null) return () => {
+    };
+    const own = node.closest ? node.closest(ROW) : null;
+    const row = own ? own.dataset.mid === active ? own : null : node.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+    if (!row) return () => {
+    };
+    const blocks = [...row.querySelectorAll(SCROLLER)].filter((el) => !el.hasAttribute("aria-label") && !el.hasAttribute("aria-labelledby"));
+    const scrolls = blocks.filter((el) => el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight);
+    return () => {
+      for (const el of scrolls) {
+        if (!el.hasAttribute("role")) el.setAttribute("role", "region");
+        el.setAttribute("aria-label", el.matches("pre") ? SCROLLER_NAME.code : SCROLLER_NAME.table);
+      }
+    };
   }
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
@@ -913,6 +923,7 @@
     }
   }
   function applyTo(node, active) {
+    const name = scrollerNames(node, active);
     const rows = node.matches(ROW) ? [node, ...node.querySelectorAll(ROW)] : node.querySelectorAll(ROW);
     for (const row of rows) {
       row.tabIndex = row.dataset.mid === active ? 0 : -1;
@@ -922,10 +933,9 @@
     for (const el of [...controls, ...node.querySelectorAll(FOCUSABLE)]) {
       if (el.matches(ROW)) continue;
       const row = el.closest(ROW);
-      if (!row) continue;
-      setControl(el, row.dataset.mid === active);
-      if (el.matches(SCROLLER)) nameScroller(el);
+      if (row) setControl(el, row.dataset.mid === active);
     }
+    name();
   }
   function rovingThread(log) {
     let picked = null, active = null;
@@ -974,10 +984,11 @@
     };
     const onFocusIn = (event) => {
       const row = event.target.closest && event.target.closest(ROW);
-      if (row && log.contains(row) && row.dataset.mid !== active) {
+      if (!row || !log.contains(row)) return;
+      if (row.dataset.mid !== active) {
         picked = row.dataset.mid;
         refresh();
-      }
+      } else scrollerNames(row, active)();
     };
     log.addEventListener("keydown", onKeyDown);
     log.addEventListener("focusin", onFocusIn);
