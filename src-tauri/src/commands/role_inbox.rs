@@ -447,7 +447,7 @@ impl RoleRenewalStores {
         }
     }
 
-    fn snapshot(&self) -> Vec<PathBuf> {
+    fn noted_paths(&self) -> Vec<PathBuf> {
         self.0
             .lock()
             .map(|stores| stores.iter().cloned().collect())
@@ -530,7 +530,7 @@ async fn renew_roles_once(app: &tauri::AppHandle) {
     let Some(stores) = app.try_state::<RoleRenewalStores>() else {
         return;
     };
-    let paths = stores.snapshot();
+    let paths = stores.noted_paths();
     if paths.is_empty() {
         return;
     }
@@ -556,7 +556,7 @@ async fn renew_noted_stores(app: &tauri::AppHandle, liveness: Liveness) {
         return;
     };
     let mut changed = false;
-    for path in stores.snapshot() {
+    for path in stores.noted_paths() {
         let (liveness, store_path) = (liveness.clone(), path.clone());
         let report = await_blocking("role_renewal", move || {
             // RI-2-ALLOW: inside await_blocking closure, off the async runtime.
