@@ -6,6 +6,16 @@
 /** What a message can hold that Tab would stop on: its actions, links and framed dashboards, and the code blocks and tables Chromium makes keyboard-focusable when
  *  they scroll (with no tabindex). */
 const FOCUSABLE='button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll';
+/** The blocks that scroll inside a message, and the name each one gets when it does (it is a Tab stop then, and a stop needs a name). */
+const SCROLLER='pre, .inbox-table-scroll';
+const SCROLLER_NAME={code:'Code',table:'Table'};
+/** Name a block that scrolls as a region, once; one that fits is left alone (a named region on every block would only be noise). */
+function nameScroller(el){
+ if(el.hasAttribute('aria-label')||el.hasAttribute('aria-labelledby'))return;
+ if(el.scrollWidth<=el.clientWidth&&el.scrollHeight<=el.clientHeight)return;
+ if(!el.hasAttribute('role'))el.setAttribute('role','region');
+ el.setAttribute('aria-label',el.matches('pre')?SCROLLER_NAME.code:SCROLLER_NAME.table);
+}
 /** The tabindex a control had before the thread took it out of the Tab order ("" for none). */
 const HELD='data-roving-tabindex';
 const ROW='[data-mid]';
@@ -28,7 +38,9 @@ function applyTo(node,active){
  for(const el of [...controls,...node.querySelectorAll(FOCUSABLE)]){
   if(el.matches(ROW))continue;
   const row=el.closest(ROW);
-  if(row)setControl(el,row.dataset.mid===active);
+  if(!row)continue;
+  setControl(el,row.dataset.mid===active);
+  if(el.matches(SCROLLER))nameScroller(el);
  }
 }
 export function rovingThread(log){

@@ -891,6 +891,14 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
   var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
+  var SCROLLER = "pre, .inbox-table-scroll";
+  var SCROLLER_NAME = { code: "Code", table: "Table" };
+  function nameScroller(el) {
+    if (el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby")) return;
+    if (el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight) return;
+    if (!el.hasAttribute("role")) el.setAttribute("role", "region");
+    el.setAttribute("aria-label", el.matches("pre") ? SCROLLER_NAME.code : SCROLLER_NAME.table);
+  }
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
   function setControl(el, on) {
@@ -914,7 +922,9 @@
     for (const el of [...controls, ...node.querySelectorAll(FOCUSABLE)]) {
       if (el.matches(ROW)) continue;
       const row = el.closest(ROW);
-      if (row) setControl(el, row.dataset.mid === active);
+      if (!row) continue;
+      setControl(el, row.dataset.mid === active);
+      if (el.matches(SCROLLER)) nameScroller(el);
     }
   }
   function rovingThread(log) {

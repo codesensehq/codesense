@@ -1047,6 +1047,45 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     for (const block of blocks) expect(block.hasAttribute("tabindex")).toBe(false);
   });
 
+  it("names a code block or table that scrolls, which Chromium makes a Tab stop, and leaves one that fits alone", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const wide = new Set<string>(["PRE"]);
+    // jsdom has no layout: the code block overflows, the table fits.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.matches(BLOCK) && wide.has(this.tagName) ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            ...MESSAGES,
+            msg(
+              9,
+              LEAD,
+              "human",
+              "Here:\n\n```\nlong line of code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            ),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      const table = newest.querySelector<HTMLElement>(".inbox-table-scroll")!;
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+      expect(table).not.toHaveAttribute("role");
+      expect(table).not.toHaveAttribute("aria-label");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("names a grouped follow-on message by its sender and time, as the message it follows is", async () => {
     await renderOverlay(420, 700);
     const grouped = rows().filter((r) => r.classList.contains("grouped"));
