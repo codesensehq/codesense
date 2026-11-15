@@ -148,6 +148,20 @@ fn refused_with_list(
     Ok(format!("{reason}. Pinned now: {held}"))
 }
 
+impl PinOp {
+    /// The message a write puts into the list, which a session may name only if it is party
+    /// to it: what a pin, restore or replace pins (or brings back).
+    fn pinned_message(&self) -> Option<i64> {
+        match self {
+            PinOp::Pin { message_id, .. }
+            | PinOp::Restore { message_id }
+            | PinOp::Replace { message_id, .. }
+            | PinOp::RestoreReplacing { message_id, .. } => Some(*message_id),
+            PinOp::Read | PinOp::Unpin { .. } | PinOp::Reorder { .. } => None,
+        }
+    }
+}
+
 /// Run `op` on `thread`'s list in the store at `own`, as `by`. A session (`party`) pins
 /// only mail it sent, received or is the reply target of, or a role message, as it
 /// reacts; the person pins anything the team's inbox shows.
@@ -163,10 +177,8 @@ async fn pins_in(
     let stored = {
         let thread = thread.clone();
         with_store("pins", path, move |store| {
-            if let (true, PinOp::Pin { message_id, .. } | PinOp::Restore { message_id }) =
-                (party, &op)
-            {
-                if !inbox::inbox_get(store, *message_id)?.is_some_and(|m| is_party(&m, &by)) {
+            if let (true, Some(message_id)) = (party, op.pinned_message()) {
+                if !inbox::inbox_get(store, message_id)?.is_some_and(|m| is_party(&m, &by)) {
                     return Ok(Err(format!("no message {message_id}")));
                 }
             }

@@ -404,7 +404,8 @@ pub fn pin_replace(
         return Err(invalid(&format!("no message {message_id}")));
     }
     let (mut order, gone) = ordered(&tx, thread)?;
-    if order.contains(&message_id) {
+    // Any live pin row counts, shown or kept past the cap (a message that left and came back).
+    if order.contains(&message_id) || gone.contains(&message_id) {
         return Err(invalid(&format!("message {message_id} is already pinned")));
     }
     let Some(at) = Iterator::position(&mut order.iter(), |id| *id == replaces) else {
@@ -898,6 +899,27 @@ mod tests {
         assert!(pin_replace(&store, &t, 9_999, a, "human").is_err());
         assert!(pin_replace(&store, &t, d, a, " ").is_err());
         assert_eq!(ids(&store, &t), vec![a, c]);
+    }
+
+    #[test]
+    fn replace_with_a_message_pinned_past_the_cap_is_refused_in_words_not_by_the_table() {
+        let (_d, store) = open_temp();
+        let t = thread(None);
+        let (a, b, c) = full_thread(&store, &t);
+        // a leaves (archived), d takes the free place, then a comes back: four live pins, a
+        // past the cap.
+        inbox_mark_archived_many(&store, &[a]).unwrap();
+        let d = message(&store);
+        pin_add(&store, &t, d, "human", None, None).unwrap();
+        inbox_unarchive_many(&store, &[a], &[]).unwrap();
+        assert_eq!(ids(&store, &t), vec![b, c, d]);
+        match pin_replace(&store, &t, a, b, "human") {
+            Err(super::super::sqlite::WvWriteError::Invalid(reason)) => {
+                assert!(reason.0.contains("already pinned"), "{}", reason.0)
+            }
+            other => panic!("expected the worded refusal, got {other:?}"),
+        }
+        assert_eq!(ids(&store, &t), vec![b, c, d]);
     }
 
     #[test]
