@@ -12,6 +12,7 @@ import {
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { usePrefsStore } from "@/features/dashboard/lib/prefs-client";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { isRunningAgent } from "@/features/viewer/lib/hand-agents";
 import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
@@ -1520,7 +1521,15 @@ describe("ChatOverlay for the Foreman", () => {
   let senders: string[];
   const realWatch = liveHub.watch.bind(liveHub);
 
+  // The view key the host files the page's `ui:foreman` state under: "all" under the Open
+  // preset (the default), the frame's team under Team-safe.
+  let preset: "open" | "team-safe";
+  const viewKeyOf = () =>
+    preset === "team-safe" ? `team:${DOCS_TEAM.org}/${DOCS_TEAM.team}` : "all";
+  const uiWatches: string[] = [];
+
   function foremanSetup(store: Map<string, ConversationMessage[]>) {
+    usePrefsStore.setState({ owned: { dashboardPolicy: { preset } }, ownedReady: true });
     // The docs team declares no agent_page: the Foreman's Full view comes from openForeman.
     useOrgStore.setState({
       orgs: [
@@ -1558,18 +1567,19 @@ describe("ChatOverlay for the Foreman", () => {
     });
     vi.spyOn(liveHub, "watch").mockImplementation((topic, viewKey, callback, options) => {
       if (topic !== "ui:foreman") return realWatch(topic, viewKey, callback, options);
-      expect(viewKey).toBe(`team:${DOCS_TEAM.org}/${DOCS_TEAM.team}`);
+      uiWatches.push(viewKey);
+      if (viewKey !== viewKeyOf()) return () => {};
       callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders }] } as never);
       return () => {};
     });
   }
 
-  async function renderForeman() {
+  async function renderForeman(teamKey = `${DOCS_TEAM.org}:${DOCS_TEAM.team}`) {
     render(
       <ChatOverlay
         tabId="tab-fm"
         sessionId={FOREMAN_SESSION}
-        teamKey={`${DOCS_TEAM.org}:${DOCS_TEAM.team}`}
+        teamKey={teamKey}
         composeRequest={0}
         size={{ width: 420, height: 700 }}
         placement="dock"
@@ -1580,6 +1590,8 @@ describe("ChatOverlay for the Foreman", () => {
 
   beforeEach(() => {
     senders = [FOREMAN, EARLIER];
+    preset = "open";
+    uiWatches.length = 0;
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1593,6 +1605,22 @@ describe("ChatOverlay for the Foreman", () => {
     expect(isForemanAgent("Foreman")).toBe(false);
     expect(isForemanAgent(null)).toBe(false);
   });
+
+  it.each(["open", "team-safe"] as const)(
+    "under the %s preset reads the page's sender set where the host files it",
+    async (which) => {
+      preset = which;
+      foremanSetup(
+        new Map([
+          [FOREMAN, LIVE_MAIL],
+          [EARLIER, EARLIER_MAIL],
+        ]),
+      );
+      await renderForeman();
+      await screen.findByText("Hello from the earlier Foreman.");
+      expect(new Set(uiWatches)).toEqual(new Set([viewKeyOf()]));
+    },
+  );
 
   it("shows the page's thread: the earlier Foreman sessions' messages, then the live one's, oldest first", async () => {
     foremanSetup(
@@ -1637,7 +1665,7 @@ describe("ChatOverlay for the Foreman", () => {
     const overlay = pinReads()[0];
     expect(overlay).toEqual({ team: DOCS_TEAM, agent: FOREMAN_AGENT_ID, story: "" });
 
-    // The page's shared read (agent/bridge.js `pins`): the Foreman's row's agent, no story, in its frame's team.
+    // The page's shared read (the bridge's `pins` verb): the Foreman's row's agent, no story, in its frame's team.
     vi.mocked(invoke).mockClear();
     await runBridgeCommand(
       "pins",
@@ -1687,9 +1715,70 @@ describe("ChatOverlay for the Foreman", () => {
     await act(async () => {
       listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null }));
     });
-    const shown = await screen.findAllByText("What needs me?");
-    expect(shown.length).toBeGreaterThan(0);
-    // The page's thread reads its newest senders' inboxes (src/foreman/session.js `sources`): the send's handle is one.
-    expect(senders.slice(0, FOREMAN_HISTORY)).toContain(to);
+    // It renders in the overlay's own thread, read back from the live Foreman's inbox: the inbox
+    // the page's thread reads for that handle.
+    const thread = screen.getByTestId("ibx-msgs");
+    expect(await within(thread).findByText("What needs me?")).toBeInTheDocument();
+  });
+
+  it("re-reads an earlier sender when the inbox changes: a second, still running Foreman's new message shows", async () => {
+    const store = new Map([
+      [FOREMAN, [...LIVE_MAIL]],
+      [EARLIER, [...EARLIER_MAIL]],
+    ]);
+    foremanSetup(store);
+    await renderForeman();
+    await screen.findByText("Hello from the earlier Foreman.");
+    store.get(EARLIER)!.push(fm(5, EARLIER, "human", "The other Foreman is still here.", NOW));
+    await act(async () => {
+      listeners.get(AGENT_INBOX_CHANGED_EVENT)?.forEach((h) => h({ payload: null }));
+    });
+    expect(await screen.findByText("The other Foreman is still here.")).toBeInTheDocument();
+  });
+
+  it("names a pin on an earlier session's message by that message, not by its id", async () => {
+    foremanSetup(
+      new Map([
+        [FOREMAN, LIVE_MAIL],
+        [EARLIER, EARLIER_MAIL],
+      ]),
+    );
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "agent_pins"
+        ? {
+            status: "pins",
+            team: DOCS_TEAM,
+            agentId: FOREMAN_AGENT_ID,
+            storyId: null,
+            pins: [
+              { messageId: 1, position: 0, pinnedBy: "human", pinnedAtMs: NOW, preview: null },
+            ],
+          }
+        : undefined,
+    );
+    await renderForeman();
+    await within(screen.getByTestId("ibx-msgs")).findByText("Hello from the earlier Foreman.");
+    const strip = await waitFor(() => {
+      const el = screen.getByTestId("chat-overlay").querySelector<HTMLElement>(".ibx-ov-pins");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    await waitFor(() => expect(strip.textContent).toMatch(/Hello from the earlier Foreman/));
+    expect(strip.textContent).not.toMatch(/Pin 1\b/);
+  });
+
+  it("keeps the Foreman's pins on the docs team when its chat lives in another team", async () => {
+    const USER_TEAM = { org: "acme", team: "widgets" };
+    const moved = [{ ...LIVE_MAIL[0]!, team: USER_TEAM }];
+    foremanSetup(new Map([[FOREMAN, moved]]));
+    await renderForeman("acme:widgets");
+    await waitFor(() =>
+      expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "agent_pins")).toBe(true),
+    );
+    const teams = vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === "agent_pins")
+      .map(([, args]) => (args as { team: unknown }).team);
+    expect(teams).toEqual(teams.map(() => DOCS_TEAM));
   });
 });

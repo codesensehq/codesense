@@ -218,13 +218,18 @@ export function ChatOverlay({
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
   // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
+  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too).
+  const pinnedMessage = (id: number) =>
+    foreman
+      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ?? null)
+      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
   const pinTitle = (id: number) => {
-    const m = messages.find((x) => x.id === id && (!team || sameTeam(x.team, team)));
+    const m = pinnedMessage(id);
     return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
   };
   // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
   const ownCard = (p: AgentPin): OwnPinCard | null => {
-    const m = messages.find((x) => x.id === p.messageId && (!team || sameTeam(x.team, team)));
+    const m = pinnedMessage(p.messageId);
     if (p.preview || !m) return null;
     const who = senderOf(m);
     const at = formatClock(m.createdAtMs);
@@ -237,9 +242,7 @@ export function ChatOverlay({
     };
   };
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
-  const openedMessage = opened
-    ? (messages.find((m) => m.id === opened.messageId && (!team || sameTeam(m.team, team))) ?? null)
-    : null;
+  const openedMessage = opened ? pinnedMessage(opened.messageId) : null;
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
   // The person pins this chat's messages into the same thread: Show pins goes to the strip.
   const personPins = usePersonPins({
