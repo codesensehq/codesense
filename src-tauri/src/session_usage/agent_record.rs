@@ -82,7 +82,7 @@ pub(crate) fn thread_sessions(
 ) -> Result<Vec<ThreadSession>, String> {
     let key = agent.split('@').next().unwrap_or(agent).trim();
     let story = story.trim();
-    if key.is_empty() || story.is_empty() {
+    if str::is_empty(key) || str::is_empty(story) {
         return Ok(vec![]);
     }
     let mut stmt = rusqlite::Connection::prepare(
@@ -111,7 +111,7 @@ pub(crate) fn thread_sessions_in(
     story: &str,
 ) -> Result<Vec<ThreadSession>, String> {
     let path = home.join("usage.sqlite");
-    if !path.exists() {
+    if !Path::exists(&path) {
         return Ok(vec![]);
     }
     thread_sessions(&UsageStore::open(&path)?, agent, story)

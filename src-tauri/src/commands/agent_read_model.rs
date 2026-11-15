@@ -1332,7 +1332,7 @@ pub(crate) async fn thread_inbox(
 ) -> Result<ThreadInboxDto, String> {
     let thread = crate::weft::pins::ThreadKey::new(agent_id, Some(story_id))
         .map_err(|e| e.to_string())?;
-    let sessions = host.sessions().await?;
+    let sessions = InboxHost::sessions(host).await?;
     // The roster's sessions launched on this thread, from one read of the launch registry.
     let listed: Vec<String> = sessions.iter().map(|known| known.handle.clone()).collect();
     let launched = host.launch_threads(&listed).await;
@@ -1341,7 +1341,7 @@ pub(crate) async fn thread_inbox(
         .zip(launched)
         .filter(|(_, launch)| {
             launch.as_ref().is_some_and(|(agent, story)| {
-                crate::weft::pins::ThreadKey::new(agent, story.as_deref()).ok().as_ref()
+                Result::ok(crate::weft::pins::ThreadKey::new(agent, story.as_deref())).as_ref()
                     == Some(&thread)
             })
         })
@@ -1349,14 +1349,14 @@ pub(crate) async fn thread_inbox(
         .collect();
     // A no-story thread is its listed sessions only: nothing bounds the no-story sessions a
     // saved agent ever launched, and a fresh one must not open on all of their mail.
-    let recorded = if thread.story_id.is_empty() {
+    let recorded = if str::is_empty(&thread.story_id) {
         Vec::new()
     } else {
         host.thread_sessions(&thread).await?
     };
     let member = |handle: &str| members.iter().any(|m| m.handle == handle);
     let own = seat
-        .and_then(|seat| sessions.find(seat))
+        .and_then(|seat| KnownSessions::find(&sessions, seat))
         .filter(|row| row.is_seat() && member(&row.handle))
         .cloned();
     let others: Vec<&KnownSession> = match &own {
@@ -1372,7 +1372,7 @@ pub(crate) async fn thread_inbox(
     let mut handles: Vec<String> = Vec::new();
     let mut add = |id: &str, handle: bool| {
         let id = id.trim();
-        if id.is_empty() || left_out(id) {
+        if str::is_empty(id) || left_out(id) {
             return;
         }
         if !addresses.iter().any(|a| a == id) {
@@ -1387,7 +1387,7 @@ pub(crate) async fn thread_inbox(
         // A recorded handle the roster now holds for a session of another thread is that
         // session's address, not this thread's: its tab session id still finds the mail.
         if let Some(handle) = row.handle.as_deref() {
-            if sessions.find(handle).is_none_or(|now| member(&now.handle)) {
+            if KnownSessions::find(&sessions, handle).is_none_or(|now| member(&now.handle)) {
                 add(handle, true);
             }
         }
@@ -1401,21 +1401,22 @@ pub(crate) async fn thread_inbox(
     let handle = own
         .as_ref()
         .map(|own| own.handle.clone())
-        .or_else(|| members.iter().rev().find(|m| m.is_seat()).map(|m| m.handle.clone()))
         .or_else(|| {
-            recorded
-                .iter()
-                .rev()
-                .filter_map(|row| row.handle.clone())
-                .find(|recorded| handles.contains(recorded))
+            Iterator::find(&mut members.iter().rev(), |m| m.is_seat()).map(|m| m.handle.clone())
         })
-        .or_else(|| handles.last().cloned())
+        .or_else(|| {
+            Iterator::find(
+                &mut recorded.iter().rev().filter_map(|row| row.handle.clone()),
+                |recorded| handles.contains(recorded),
+            )
+        })
+        .or_else(|| <[String]>::last(&handles).cloned())
         .unwrap_or_default();
-    let also = match handle.as_str() {
+    let also = match String::as_str(&handle) {
         "" => None,
         handle => crate::commands::agent_inbox::handle_team(host, handle).await,
     };
-    let (roles, messages) = if addresses.is_empty() {
+    let (roles, messages) = if Vec::is_empty(&addresses) {
         (Vec::new(), Vec::new())
     } else {
         conversation_of(host, &sessions, addresses.clone(), also).await?
