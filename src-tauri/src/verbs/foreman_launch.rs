@@ -28,7 +28,7 @@ pub const PAGES: &[Page] = &[
     },
     Page {
         path: "getting-started/content/guide/index.html",
-        sha256: "f3cac1364f73772daae6bee91e533866513482214ccd0fa20864dcdcf337cacd",
+        sha256: "6872165b158e480fa21ff281c87c04f30edae85c7946a35e048c4195d8f68eb1",
     },
 ];
 

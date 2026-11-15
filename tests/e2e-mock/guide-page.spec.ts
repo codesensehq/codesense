@@ -739,3 +739,43 @@ test("the guide's message rows show the guide's avatar, once for a run, and the 
     await page.screenshot({ path: join(SHOTS, "faces-guide.png") });
   }
 });
+
+const STORY_PATH = "orgs/acme-context/web/content/stories/ACME-1.md";
+
+test("a story line in the guide's reply opens that story, once, with the person's own team", async ({
+  page,
+}) => {
+  const { live, calls, inbox } = await open(page);
+  const created = lead(
+    2,
+    `Created ACME-1.\nstory: ACME-1 · ${STORY_PATH}\nNext: \`Create another story\`, \`What have you set up?\``,
+  );
+  await live([
+    created,
+    lead(3, `story: ACME-2 · ${STORY_PATH.replace("ACME-1", "ACME-2")}`, { unread: false }),
+  ]);
+  await expect.poll(async () => (await calls("openFile")).length).toBe(1);
+  expect((await calls("openFile"))[0].args).toEqual({
+    path: STORY_PATH,
+    team: "web",
+    newTab: true,
+  });
+  // The same row on the next change, or a row the person already read, opens nothing more.
+  await inbox([created, lead(4, "Anything else?")]);
+  await expect.poll(async () => (await calls("markRead")).length).toBeGreaterThan(0);
+  expect(await calls("openFile")).toHaveLength(1);
+});
+
+test("a story line the page can't trust opens nothing", async ({ page }) => {
+  const { live, calls } = await open(page);
+  await live([
+    lead(2, `story: ACME-1 · orgs/acme-context/web/content/stories/../../../x/ACME-1.md`),
+    lead(3, `story: ACME-1 · orgs/acme-context/web/content/stories/ACME-2.md`),
+    lead(4, `story: ACME-1 · orgs/acme-context/web/content/notes/ACME-1.md`),
+    lead(5, `story: ACME-1 · orgs/codesense-docs/getting-started/content/stories/ACME-1.md`),
+    lead(6, `Created.\n  story: ACME-1 · ${STORY_PATH} and more`),
+    human(7, `story: ACME-1 · ${STORY_PATH}`),
+  ]);
+  await expect.poll(async () => (await calls("markRead")).length).toBeGreaterThan(0);
+  expect(await calls("openFile")).toHaveLength(0);
+});

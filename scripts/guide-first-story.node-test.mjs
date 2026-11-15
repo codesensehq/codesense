@@ -131,6 +131,15 @@ test("a failed create offers a new id or a skip, and says nothing was written", 
   assert.match(on_fail.text, /\{\{story_id\}\}/);
 });
 
+test("the guide ends a created story's reply with the line the page opens", () => {
+  const command = read("commands/codesense-setup.md");
+  assert.match(command, /`story: <story_id> · <path>` above `Next:`/);
+  assert.match(command, /which the page opens/);
+  // The page's own check of that line lives in guide.js; the step's path has the same shape.
+  const path = act("create-story").verb.args.path;
+  assert.match(path, /\/content\/stories\/\{\{story_id\}\}\.md$/);
+});
+
 test("the chip: the guide offers `Start my first story`, and the page's Next: parser reads it", () => {
   const command = read("commands/codesense-setup.md");
   assert.match(command, /`Start my first story`/);
