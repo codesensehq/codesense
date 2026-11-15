@@ -190,7 +190,7 @@ impl GitAiSource {
             .map_err(|error| AttributionError::Git(error.to_string()))?;
         let oid = git2::Oid::from_str(commit)
             .map_err(|error| AttributionError::Git(error.to_string()))?;
-        if git2::Repository::find_object(&repository, oid, None).is_err() {
+        if let Err(_error) = git2::Repository::find_object(&repository, oid, None) {
             return Err(AttributionError::ObjectsNotLocal);
         }
         for notes_ref in NOTES_REFS {
