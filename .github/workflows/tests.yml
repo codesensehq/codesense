@@ -86,6 +86,7 @@ jobs:
           tests/e2e-mock/agent-inbox-pane-alignment.spec.ts
           tests/e2e-mock/inbox-long-log.spec.ts
           tests/e2e-mock/inbox-reduced-motion.spec.ts
+          tests/e2e-mock/needs-you-pin.spec.ts
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
