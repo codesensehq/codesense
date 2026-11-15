@@ -46,6 +46,30 @@ pub(crate) const REPO_OVERRIDES: [&str; 7] = [
     "GIT_NAMESPACE",
 ];
 
+#[cfg(test)]
+static CHILD_PROCESSES: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn count_child(repo: &Path) {
+    let mut counts = CHILD_PROCESSES.lock().unwrap();
+    if let Some((_, count)) = counts.iter_mut().find(|(path, _)| path == repo) {
+        *count += 1;
+    } else {
+        counts.push((repo.to_owned(), 1));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn child_processes(repo: &Path) -> usize {
+    CHILD_PROCESSES
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(path, _)| path == repo)
+        .map(|(_, count)| *count)
+        .unwrap_or_default()
+}
+
 fn local_read_env(command: &mut Command) {
     // Only the repository at `repo` decides anything.
     for var in REPO_OVERRIDES {
@@ -106,6 +130,8 @@ impl GitAiSource {
         local_read_env(&mut command);
         #[cfg(test)]
         crate::test_support::strip_attribution_env(&mut command);
+        #[cfg(test)]
+        count_child(repo);
         let output = command
             .stdin(Stdio::null())
             .output()
@@ -140,6 +166,8 @@ impl GitAiSource {
             .current_dir(repo)
             .envs(drain.env.iter().map(|(k, v)| (k, v)));
         local_read_env(&mut command);
+        #[cfg(test)]
+        count_child(repo);
         let _ = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -147,20 +175,24 @@ impl GitAiSource {
             .status();
     }
 
-    /// The raw note on `commit` from the first of [`NOTES_REFS`] that has one: the one test of
-    /// "this commit has a git-ai note here" every reader shares.
+    /// The raw note on `commit` from the first of [`NOTES_REFS`] that has one, found in-process.
     pub(crate) fn raw_note(
         &self,
         repo: &Path,
         commit: &str,
-    ) -> Result<Option<std::process::Output>, AttributionError> {
+    ) -> Result<Option<String>, AttributionError> {
+        let repository = git2::Repository::open(repo)
+            .map_err(|error| AttributionError::Git(error.to_string()))?;
+        let oid = git2::Oid::from_str(commit)
+            .map_err(|error| AttributionError::Git(error.to_string()))?;
+        if repository.find_object(oid, None).is_err() {
+            return Err(AttributionError::ObjectsNotLocal);
+        }
         for notes_ref in NOTES_REFS {
-            let output = self.git(
-                repo,
-                &["notes", &format!("--ref={notes_ref}"), "show", commit],
-            )?;
-            if output.status.success() {
-                return Ok(Some(output));
+            match repository.find_note(Some(&format!("refs/notes/{notes_ref}")), oid) {
+                Ok(note) => return Ok(Some(note.message().unwrap_or_default().to_owned())),
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                Err(error) => return Err(AttributionError::Git(error.to_string())),
             }
         }
         Ok(None)
@@ -174,10 +206,10 @@ impl GitAiSource {
         repo: &Path,
         commit: &str,
     ) -> Result<Option<Authorship>, AttributionError> {
-        let Some(output) = self.raw_note(repo, commit)? else {
+        let Some(note) = self.raw_note(repo, commit)? else {
             return Ok(None);
         };
-        match Authorship::parse(&String::from_utf8_lossy(&output.stdout)) {
+        match Authorship::parse(&note) {
             Ok(note) => Ok(Some(note)),
             Err(error) => {
                 log::warn!(target: "attribution", "note on {commit} unreadable: {error}");

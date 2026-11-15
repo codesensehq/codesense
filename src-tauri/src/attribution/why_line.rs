@@ -32,9 +32,10 @@ pub(crate) fn notes_stay_local(home: &Path, repo_key: &str) -> bool {
 }
 
 /// Whether `commit` has a git-ai note in this copy, in any of the refs readers use.
-fn has_note(repo: &Path, commit: &str) -> Result<Option<std::process::Output>, String> {
+fn has_note(repo: &Path, commit: &str) -> Result<bool, String> {
     GitAiSource::default()
         .raw_note(repo, commit)
+        .map(|note| Option::is_some(&note))
         .map_err(|error| error.to_string())
 }
 
@@ -456,13 +457,24 @@ impl RawReader {
     ) -> Result<Vec<LineRange>, String> {
         let remote_key = format!("{}{key_suffix}", self.remote_key);
         for _ in 0..READ_ATTEMPTS {
-            let notes = self.notes_ref.clone();
+            let own_note = key_suffix == OWN_KEY;
+            let notes = if own_note {
+                own_note_key(&self.checkout, commit)?
+            } else {
+                self.notes_ref.clone()
+            };
             let key = raw_key(&remote_key, commit, path, notes.as_deref());
             let (raw, hit) = cached_raw(self.cache.as_ref(), &key, || {
                 read(&self.checkout, commit, path, &mut self.own_notes)
             })?;
             // A cold read is only valid if the notes it saw are still the snapshot.
-            let now = if hit { notes.clone() } else { notes_revisions(&self.checkout)? };
+            let now = if hit {
+                notes.clone()
+            } else if own_note {
+                own_note_key(&self.checkout, commit)?
+            } else {
+                notes_revisions(&self.checkout)?
+            };
             #[cfg(test)]
             if !hit {
                 self.snapshots += 1;
@@ -471,11 +483,27 @@ impl RawReader {
                 save_raw(self.cache.as_mut(), &key, hit, &raw);
                 return Ok(raw);
             }
-            self.notes_ref = now;
+            if !own_note {
+                self.notes_ref = now;
+            }
             self.own_notes.clear();
         }
         Err(NOTES_CHANGED.into())
     }
+}
+
+/// The note blob that owns this commit's lines; unrelated notes do not invalidate that row.
+fn own_note_key(repo_path: &Path, commit: &str) -> Result<Option<String>, String> {
+    let repo = git2::Repository::open(repo_path).map_err(|error| error.to_string())?;
+    let oid = git2::Oid::from_str(commit).map_err(|error| error.to_string())?;
+    for name in super::git_ai::NOTES_REFS {
+        match repo.find_note(Some(&format!("refs/notes/{name}")), oid) {
+            Ok(note) => return Ok(Some(format!("{name}={}", note.id()))),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(None)
 }
 
 /// Appended to a repository's cache key for the ranges of a commit's own lines.
@@ -618,7 +646,7 @@ fn resolve_with_read(
                 let commit_noted = Option::is_some_and(Option::as_deref(&range.commit), |commit| {
                     *std::collections::hash_map::Entry::or_insert_with(
                         HashMap::entry(&mut noted, commit.to_owned()),
-                        || Result::map_or(has_note(repo, commit), true, |note| Option::is_some(&note)),
+                        || Result::map_or(has_note(repo, commit), true, |note| note),
                     )
                 });
                 let past_boundary = range.commit.as_ref().is_some_and(|c| boundary.contains(c));
@@ -822,7 +850,7 @@ fn associate(
         return Ok(());
     };
     // An existing but unreadable note (or an uncovered line) is never a story association.
-    if Option::is_some(&has_note(repo, commit)?) {
+    if has_note(repo, commit)? {
         return Ok(());
     }
     let Some(subject) = git_text(repo, &["show", "-s", "--format=%s", commit])? else {
@@ -2001,16 +2029,13 @@ pub(crate) mod tests {
         (first, notes_calls(&log))
     }
 
-    /// The count path reads the commit's own note and no other, one `git notes show` per notes ref
-    /// it tries, in `NOTES_REFS` order until one has the note: a constant (at most two), whatever
-    /// the note's ref and however many commits the file's blame names or files the commit touched.
+    /// The count path reads notes through libgit2, without a child process, and reuses a commit's
+    /// note when another file from that commit is counted.
     #[test]
-    fn the_count_path_reads_one_note_per_ref_tried_however_many_the_blame_names() {
+    fn the_count_path_reads_notes_without_git_children() {
         let home = tempfile::tempdir().unwrap();
         let repo = rebuild();
         attach(home.path(), repo.path());
-        let [managed, ai] = crate::attribution::git_ai::NOTES_REFS;
-        let show = |sha: &str, notes_ref: &str| format!("notes --ref={notes_ref} show {sha}");
         let sha_of = |rev: &str| git(repo.path(), &["rev-parse", rev]).trim().to_owned();
         let (head, c1, c0) = (sha_of("HEAD"), sha_of("HEAD~1"), sha_of("HEAD~2"));
         let blamed = |sha: &str, file: &str| {
@@ -2019,26 +2044,38 @@ pub(crate) mod tests {
         };
         assert!(blamed(&head, "d.txt") > blamed(&c0, "d.txt"), "the fixture's blame must widen with history");
 
-        // The note is on the `ai` ref only (the fixture): the managed ref is tried first and misses.
+        // The fixture has notes on its history.
         let (first, both) = counted_notes_calls(home.path(), &head, ["d.txt", "a.txt"]);
-        assert_eq!(first, vec![show(&head, managed), show(&head, ai)], "ai-only note: one call per ref");
-        assert_eq!(both, first, "a second file of the same commit reads no note");
+        assert!(first.is_empty(), "notes were read in a child: {first:?}");
+        assert_eq!(both, first, "a second file of the same commit read a note in a child");
 
         // The same count on a commit whose blame names fewer commits: it does not grow with the blame.
         let (narrow, _) = counted_notes_calls(home.path(), &c1, ["a.txt", "a.txt"]);
-        assert_eq!(narrow, vec![show(&c1, managed), show(&c1, ai)]);
+        assert!(narrow.is_empty());
 
         // No note on either ref: both are tried, once each.
         let (none, none_both) = counted_notes_calls(home.path(), &c0, ["base.txt", "d.txt"]);
-        assert_eq!(none, vec![show(&c0, managed), show(&c0, ai)], "no note: one call per ref");
+        assert!(none.is_empty(), "no-note lookup spawned git: {none:?}");
         assert_eq!(none_both, none);
 
         // A note on the managed ref wins with the first lookup.
-        let blob = git(repo.path(), &["notes", &format!("--ref={ai}"), "list", &head]);
-        git(repo.path(), &["notes", &format!("--ref={managed}"), "add", "-C", blob.trim(), &head]);
+        let blob = git(repo.path(), &["notes", "--ref=ai", "list", &head]);
+        git(repo.path(), &["notes", "--ref=sense", "add", "-C", blob.trim(), &head]);
         let (won, won_both) = counted_notes_calls(home.path(), &head, ["d.txt", "a.txt"]);
-        assert_eq!(won, vec![show(&head, managed)], "managed-ref note: one call");
+        assert!(won.is_empty());
         assert_eq!(won_both, won);
+    }
+
+    #[test]
+    fn own_note_key_ignores_unrelated_notes_and_changes_with_its_blob() {
+        let repo = rebuild();
+        let target = git(repo.path(), &["rev-parse", "HEAD~1"]).trim().to_owned();
+        let unrelated = git(repo.path(), &["rev-parse", "HEAD"]).trim().to_owned();
+        let before = own_note_key(repo.path(), &target).unwrap();
+        git(repo.path(), &["notes", "--ref=sense", "add", "-m", "unrelated", &unrelated]);
+        assert_eq!(own_note_key(repo.path(), &target).unwrap(), before);
+        replace_note(repo.path(), "updated");
+        assert_ne!(own_note_key(repo.path(), &target).unwrap(), before);
     }
 
     /// Counts are identical by construction: the ranges of the commit's own lines are the same

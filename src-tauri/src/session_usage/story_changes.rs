@@ -645,7 +645,7 @@ pub async fn read(
     params: &Params,
     scope: &CallerScope,
 ) -> Result<StoryChanges, String> {
-    read_with(home, params, scope, false, None).await
+    read_with(home, params, scope, true, None).await
 }
 
 /// [`read`], with `kept` the git half is reused while origin's head and the branch tips of the
@@ -793,7 +793,7 @@ pub(crate) async fn totals(
     batch: Option<std::sync::Arc<Batch>>,
 ) -> Result<(Totals, BTreeMap<String, String>, Value, GitTotals), String> {
     let batch = Option::unwrap_or_else(batch, || std::sync::Arc::new(Batch::new()));
-    let session = indexed_session_facts(home, story, scope, batch.clone()).await?;
+    let session = indexed_session_facts(home, story, scope, batch.clone(), false, false).await?;
     let key = session.git_key.clone();
     let before = Option::or(cached.clone(), earlier);
     let mut git_part = match cached.filter(|cached| cached.key == key) {
@@ -1024,54 +1024,15 @@ async fn session_facts(
     scope: &CallerScope,
     with_tasks: bool,
 ) -> Result<SessionFacts, String> {
-    let half = task_half(home, story, scope, with_tasks, None).await?;
-    let (home_owned, story_owned, scope_owned) = (home.to_owned(), story.to_owned(), scope.clone());
-    let (report, rows) = crate::commands::await_blocking("story_changes.sessions", move || {
-        let store = UsageStore::open(&home_owned.join("usage.sqlite"))?;
-        let report = story_report(&store, &home_owned, &story_owned, &scope_owned)?;
-        let rows = rows::rows_from_sessions(&store, &report.sessions)?;
-        Ok((report, rows))
-    })
-    .await?;
-    let sessions = read_sessions(home, scope, report.sessions).await?;
-    let rows: Vec<contribution::Row> = Iterator::collect(Iterator::map(IntoIterator::into_iter(rows), |(source, contribution)| {
-        contribution::Row { source: (source.kind.to_owned(), source.id), contribution }
-    }));
-    let redirected = crate::session_usage::managed_telemetry::usage_reason().is_some();
-    Ok(SessionFacts::new(half, rows::fold(&rows, chrono::Utc::now().timestamp_millis(), redirected), sessions))
-}
-
-/// The story's sessions as `session_read` reads them, each once.
-async fn read_sessions(
-    home: &Path,
-    scope: &CallerScope,
-    usages: Vec<super::SessionUsage>,
-) -> Result<Vec<Value>, String> {
-    let mut sessions = Vec::new();
-    let mut seen = BTreeSet::new();
-    for usage in usages {
-        let basis = Option::unwrap_or(Option::and_then(Option::as_ref(&usage.story), |s| s.basis), "exact");
-        let params: session_read::Params =
-            serde_json::from_value(json!({"sessionId":usage.session_id}))
-                .map_err(|e| e.to_string())?;
-        let mut session = session_read::read(
-            &home.join("usage.sqlite"),
-            &home.join("session-conversations"),
-            &params,
-            scope,
-        )
-        .await?;
-        let id = serde_json::Value::as_str(&session["session"]["sessionId"])
-            .or_else(|| serde_json::Value::as_str(&session["nativeSessionIds"][0]))
-            .unwrap_or(&usage.session_id)
-            .to_owned();
-        if !seen.insert(id) {
-            continue;
-        }
-        session["basis"] = json!(basis);
-        sessions.push(session);
-    }
-    Ok(sessions)
+    indexed_session_facts(
+        home,
+        story,
+        scope,
+        std::sync::Arc::new(Batch::new()),
+        with_tasks,
+        true,
+    )
+    .await
 }
 
 /// The session half from the story's stored session rows (no `session_read` per session), built
@@ -1081,8 +1042,10 @@ async fn indexed_session_facts(
     story: &str,
     scope: &CallerScope,
     batch: std::sync::Arc<Batch>,
+    with_tasks: bool,
+    include_sessions: bool,
 ) -> Result<SessionFacts, String> {
-    let half = task_half(home, story, scope, false, Some(std::sync::Arc::clone(&batch))).await?;
+    let half = task_half(home, story, scope, with_tasks, Some(std::sync::Arc::clone(&batch))).await?;
     let (home_owned, story_owned, scope_owned) = (home.to_owned(), story.to_owned(), scope.clone());
     let rows = crate::commands::await_blocking("story_changes.rows", move || {
         use contribution::EntityAdapter;
@@ -1109,8 +1072,51 @@ async fn indexed_session_facts(
         Ok(Option::unwrap_or_default(contribution::rows_of(&store, &scope_key, kind, &entity, version)?))
     })
     .await?;
+    let sessions = if include_sessions {
+        read_indexed_sessions(home, scope, &rows).await?
+    } else {
+        Vec::new()
+    };
     let redirected = crate::session_usage::managed_telemetry::usage_reason().is_some();
-    Ok(SessionFacts::new(half, rows::fold(&rows, chrono::Utc::now().timestamp_millis(), redirected), vec![]))
+    Ok(SessionFacts::new(half, rows::fold(&rows, chrono::Utc::now().timestamp_millis(), redirected), sessions))
+}
+
+/// The story's indexed sessions as `session_read` reads them, each once.
+async fn read_indexed_sessions(
+    home: &Path,
+    scope: &CallerScope,
+    rows: &[contribution::Row],
+) -> Result<Vec<Value>, String> {
+    let mut sessions = Vec::new();
+    let mut seen = BTreeSet::new();
+    for row in rows {
+        let session_id = &row.source.1;
+        let params: session_read::Params = serde_json::from_value(json!({"sessionId":session_id}))
+            .map_err(|error| error.to_string())?;
+        let mut session = session_read::read(
+            &home.join("usage.sqlite"),
+            &home.join("session-conversations"),
+            &params,
+            scope,
+        )
+        .await?;
+        let id = serde_json::Value::as_str(&session["session"]["sessionId"])
+            .or_else(|| serde_json::Value::as_str(&session["nativeSessionIds"][0]))
+            .unwrap_or(session_id)
+            .to_owned();
+        if !seen.insert(id) {
+            continue;
+        }
+        let basis = row
+            .contribution
+            .extra
+            .get("basis")
+            .and_then(Value::as_str)
+            .unwrap_or("exact");
+        session["basis"] = json!(basis);
+        sessions.push(session);
+    }
+    Ok(sessions)
 }
 
 impl SessionFacts {
@@ -1758,7 +1764,7 @@ pub(crate) fn task_facts(
 }
 
 pub async fn current(params: &Params, scope: &CallerScope) -> Result<Value, String> {
-    current_with(params, scope, false, None).await
+    current_with(params, scope, true, None).await
 }
 
 /// [`current`] for a hosted page: its git half is kept per story until origin's head or a

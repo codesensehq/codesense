@@ -364,10 +364,10 @@ async fn review_rows_omit_missing_fields_and_undated_rounds_sort_last() {
     }
 }
 
-/// SV-ENG-121: a second kept read of the same story at the same refs does no git walk; a branch
-/// tip that moves, or a read that is not kept, walks again.
+/// A second read of the same story at the same refs does no git walk; a branch tip that moves
+/// invalidates the kept facts and walks again.
 #[tokio::test]
-async fn a_kept_git_half_is_reused_until_a_branch_tip_moves() {
+async fn story_reads_reuse_the_kept_git_half_until_a_branch_tip_moves() {
     let (home, _s, f) = git_story();
     let asked = only(json!(["commits", "prs", "branches"]));
     let first = serde_json::to_value(
@@ -380,27 +380,12 @@ async fn a_kept_git_half_is_reused_until_a_branch_tip_moves() {
     assert!(walked > 0, "the first read walks git");
     assert_eq!(first["commits"].as_array().unwrap().len(), 1);
 
-    let second = serde_json::to_value(
-        read_with(home.path(), &asked, &CallerScope::Human, true, None)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let second = serde_json::to_value(read(home.path(), &asked, &CallerScope::Human).await.unwrap()).unwrap();
     assert_eq!(git_reads(home.path()), walked, "the second read walked git");
     assert_eq!(second["commits"], first["commits"]);
     assert_eq!(second["prs"], first["prs"]);
     assert_eq!(second["branches"], first["branches"]);
 
-    let unkept = read(home.path(), &asked, &CallerScope::Human)
-        .await
-        .unwrap();
-    drop(unkept);
-    assert!(
-        git_reads(home.path()) > walked,
-        "a read that is not kept walks git"
-    );
-
-    let walked = git_reads(home.path());
     let tip = f.repo.refname_to_id("refs/heads/feat/SV-29-work").unwrap();
     f.commit(
         "refs/heads/feat/SV-29-work",
@@ -409,17 +394,50 @@ async fn a_kept_git_half_is_reused_until_a_branch_tip_moves() {
         3000,
         &[tip],
     );
-    let moved = serde_json::to_value(
-        read_with(home.path(), &asked, &CallerScope::Human, true, None)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let walked = git_reads(home.path());
+    let moved = serde_json::to_value(read(home.path(), &asked, &CallerScope::Human).await.unwrap()).unwrap();
     assert!(
         git_reads(home.path()) > walked,
         "a moved tip walks git again"
     );
     assert_eq!(moved["commits"].as_array().unwrap().len(), 2);
+}
+
+/// The public story read meets the cold and warm latency budgets, and an unrelated note does
+/// not invalidate its cached facts.
+#[tokio::test]
+async fn story_read_warm_cache_survives_an_unrelated_note() {
+    let (home, _s, f) = git_story();
+    let asked = only(json!(["commits", "prs", "branches"]));
+    let cold_at = std::time::Instant::now();
+    let first = read(home.path(), &asked, &CallerScope::Human).await.unwrap();
+    let cold = cold_at.elapsed();
+    assert!(cold < std::time::Duration::from_secs(1), "cold read took {cold:?}");
+    assert_eq!(first.commits.len(), 1);
+    let children = crate::attribution::git_ai::child_processes(f.dir.path());
+
+    let signature = f.repo.find_commit(f.root).unwrap().author();
+    f.repo
+        .note(
+            &signature,
+            &signature,
+            Some("refs/notes/sense"),
+            f.root,
+            "unrelated note",
+            true,
+        )
+        .unwrap();
+
+    let warm_at = std::time::Instant::now();
+    let second = read(home.path(), &asked, &CallerScope::Human).await.unwrap();
+    let warm = warm_at.elapsed();
+    assert!(warm < std::time::Duration::from_millis(200), "warm read took {warm:?}");
+    assert_eq!(second.commits, first.commits);
+    assert_eq!(
+        crate::attribution::git_ai::child_processes(f.dir.path()),
+        children,
+        "a warm story read spawned a git child"
+    );
 }
 
 /// SV-ENG-121: only a kept read stamps refs (the totals sweep and task reads pay no ref scan),
