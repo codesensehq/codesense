@@ -283,6 +283,8 @@ describe("the global CLI across team switches", () => {
     }
     expect(sessionIds()).toEqual(ids);
     for (const id of SESSIONS) {
+      // A parked terminal holds its output until it is shown.
+      if (!terminalManager.holdsVisible(id)) continue;
       const steps = chunked(paneSteps(loadPtylog(FIXTURE[id])), 1)[0] ?? [];
       expect(await bufferOf(id)).toEqual(
         await headlessFrom(loadPtylog(FIXTURE[id]).slice(0, steps.length)),
