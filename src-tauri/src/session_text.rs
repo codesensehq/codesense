@@ -1,110 +1,26 @@
 // SPDX-License-Identifier: MIT
-//! A running Claude session's assistant prose, streamed to the pages that ask for it
-//! (`onSessionText`): the `text` blocks of its assistant rows as they are written, never its
-//! thinking, tool calls or tool results, and one turn end per turn. It tails the session log the
+//! A running session's assistant prose, streamed to the pages that ask for it
+//! (`onSessionText`): its assistant prose as it is written, never its thinking or reasoning,
+//! tool calls or tool results, and one turn end per turn. It tails the session log the
 //! conversation capture reads, redacting each line the same way, but as rows arrive instead of
-//! after the capture's 60 s debounce.
+//! after the capture's 60 s debounce. What a line says comes from the adapter's parser for the
+//! log's transcript format (`agent_cli::prose`), so any CLI whose log has one streams.
 //!
-//! The pure parts (a line's events, the tail, a session's stream) are here with their tests; the
-//! watch registry wires them to a file watcher, the turn-end hook and the app event.
+//! The pure parts (the tail, a session's stream) are here with their tests; the watch registry
+//! wires them to a file watcher, the turn-end hook and the app event.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use serde_json::Value;
+use codesense_pty_core::agent_cli::prose::{self, ProseEvent};
+use codesense_pty_core::agent_cli::TranscriptFormat;
 
 use crate::shared::secret_scan::redact_secrets;
 
 /// The app event a page's stream is fed from (`live-hub.ts` routes it to the frames that asked).
 pub const EVENT: &str = "session-text";
-
-/// What one session-log line says for the stream, in the order it says it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogEvent {
-    /// The person's request: a new turn starts. `key` is the row's uuid.
-    Turn { key: String },
-    /// Assistant prose: the joined `text` blocks of an assistant row. `key` is the row's uuid.
-    Prose { key: String, text: String },
-    /// An assistant row that calls a tool: prose before it is progress, not the turn's final.
-    Tool,
-}
-
-fn text_of(v: Option<&Value>) -> Option<&str> {
-    v.and_then(Value::as_str)
-}
-
-fn flag(row: &Value, key: &str) -> bool {
-    row.get(key).and_then(Value::as_bool) == Some(true)
-}
-
-/// The events of one redacted Claude session-log line. A line that isn't JSON, a meta or
-/// sidechain (subagent) row, a tool result, or a row with no prose says nothing.
-pub fn classify(line: &str) -> Vec<LogEvent> {
-    let Ok(row) = serde_json::from_str::<Value>(line) else {
-        return vec![];
-    };
-    if flag(&row, "isMeta") || flag(&row, "isSidechain") {
-        return vec![];
-    }
-    let key = text_of(row.get("uuid")).unwrap_or_default().to_owned();
-    let message = row.get("message").unwrap_or(&row);
-    let content: Option<&Value> = message.get("content");
-    match text_of(row.get("type")) {
-        Some("user") => {
-            if row.get("toolUseResult").is_some_and(|v| !Value::is_null(v)) {
-                return vec![];
-            }
-            if text_of(row.pointer("/origin/kind")).is_some_and(|kind| kind != "human") {
-                return vec![];
-            }
-            let blocks: &[Value] = content.and_then(Value::as_array).map_or(&[], |a| &a[..]);
-            let answers_a_tool = blocks
-                .iter()
-                .any(|b| text_of(b.get("type")) == Some("tool_result"));
-            let said = content.and_then(Value::as_str).is_some()
-                || blocks
-                    .iter()
-                    .any(|b| text_of(b.get("type")) == Some("text"));
-            if answers_a_tool || !said {
-                return vec![];
-            }
-            vec![LogEvent::Turn { key }]
-        }
-        Some("assistant") => {
-            let blocks: &[Value] = content.and_then(Value::as_array).map_or(&[], |a| &a[..]);
-            let mut prose: Vec<&str> = vec![];
-            let mut tool = false;
-            for block in blocks {
-                match text_of(block.get("type")) {
-                    Some("text") => {
-                        if let Some(text) = text_of(block.get("text")) {
-                            let trimmed: &str = str::trim(text);
-                            if !str::is_empty(trimmed) {
-                                prose.push(text);
-                            }
-                        }
-                    }
-                    Some("tool_use") => tool = true,
-                    _ => {}
-                }
-            }
-            let mut out = vec![];
-            if prose.first().is_some() {
-                out.push(LogEvent::Prose {
-                    key,
-                    text: prose.join("\n\n"),
-                });
-            }
-            if tool {
-                out.push(LogEvent::Tool);
-            }
-            out
-        }
-        _ => vec![],
-    }
-}
 
 /// A session log read from a byte offset: each read returns the complete lines written since,
 /// redacted, and keeps a trailing partial line for the next read. A log that shrank (rewritten)
@@ -174,11 +90,11 @@ const START_WINDOW: u64 = 4 * 1024 * 1024;
 /// so a page that subscribes mid-turn still hears that turn's prose and its end. Only the log's
 /// last `START_WINDOW` bytes are scanned: a turn that opened before them starts at the window's
 /// first whole line. 0 when the log can't be read.
-pub fn start_offset(path: &Path) -> u64 {
-    start_offset_within(path, START_WINDOW)
+pub fn start_offset(path: &Path, format: TranscriptFormat) -> u64 {
+    start_offset_within(path, format, START_WINDOW)
 }
 
-fn start_offset_within(path: &Path, window: u64) -> u64 {
+fn start_offset_within(path: &Path, format: TranscriptFormat, window: u64) -> u64 {
     let Ok(Some((mut file, len))) = open_log(path) else {
         return 0;
     };
@@ -197,9 +113,9 @@ fn start_offset_within(path: &Path, window: u64) -> u64 {
     let mut turn_at: u64 = at;
     for line in bytes[skip..].split_inclusive(|b| *b == b'\n') {
         let text = String::from_utf8_lossy(line);
-        if classify(str::trim(&text))
+        if prose::events(format, str::trim(&text))
             .iter()
-            .any(|e| matches!(e, LogEvent::Turn { .. }))
+            .any(|e| matches!(e, ProseEvent::Turn { .. }))
         {
             turn_at = at;
         }
@@ -240,15 +156,15 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn feed(&mut self, event: LogEvent) -> Option<StreamEvent> {
+    pub fn feed(&mut self, event: ProseEvent) -> Option<StreamEvent> {
         let event = match event {
-            LogEvent::Turn { key } => {
+            ProseEvent::Turn { key } => {
                 self.turn = key;
                 self.ended = false;
                 self.so_far = vec![];
                 return None;
             }
-            LogEvent::Prose { key, text } => {
+            ProseEvent::Prose { key, text } => {
                 if !self.sent.insert(key.clone()) {
                     return None;
                 }
@@ -258,7 +174,7 @@ impl Stream {
                     text,
                 }
             }
-            LogEvent::Tool => StreamEvent::Tool {
+            ProseEvent::Tool => StreamEvent::Tool {
                 turn: self.turn.clone(),
             },
         };
@@ -290,18 +206,20 @@ impl Stream {
     }
 }
 
-/// A watched session: its log's tail and its stream.
+/// A watched session: its log's tail, the log's transcript format and its stream.
 #[derive(Debug)]
 pub struct Watched {
     tail: Tail,
+    format: TranscriptFormat,
     stream: Stream,
 }
 
 impl Watched {
-    pub fn new(path: PathBuf) -> Self {
-        let offset = start_offset(&path);
+    pub fn new(path: PathBuf, format: TranscriptFormat) -> Self {
+        let offset = start_offset(&path, format);
         Watched {
             tail: Tail::at(path, offset),
+            format,
             stream: Default::default(),
         }
     }
@@ -311,7 +229,7 @@ impl Watched {
         let lines = self.tail.read().unwrap_or_default();
         let mut out = vec![];
         for line in lines {
-            for event in classify(&line) {
+            for event in prose::events(self.format, &line) {
                 out.extend(Stream::feed(&mut self.stream, event));
             }
         }
@@ -374,14 +292,15 @@ fn pump(session_id: &str) {
     emit(session_id, events);
 }
 
-/// The Claude session log of `session_id`, as the conversation capture finds it.
-fn session_log_path(session_id: &str) -> Result<PathBuf, String> {
-    crate::session_conversation::claude_session_log(session_id)
-        .ok_or_else(|| format!("no Claude session log for {session_id}"))
+/// The session log of `session_id` and its transcript format, as the conversation capture
+/// finds it.
+fn session_log_path(session_id: &str) -> Result<(PathBuf, TranscriptFormat), String> {
+    crate::session_conversation::prose_session_log(session_id)
+        .ok_or_else(|| format!("no session log with prose for {session_id}"))
 }
 
-/// Start (or count one more watcher of) `session_id`'s stream. Only a local Claude session has a
-/// log to tail.
+/// Start (or count one more watcher of) `session_id`'s stream. Only a local session whose log has
+/// a prose parser (`prose::streams`) has one to tail.
 pub fn watch(session_id: &str) -> Result<(), String> {
     let joined = {
         let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -391,8 +310,8 @@ pub fn watch(session_id: &str) -> Result<(), String> {
         emit(session_id, replay);
         return Ok(());
     }
-    let path = session_log_path(session_id)?;
-    let watched = Watched::new(path.clone());
+    let (path, format) = session_log_path(session_id)?;
+    let watched = Watched::new(path.clone(), format);
     let owner = session_id.to_owned();
     let started = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
@@ -492,64 +411,13 @@ mod tests {
 
     const FIXTURE: &str =
         include_str!("../crates/codesense-pty-core/tests/fixtures/claude/session-2.1.296.jsonl");
+    const ROLLOUT: &str =
+        include_str!("../crates/codesense-pty-core/tests/fixtures/codex/rollout-0.164.0.jsonl");
+    const CLAUDE_LOG: TranscriptFormat = TranscriptFormat::AnthropicSessionJsonl;
+    const CODEX_LOG: TranscriptFormat = TranscriptFormat::CodexSessionJsonl;
 
-    fn events(lines: &str) -> Vec<LogEvent> {
-        lines.lines().flat_map(classify).collect()
-    }
-
-    #[test]
-    fn a_tool_using_turn_yields_its_prose_and_tool_markers_never_thinking_or_tool_text() {
-        let all = events(FIXTURE);
-        // The fixture: a request, prose with a tool call (and thinking), two tool calls, the
-        // answer, then a new request.
-        assert!(matches!(&all[0], LogEvent::Turn { key } if key == "u1"));
-        let prose: Vec<&str> = all
-            .iter()
-            .filter_map(|e| match e {
-                LogEvent::Prose { text, .. } => Some(text.as_ref()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(prose.len(), 2, "{all:?}");
-        let tools = all.iter().filter(|e| **e == LogEvent::Tool).count();
-        assert_eq!(tools, 2);
-        assert!(matches!(all.last(), Some(LogEvent::Turn { key }) if key == "u4"));
-        // Nothing of the thinking or tool input or output leaks into prose.
-        let raw: Vec<Value> = FIXTURE
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-        for row in &raw {
-            for block in row
-                .pointer("/message/content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let hidden = match text_of(block.get("type")) {
-                    Some("thinking") => text_of(block.get("thinking")),
-                    Some("tool_result") => text_of(block.get("content")),
-                    _ => None,
-                };
-                if let Some(hidden) = hidden.filter(|h| h.len() > 8) {
-                    assert!(prose.iter().all(|p| !p.contains(hidden)), "{hidden}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn meta_sidechain_tool_result_and_non_human_rows_say_nothing() {
-        for line in [
-            r#"{"type":"user","isMeta":true,"uuid":"m","message":{"content":"hi"}}"#,
-            r#"{"type":"assistant","isSidechain":true,"uuid":"s","message":{"content":[{"type":"text","text":"sub"}]}}"#,
-            r#"{"type":"user","uuid":"r","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"x"}]}}"#,
-            r#"{"type":"user","uuid":"o","origin":{"kind":"system"},"message":{"content":"auto"}}"#,
-            r#"{"type":"assistant","uuid":"t","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}"#,
-            "not json",
-        ] {
-            assert_eq!(classify(line), vec![], "{line}");
-        }
+    fn events(format: TranscriptFormat, line: &str) -> Vec<ProseEvent> {
+        prose::events(format, line)
     }
 
     #[test]
@@ -586,11 +454,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, FIXTURE).unwrap();
-        let offset = start_offset(&path);
+        let offset = start_offset(&path, CLAUDE_LOG);
         let rest = &FIXTURE[offset as usize..];
         assert!(rest.starts_with('{'));
         assert!(
-            matches!(classify(rest.lines().next().unwrap()).as_slice(), [LogEvent::Turn { key }] if key == "u4")
+            matches!(events(CLAUDE_LOG, rest.lines().next().unwrap()).as_slice(), [ProseEvent::Turn { key }] if key == "u4")
         );
     }
 
@@ -602,6 +470,7 @@ mod tests {
         std::fs::write(&path, &first_turn).unwrap();
         let mut watched = Watched {
             tail: Tail::at(path.clone(), 0),
+            format: CLAUDE_LOG,
             stream: Stream::default(),
         };
         let sent = watched.pump();
@@ -641,17 +510,27 @@ mod tests {
         std::fs::write(&path, FIXTURE).unwrap();
         let len = FIXTURE.len() as u64;
         // The window holds the current turn's opening line: the watch starts there.
-        let whole = start_offset_within(&path, len);
-        assert_eq!(start_offset_within(&path, len - whole + 1), whole);
+        let whole = start_offset_within(&path, CLAUDE_LOG, len);
+        assert_eq!(
+            start_offset_within(&path, CLAUDE_LOG, len - whole + 1),
+            whole
+        );
         // A window that starts after it, mid-line: the watch starts at its first whole line.
-        let late = start_offset_within(&path, len - whole - 3);
+        let late = start_offset_within(&path, CLAUDE_LOG, len - whole - 3);
         assert!(late > whole && FIXTURE.as_bytes()[late as usize - 1] == b'\n');
-        assert_eq!(start_offset_within(&dir.path().join("gone"), len), 0);
+        assert_eq!(
+            start_offset_within(&dir.path().join("gone"), CLAUDE_LOG, len),
+            0
+        );
     }
 
     fn fixture_stream(lines: usize) -> Stream {
         let mut stream = Stream::default();
-        for event in FIXTURE.lines().take(lines).flat_map(classify) {
+        for event in FIXTURE
+            .lines()
+            .take(lines)
+            .flat_map(|l| events(CLAUDE_LOG, l))
+        {
             stream.feed(event);
         }
         stream
@@ -680,6 +559,7 @@ mod tests {
         Entry {
             watched: Watched {
                 tail: Tail::at(path.to_owned(), 0),
+                format: CLAUDE_LOG,
                 stream: fixture_stream(9),
             },
             watchers: 1,
@@ -700,6 +580,50 @@ mod tests {
         assert_eq!(map["s1"].watchers, 1);
         release(&mut map, "s1");
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn a_codex_rollout_streams_its_turn_the_same_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        // The rollout up to the answer: the request, a preamble, three tool calls, the answer.
+        let turn: String = ROLLOUT.lines().take(14).map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, &turn).unwrap();
+        let mut watched = Watched::new(path.clone(), CODEX_LOG);
+        let sent = watched.end_turn();
+        let kinds: Vec<&str> = sent
+            .iter()
+            .map(|e| match e {
+                StreamEvent::Prose { .. } => "prose",
+                StreamEvent::Tool { .. } => "tool",
+                StreamEvent::End { .. } => "end",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["prose", "tool", "tool", "tool", "prose", "end"],
+            "{sent:?}"
+        );
+        // The turn the events belong to is the request's row, the same on each read.
+        let turn_key = match &sent[0] {
+            StreamEvent::Prose { turn, .. } => turn.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(!turn_key.is_empty());
+        assert!(sent.iter().all(|e| match e {
+            StreamEvent::Prose { turn, .. }
+            | StreamEvent::Tool { turn }
+            | StreamEvent::End { turn } => *turn == turn_key,
+        }));
+        // A watch opened on the whole rollout starts at its latest request.
+        std::fs::write(&path, ROLLOUT).unwrap();
+        let offset = start_offset(&path, CODEX_LOG);
+        let first = ROLLOUT[offset as usize..].lines().next().unwrap();
+        assert!(matches!(
+            events(CODEX_LOG, first).as_slice(),
+            [ProseEvent::Turn { .. }]
+        ));
+        assert!(ROLLOUT[offset as usize..].lines().count() == 1);
     }
 
     #[test]
