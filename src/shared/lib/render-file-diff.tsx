@@ -223,7 +223,7 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
             // The ring is drawn inside the button: the group's overflow-hidden would clip it. Important,
             // because the global :focus-visible rule (unlayered) sets a 2 px offset that beats utilities.
             "px-2 py-0.5 focus-visible:!outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
-            mode === value
+            shown === value
               ? "bg-primary font-medium text-primary-foreground"
               : "enabled:hover:bg-accent/60",
           )}
