@@ -553,6 +553,9 @@ fn on_waiter(app: &AppHandle, machine: &str, state: &InboxWaiterState) {
         HostInboxes::changed(&inboxes, machine, state);
     }
     let _ = app.emit("sessions-waiter-changed", ());
+    if !state.waiting {
+        refusal_ended(state.session.as_str());
+    }
     // Only a tab of this app's on that machine is offered its mail.
     if state.waiting && tab_machine(app, state.session.as_str()).as_deref() == Some(machine) {
         // A launched agent whose waiter armed is at its prompt or mid-turn: one that never
@@ -629,7 +632,7 @@ where
         }
         return Some((RETRY_PUSH, 0));
     }
-    lock_refused().remove(session);
+    refusal_ended(session);
     let reoffer = why == Offer::Restored;
     match agent_inbox::check_for_mail(host, session, reoffer).await {
         Ok(Check::Offer { notice, token }) => match push(notice, token.clone()).await {
@@ -672,6 +675,12 @@ fn refused_past_a_cycle(session: &str, now: std::time::Instant) -> bool {
     }
     *logged = true;
     true
+}
+
+/// `session`'s waiter went away, so its refused stretch (if any) ended: a later refusal
+/// starts a new one, logged again.
+fn refusal_ended(session: &str) {
+    lock_refused().remove(session);
 }
 
 /// How long after a push its reservation has lapsed.
@@ -784,6 +793,13 @@ mod tests {
         ));
         assert!(refused_past_a_cycle("refused-1", t0 + ttl()));
         assert!(!refused_past_a_cycle("refused-1", t0 + ttl() * 2), "once");
+        // Its waiter went away: the next refusal is a new stretch, logged again.
+        refusal_ended("refused-1");
+        let t1 = t0 + ttl() * 3;
+        assert!(!refused_past_a_cycle("refused-1", t1));
+        assert!(refused_past_a_cycle("refused-1", t1 + ttl()));
+        refusal_ended("refused-1");
+        assert!(!lock_refused().contains_key("refused-1"), "pruned");
     }
 
     pub(super) fn state(session: &str, waiting: bool, grace_ms: Option<u64>) -> InboxWaiterState {
