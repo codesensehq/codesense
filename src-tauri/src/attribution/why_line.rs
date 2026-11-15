@@ -499,6 +499,12 @@ fn own_note_key(repo_path: &Path, commit: &str) -> Result<Option<String>, String
     for name in super::git_ai::NOTES_REFS {
         match repo.find_note(Some(&format!("refs/notes/{name}")), oid) {
             Ok(note) => return Ok(Some(format!("{name}={}", note.id()))),
+            Err(error)
+                if error.code() == git2::ErrorCode::NotFound
+                    && error.class() == git2::ErrorClass::Odb =>
+            {
+                return Err(AttributionError::ObjectsNotLocal.to_string())
+            }
             Err(error) if error.code() == git2::ErrorCode::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }

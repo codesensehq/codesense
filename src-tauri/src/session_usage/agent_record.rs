@@ -158,7 +158,7 @@ async fn read_page(
         cursor,
         only: Some(vec![story_changes::Only::Commits]),
     };
-    let page = story_changes::read(home, &params, scope).await?;
+    let page = story_changes::read_kept(home, &params, scope).await?;
     let unavailable = BTreeMap::get(&page.unavailable, "commits").map(Clone::clone);
     let mut commits = Vec::new();
     for commit in page.commits {

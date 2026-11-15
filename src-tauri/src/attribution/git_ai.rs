@@ -191,6 +191,12 @@ impl GitAiSource {
         for notes_ref in NOTES_REFS {
             match repository.find_note(Some(&format!("refs/notes/{notes_ref}")), oid) {
                 Ok(note) => return Ok(Some(note.message().unwrap_or_default().to_owned())),
+                Err(error)
+                    if error.code() == git2::ErrorCode::NotFound
+                        && error.class() == git2::ErrorClass::Odb =>
+                {
+                    return Err(AttributionError::ObjectsNotLocal)
+                }
                 Err(error) if error.code() == git2::ErrorCode::NotFound => {}
                 Err(error) => return Err(AttributionError::Git(error.to_string())),
             }

@@ -1055,14 +1055,32 @@ fn read_notes(
         .map(|sha| {
             let value = match (&opened, git2::Oid::from_str(sha)) {
                 (Ok(repository), Ok(oid)) => {
-                    let note = crate::attribution::git_ai::NOTES_REFS.iter().find_map(|name| {
-                        git2::Repository::find_note(
+                    let mut note = None;
+                    let mut reason = None;
+                    for name in crate::attribution::git_ai::NOTES_REFS {
+                        match git2::Repository::find_note(
                             repository,
                             Some(&format!("refs/notes/{name}")),
                             oid,
-                        )
-                        .ok()
-                    });
+                        ) {
+                            Ok(found) => {
+                                note = Some(found);
+                                break;
+                            }
+                            Err(error)
+                                if error.code() == git2::ErrorCode::NotFound
+                                    && error.class() == git2::ErrorClass::Odb =>
+                            {
+                                reason = Some(crate::attribution::ranges::OBJECTS_NOT_LOCAL);
+                                break;
+                            }
+                            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                            Err(_) => {
+                                reason = Some("git-ai note unavailable locally");
+                                break;
+                            }
+                        }
+                    }
                     let ids = note
                         .and_then(|note| {
                             crate::attribution::authorship::Authorship::parse(
@@ -1076,7 +1094,7 @@ fn read_notes(
                         })
                         .transpose();
                     match ids {
-                        Ok(ids) => (ids.unwrap_or_default(), None),
+                        Ok(ids) => (ids.unwrap_or_default(), reason),
                         Err(_) => (Vec::new(), Some("checkpoint identities unavailable")),
                     }
                 }

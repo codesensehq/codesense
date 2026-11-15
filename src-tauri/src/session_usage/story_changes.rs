@@ -645,6 +645,15 @@ pub async fn read(
     params: &Params,
     scope: &CallerScope,
 ) -> Result<StoryChanges, String> {
+    read_kept(home, params, scope).await
+}
+
+/// A story read using the kept git facts, including page and record consumers.
+pub(crate) async fn read_kept(
+    home: &Path,
+    params: &Params,
+    scope: &CallerScope,
+) -> Result<StoryChanges, String> {
     read_with(home, params, scope, true, None).await
 }
 

@@ -440,6 +440,37 @@ async fn story_read_warm_cache_survives_an_unrelated_note() {
     );
 }
 
+/// Record reads repeatedly revisit the story, but warm reads reuse its cached git facts.
+#[tokio::test]
+async fn repeated_session_record_reads_do_not_spawn_more_git_children() {
+    let (home, mut store, f) = git_story();
+    let mut record = store.read_session_record("git-session").unwrap().unwrap();
+    record.handle = Some("record-reader".into());
+    store.write_session_record(&record).unwrap();
+
+    let asked = only(json!(["commits"]));
+    read(home.path(), &asked, &CallerScope::Human).await.unwrap();
+    let children = crate::attribution::git_ai::child_processes(f.dir.path());
+    for _ in 0..10 {
+        let result = crate::session_usage::agent_record::read(
+            home.path(),
+            &crate::session_usage::agent_record::Params {
+                handle: "record-reader".into(),
+            },
+            std::collections::HashMap::new(),
+            &CallerScope::Human,
+        )
+        .await
+        .unwrap();
+        assert!(!result["story"].is_null());
+    }
+    assert_eq!(
+        crate::attribution::git_ai::child_processes(f.dir.path()),
+        children,
+        "record reads spawned git after warming the story cache"
+    );
+}
+
 /// SV-ENG-121: only a kept read stamps refs (the totals sweep and task reads pay no ref scan),
 /// and the stamp covers origin's head and the story's own branches, not every ref in the repo.
 #[tokio::test]
