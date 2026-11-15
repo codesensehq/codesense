@@ -360,6 +360,58 @@ describe("kit.chat", () => {
     expect(s.el.querySelector('[data-card="9"]')!.getAttribute("data-state")).toBe("answered");
   });
 
+  it("a card shows the lead's reason for its pick under the question, and none when it gave no reason", async () => {
+    const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
+    const plain = "Ship it?\n\nOptions: `Ship`, `Hold`.";
+    const s = setup(
+      [lead("idle")],
+      [
+        { messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 },
+        { messageId: 10, from: "lead-1", kind: "needs-you", text: plain, createdAtMs: 2000 },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const card = s.el.querySelector('[data-card="9"]')!;
+    const why = card.querySelector(".why")!;
+    expect(why.textContent).toBe("Story lead recommends Ship because green.");
+    // it reads after the question and before the answers
+    expect(card.querySelector(".body")!.compareDocumentPosition(why)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(why.compareDocumentPosition(card.querySelector(".opts")!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(s.el.querySelector('[data-card="10"] .why')).toBeNull();
+  });
+
+  it.each([
+    [
+      "a backticked pick is its label",
+      "My pick: `Ship`, because green.",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason's own end punctuation folds into one full stop",
+      "My pick: Ship, because green!!",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason that starts with because gets no second one",
+      "My pick: Ship, because because the tests are green.",
+      "Story lead recommends Ship because the tests are green.",
+    ],
+  ])("the reason line: %s", async (_why, pick, line) => {
+    const text = `Ship it?\n\nOptions: \`Ship\`, \`Hold\`. ${pick}`;
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 }],
+    );
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector('[data-card="9"] .why')!.textContent).toBe(line);
+  });
+
   it("cards: false shows a needs-you message as a message", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`.";
     const s = setup(

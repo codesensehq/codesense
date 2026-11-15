@@ -74,6 +74,7 @@
 .cs-chat .card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .card-h b{color:var(--cs-fg);font-size:var(--cs-text-sm)}
 .cs-chat .card-h .sp{flex:1}
+.cs-chat .card .why{margin:0;font-size:var(--cs-text-sm);color:var(--cs-muted-fg)}
 .cs-chat .card .body{padding:0;border:0;background:transparent}
 .cs-chat .card .opts{display:flex;flex-wrap:wrap;gap:6px}
 .cs-chat .card .opts .btn{white-space:normal;height:auto;min-height:28px;padding-top:4px;padding-bottom:4px;text-align:left}
