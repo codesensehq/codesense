@@ -1044,7 +1044,7 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
     }
     // Each is registered under the inbox namespace, and its flat name is the same verb: one
     // entry in every per-name table, so the alias the kit and pages call cannot drift.
-    for name in ["pins", "pin", "unpin", "restorePin", "replacePin", "reorderPins"] {
+    for name in PIN_VERBS {
         let flat = registry.get(name).expect(name);
         let spaced = registry
             .get(&format!("inbox.{name}"))

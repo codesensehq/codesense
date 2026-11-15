@@ -117,20 +117,22 @@ impl Default for Registry {
         registry
     }
 }
+/// The pin verbs: each is registered as `inbox.<verb>` and kept under its flat name as an
+/// alias the kit, the chat overlay and page bridges call.
+pub(crate) const PIN_VERBS: [&str; 6] = [
+    "pins",
+    "pin",
+    "unpin",
+    "restorePin",
+    "replacePin",
+    "reorderPins",
+];
 /// The name a verb's per-name tables (schemas, capability, inbox target, audit target,
-/// contract docs) are keyed by. The pin verbs are registered as `inbox.<verb>` and kept
-/// under their flat names as aliases the kit, the chat overlay and page bridges call;
-/// both names share one entry in each table.
+/// contract docs) are keyed by: a pin verb's `inbox.` name and its flat alias share one
+/// entry in each table.
 pub(crate) fn table_name(name: &str) -> &str {
     match str::strip_prefix(name, "inbox.") {
-        Some(flat)
-            if matches!(
-                flat,
-                "pins" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins"
-            ) =>
-        {
-            flat
-        }
+        Some(flat) if <[&str]>::contains(&PIN_VERBS, &flat) => flat,
         _ => name,
     }
 }
@@ -318,10 +320,9 @@ fn register_resources(registry: &mut Registry) {
         ),
     ] {
         let write = class != Class::Read;
-        registry.register(
-            "inbox",
-            spec(&format!("inbox.{verb}"), class, false, twin, reason, write, write),
-        );
+        let name = format!("inbox.{verb}");
+        assert_eq!(table_name(&name), verb, "a pin verb is listed in PIN_VERBS");
+        registry.register("inbox", spec(&name, class, false, twin, reason, write, write));
         registry.register_existing("inbox", spec(verb, class, false, twin, reason, write, write));
     }
     registry.register(

@@ -800,10 +800,6 @@ const INVOKE_META = {
     ], // analyze is in READ_VERBS but is a spawn-ish call; audit-exempt
   },
 };
-// The pin verbs' namespaced names (`inbox.<verb>`) are the same verbs: one entry each.
-for (const name of ["pins", "pin", "unpin", "restorePin", "replacePin", "reorderPins"]) {
-  INVOKE_META[`inbox.${name}`] = INVOKE_META[name];
-}
 
 // ---------------------------------------------------------------------------
 // Kit SDK — the shortcuts the viewer shim binds onto `window.codesense`.
@@ -2200,7 +2196,8 @@ export function buildManifest(root = ROOT) {
   };
   const invoke = sdk.verbs.map((verb) => {
     const name = verb.name;
-    const meta = INVOKE_META[name];
+    // A pin verb's `inbox.` name is the same verb as its flat alias: one entry for both.
+    const meta = INVOKE_META[name] ?? INVOKE_META[name.replace(/^inbox\./, "")];
     const category = verbCategory(name, lanes);
     const readOnlyDocsSafe =
       lanes.READ_VERBS.includes(name) || lanes.READ_ACTION_VERBS.includes(name);
