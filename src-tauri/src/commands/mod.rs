@@ -1091,7 +1091,7 @@ pub use async_helpers::await_blocking;
 // (Unsaved team edits). → 512.
 // +2 `session_text::session_text_watch` / `session_text_unwatch` (a page hears a Claude
 // session's assistant prose as it is written). → 514.
-pub const EXPECTED_COMMAND_COUNT: usize = 514;
+pub const EXPECTED_COMMAND_COUNT: usize = 515;
 
 #[cfg(test)]
 mod tests {

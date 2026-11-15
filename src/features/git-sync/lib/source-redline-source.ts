@@ -22,6 +22,7 @@ import { sourceFileRedline as invokeSourceFileRedline } from "@/tauri/commands";
 import { sourceImageSides as invokeSourceImageSides, type ImageSides } from "@/tauri/commands";
 import { sourceRemoteChangeset as invokeSourceRemoteChangeset } from "@/tauri/commands";
 import { sourceRemoteFileRedline as invokeSourceRemoteFileRedline } from "@/tauri/commands";
+import { sourceRemoteImageSides as invokeSourceRemoteImageSides } from "@/tauri/commands";
 import { sourceWorktreeChangeset as invokeSourceWorktreeChangeset } from "@/tauri/commands";
 
 import type { FileRedline, PublishFile, SourceCommitGraphEntry } from "./types";
@@ -632,6 +633,22 @@ export function sourceFileImageSides(
   const key = joinKey([worktreePath, filePath, opts.oldPath, opts.baseRef, opts.sha]);
   return dedupe(imageSidesInflight, key, () =>
     invokeSourceImageSides(worktreePath, filePath, opts),
+  );
+}
+
+/**
+ * A raster file's Before | After bytes in a REMOTE source worktree, at the working tree
+ * (before at the same baseline as the remote redline), read by the machine over its file
+ * protocol. Deduped like the local read.
+ */
+export function sourceRemoteImageSides(
+  repo: { machineId: string; handle: string },
+  filePath: string,
+  opts: { oldPath?: string; baseRef?: string },
+): Promise<ImageSides> {
+  const key = joinKey([repo.machineId, repo.handle, filePath, opts.oldPath, opts.baseRef]);
+  return dedupe(imageSidesInflight, key, () =>
+    invokeSourceRemoteImageSides(repo.machineId, repo.handle, filePath, opts.oldPath, opts.baseRef),
   );
 }
 

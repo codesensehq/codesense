@@ -1076,17 +1076,23 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(images()).toEqual(["Before"]);
   });
 
-  it("a changed PNG that won't draw here (remote, past the cap) says why, with Side by side disabled", () => {
+  it("a changed PNG that won't draw here (at a remote commit, past the cap) says why, with Side by side disabled", () => {
     openPng({
-      imageState: { kind: "unavailable", reason: "Images in a remote worktree aren't drawn yet" },
+      imageState: {
+        kind: "unavailable",
+        reason: "Images at a commit in a remote worktree aren't drawn yet",
+      },
     });
     const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
       name: "Side by side",
     });
     expect(sideBySide).toBeDisabled();
-    expect(sideBySide).toHaveAttribute("title", "Images in a remote worktree aren't drawn yet");
+    expect(sideBySide).toHaveAttribute(
+      "title",
+      "Images at a commit in a remote worktree aren't drawn yet",
+    );
     expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
-      "An image has no text diff. Images in a remote worktree aren't drawn yet.",
+      "An image has no text diff. Images at a commit in a remote worktree aren't drawn yet.",
     );
     expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
     expect(images()).toEqual([]);

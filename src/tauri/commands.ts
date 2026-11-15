@@ -5239,6 +5239,24 @@ export const sourceRemoteChangeset = (machineId: string, handle: string, baseRef
  *  computed against the same merge-base baseline as {@link sourceRemoteChangeset}.
  *  Byte-identical shape to {@link sourceFileRedline}. Routed via
  *  {@link sourceRedline} — do not call directly. */
+/** A raster file's Before | After bytes in a REMOTE source worktree, read by the machine's
+ *  Git at the working tree against the same baseline as {@link sourceRemoteFileRedline}.
+ *  A side whose bytes aren't a raster image is refused; one past the cap carries none. */
+export const sourceRemoteImageSides = (
+  machineId: string,
+  handle: string,
+  filePath: string,
+  oldPath?: string,
+  baseRef?: string,
+) =>
+  invoke<ImageSides>("source_remote_image_sides", {
+    machineId,
+    handle,
+    filePath,
+    oldPath,
+    baseRef,
+  });
+
 export const sourceRemoteFileRedline = (
   machineId: string,
   handle: string,
