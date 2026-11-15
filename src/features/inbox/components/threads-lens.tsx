@@ -739,6 +739,13 @@ export function Bubble({
       // On touch the action row shows on a tap, as hover shows it for a pointer.
       onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
     >
+      {grouped && roving && (
+        // A follow-on message drops who and when from its line; as an item of the chat's thread it
+        // is still read sender and time first, as the message it follows is.
+        <span className="ibx-sr">
+          {m.from === HUMAN ? "You" : labelOf(dir, m.from)} · {formatClock(m.createdAtMs)}
+        </span>
+      )}
       {avatar && !out && !grouped && <Avatar k={m.from} dir={dir} team={m.team} sm />}
       {meta && (
         <div className="meta">
