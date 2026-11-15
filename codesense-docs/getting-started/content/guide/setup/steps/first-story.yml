@@ -3,8 +3,8 @@ id: first-story
 title: Start your first story
 summary: >-
   A story is how you ask for work in CodeSense: a short file naming the repo it is about, which an
-  agent then picks up in its own tab. This step writes one for a repo your team tracks, and opens
-  it. Run it again for another story; it never changes one you have.
+  agent then picks up in its own tab. This step writes one for a repo your team tracks, and this
+  page opens it. Run it again for another story; it never changes one you have.
 needs: [clone]
 probe:
   - id: repos
@@ -32,19 +32,23 @@ probe:
       path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/stories/{{story_id}}.md"
     map: { found: done, none: missing, unreadable: missing }
 ask:
-  text: >-
-    **Start your first story?** Tell me what you want done, like "fix the login bug where the
-    session expires too early", and which of your tracked repos it is about. I'll write it as a
-    story file in your team, check it with `validate_story` first (nothing is created unless it
-    comes back clean), and open it. Nothing is created until you click, and nothing is committed
-    or pushed: the file waits in your context repo's folder. If your team has no story template
-    yet, it opens as plain markdown and I'll say so, because the story page needs that template.
-    If you already made one, this makes another story with its own id; it never changes one you
-    have.
+  text: |-
+    Start your first story? Tell me what you want done, like "fix the login bug where the session expires too early", and which of your tracked repos it is about.
+    What: write one story file for a repo your team tracks, after checking it
+    Where: your team's content folder in the context repo, under stories
+    Why: so you see how work starts: ask for something, and an agent does it in its own tab
+    I check it with validate_story first, and nothing is created unless it comes back clean. Nothing is created until you click, and nothing is committed or pushed. Once it is created this page opens the story: in its page when your team has a story template, otherwise as plain markdown with the reason. If you already made one, this makes another story with its own id; it never changes one you have.
   options:
     - { label: Do it, act: create-story }
     - { label: Not now, act: none }
   free_text: true
+on_fail:
+  text: >-
+    The story {{story_id}} wasn't created, and nothing was written. A story with that id may
+    already exist, or the check found a problem. Pick another id, or leave it for now.
+  options:
+    - { label: Retry with a new id, do: retry }
+    - { label: Skip for now, do: skip }
 inputs:
   story_id: { pattern: "^[A-Z][A-Z0-9]{1,9}-[0-9]{1,4}$", label: "The story's id, like ACME-1", shareable: true }
   title: { pattern: "^[A-Za-z0-9][A-Za-z0-9 ,.'()/_-]{2,78}$", label: A short title for the story }
@@ -61,27 +65,15 @@ act:
         content: "---\ntype: story\nstatus: todo\nstory_id: {{story_id}}\nsource_repo: {{probe.repos.repo}}\n---\n\n# {{title}}\n\n## Purpose\n\n{{title}}\n"
   - id: create-story
     consent: local-write
-    what: create the story file and open it
+    what: write one story file for a repo your team tracks, after checking it
     where: your team's content folder in the context repo, under stories
-    why: "so you see how work starts in CodeSense: ask for something, and an agent does it in its own tab"
+    why: "so you see how work starts: ask for something, and an agent does it in its own tab"
     verb:
       tool: create_content_file
       args:
         path: "{{probe.repos.org_root}}/{{probe.repos.team}}/content/stories/{{story_id}}.md"
         content: "---\ntype: story\nstatus: todo\nstory_id: {{story_id}}\nsource_repo: {{probe.repos.repo}}\n---\n\n# {{title}}\n\n## Purpose\n\n{{title}}\n"
         onCollision: fail
-    then: [open-story]
-  - id: open-story
-    consent: local-write
-    what: open the story you just created
-    where: a new tab for the story in this app
-    why: so you can see it
-    verb:
-      tool: open_workspace
-      args:
-        story_id: "{{story_id}}"
-        org: "{{probe.repos.org}}"
-        team: "{{probe.repos.team}}"
 verify: { probe: [story, file], expect: done }
 record:
   scope: team

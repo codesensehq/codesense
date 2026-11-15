@@ -50,16 +50,6 @@
             "result": "{\"status\": \"ok\"}"
           }
         ]
-      },
-      {
-        "index": 6,
-        "tool_calls": [
-          {
-            "name": "mcp__codesense__open_workspace",
-            "input": "{\"story_id\": \"ACME-1\", \"org\": \"acme/context\", \"team\": \"web\"}",
-            "result": "{\"status\": \"opened\"}"
-          }
-        ]
       }
     ]
   }

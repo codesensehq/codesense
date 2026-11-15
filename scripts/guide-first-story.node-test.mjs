@@ -29,7 +29,7 @@ test("the index lists first-story after clone, and the pack builds clean", () =>
   assert.deepEqual(buildPack(PACK, { check: true }).errors, []);
 });
 
-test("one live consent card: What / Where / Why, Do it and Not now, and Not now writes nothing", () => {
+test("one live consent card: What / Where / Why in its text, Do it and Not now, and Not now writes nothing", () => {
   const s = step();
   assert.deepEqual(
     s.ask.options.map((o) => [o.label, o.act]),
@@ -40,12 +40,23 @@ test("one live consent card: What / Where / Why, Do it and Not now, and Not now 
   );
   const create = act("create-story");
   assert.equal(create.consent, "local-write");
-  for (const key of ["what", "where", "why"]) assert.ok(create[key]?.length > 10, key);
-  // The open follows the create inside the same click; nothing else is reachable.
-  assert.deepEqual(create.then, ["open-story"]);
-  assert.equal(act("open-story").consent, "local-write");
-  const writers = s.act.filter((a) => a.consent !== "read").map((a) => a.id);
-  assert.deepEqual(writers.sort(), ["create-story", "open-story"]);
+  // The kit shows a card's text and buttons only, so the card's text carries the act's own words.
+  for (const key of ["what", "where", "why"]) {
+    assert.ok(create[key]?.length > 10, key);
+    const label = key[0].toUpperCase() + key.slice(1);
+    assert.ok(
+      s.ask.text.split("\n").includes(`${label}: ${create[key]}`),
+      `the card's text has its ${label} line, as the act says it`,
+    );
+  }
+  // One write in the click, and nothing opens from the guide: the page opens the story.
+  assert.equal(create.then, undefined);
+  assert.deepEqual(
+    s.act.filter((a) => a.consent !== "read").map((a) => a.id),
+    ["create-story"],
+  );
+  assert.ok(s.act.every((a) => a.verb?.tool !== "open_workspace"));
+  assert.doesNotMatch(read("setup/steps/first-story.yml"), /open_workspace/);
   assert.match(s.ask.text, /nothing is created until you click/i);
 });
 
@@ -79,18 +90,11 @@ test("the story names a repo the team tracks, read from the team's own listing",
 });
 
 test("every write names the user's own org and team, never the docs team", () => {
-  for (const id of ["create-story", "open-story"]) {
-    const args = act(id).verb.args;
-    if (id === "open-story") {
-      assert.equal(args.org, "{{probe.repos.org}}");
-      assert.equal(args.team, "{{probe.repos.team}}");
-      assert.equal(args.story_id, "{{story_id}}");
-    } else
-      assert.equal(
-        args.path,
-        "{{probe.repos.org_root}}/{{probe.repos.team}}/content/stories/{{story_id}}.md",
-      );
-  }
+  const args = act("create-story").verb.args;
+  assert.equal(
+    args.path,
+    "{{probe.repos.org_root}}/{{probe.repos.team}}/content/stories/{{story_id}}.md",
+  );
   assert.doesNotMatch(read("setup/steps/first-story.yml"), /codesense\/docs"?\s*[,}]?\s*$/m);
 });
 
@@ -110,16 +114,27 @@ test("a re-run offers a new story and never writes over one", () => {
   for (const bad of ['a"b', "a\nb", "a\\b", "#x", ""]) assert.ok(!title.test(bad), bad);
 });
 
-test("with no story template the story opens as markdown, and the card says why", () => {
+test("the page opens the story, so the card promises the page's own reason and never its own", () => {
   const text = step().ask.text;
-  assert.match(text, /no story template/i);
-  assert.match(text, /plain markdown/i);
+  assert.match(text, /this page opens the story/i);
+  assert.match(text, /plain markdown with the reason/i);
+  assert.doesNotMatch(text, /I'll say so/);
+});
+
+test("a failed create offers a new id or a skip, and says nothing was written", () => {
+  const { on_fail } = step();
+  assert.deepEqual(
+    on_fail.options.map((o) => o.do),
+    ["retry", "skip"],
+  );
+  assert.match(on_fail.text, /nothing was written/i);
+  assert.match(on_fail.text, /\{\{story_id\}\}/);
 });
 
 test("the chip: the guide offers `Start my first story`, and the page's Next: parser reads it", () => {
   const command = read("commands/codesense-setup.md");
   assert.match(command, /`Start my first story`/);
-  assert.ok(command.length < 4700, `${command.length} bytes`);
+  assert.ok(command.length < 4500, `${command.length} bytes`);
   assert.deepEqual(parseNext("Done.\n\nNext: `Start my first story`, `What have you set up?`"), {
     text: "Done.",
     chips: ["Start my first story", "What have you set up?"],
@@ -130,7 +145,7 @@ const GUIDE = { actVerbs: stepActVerbs(PACK) };
 const load = (name) =>
   JSON.parse(readFileSync(join(HERE, "fixtures/consent", `${name}.json`), "utf8"));
 
-test("a first-story session passes: card, click, validate, create, open", () => {
+test("a first-story session passes: card, click, validate, create", () => {
   const { errors, calls } = checkConsent(load("first-story"), GUIDE);
   assert.deepEqual(errors, []);
   assert.equal(calls, 1);

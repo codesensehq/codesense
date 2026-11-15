@@ -49,7 +49,6 @@ const PHASE_1 = [
   "records_set_fields",
   "create_content_file",
   "validate_story",
-  "open_workspace",
   // the product step, until SV-PW lands
   "set_epic_repos",
   "read_epic_repos",
@@ -59,8 +58,8 @@ const PHASE_1 = [
 const sorted = (list) => [...list].sort();
 
 test("the phase 1 list is DESIGN's 24 tools plus the two epic-repo verbs, set_active_team, the hand-back verb and the clone step's three", () => {
-  assert.equal(PHASE_1.length, 31);
-  assert.equal(new Set(PHASE_1).size, 31);
+  assert.equal(PHASE_1.length, 30);
+  assert.equal(new Set(PHASE_1).size, 30);
 });
 
 test("the pack builds clean under --check", () => {
@@ -196,7 +195,7 @@ test("the command opens with the root rules: reply, Next:, cards in the card lin
     /`Sources:`/,
   ])
     assert.match(rules, rule);
-  assert.ok(text.length < 4700, `${text.length} bytes`);
+  assert.ok(text.length < 4500, `${text.length} bytes`);
 });
 
 test("the old example recipe is gone and exactly one skill has the name", () => {

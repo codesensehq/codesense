@@ -45,7 +45,6 @@ permissions:
       - mcp__codesense__records_set_fields
       - mcp__codesense__create_content_file
       - mcp__codesense__validate_story
-      - mcp__codesense__open_workspace
       - mcp__codesense__set_epic_repos
       - mcp__codesense__read_epic_repos
       - mcp__codesense__set_active_team

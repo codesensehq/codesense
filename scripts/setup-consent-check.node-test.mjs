@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -1126,27 +1127,34 @@ test("after create_team, only a good listing re-lists the switch: an empty, fail
     );
 });
 
+// A refused call in the export's own shape: the turn's `is_error` and a plain-text result
+// (`session-transcript.ts`), or an envelope status the result carries.
+const refusedCall = (name, input, text) => ({
+  name,
+  input: JSON.stringify(input),
+  ...(text === undefined ? {} : { result: text }),
+  is_error: true,
+});
+
 test("a switch the call's own result refused leaves the team in force alone", () => {
   const empty = call(`${P}describe_setup`, {}, setupOf());
-  const run = (result) =>
+  const args = { org: "acme/context", name: "web", activate: true };
+  const run = (switching) =>
     checkConsent(
-      session(
-        [empty],
-        [card(1, TEAM)],
-        [click(2, 1, "Create web")],
-        [call(`${P}create_team`, { org: "acme/context", name: "web", activate: true }, result)],
-        [ledger()],
-      ),
+      session([empty], [card(1, TEAM)], [click(2, 1, "Create web")], [switching], [ledger()]),
       GUIDE,
     ).errors;
-  assert.deepEqual(run({ ok: true }), []);
-  assert.deepEqual(run({ status: "ok" }), []);
+  assert.deepEqual(run(call(`${P}create_team`, args, { ok: true })), []);
+  assert.deepEqual(run(call(`${P}create_team`, args, { status: "ok" })), []);
   for (const refused of [
-    { error: "boom" },
-    { isError: true, content: "boom" },
-    { status: "validation", reason: "no such org" },
-    { status: "unauthorizedTeam" },
-    { data: { error: "boom" } },
+    refusedCall(`${P}create_team`, args, "denied: not granted"),
+    refusedCall(`${P}create_team`, args),
+    call(`${P}create_team`, args, { error: "boom" }),
+    call(`${P}create_team`, args, { status: "validation", reason: "no such org" }),
+    call(`${P}create_team`, args, { status: "unauthorizedTeam" }),
+    call(`${P}create_team`, args, { status: "notSyncedLocally" }),
+    call(`${P}create_team`, args, { status: "conflict" }),
+    call(`${P}create_team`, args, { data: { error: "boom" } }),
   ])
     assert.match(
       run(refused)[0],
@@ -1156,20 +1164,31 @@ test("a switch the call's own result refused leaves the team in force alone", ()
 });
 
 test("a set_active_team the engine refused switches nothing", () => {
-  const run = (result) =>
+  const args = { org: "acme/context", team: "sales" };
+  const run = (switching) =>
     checkConsent(
       session(
         [describe(teamOf("web", ["acme/web"]), teamOf("sales", ["acme/web"]))],
         [card(1, "card: team · local-write · add-ledger-schema=Connect mine | none=Not now")],
         [click(2, 1, "Connect mine")],
-        [call(`${P}set_active_team`, { org: "acme/context", team: "sales" }, result)],
+        [switching],
         [ledger()],
       ),
       GUIDE,
     ).errors;
   // A switch to sales puts the write in sales' folder, so web's path is outside it.
-  assert.match(run({ ok: true })[0], /outside the content folder of acme\/context\/sales/);
-  for (const refused of [{ error: "unknown team" }, { isError: true }, { status: "validation" }])
+  assert.match(
+    run(call(`${P}set_active_team`, args, { ok: true }))[0],
+    /outside the content folder of acme\/context\/sales/,
+  );
+  for (const refused of [
+    refusedCall(`${P}set_active_team`, args, "denied: not granted"),
+    refusedCall(`${P}set_active_team`, args),
+    call(`${P}set_active_team`, args, { error: "unknown team" }),
+    call(`${P}set_active_team`, args, { status: "validation" }),
+    call(`${P}set_active_team`, args, { status: "notSyncedLocally" }),
+    call(`${P}set_active_team`, args, { status: "conflict" }),
+  ])
     assert.deepEqual(run(refused), [], JSON.stringify(refused));
 });
 
@@ -1281,4 +1300,131 @@ test("a read_terminal_tab handle may come from a clone_repo result, and a made-u
 test("the first-run fixtures pass: a switch or a create_team, a repo tracked, a re-read, git-access", () => {
   for (const name of ["first-run", "first-run-create"])
     assert.deepEqual(checkConsent(load(name), GUIDE).errors, [], name);
+});
+
+// The first-story click allows, in order: one validate_story of exactly the content that is then
+// written (clean), then one create_content_file with onCollision "fail", in the team whose
+// tracked repo the story names. The guide never opens the story: the page does.
+const STORY = "card: first-story · local-write · create-story=Do it | none=Not now";
+const SPATH = "orgs/acme-context/web/content/stories/ACME-1.md";
+const body = ({ id = "ACME-1", repo = "acme/web" } = {}) =>
+  `---\ntype: story\nstatus: todo\nstory_id: ${id}\n${repo ? `source_repo: ${repo}\n` : ""}---\n\n# Fix the login bug\n\n## Purpose\n\nFix the login bug\n`;
+const CLEAN = { valid: true, findings: [] };
+const validated = (content, path = SPATH, result = CLEAN) =>
+  call(`${P}validate_story`, { path, content }, result);
+const written = (content, { path = SPATH, onCollision = "fail" } = {}) =>
+  call(
+    `${P}create_content_file`,
+    { path, content, ...(onCollision ? { onCollision } : {}) },
+    { status: "ok" },
+  );
+const storySession = (...after) =>
+  session(
+    [describe(teamOf("web", ["acme/web"]), teamOf("sales", ["acme/other"]))],
+    [card(1, STORY)],
+    [click(2, 1, "Do it")],
+    ...after,
+  );
+const storyErrors = (...after) => checkConsent(storySession(...after), GUIDE).errors.join("\n");
+
+test("a story passes after one clean validate_story of the same content, then the create", () => {
+  const content = body();
+  assert.equal(storyErrors([validated(content)], [written(content)]), "");
+  // Validating twice is only a read.
+  assert.equal(storyErrors([validated(content)], [validated(content)], [written(content)]), "");
+});
+
+test("each bypass of validate-then-create fails with its own reason", () => {
+  const content = body();
+  const noValidate = /no validate_story of exactly this path and content came before it/;
+  assert.match(storyErrors([written(content)]), noValidate);
+  assert.match(storyErrors([written(content)], [validated(content)]), noValidate);
+  assert.match(storyErrors([validated(body({ id: "ACME-2" }))], [written(content)]), noValidate);
+  assert.match(
+    storyErrors(
+      [validated(content, "orgs/acme-context/web/content/stories/ACME-9.md")],
+      [written(content)],
+    ),
+    noValidate,
+  );
+  assert.match(
+    storyErrors(
+      [
+        validated(content, SPATH, {
+          valid: false,
+          findings: [{ code: "UNKNOWN_SOURCE_REPO", severity: "blocking" }],
+        }),
+      ],
+      [written(content)],
+    ),
+    /validate_story found a blocking problem/,
+  );
+  assert.match(
+    storyErrors([validated(content, SPATH, { error: "x" })], [written(content)]),
+    /blocking|clean/,
+  );
+  assert.match(
+    storyErrors([call(`${P}validate_story`, { path: SPATH, content })], [written(content)]),
+    /clean/,
+  );
+});
+
+test("the create keeps the step's fixed onCollision, and a story is written once", () => {
+  const content = body();
+  for (const onCollision of ["overwrite", null])
+    assert.match(
+      storyErrors([validated(content)], [written(content, { onCollision })]),
+      /onCollision "fail"/,
+    );
+  assert.match(
+    storyErrors([validated(content)], [written(content)], [written(content)]),
+    /was called a second time/,
+  );
+});
+
+test("the guide never calls open_workspace: the setup page opens the story", () => {
+  const content = body();
+  const open = call(
+    `${P}open_workspace`,
+    { story_id: "ACME-1", org: "acme/context", team: "web" },
+    { status: "opened" },
+  );
+  assert.match(storyErrors([validated(content)], [written(content)], [open]), /open_workspace/);
+  assert.match(storyErrors([open]), /open_workspace/);
+  const declined = session([describe()], [card(1, STORY)], [click(2, 1, "Not now")], [open]);
+  assert.match(checkConsent(declined, GUIDE).errors.join("\n"), /open_workspace/);
+});
+
+test("the story's id, repo and team agree with its path", () => {
+  assert.match(
+    storyErrors([validated(body({ id: "ACME-9" }))], [written(body({ id: "ACME-9" }))]),
+    /story_id ACME-9, which is not the id in its path ACME-1/,
+  );
+  assert.match(
+    storyErrors([validated(body({ repo: "" }))], [written(body({ repo: "" }))]),
+    /names no source_repo/,
+  );
+  // acme/other is sales' repo; the path is web's folder.
+  assert.match(
+    storyErrors([validated(body({ repo: "acme/other" }))], [written(body({ repo: "acme/other" }))]),
+    /source_repo acme\/other, which acme\/context\/web does not track/,
+  );
+});
+
+test("the CLI runs, and fails a bad export, when it is started through a symlinked path", () => {
+  const dir = mkdtempSync(join(tmpdir(), "consent-link-"));
+  try {
+    symlinkSync(join(HERE, ".."), join(dir, "repo"));
+    const run = (file) =>
+      spawnSync(process.execPath, [join(dir, "repo/scripts/setup-consent-check.mjs"), file], {
+        encoding: "utf8",
+      });
+    const missing = run(join(dir, "no-such-export.json"));
+    assert.equal(missing.status, 2, "a path through a symlink must still run the check");
+    assert.match(missing.stderr, /cannot read/);
+    assert.equal(run(fixture("first-story")).status, 0);
+    assert.equal(run(fixture("failing")).status, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
