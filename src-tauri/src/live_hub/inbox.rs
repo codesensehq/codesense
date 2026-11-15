@@ -578,8 +578,10 @@ impl InboxProjection {
                 row.mail_notice = match fields["mailNotice"].as_str() {
                     Some("pending") => Some(crate::mcp::session_list::MailNotice::Pending),
                     Some("told") => Some(crate::mcp::session_list::MailNotice::Told),
+                    Some("held") => Some(crate::mcp::session_list::MailNotice::Held),
                     _ => None,
                 };
+                crate::mcp::session_list::mark_held(row);
                 row.notified_at = fields["notifiedAt"].as_str().map(str::to_string);
                 row.group_unread = fields["groupUnread"].as_u64().unwrap_or(0) as u32;
                 row.group_read_id = fields["groupReadId"].as_i64().unwrap_or(0);

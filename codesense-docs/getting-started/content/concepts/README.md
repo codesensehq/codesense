@@ -406,7 +406,10 @@ See [Send a GIF or image](../arc-f-inboxes-and-triage/messages.html#send-media).
 3. Does Z have an inbox waiter? With `inboxWaiter: false` in `list_sessions` (its CLI has no
    wake path, or CodeSense cannot name its process), the mail is stored but nothing tells Z: see its `unread` and
    wake it with `send_to_session`. With a waiter, `mailNotice: "told"` shows Z was told; it
-   decides when to read.
+   decides when to read. `mailNotice: "held"` means the notice has been held back from Z's
+   waiter for more than one notice cycle; `held.gate` names what holds it (`hold: <reason>`
+   for a wake hold such as a spend cap, `hold: undecided`, or `tools` while Z's agent lacks
+   its CodeSense tools) and `held.sinceMs` since when.
 4. Is Z's `unread` null? Its team is not synced on this Mac, so its inbox can't be read here.
 5. Was the text blank? Blank text is refused.
 

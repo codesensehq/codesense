@@ -25,7 +25,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::agent_cli::{AgentCliAdapter, Channel, Notice, SubmitOutcome};
-use crate::domain::{InboxWaiterState, PtySessionId, TerminalDomainEvent, TerminalEventSink};
+use crate::domain::{
+    HeldNotice, InboxWaiterState, PtySessionId, TerminalDomainEvent, TerminalEventSink,
+};
 use crate::inbox_waiters::{locked as lock, InboxWaiters, WaiterSignal};
 
 /// The waiter's socket: its helper's hand-over ([`HostInbox::serve`]) and hang-up check.
@@ -219,6 +221,24 @@ pub struct HostInbox {
     reported: Mutex<HashMap<String, (Reported, Instant)>>,
     /// How long a waiter's notice may be held before the hold is logged.
     cycle: Mutex<Cycle>,
+    /// What holds each session's waiting notice back from its waiter, while something does.
+    gated: Mutex<HashMap<String, Gated>>,
+}
+
+/// What holds a waiting notice back, since when, and whether that outlasted one cycle.
+struct Gated {
+    gate: String,
+    since: Instant,
+    past_cycle: bool,
+}
+
+/// How a waiting notice's hold changed, as its desktop hears it.
+#[derive(Debug, PartialEq, Eq)]
+enum GateChange {
+    /// Held by this gate for one cycle now.
+    Held(String),
+    /// A hold that outlasted a cycle lifted, or another gate holds it now.
+    Lifted,
 }
 
 /// One notice cycle: how long a notice offered to an agent awaits its confirm before it
@@ -266,6 +286,7 @@ struct Reported {
     waiting: bool,
     armed: bool,
     audience: Option<String>,
+    held: Option<String>,
 }
 
 /// The wake key a submitted notice is headed with: the CLI's own prompt hook shows it
@@ -344,6 +365,50 @@ impl HostInbox {
         (outlet.has_tools(session) == Some(false)).then(|| "tools".into())
     }
 
+    /// `session`'s waiting notice is held back by `gate` (`None`: by nothing) at `now`.
+    /// A gate that just outlasted one cycle is [`GateChange::Held`]; one that had, and no
+    /// longer holds it, is [`GateChange::Lifted`]. Another gate starts its own cycle.
+    fn track_gate(&self, session: &str, gate: Option<String>, now: Instant) -> Option<GateChange> {
+        let cycle = lock(&self.cycle).0;
+        let mut gated = lock(&self.gated);
+        let Some(gate) = gate else {
+            let was = gated.remove(session);
+            return was
+                .is_some_and(|was| was.past_cycle)
+                .then_some(GateChange::Lifted);
+        };
+        let lifted = match gated.get_mut(session) {
+            Some(held) if held.gate == gate => {
+                if held.past_cycle || now.saturating_duration_since(held.since) < cycle {
+                    return None;
+                }
+                held.past_cycle = true;
+                return Some(GateChange::Held(gate));
+            }
+            was => was.is_some_and(|was| was.past_cycle),
+        };
+        gated.insert(
+            session.to_string(),
+            Gated {
+                gate,
+                since: now,
+                past_cycle: false,
+            },
+        );
+        lifted.then_some(GateChange::Lifted)
+    }
+
+    /// `session`'s notice held back past one cycle at `now`, if one is.
+    fn held_at(&self, session: &str, now: Instant) -> Option<HeldNotice> {
+        let gated = lock(&self.gated);
+        let held = gated.get(session).filter(|held| held.past_cycle)?;
+        Some(HeldNotice {
+            gate: held.gate.clone(),
+            held_ms: u64::try_from(now.saturating_duration_since(held.since).as_millis())
+                .unwrap_or(u64::MAX),
+        })
+    }
+
     /// The desktop pushed `session`'s notice reserved under `token`: held for its agent,
     /// replacing an older one. The same token again changes nothing; one already handed
     /// over or submitted uncertainly is not sent again.
@@ -389,6 +454,7 @@ impl HostInbox {
     /// desktop told it was armed hears it is not.
     pub fn forget(&self, session: &str, outlet: &dyn InboxOutlet) {
         lock(&self.wake_holds).sessions.remove(session);
+        lock(&self.gated).remove(session);
         self.waiters.forget(session);
         lock(&self.held).remove(session);
         lock(&self.handed).remove(session);
@@ -405,6 +471,7 @@ impl HostInbox {
                 session: PtySessionId::new(session),
                 waiting: false,
                 grace_ms: None,
+                held: None,
             });
         }
     }
@@ -441,6 +508,11 @@ impl HostInbox {
             session: PtySessionId::new(session),
             waiting,
             grace_ms,
+            held: if waiting {
+                self.held_at(session, Instant::now())
+            } else {
+                None
+            },
         }
     }
 
@@ -455,6 +527,7 @@ impl HostInbox {
             waiting: state.waiting,
             armed: state.waiting || state.grace_ms.is_some(),
             audience: outlet.audience(session),
+            held: state.held.as_ref().map(|held| held.gate.clone()),
         };
         let renew = lock(&self.submitters).get(session) == Some(&false);
         // A session never told of anything (one forgotten meanwhile) has nothing to tell.
