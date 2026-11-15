@@ -1279,12 +1279,13 @@ describe("kit.chat faces", () => {
     await flush();
     const rows = shape(s.el);
     // lead run (1, 2), another agent (3), the person (4), the lead again (5)
+    // a run's first message leads with the face beside its meta line; the person's own has no face
     expect(rows.map((r) => r.kids)).toEqual([
-      ["meta", "body"],
+      ["who", "body"],
       ["body"],
+      ["who", "body"],
       ["meta", "body"],
-      ["meta", "body"],
-      ["meta", "body"],
+      ["who", "body"],
     ]);
     const msgs = [...s.el.querySelectorAll<HTMLElement>(".log .msg")];
     expect(msgs.map((m) => m.getAttribute("data-run"))).toEqual([
@@ -1329,7 +1330,8 @@ describe("kit.chat faces", () => {
     await flush();
     const img = s.el.querySelector<HTMLImageElement>(".log .msg.other .cs-avatar img")!;
     expect(img.getAttribute("src")).toBe("/img/dev.png");
-    expect(img.getAttribute("alt")).toBe("Dev two");
+    // the name is on the meta line beside it, so the image says nothing of its own
+    expect(img.getAttribute("alt")).toBe("");
     expect(calls).toEqual([
       expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Lead one" }),
     ]);
@@ -1345,9 +1347,7 @@ describe("kit.chat faces", () => {
     const img = s.el.querySelector<HTMLImageElement>(".log .msg .cs-avatar img")!;
     img.dispatchEvent(new Event("error"));
     expect(s.el.querySelector(".log .msg img")).toBeNull();
-    expect(s.el.querySelector(".log .msg .meta .cs-avatar")!.getAttribute("data-name")).toBe(
-      "Dev two",
-    );
+    expect(s.el.querySelector(".log .msg .cs-avatar")!.getAttribute("data-name")).toBe("Dev two");
     expect(calls.at(-1)).toEqual(
       expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Dev two" }),
     );
@@ -1359,7 +1359,7 @@ describe("kit.chat faces", () => {
     await flush();
     bare.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
     expect(bare.el.querySelector(".log .msg img")).toBeNull();
-    expect(bare.el.querySelector(".log .msg .meta .cs-avatar")!.textContent).toBe("DT");
+    expect(bare.el.querySelector(".log .msg .cs-avatar")!.textContent).toBe("DT");
   });
 
   it("a streamed reply joins the lead's run and keeps no meta line the final message would drop", async () => {
@@ -1417,6 +1417,69 @@ describe("kit.chat faces", () => {
     // the card is its own node with no run mark; the messages around it each start a run
     expect(msgs.map((m) => m.getAttribute("data-run"))).toEqual(["start", null, "start"]);
     expect(msgs.filter((m) => m.querySelector(".cs-avatar")).length).toBe(2);
+  });
+
+  // What a screen reader reads from a node: its text, skipping what is aria-hidden, with an image read as its alt.
+  const spoken = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (!(node instanceof Element) || node.getAttribute("aria-hidden") === "true") return "";
+    if (node instanceof HTMLImageElement) return node.getAttribute("alt") ?? "";
+    return [...node.childNodes].map(spoken).join("");
+  };
+  // The run starters' meta lines with faces unset: each reads exactly "<name> · <time>".
+  const plainMetas = async (thread: Row[]) => {
+    const plain = setup([lead("idle")], thread);
+    mountOn(plain);
+    await flush();
+    const metas = [...plain.el.querySelectorAll<HTMLElement>(".log .msg .meta")].map(
+      (m) => m.textContent,
+    );
+    plain.el.remove();
+    return metas;
+  };
+
+  it.each([
+    ["initials (no kit.avatar)", false, () => ({ name: "Story lead" })],
+    ["initials through kit.avatar", true, () => ({ name: "Story lead" })],
+    [
+      "a face ref through kit.avatar",
+      true,
+      () => ({ face: "builtin-funny:coffee-bot", name: "Story lead" }),
+    ],
+    ["an image", false, () => ({ src: "/img/lead.png", name: "Story lead" })],
+    ["an emoji name", false, () => ({ name: "🦊 Story lead" })],
+  ])(
+    "with faces on (%s) the meta line reads only the name and the time, and the face is read by no one",
+    async (_kind, kitAvatar, faces) => {
+      if (kitAvatar) withAvatar();
+      const thread = THREAD.slice(0, 1);
+      const [expected] = await plainMetas(thread);
+      expect(expected).toMatch(/^Story lead · \S/);
+      const s = setup([lead("idle")], thread);
+      mountOn(s, { faces });
+      await flush();
+      const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+      expect(msg.querySelector(".cs-avatar")).not.toBeNull();
+      // the face sits beside the meta line, not inside it
+      expect(msg.querySelector(".meta .cs-avatar")).toBeNull();
+      expect(msg.querySelector(".meta")!.textContent).toBe(expected);
+      // the name is said once, by the meta line: no initials, no alt, no title read before it
+      expect(spoken(msg)).toBe(`${expected}first`);
+      const img = msg.querySelector("img");
+      if (img) expect(img.getAttribute("alt")).toBe("");
+    },
+  );
+
+  it("a face swapped in for an image that fails to load is hidden as well", async () => {
+    const [expected] = await plainMetas(THREAD.slice(0, 1));
+    const s = setup([lead("idle")], THREAD.slice(0, 1));
+    mountOn(s, { faces: () => ({ src: "/img/gone.png", name: "Story lead" }) });
+    await flush();
+    s.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
+    const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+    expect(msg.querySelector(".cs-avatar")!.textContent).toBe("SL");
+    expect(msg.querySelector(".meta")!.textContent).toBe(expected);
+    expect(spoken(msg)).toBe(`${expected}first`);
   });
 
   it("a sender run keeps its nodes when a later message joins it", async () => {
