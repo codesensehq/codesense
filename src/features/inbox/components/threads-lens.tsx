@@ -26,6 +26,7 @@ import {
   type Thread,
 } from "../model";
 import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
+import { useRovingThread } from "../hooks/use-roving-thread";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
 import type { DeliveryMark } from "../lib/delivery-marks";
 import type { PersonPins } from "../hooks/use-person-pins";
@@ -588,6 +589,12 @@ export function Conversation({
     hiddenBefore.current = threadHidden;
   }, [threadHidden, away, jump]);
 
+  // The chat's thread is one Tab stop: its active message (the newest, until the person moves),
+  // with Up, Down, Home and End between messages.
+  const keys = useMemo(() => thread.messages.map(msgKey), [thread.messages]);
+  const roving = useRovingThread(scroller, keys, quick);
+  const rovingOn = quick && keys.length > 0;
+
   const heads = dayHeads(thread.messages);
   return (
     <>
@@ -596,22 +603,22 @@ export function Conversation({
         <div
           className="ibx-msgs"
           ref={scroller}
-          // Reachable by Tab to scroll with the keys, and where focus lands after a jump.
-          tabIndex={0}
+          // Reachable by Tab to scroll with the keys, and where focus lands after a jump; in the
+          // chat its active message is the Tab stop instead.
+          tabIndex={rovingOn ? -1 : 0}
           role="region"
           aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
           data-testid="ibx-msgs"
-          // Esc closes a pin note and ends an Undo.
-          onKeyDown={
-            pins
-              ? (e) => {
-                  if (e.key === "Escape" && pins.note) {
-                    e.stopPropagation();
-                    pins.dismiss();
-                  }
-                }
-              : undefined
-          }
+          onFocus={roving.onFocus}
+          onKeyDown={(e) => {
+            // Esc closes a pin note and ends an Undo.
+            if (pins && e.key === "Escape" && pins.note) {
+              e.stopPropagation();
+              pins.dismiss();
+              return;
+            }
+            roving.onKeyDown(e);
+          }}
         >
           {thread.messages.length === 0 && empty}
           {thread.messages.map((m, i) => {
@@ -633,6 +640,7 @@ export function Conversation({
                   avatar={avatars && quick}
                   mark={marks?.(m) ?? null}
                   pins={pins}
+                  roving={quick}
                 />
               </Fragment>
             );
@@ -642,8 +650,10 @@ export function Conversation({
           unseen={away ? unseen : 0}
           onJump={() => {
             jump();
-            // The pill goes away; focus lands on the conversation, not the page body.
-            scroller.current?.focus({ preventScroll: true });
+            // The pill goes away; focus lands on the conversation (in the chat, its newest
+            // message), not the page body.
+            if (rovingOn) roving.focusNewest();
+            else scroller.current?.focus({ preventScroll: true });
           }}
         />
       </div>
@@ -676,9 +686,12 @@ export function Bubble({
   grouped = false,
   mark = null,
   pins = null,
+  roving = false,
   avatar = false,
 }: {
   m: ConversationMessage;
+  /** A stop in the chat's roving thread: focusable, and read as one message. */
+  roving?: boolean;
   /** Draw the sender's avatar beside the other side's messages: at a run's start, and its
    *  column under the rest of the run. */
   avatar?: boolean;
@@ -721,6 +734,7 @@ export function Bubble({
     <div
       className={cls}
       data-mid={msgKey(m)}
+      role={roving ? "article" : undefined}
       data-tapped={tapped || undefined}
       // On touch the action row shows on a tap, as hover shows it for a pointer.
       onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
