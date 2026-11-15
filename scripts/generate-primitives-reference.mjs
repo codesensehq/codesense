@@ -167,8 +167,18 @@ const INVOKE_META = {
   },
   restorePin: {
     description:
-      "Undo an unpin: the message's unpinned pin comes back as it was (who pinned it, when, its preview and its place).",
-    examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
+      "Undo an unpin: the message's unpinned pin comes back as it was (who pinned it, when, its preview and its place). With replacing, the Undo of a replacePin: the pin that took its place goes in the same step.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } },
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42, replacing: 51 } },
+    ],
+  },
+  replacePin: {
+    description:
+      "At the cap, pin a message in place of the shown pin replaces, in one step; nothing else moves. restorePin with replacing undoes it.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 51, replaces: 42 } },
+    ],
   },
   reorderPins: {
     description:

@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 116 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 117 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -1215,7 +1215,7 @@ pin(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1278,7 +1278,7 @@ pins(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1780,7 +1780,7 @@ reorderPins(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1831,6 +1831,71 @@ metadata · inbox:write
 
 Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thread's pins; an agent places a pin with the pin tool's position.
 
+## VerbMethods: replacePin
+
+```ts
+replacePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin.
+
 ## VerbMethods: replyAsHuman
 
 ```ts
@@ -1852,13 +1917,14 @@ restorePin(args: {
       agentId: string;
       messageId: number;
       org?: string;
+      replacing?: number;
       storyId?: string;
       team?: string;
       [key: string]: unknown;
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -2502,7 +2568,7 @@ unpin(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;

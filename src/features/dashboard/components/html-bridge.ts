@@ -1502,12 +1502,30 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     );
   },
   // The Undo of an unpin: the pin comes back as it was (who pinned it, when, its preview).
+  // With `replacing`, the Undo of a replace: that pin goes in the same step.
   restorePin: async (args, ctx) => {
     const a = argObject(args, "restorePin");
     const { agentId, storyId } = pinThread(a, "restorePin");
     const id = messageId(a.messageId, "restorePin");
+    const replacing =
+      a.replacing == null ? undefined : messageId(a.replacing, "restorePin: replacing");
     return inboxWrite(ctx, "restorePin", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "restore", messageId: id }),
+      agentPins(team, agentId, storyId, {
+        op: "restore",
+        messageId: id,
+        ...(replacing === undefined ? {} : { replacing }),
+      }),
+    );
+  },
+  // At the cap, the person pins a message in place of a pin they choose, in one step.
+  replacePin: async (args, ctx) => {
+    const a = argObject(args, "replacePin");
+    const { agentId, storyId } = pinThread(a, "replacePin");
+    const id = messageId(a.messageId, "replacePin");
+    if (a.replaces == null) throw new Error("replacePin: {replaces} must name the pin to replace");
+    const replaces = messageId(a.replaces, "replacePin: replaces");
+    return inboxWrite(ctx, "replacePin", a, (team) =>
+      agentPins(team, agentId, storyId, { op: "replace", messageId: id, replaces }),
     );
   },
   reorderPins: async (args, ctx) => {

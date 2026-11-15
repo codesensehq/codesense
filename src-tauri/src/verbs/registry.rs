@@ -152,6 +152,7 @@ fn spec(
                 | "pin"
                 | "unpin"
                 | "restorePin"
+                | "replacePin"
                 | "reorderPins"
         ),
         confirmable,
@@ -188,8 +189,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
-        | "unpin" | "restorePin" | "reorderPins" => "inbox:write",
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin" | "unpin"
+        | "restorePin" | "replacePin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -283,6 +284,13 @@ fn register_resources(registry: &mut Registry) {
         ("unpin", Class::Metadata, Some("pin"), None),
         // The Undo of an unpin: the pin comes back as it was.
         ("restorePin", Class::Metadata, Some("pin"), None),
+        // At the cap, the person pins in place of a pin they choose.
+        (
+            "replacePin",
+            Class::Metadata,
+            None,
+            Some("The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin"),
+        ),
         (
             "reorderPins",
             Class::Metadata,
