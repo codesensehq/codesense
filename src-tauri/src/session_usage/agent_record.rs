@@ -59,10 +59,11 @@ fn session_for_handle(store: &UsageStore, handle: &str) -> Result<Option<String>
     Ok(None)
 }
 
-/// A `session_record` row of the thread of saved agent `?2` (the id before `@`) and story `?1`:
-/// any revision of the agent continues its threads.
+/// A `session_record` row of the thread of saved agent `?2` (the id before `@`) and story `?1`
+/// (empty: launched with no story, as the pin key has it): any revision of the agent
+/// continues its threads.
 const THREAD_MATCH: &str =
-    "story_id = ?1 AND (agent = ?2 OR substr(agent, 1, length(?2) + 1) = ?2 || '@')";
+    "COALESCE(story_id, '') = ?1 AND (agent = ?2 OR substr(agent, 1, length(?2) + 1) = ?2 || '@')";
 
 /// One recorded session of a thread: its tab session and the handle it was launched under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +73,8 @@ pub(crate) struct ThreadSession {
 }
 
 /// Every recorded session of saved agent `agent` (any revision) on `story`, oldest first,
-/// ended ones included: the sessions whose mail makes the thread. No story, no sessions.
+/// ended ones included: the sessions whose mail makes the thread. An empty `story` is the
+/// thread of the agent's sessions launched with none.
 pub(crate) fn thread_sessions(
     store: &UsageStore,
     agent: &str,
@@ -80,7 +82,7 @@ pub(crate) fn thread_sessions(
 ) -> Result<Vec<ThreadSession>, String> {
     let key = agent.split('@').next().unwrap_or(agent).trim();
     let story = story.trim();
-    if key.is_empty() || story.is_empty() {
+    if key.is_empty() {
         return Ok(vec![]);
     }
     let mut stmt = rusqlite::Connection::prepare(

@@ -409,7 +409,14 @@ fn a_thread_lists_every_recorded_session_of_its_agent_and_story_ended_ones_inclu
             },
         ]
     );
-    assert_eq!(thread_sessions(&store, "dev", "").unwrap(), vec![]);
+    // A thread with no story is the agent's sessions launched with none.
+    let mut store_w = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    let mut none = SessionRecord::new("tab-loose");
+    none.handle = Some("loose".into());
+    none.agent = Some("dev@3".into());
+    store_w.write_session_record(&none).unwrap();
+    let loose = thread_sessions(&store, "dev", "").unwrap();
+    assert_eq!(loose.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(), ["tab-loose"]);
     assert_eq!(thread_sessions(&store, "", "STORY-A").unwrap(), vec![]);
     let empty = tempfile::tempdir().unwrap();
     assert_eq!(thread_sessions_in(empty.path(), "dev", "STORY-A").unwrap(), vec![]);

@@ -35,6 +35,8 @@ struct FakeHost {
     threads: Mutex<std::collections::HashMap<String, (String, Option<String>)>>,
     /// What the usage store recorded per thread (`thread_sessions`), keyed `agent|story`.
     recorded: Mutex<std::collections::HashMap<String, Vec<ThreadSession>>>,
+    /// Listed sessions' `(running, ended)` in place of running and not ended.
+    states: Mutex<std::collections::HashMap<String, (bool, bool)>>,
 }
 
 impl FakeHost {
@@ -45,6 +47,7 @@ impl FakeHost {
             role_dirs: Mutex::default(),
             threads: Mutex::default(),
             recorded: Mutex::default(),
+            states: Mutex::default(),
             changed: Mutex::default(),
             events: Mutex::default(),
             queued: Mutex::default(),
@@ -184,11 +187,16 @@ impl InboxHost for FakeHost {
         Ok(self.recorded.lock().unwrap().get(&key).cloned().unwrap_or_default())
     }
     async fn sessions(&self) -> Result<KnownSessions, String> {
-        let session = |handle: &str, session: &str, name: &str| KnownSession {
-            handle: handle.into(),
-            session: Some(session.into()),
-            name: name.into(),
-            running: true,
+        let states = self.states.lock().unwrap().clone();
+        let session = |handle: &str, session: &str, name: &str| {
+            let (running, ended) = states.get(handle).copied().unwrap_or((true, false));
+            KnownSession {
+                handle: handle.into(),
+                session: Some(session.into()),
+                name: name.into(),
+                running,
+                ended,
+            }
         };
         let mut sessions = vec![
             session("H1", "S1", "Manager"),
@@ -204,6 +212,7 @@ impl InboxHost for FakeHost {
                     session: Some(record.target.session.as_str().to_string()),
                     name: "Remote worker".into(),
                     running: self.remote_online.load(std::sync::atomic::Ordering::SeqCst),
+                    ended: false,
                 }),
         );
         Ok(KnownSessions::new(sessions))
@@ -254,6 +263,7 @@ fn row(handle: &str, name: &str, agent: Option<&str>) -> SessionListRow {
         expiring: false,
         session: None,
         failed: false,
+        crashed: false,
     }
 }
 
@@ -2143,6 +2153,7 @@ async fn role_registration_and_zero_claim_release_reproject_inferred_kind() {
         session: Some("S1".into()),
         name: "Manager".into(),
         running: true,
+        ended: false,
     }]);
     let mut projection = InboxProjection::default();
     let batch = read_batch(host.path("default"), true, vec![])
@@ -2713,4 +2724,53 @@ async fn a_thread_with_no_session_is_empty_and_no_saved_agent_is_refused() {
     let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
     assert_eq!((view.handle.as_str(), view.messages.len()), ("", 0));
     assert!(thread_inbox(&*host, " @3", "STORY-1", None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_crashed_seat_has_ended_and_an_offline_one_is_still_the_seat() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H1", HUMAN, "seat one", None);
+    insert(&default, "H3", HUMAN, "seat three", None);
+    thread_of(&host, &[("H1", "1"), ("H3", "1")], &[("S1", "H1"), ("S3", "H3")]);
+    let set = |handle: &str, running: bool, ended: bool| {
+        host.states.lock().unwrap().insert(handle.into(), (running, ended));
+    };
+
+    // A crashed concurrent seat has ended: its mail is the thread's, the opened seat's too.
+    set("H3", true, true);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert!(texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+    // A crashed opened seat is no seat: nothing is left out, so the live seat's replies show.
+    host.states.lock().unwrap().clear();
+    set("H1", true, true);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert!(texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+    assert_eq!(got.handle, "H3", "the seat that has not ended names the thread");
+    // An opened seat on an offline machine has not ended: it is still the seat.
+    host.states.lock().unwrap().clear();
+    set("H1", false, false);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert_eq!(got.handle, "H1");
+    assert!(!texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+}
+
+#[tokio::test]
+async fn a_thread_with_no_story_reads_its_recorded_predecessor_and_names_its_newest() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H-old", HUMAN, "no-story predecessor", None);
+    insert(&default, "H-older", HUMAN, "an earlier one", None);
+    host.recorded.lock().unwrap().insert(
+        format!("{REVIEWER}|"),
+        vec![
+            ThreadSession { session_id: "S-older".into(), handle: Some("H-older".into()) },
+            ThreadSession { session_id: "S-old".into(), handle: Some("H-old".into()) },
+        ],
+    );
+    let view = thread_inbox(&*host, REVIEWER, "", None).await.unwrap();
+    let got = texts(&view);
+    assert!(got.contains(&"no-story predecessor") && got.contains(&"an earlier one"), "{got:?}");
+    // No session listed: the newest recorded one names the thread.
+    assert_eq!(view.handle, "H-old");
 }
