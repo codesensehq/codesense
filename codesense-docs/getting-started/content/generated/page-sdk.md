@@ -4,7 +4,7 @@ Generated from the Rust registry and TypeScript declarations. All 117 verbs and 
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
-SDK version: 4. Features reported to has(): `window`, `firstPaint`, `lifecycle`, `slotContext`, `theme`, `kitTokens`, `virtualList`. A null feature means no separate member-named feature flag is declared. Named types in signatures are defined in the linked .d.ts; unknown stays unknown.
+SDK version: 4. Features reported to has(): `window`, `firstPaint`, `lifecycle`, `slotContext`, `theme`, `kitTokens`, `virtualList`, `inboxThread`. A null feature means no separate member-named feature flag is declared. Named types in signatures are defined in the linked .d.ts; unknown stays unknown.
 
 ## Surface: version
 

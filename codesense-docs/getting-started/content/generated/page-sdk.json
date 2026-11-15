@@ -11,7 +11,8 @@
     "slotContext",
     "theme",
     "kitTokens",
-    "virtualList"
+    "virtualList",
+    "inboxThread"
   ],
   "counts": {
     "bridgeMethods": 117,
@@ -19067,7 +19068,7 @@
     "src-tauri/src/verbs/registry.rs": "d2ffa628840cefb158709b3b676a87facdf7e8c2a6232753c353b3b1671b4b5d",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "731a5c291fc4e43f5a328119912aff18e29656fa7c9abf4a2cde25f0dff54fc2",
+    "src-tauri/src/http/routes/viewer.rs": "97e9f952b3d94ca2a35b05f7cd78946873911acb23e4e314cf44b625b94ceeba",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

@@ -66,6 +66,8 @@ describe("codesense.has", () => {
     deliver({ type: "codesense:slot-context", context: message.context, sdk: message.sdk });
     expect(VERB_REGISTRY.every((verb) => has(verb.name))).toBe(true);
     expect(has("virtualList")).toBe(true);
+    // A page tests for the inbox thread read before it passes storyId.
+    expect(has("inboxThread")).toBe(true);
     expect(has("noSuchThing")).toBe(false);
   });
 

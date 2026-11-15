@@ -2961,10 +2961,13 @@ impl InboxHost for AppInboxHost {
         else {
             return vec![None; handles.len()];
         };
-        let rows = launch.snapshot();
+        let rows = super::dashboard_launch::DashboardLaunchState::snapshot(&launch);
         handles
             .iter()
-            .map(|handle| rows.iter().find(|row| &row.handle == handle).and_then(registry_thread))
+            .map(|handle| {
+                let row = Iterator::find(&mut rows.iter(), |row| &row.handle == handle);
+                row.and_then(registry_thread)
+            })
             .collect()
     }
 
