@@ -1932,7 +1932,7 @@ pub(crate) async fn prune_worktree_locked(
 /// (renders as neither dirty nor a false "clean"); the auto-teardown gate folds
 /// `None → true` via [`worktree_git_dirty`] (never auto-destroy on an ambiguous read).
 pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
-    let out = super::worktree_probe::git_stdout(worktree, &["status", "--porcelain"])?;
+    let out = super::worktree_probe::git_stdout(worktree, &super::worktree_probe::STATUS_ARGS)?;
     Some(!out.trim().is_empty())
 }
 
@@ -2856,6 +2856,13 @@ fn list_managed_worktrees_core(
         &ctx.org_slug,
     );
     survivors.extend(adopted);
+    warm_listing_git_facts(
+        survivors
+            .iter()
+            .map(|r| r.code_repo_path.clone())
+            .chain(present.iter().map(|(w, _)| PathBuf::from(&w.path)))
+            .collect(),
+    );
     // Story rows: the user-global record set through the reused enrichment path,
     // wrapped as unified rows (no story enrichment duplicated).
     let mut rows: Vec<WorktreeRow> = enrich_rows(survivors, live_home_dirs)
@@ -2956,6 +2963,20 @@ fn enrich_rows(
         .zip(roots)
         .map(|(r, root)| managed_row_from_record(r, live.contains(&root)))
         .collect()
+}
+
+/// How many worktrees the listing reads git for at once.
+const LISTING_PROBE_CONCURRENCY: usize = 4;
+
+/// Read the git facts for every worktree the listing is about to show, at most
+/// [`LISTING_PROBE_CONCURRENCY`] at a time, so the row builders that follow find them kept. A
+/// worktree whose facts are already kept costs no git.
+fn warm_listing_git_facts(mut paths: Vec<PathBuf>) {
+    paths.sort();
+    paths.dedup();
+    super::worktree_probe::for_each_bounded(&paths, LISTING_PROBE_CONCURRENCY, |path| {
+        listing_git_facts(path);
+    });
 }
 
 /// Parse `git worktree list --porcelain` output. Each worktree is a
@@ -5417,6 +5438,15 @@ detached
             Some(true),
             "real untracked developer work must still read dirty"
         );
+    }
+
+    #[test]
+    fn an_untracked_file_alone_makes_a_worktree_dirty() {
+        let tmp = TempDir::new().unwrap();
+        init_repo_with_commit(tmp.path());
+        assert_eq!(worktree_git_dirty_opt(tmp.path()), Some(false));
+        fs::write(tmp.path().join("new.txt"), "untracked").unwrap();
+        assert_eq!(worktree_git_dirty_opt(tmp.path()), Some(true));
     }
 
     #[tokio::test]

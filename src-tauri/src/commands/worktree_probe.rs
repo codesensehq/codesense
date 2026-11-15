@@ -81,6 +81,16 @@ fn read_capped(file: &mut File) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// The dirty check. Untracked files count as dirty (`normal` is git's default, spelled out so a
+/// user's `status.showUntrackedFiles=no` cannot hide them); a submodule's own state does not,
+/// which also spares the status a walk into every submodule.
+pub(crate) const STATUS_ARGS: [&str; 4] = [
+    "status",
+    "--porcelain",
+    "--untracked-files=normal",
+    "--ignore-submodules",
+];
+
 /// The facts the listing shows for one worktree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GitFacts {
@@ -204,6 +214,23 @@ impl ProbeCache {
     }
 }
 
+/// Run `work` on every item with at most `limit` running at once.
+pub(crate) fn for_each_bounded<T: Sync>(items: &[T], limit: usize, work: impl Fn(&T) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let workers = limit.max(1).min(items.len());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match items.get(index) {
+                    Some(item) => work(item),
+                    None => break,
+                }
+            });
+        }
+    });
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -286,6 +313,7 @@ mod tests {
     }
 
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn facts(dirty: Option<bool>) -> GitFacts {
         GitFacts {
@@ -422,5 +450,24 @@ mod tests {
         std::fs::write(gitdir.join("index"), "changed index").unwrap();
         read(&cache, &wt, now, &spawns);
         assert_eq!(spawns.get(), 2);
+    }
+
+    #[test]
+    fn work_runs_for_every_item_with_no_more_than_the_limit_at_once() {
+        let items: Vec<u32> = (0..24).collect();
+        let (running, peak, done) = (
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+        );
+        for_each_bounded(&items, 4, |_| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(10));
+            running.fetch_sub(1, Ordering::SeqCst);
+            done.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(done.load(Ordering::SeqCst), 24);
+        assert!(peak.load(Ordering::SeqCst) <= 4);
     }
 }
