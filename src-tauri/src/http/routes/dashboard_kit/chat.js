@@ -569,10 +569,21 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/prose.js
-  var SKIP = /^(?:`{3,}|~{3,}|\|)/;
+  var FENCE = /^(?:`{3,}|~{3,})/;
+  var TABLE = /^\|/;
   var plain = (line) => line.replace(/^(?:>\s*)+/, "").replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/`/g, "").trim();
+  function proseLines(text) {
+    let inFence = false;
+    return String(text || "").split("\n").map((part) => part.trim()).filter((part) => {
+      if (FENCE.test(part)) {
+        inFence = !inFence;
+        return false;
+      }
+      return part && !inFence && !TABLE.test(part);
+    });
+  }
   function lastSentence(text) {
-    const lines = String(text || "").split("\n").map((part) => part.trim()).filter((part) => part && !SKIP.test(part)).map(plain).filter(Boolean);
+    const lines = proseLines(text).map(plain).filter(Boolean);
     const sentences = (lines.pop() || "").split(/(?<=[.!?])\s+/).filter(Boolean);
     return sentences.length ? sentences[sentences.length - 1] : "";
   }
