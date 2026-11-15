@@ -919,15 +919,17 @@ where
 pub(crate) async fn offer_queued_role(host: &dyn InboxHost, team: &LaunchTeam, role: &str) {
     let role = crate::weft::role_inbox::role_name(role).to_string();
     let now = chrono::Utc::now().timestamp();
-    let sessions = match host.team_store(team).await {
-        Ok(path) => {
-            with_store("role_holders", path, move |store| {
-                crate::weft::role_inbox::live_role_sessions(store, &role, now)
-            })
-            .await
+    let path = match host.team_store(team).await {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(target: "inbox", "role holders: {e}");
+            return;
         }
-        Err(e) => Err(e),
     };
+    let sessions = with_store("role_holders", path, move |store| {
+        crate::weft::role_inbox::live_role_sessions(store, &role, now)
+    })
+    .await;
     match sessions {
         Ok(Ok(sessions)) => {
             for handle in sessions.iter().filter_map(|s| host.handle_for_session(s)) {
