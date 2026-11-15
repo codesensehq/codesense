@@ -388,7 +388,11 @@ impl LiveHub {
         if topic == "agentList" && model.agent_views.insert(key.to_owned()) {
             project_agent_views(&mut model)?;
         }
-        model.projections.snapshot(topic, key)
+        let result = model.projections.snapshot(topic, key);
+        let agent_views = model.agent_views.len();
+        drop(model);
+        crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", agent_views);
+        result
     }
     pub(crate) fn with_effective_status(&self, source: &[SessionListRow]) -> serde_json::Value {
         let owner = self.snapshot("all", "sessions").unwrap().snapshot;
@@ -1671,6 +1675,7 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     );
     drop_unwatched_pins(app, Vec::from_iter(viewed));
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
+    record_projection_metrics(app);
 }
 /// The last subscriber of a pins view takes the view's refreshes with it: drop each pins view
 /// among `viewed` (topic, view key) that nothing follows any more.
@@ -1696,6 +1701,7 @@ pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &
         let gone = hub.model.lock().unwrap().projections.drop_owner(owner);
         drop_unwatched_pins(app, gone);
         hub.invalidate(MACHINE_STATS);
+        record_projection_metrics(app);
     }
 }
 #[tauri::command]
