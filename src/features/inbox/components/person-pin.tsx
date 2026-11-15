@@ -4,6 +4,7 @@ import { Info, LayoutDashboard, Pin, PinOff, Quote, Replace, TriangleAlert } fro
 
 import type { ConversationMessage } from "../api";
 import type { PersonPins, PinChooser as Chooser } from "../hooks/use-person-pins";
+import { pinChooserStep } from "../lib/chat-core";
 import { msgKey } from "../model";
 import { Ico } from "./primitives";
 
@@ -171,20 +172,8 @@ function PinChooser({ pins, chooser }: { pins: PersonPins; chooser: Chooser }) {
   }, [currentKey, chooser.room]);
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const fromChange = e.target === change.current;
-    const step =
-      e.key === "ArrowDown"
-        ? fromChange
-          ? 0
-          : at + 1
-        : e.key === "ArrowUp"
-          ? fromChange
-            ? rows.length - 1
-            : at - 1
-          : e.key === "Home"
-            ? 0
-            : e.key === "End"
-              ? rows.length - 1
-              : null;
+    // chat-core's step rule, the one the kit's chooser runs.
+    const step = pinChooserStep(e.key, at, rows.length, fromChange);
     if (step !== null) {
       e.preventDefault();
       e.stopPropagation();
