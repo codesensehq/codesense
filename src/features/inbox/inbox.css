@@ -2432,8 +2432,9 @@ button.ibx-media-open {
   outline: 2px solid var(--ibx-accent);
   outline-offset: 1px;
 }
+/* Pressed (Unpin): accent ink on the bare page. The on-accent ink is only for text on an accent fill. */
 .ibx-pin-b[aria-pressed="true"] {
-  color: var(--ibx-accent-ink);
+  color: var(--ibx-accent);
 }
 /* At the cap: dimmed ahead of time, still focusable, and hover doesn't brighten it. */
 .ibx-pin-b[aria-disabled="true"] {
