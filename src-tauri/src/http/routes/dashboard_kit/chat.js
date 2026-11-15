@@ -793,11 +793,23 @@
   function rovingThread(log) {
     let picked = null, active = null;
     const keys = () => [...log.querySelectorAll(ROW)].map((row) => row.dataset.mid);
-    function refresh() {
+    const focused = () => {
+      const at = log.ownerDocument.activeElement, row = at && log.contains(at) && at.closest(ROW);
+      return row ? row.dataset.mid : null;
+    };
+    function refresh(held = null) {
       const all = keys();
-      active = picked !== null && all.includes(picked) ? picked : all.length ? all[all.length - 1] : null;
+      const next = picked !== null && all.includes(picked) ? picked : all.length ? all[all.length - 1] : null;
       log.tabIndex = all.length ? -1 : 0;
-      applyTo(log, active);
+      if (next !== active) {
+        active = next;
+        applyTo(log, active);
+      }
+      if (held === null || active === null || log.contains(log.ownerDocument.activeElement)) return;
+      const row = log.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+      if (!row) return;
+      applyTo(row, active);
+      row.focus({ preventScroll: true });
     }
     const watch = new MutationObserver((changes) => {
       for (const change of changes) for (const node of change.addedNodes) if (node.nodeType === 1) applyTo(node, active);
@@ -832,6 +844,7 @@
     log.addEventListener("keydown", onKeyDown);
     log.addEventListener("focusin", onFocusIn);
     return {
+      focused,
       refresh,
       release() {
         watch.disconnect();
@@ -1303,8 +1316,9 @@
       if (layout.head) paint(headBox, "head", layout.head(here));
       if (headerSlot) paint(headerSlot.slot, "header", headerSlot.render(here));
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...act ? [act] : [], ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
+      const held = roving.focused();
       reconcile(log, cache, want);
-      roving.refresh();
+      roving.refresh(held);
       paintChips();
       pin.onContentChanged();
       if (pinState.refocus !== null) {

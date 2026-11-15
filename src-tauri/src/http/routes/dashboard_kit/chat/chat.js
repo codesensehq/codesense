@@ -331,8 +331,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const held=roving.focused();
   reconcile(log,cache,want);
-  roving.refresh();
+  roving.refresh(held);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.

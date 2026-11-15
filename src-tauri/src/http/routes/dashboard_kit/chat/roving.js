@@ -33,13 +33,22 @@ function applyTo(node,active){
 export function rovingThread(log){
  let picked=null,active=null;
  const keys=()=>[...log.querySelectorAll(ROW)].map(row=>row.dataset.mid);
- // The whole thread on each render; after that only what is added (an image or a frame a message draws after the render).
- function refresh(){
+ /** The message focus is in, before a render that may rebuild its node. */
+ const focused=()=>{const at=log.ownerDocument.activeElement,row=at&&log.contains(at)&&at.closest(ROW);return row?row.dataset.mid:null;};
+ // The whole thread once when the stop moves; after that only what is added (a rebuilt message, or an image or a frame a message draws after the render).
+ // `held` is focused() from before the render: a message whose node the render rebuilt (a mark, a pin, a stream turning final) keeps focus on its new node, and
+ // one that left hands it to the newest, so focus never drops to the page.
+ function refresh(held=null){
   const all=keys();
   // A message that left the thread hands the stop back to the newest.
-  active=picked!==null&&all.includes(picked)?picked:(all.length?all[all.length-1]:null);
+  const next=picked!==null&&all.includes(picked)?picked:(all.length?all[all.length-1]:null);
   log.tabIndex=all.length?-1:0;
-  applyTo(log,active);
+  if(next!==active){active=next;applyTo(log,active);}
+  if(held===null||active===null||log.contains(log.ownerDocument.activeElement))return;
+  const row=log.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+  if(!row)return;
+  applyTo(row,active);
+  row.focus({preventScroll:true});
  }
  const watch=new MutationObserver(changes=>{for(const change of changes)for(const node of change.addedNodes)if(node.nodeType===1)applyTo(node,active);});
  watch.observe(log,{childList:true,subtree:true});
@@ -69,6 +78,7 @@ export function rovingThread(log){
  log.addEventListener('keydown',onKeyDown);
  log.addEventListener('focusin',onFocusIn);
  return {
+  focused,
   refresh,
   release(){watch.disconnect();log.removeEventListener('keydown',onKeyDown);log.removeEventListener('focusin',onFocusIn);},
  };
