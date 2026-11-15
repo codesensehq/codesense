@@ -802,11 +802,15 @@
     if (kit && typeof kit.avatar === "function") return kit.avatar({ face: info.face, name: info.name, size: 24 });
     return h("span", { class: "cs-avatar", title: info.name }, initialsOf(info.name));
   }
+  var unspoken = (node) => {
+    node.setAttribute("aria-hidden", "true");
+    return node;
+  };
   function faceNode(info) {
-    if (!info.src) return avatarOf(info);
-    const img = h("img", { src: info.src, alt: info.name }), wrap = h("span", { class: "cs-avatar", title: info.name }, img);
+    if (!info.src) return unspoken(avatarOf(info));
+    const img = h("img", { src: info.src, alt: "" }), wrap = unspoken(h("span", { class: "cs-avatar", title: info.name }, img));
     img.addEventListener("error", () => {
-      const next = avatarOf(info);
+      const next = unspoken(avatarOf(info));
       if (wrap.parentNode) wrap.replaceWith(next);
       else wrap.replaceChildren(next);
     }, { once: true });
@@ -998,12 +1002,14 @@
         slot.replaceChildren(...made.nodes);
       }
     };
+    const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
+    const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
     const bubble = (item, side, first = true, info = null) => {
-      const pin2 = item.pin ? item.pin.make() : null;
+      const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
       return h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
-        first ? h("div", { class: "meta" }, ...info ? [faceNode(info)] : [], `${info && info.label || item.who} · ${timeLabel(item.at)}`) : null,
+        first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`)) : null,
         pin2 ? pin2.acts : null,
         h("div", { class: "body" }, item.text),
         item.note ? h("div", { class: "note" }, item.note) : null,

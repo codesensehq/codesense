@@ -558,7 +558,7 @@ declare namespace CodesenseSdk {
     copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
     chips?: Array<{ label: string; text: string; /** A pencil beside the chip puts its text in the composer instead of sending it. */ edit?: boolean }>;
-    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
+    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar beside the meta line at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. The meta line names the sender, so the avatar is hidden from screen readers; a `name` that doesn't contain the line's name is read once before it. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
     faces?: boolean | ((row: ChatRow) => { src?: string; face?: string; name?: string; label?: string } | null | undefined);
     /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
     next?: boolean | { edit?: boolean };
