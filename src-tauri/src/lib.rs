@@ -1026,7 +1026,7 @@ pub fn run() {
             agents::events::install_app_emitter(app.handle().clone());
             // A stored usage call tells pages showing that agent's record to reread it.
             session_usage::ingest_notice::install_app_emitter(app.handle().clone());
-            session_text::install_app_emitter(app.handle().clone());
+            session_text::install_app_emitter(tauri::App::handle(app).clone());
             // Routines run on their own scheduler thread and their own agent-done intake. The
             // intake offers each finished session to routines first, then to its registered
             // consumers; they register before it starts so none misses an early signal.

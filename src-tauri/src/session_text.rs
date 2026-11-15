@@ -130,16 +130,9 @@ impl Tail {
     }
 
     pub fn read(&mut self) -> std::io::Result<Vec<String>> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&self.path)?;
-        let meta = std::fs::File::metadata(&file)?;
-        if !meta.is_file() {
+        let Some((mut file, len)) = open_log(&self.path)? else {
             return Ok(vec![]);
-        }
-        let len: u64 = meta.len();
+        };
         if len < self.offset {
             self.offset = 0;
             self.partial = vec![];
@@ -162,16 +155,47 @@ impl Tail {
     }
 }
 
+/// `path` opened for reading without following a link, with its length; `None` for anything but
+/// a regular file.
+fn open_log(path: &Path) -> std::io::Result<Option<(std::fs::File, u64)>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let meta = std::fs::File::metadata(&file)?;
+    Ok(meta.is_file().then(|| (file, meta.len())))
+}
+
+/// How much of a log's end a new watch scans for the current turn's start.
+const START_WINDOW: u64 = 4 * 1024 * 1024;
+
 /// Where a new watch starts reading `path`: the start of the line that opened the current turn,
-/// so a page that subscribes mid-turn still hears that turn's prose and its end. The whole log
-/// when no turn has started; its end when it can't be read.
+/// so a page that subscribes mid-turn still hears that turn's prose and its end. Only the log's
+/// last `START_WINDOW` bytes are scanned: a turn that opened before them starts at the window's
+/// first whole line. 0 when the log can't be read.
 pub fn start_offset(path: &Path) -> u64 {
-    let Ok(bytes) = std::fs::read(path) else {
+    start_offset_within(path, START_WINDOW)
+}
+
+fn start_offset_within(path: &Path, window: u64) -> u64 {
+    let Ok(Some((mut file, len))) = open_log(path) else {
         return 0;
     };
-    let mut at: u64 = 0;
-    let mut turn_at: u64 = 0;
-    for line in bytes.split_inclusive(|b| *b == b'\n') {
+    let from = len.saturating_sub(window);
+    let mut bytes: Vec<u8> = vec![];
+    if file.seek(SeekFrom::Start(from)).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return 0;
+    }
+    // A window that starts mid-line starts at its first whole line.
+    let first_newline = Iterator::position(&mut bytes.iter(), |b| *b == b'\n');
+    let skip = match from {
+        0 => 0,
+        _ => first_newline.map_or(bytes.len(), |i| i + 1),
+    };
+    let mut at: u64 = from + skip as u64;
+    let mut turn_at: u64 = at;
+    for line in bytes[skip..].split_inclusive(|b| *b == b'\n') {
         let text = String::from_utf8_lossy(line);
         if classify(str::trim(&text))
             .iter()
@@ -201,36 +225,56 @@ pub enum StreamEvent {
     End { turn: String },
 }
 
-/// One session's stream: the current turn, the prose already sent (a re-read never repeats it)
-/// and whether the turn has ended (it ends once).
+/// The most of a turn's events a stream keeps to replay to a watcher that joins mid-turn.
+const REPLAY_KEPT: usize = 256;
+
+/// One session's stream: the current turn, the prose already sent (a re-read never repeats it),
+/// the turn's events so far (replayed to a watcher that joins mid-turn) and whether the turn has
+/// ended (it ends once).
 #[derive(Debug, Default)]
 pub struct Stream {
     turn: String,
     ended: bool,
     sent: HashSet<String>,
+    so_far: Vec<StreamEvent>,
 }
 
 impl Stream {
     pub fn feed(&mut self, event: LogEvent) -> Option<StreamEvent> {
-        match event {
+        let event = match event {
             LogEvent::Turn { key } => {
                 self.turn = key;
                 self.ended = false;
-                None
+                self.so_far = vec![];
+                return None;
             }
             LogEvent::Prose { key, text } => {
                 if !self.sent.insert(key.clone()) {
                     return None;
                 }
-                Some(StreamEvent::Prose {
+                StreamEvent::Prose {
                     turn: self.turn.clone(),
                     key,
                     text,
-                })
+                }
             }
-            LogEvent::Tool => Some(StreamEvent::Tool {
+            LogEvent::Tool => StreamEvent::Tool {
                 turn: self.turn.clone(),
-            }),
+            },
+        };
+        if self.so_far.len() == REPLAY_KEPT {
+            self.so_far.remove(0);
+        }
+        self.so_far.push(event.clone());
+        Some(event)
+    }
+
+    /// The current turn's prose and tool markers so far, for a watcher that joins mid-turn;
+    /// nothing once the turn has ended.
+    pub fn replay(&self) -> Vec<StreamEvent> {
+        match self.ended {
+            true => vec![],
+            false => self.so_far.clone(),
         }
     }
 
@@ -268,7 +312,7 @@ impl Watched {
         let mut out = vec![];
         for line in lines {
             for event in classify(&line) {
-                out.extend(self.stream.feed(event));
+                out.extend(Stream::feed(&mut self.stream, event));
             }
         }
         out
@@ -276,8 +320,8 @@ impl Watched {
 
     /// The turn ended: what was written since the last read, then its end.
     pub fn end_turn(&mut self) -> Vec<StreamEvent> {
-        let mut out = self.pump();
-        out.extend(self.stream.end());
+        let mut out = Watched::pump(self);
+        out.extend(Stream::end(&mut self.stream));
         out
     }
 }
@@ -325,7 +369,7 @@ fn pump(session_id: &str) {
         let Some(entry) = map.get_mut(session_id) else {
             return;
         };
-        entry.watched.pump()
+        Watched::pump(&mut entry.watched)
     };
     emit(session_id, events);
 }
@@ -339,12 +383,13 @@ fn session_log_path(session_id: &str) -> Result<PathBuf, String> {
 /// Start (or count one more watcher of) `session_id`'s stream. Only a local Claude session has a
 /// log to tail.
 pub fn watch(session_id: &str) -> Result<(), String> {
-    {
+    let joined = {
         let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = map.get_mut(session_id) {
-            entry.watchers += 1;
-            return Ok(());
-        }
+        map.get_mut(session_id).map(join)
+    };
+    if let Some(replay) = joined {
+        emit(session_id, replay);
+        return Ok(());
     }
     let path = session_log_path(session_id)?;
     let watched = Watched::new(path.clone());
@@ -362,25 +407,53 @@ pub fn watch(session_id: &str) -> Result<(), String> {
         log::warn!(target: "session_text", "no file watch on {shown}: {e}");
     })
     .ok();
-    {
+    let entry = Entry {
+        watched,
+        watchers: 1,
+        _file_watch: file_watch,
+    };
+    let joined = {
         let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
-        map.insert(
-            session_id.to_owned(),
-            Entry {
-                watched,
-                watchers: 1,
-                _file_watch: file_watch,
-            },
-        );
+        admit(&mut map, session_id, entry)
+    };
+    match joined {
+        // Another first watch got there while this one opened the log: this one joined it.
+        Some(replay) => emit(session_id, replay),
+        // The current turn's prose so far.
+        None => pump(session_id),
     }
-    // The current turn's prose so far.
-    pump(session_id);
     Ok(())
+}
+
+/// One more watcher of an entry: its current turn so far, to replay.
+fn join(entry: &mut Entry) -> Vec<StreamEvent> {
+    entry.watchers += 1;
+    Stream::replay(&entry.watched.stream)
+}
+
+/// Keeps `entry` as `session_id`'s stream, or, when another watch already holds one, counts one
+/// more watcher of that and drops `entry`: `Some` replay then.
+fn admit(
+    map: &mut HashMap<String, Entry>,
+    session_id: &str,
+    entry: Entry,
+) -> Option<Vec<StreamEvent>> {
+    match HashMap::entry(map, session_id.to_owned()) {
+        std::collections::hash_map::Entry::Occupied(mut held) => Some(join(held.get_mut())),
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(entry);
+            None
+        }
+    }
 }
 
 /// One watcher of `session_id`'s stream is gone; the last one stops it.
 pub fn unwatch(session_id: &str) {
     let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
+    release(&mut map, session_id);
+}
+
+fn release(map: &mut HashMap<String, Entry>, session_id: &str) {
     let last = map.get_mut(session_id).is_some_and(|entry| {
         entry.watchers = entry.watchers.saturating_sub(1);
         entry.watchers == 0
@@ -556,6 +629,74 @@ mod tests {
             watched.end_turn(),
             vec![StreamEvent::End { turn: "u4".into() }]
         );
+    }
+
+    #[test]
+    fn a_watch_scans_only_the_logs_end_for_the_current_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, FIXTURE).unwrap();
+        let len = FIXTURE.len() as u64;
+        // The window holds the current turn's opening line: the watch starts there.
+        let whole = start_offset_within(&path, len);
+        assert_eq!(start_offset_within(&path, len - whole + 1), whole);
+        // A window that starts after it, mid-line: the watch starts at its first whole line.
+        let late = start_offset_within(&path, len - whole - 3);
+        assert!(late > whole && FIXTURE.as_bytes()[late as usize - 1] == b'\n');
+        assert_eq!(start_offset_within(&dir.path().join("gone"), len), 0);
+    }
+
+    fn fixture_stream(lines: usize) -> Stream {
+        let mut stream = Stream::default();
+        for event in FIXTURE.lines().take(lines).flat_map(classify) {
+            stream.feed(event);
+        }
+        stream
+    }
+
+    #[test]
+    fn a_watcher_that_joins_mid_turn_is_replayed_the_turn_so_far_and_nothing_after_its_end() {
+        let mut stream = fixture_stream(9);
+        let replay = stream.replay();
+        let kinds: Vec<&str> = replay
+            .iter()
+            .map(|e| match e {
+                StreamEvent::Prose { .. } => "prose",
+                StreamEvent::Tool { .. } => "tool",
+                StreamEvent::End { .. } => "end",
+            })
+            .collect();
+        assert_eq!(kinds, ["prose", "tool", "tool", "prose"], "{replay:?}");
+        stream.end();
+        assert_eq!(stream.replay(), vec![]);
+        // A new turn replays only itself.
+        assert_eq!(fixture_stream(10).replay(), vec![]);
+    }
+
+    fn entry(path: &Path) -> Entry {
+        Entry {
+            watched: Watched {
+                tail: Tail::at(path.to_owned(), 0),
+                stream: fixture_stream(9),
+            },
+            watchers: 1,
+            _file_watch: None,
+        }
+    }
+
+    #[test]
+    fn a_second_first_watch_joins_the_first_and_one_unwatch_leaves_the_other_streaming() {
+        let mut map = HashMap::new();
+        assert_eq!(admit(&mut map, "s1", entry(Path::new("/first"))), None);
+        // Another watch that opened the log at the same time joins instead of replacing it.
+        let replay = admit(&mut map, "s1", entry(Path::new("/second"))).unwrap();
+        assert_eq!(replay.len(), 4);
+        assert_eq!(map["s1"].watchers, 2);
+        assert_eq!(map["s1"].watched.tail.path, Path::new("/first"));
+        release(&mut map, "s1");
+        assert_eq!(map["s1"].watchers, 1);
+        release(&mut map, "s1");
+        assert!(map.is_empty());
     }
 
     #[test]

@@ -11,6 +11,8 @@ import {
   liveHubViewKey,
   type FrameRecord,
   agentReadSessions,
+  sessionTextUnwatch,
+  sessionTextWatch,
   type SessionListRow,
 } from "@/tauri/commands";
 import { ORG_REGISTRY_CHANGED_EVENT, SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT } from "@/tauri/events";
@@ -102,6 +104,9 @@ type Dependencies = {
   watchPasteTarget?: (changed: () => void) => UnlistenFn;
   readUi: (key: string) => Promise<Record<string, unknown>>;
   writeUi: (key: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /** Start and stop the host's stream of a session's prose (`session_text_watch`). */
+  watchText?: (sessionId: string) => Promise<void>;
+  unwatchText?: (sessionId: string) => Promise<void>;
 };
 type Frame = {
   viewKey: string;
@@ -122,8 +127,9 @@ type Frame = {
   resync: Set<string>;
   waits: Array<() => void>;
   invalidations: Map<string, Record<string, unknown>>;
-  /** The sessions whose assistant prose this frame hears (`onSessionText`). */
-  sessionText: Set<string>;
+  /** The sessions whose assistant prose this frame hears (`onSessionText`), each with the prose
+   *  keys of its current turn already posted: a joiner's replay repeats nothing to this frame. */
+  sessionText: Map<string, { turn: string; heard: Set<string> }>;
   themeChanged?: () => void;
 };
 const keyOf = (topic: string, viewKey: string) => JSON.stringify([topic, viewKey]);
@@ -415,11 +421,24 @@ export class LiveHub {
     if (typeof sessionId !== "string" || !event || typeof event !== "object") return;
     for (const message of this.textRouter(sessionId, event as SessionTextEvent)) {
       for (const frame of this.frames.values()) {
-        if (frame.disposed || !frame.sessionText.has(sessionId)) continue;
+        const watch = frame.sessionText.get(sessionId);
+        if (frame.disposed || !watch) continue;
         if (!frame.grants.includes(SESSIONS_READ_GRANT)) continue;
+        if (watch.turn !== message.turn) watch.heard = new Set();
+        watch.turn = message.turn;
+        if (message.kind === "prose") {
+          if (watch.heard.has(message.key)) continue;
+          watch.heard.add(message.key);
+        }
         frame.post({ type: "codesense:session-text", ...message });
       }
     }
+  }
+  /** A gone frame's prose streams stop. */
+  private releaseText(frame: Frame) {
+    for (const sessionId of frame.sessionText.keys())
+      void this.deps.unwatchText?.(sessionId).catch(() => {});
+    frame.sessionText.clear();
   }
   private sessionRecordChanged(sessionIds: string[]) {
     // An event that names no session is one every record may have to reread.
@@ -576,7 +595,7 @@ export class LiveHub {
       resync: new Set(),
       waits: [],
       invalidations: new Map(),
-      sessionText: new Set(),
+      sessionText: new Map(),
     };
     this.frames.set(id, frame);
     this.balanceHidden();
@@ -690,9 +709,22 @@ export class LiveHub {
     };
     return {
       subscribe,
-      /** This frame hears `sessionId`'s assistant prose; the bridge checked its grant and team. */
-      watchText: (sessionId: string) => void frame.sessionText.add(sessionId),
-      unwatchText: (sessionId: string) => void frame.sessionText.delete(sessionId),
+      /** This frame hears `sessionId`'s assistant prose; the bridge checked its grant and team.
+       *  One host watch per frame and session, however often the page asks. */
+      watchText: async (sessionId: string) => {
+        if (frame.disposed || frame.sessionText.has(sessionId)) return;
+        frame.sessionText.set(sessionId, { turn: "", heard: new Set() });
+        try {
+          await this.deps.watchText?.(sessionId);
+        } catch (error) {
+          frame.sessionText.delete(sessionId);
+          throw error;
+        }
+      },
+      unwatchText: async (sessionId: string) => {
+        if (!frame.sessionText.delete(sessionId)) return;
+        await this.deps.unwatchText?.(sessionId);
+      },
       unsubscribe: async (topic: string, selector?: ViewSelector) => {
         const scopedViewKey = subscriptionViewKey(frame, topic, selector);
         const scopeKey = subscriptionKey(topic, scopedViewKey);
@@ -839,6 +871,7 @@ export class LiveHub {
           } else void this.deps.unsubscribe?.(subscription.id).catch(() => {});
         }
         frame.scoped.clear();
+        this.releaseText(frame);
         if (!this.frames.size && this.timer) {
           clearTimeout(this.timer);
           this.timer = null;
@@ -1213,6 +1246,7 @@ export class LiveHub {
     for (const frame of this.frames.values()) {
       if (frame.hiddenTimer) clearTimeout(frame.hiddenTimer);
       frame.disposed = true;
+      this.releaseText(frame);
       frame.waits.splice(0).forEach((resolve) => resolve());
     }
     for (const subscription of this.scoped.values())
@@ -1242,6 +1276,8 @@ export const liveHub = new LiveHub({
   readUi: readSharedUiState,
   writeUi: writeSharedUiState,
   watchUi: watchSharedUiState,
+  watchText: sessionTextWatch,
+  unwatchText: sessionTextUnwatch,
   // Loaded when the hub starts: a static import of send-to-terminal (which reaches the viewer
   // and org stores) puts live-hub in their import cycle and breaks the app's boot order.
   watchPasteTarget: (changed) => {

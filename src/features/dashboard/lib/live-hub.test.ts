@@ -2374,9 +2374,9 @@ it("sends a session's prose only to frames that watch it and hold sessions:read,
   const b = hub.attach("text-b", "all", other, true, false, undefined, read);
   const c = hub.attach("text-c", "all", ungranted, true, false, undefined, { grants: [] });
   await vi.advanceTimersByTimeAsync(0);
-  a.watchText("s1");
-  b.watchText("s2");
-  c.watchText("s1");
+  await a.watchText("s1");
+  await b.watchText("s2");
+  await c.watchText("s1");
   const send = (event: unknown) =>
     events.get("session-text")!({ payload: { sessionId: "s1", event } });
   send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
@@ -2412,7 +2412,61 @@ it("sends a session's prose only to frames that watch it and hold sessions:read,
   ]);
   expect(textMessages(other)).toEqual([]);
   expect(textMessages(ungranted)).toEqual([]);
-  a.unwatchText("s1");
+  await a.unwatchText("s1");
   send({ kind: "prose", turn: "u2", key: "a5", text: "More." });
   expect(textMessages(watching)).toHaveLength(3);
+});
+
+it("holds one host watch per frame and session, and a disposed frame releases its watches", async () => {
+  hub.dispose();
+  const watchText = vi.fn(async () => {});
+  const unwatchText = vi.fn(async () => {});
+  hub = new LiveHub({
+    read,
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_key, patch) => patch,
+    watchText,
+    unwatchText,
+  });
+  const frame = hub.attach("text-own", "all", vi.fn(), true, false, undefined, {
+    grants: ["sessions:read"],
+  });
+  await frame.watchText("s1");
+  await frame.watchText("s1");
+  await frame.watchText("s2");
+  expect(watchText.mock.calls).toEqual([["s1"], ["s2"]]);
+  await frame.unwatchText("s2");
+  await frame.unwatchText("s2");
+  expect(unwatchText.mock.calls).toEqual([["s2"]]);
+  frame.dispose();
+  expect(unwatchText.mock.calls).toEqual([["s2"], ["s1"]]);
+});
+
+it("a frame that joins mid-turn hears the turn so far, and the frame already watching hears nothing twice", async () => {
+  const read = { grants: ["sessions:read"] };
+  const early = vi.fn();
+  const late = vi.fn();
+  const a = hub.attach("text-early", "all", early, true, false, undefined, read);
+  await vi.advanceTimersByTimeAsync(0);
+  await a.watchText("s1");
+  const send = (event: unknown) =>
+    events.get("session-text")!({ payload: { sessionId: "s1", event } });
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  const b = hub.attach("text-late", "all", late, true, false, undefined, read);
+  await b.watchText("s1");
+  // The host replays the turn so far for the joiner.
+  send({ kind: "prose", turn: "u1", key: "a1", text: "Running the suite." });
+  send({ kind: "tool", turn: "u1" });
+  send({ kind: "prose", turn: "u1", key: "a3", text: "Green." });
+  send({ kind: "end", turn: "u1" });
+  const heard = (post: typeof early) => textMessages(post).map((m) => [m.kind, m.key]);
+  const turn = [
+    ["prose", "a1"],
+    ["prose", "a3"],
+    ["final", "a3"],
+  ];
+  expect(heard(early)).toEqual(turn);
+  expect(heard(late)).toEqual(turn);
 });

@@ -11,8 +11,6 @@ import {
   agentReadSessions,
   fileSurfaceCall,
   fileSurfacePrepareView,
-  sessionTextUnwatch,
-  sessionTextWatch,
 } from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
@@ -1381,14 +1379,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("denied: session team");
     const frame = await ctx.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    await sessionTextWatch(sessionId);
-    frame.watchText(sessionId);
+    // The frame holds one host watch per session, released when the page goes.
+    await frame.watchText(sessionId);
     return { watching: sessionId };
   },
   "sessions.unwatchText": async (args, ctx) => {
     const sessionId = textSessionId(args, "sessions.unwatchText");
-    (await ctx?.liveFrame?.())?.unwatchText(sessionId);
-    await sessionTextUnwatch(sessionId);
+    await (await ctx?.liveFrame?.())?.unwatchText(sessionId);
     return null;
   },
 

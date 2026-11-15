@@ -3231,11 +3231,9 @@ describe("sessions.watchText: a page hears a session's assistant prose (onSessio
   it("starts the stream for a session in the page's own team, and stops it", async () => {
     const { ctx, watchText, unwatchText } = await textFrame("team", ["sessions:read"]);
     await runBridgeCommand("sessions.watchText", { sessionId: "s-own" }, ctx);
-    expect(mockSessionTextWatch).toHaveBeenCalledWith("s-own");
     expect(watchText).toHaveBeenCalledWith("s-own");
     await runBridgeCommand("sessions.unwatchText", { sessionId: "s-own" }, ctx);
     expect(unwatchText).toHaveBeenCalledWith("s-own");
-    expect(mockSessionTextUnwatch).toHaveBeenCalledWith("s-own");
   });
 
   it("denies another team's session, whatever the grant's scope", async () => {

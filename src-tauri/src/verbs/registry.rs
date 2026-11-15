@@ -995,7 +995,8 @@ fn register_resources(registry: &mut Registry) {
     // A page hears a session's assistant prose as it is written (`onSessionText`): the bridge
     // also confines it to the page's own team.
     for name in ["sessions.watchText", "sessions.unwatchText"] {
-        registry.register(
+        Registry::register(
+            registry,
             "sessions",
             spec(
                 name,
