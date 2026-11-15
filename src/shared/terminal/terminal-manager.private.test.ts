@@ -175,7 +175,7 @@ describe("terminal output leaves the shared agent activity clock to the host", (
       seq: 12,
       privateAuthorityEpoch: "501",
     });
-    expect(text("private")).not.toContain("revoked");
+    expect(manager.terminal("private")).toBeNull();
     expect(activityAt("private")).toBe(original);
   });
 });
