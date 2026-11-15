@@ -421,13 +421,16 @@ describe("every surface change is a slot move", () => {
     act(() => s().setActiveTerminalTab(TEAM, "shell", A));
     await flush();
     // Codex and Claude are both hidden while the rest of their output streams.
+    const writes = vi.spyOn(terminalManager.terminal("codex")!, "write");
     for (let i = 1; i < CHUNKS; i++) feed(i);
     await act(async () => new Promise((r) => setTimeout(r, 900)));
-    const writes = vi.spyOn(terminalManager.terminal("codex")!, "write");
-    act(() => s().setActiveTerminalTab(TEAM, "codex", A));
-    await flush();
-    // Showing it wrote nothing: it was already current.
+    // A parked terminal parses nothing; its output waits for the show.
     expect(writes).not.toHaveBeenCalled();
+    // Each tab replays its parked output when it is shown.
+    for (const tab of ["codex", "claude"]) {
+      act(() => s().setActiveTerminalTab(TEAM, tab, A));
+      await flush();
+    }
     for (const id of SESSIONS) await expectParity(id);
   }, 20_000);
 
