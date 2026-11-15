@@ -2092,7 +2092,7 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
 
-  it("a chooser with no change line and no error draws neither: no \"null\" text", async () => {
+  it('a chooser with no change line and no error draws neither: no "null" text', async () => {
     const { pinOf, chooser } = await mountReplace();
     pinOf(5).click();
     await flush();
