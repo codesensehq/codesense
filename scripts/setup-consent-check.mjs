@@ -222,6 +222,21 @@ function callOf(call) {
   return { name, input };
 }
 
+/**
+ * Whether the engine refused the call: its result is an error, or carries a refusing status. A
+ * call with no result recorded is not read as refused, so a switch is judged on what came back.
+ */
+function refused(result) {
+  const seen = (v) =>
+    v &&
+    typeof v === "object" &&
+    (Boolean(v.error) ||
+      v.isError === true ||
+      ["error", "failed", "validation", "unauthorizedTeam"].includes(v.status) ||
+      seen(v.data));
+  return Boolean(seen(json(result)));
+}
+
 /** Every human-sent message inside a `read_messages` result, in order. */
 function humanMessages(result) {
   const found = [];
@@ -430,7 +445,9 @@ export function checkConsent(
             const org = String(input.org ?? "").trim();
             const team = String(input.team ?? "").trim();
             const found = listed.find((t) => t.org === org && t.team === team);
-            if (found) switched = { org, team, seen: found };
+            if (refused(raw.result)) {
+              // The engine kept the old team: nothing switched.
+            } else if (found) switched = { org, team, seen: found };
             else
               errors.push(
                 `turn ${index}: set_active_team switched to ${org}/${team}, but describe_setup listed ${listed.length ? `only ${listed.map(nameOf).join(", ")}` : "no team"}`,
@@ -442,7 +459,7 @@ export function checkConsent(
               errors.push(
                 `turn ${index}: create_team activates ${org}/${team}, but describe_setup listed no org ${org}`,
               );
-            switched = { org, team, seen: { org, team, repos: [] } };
+            if (!refused(raw.result)) switched = { org, team, seen: { org, team, repos: [] } };
           }
           // The switch is the team's name; its folder and repos are the latest listing's. Until a
           // good listing follows the switch, the one it saw stands in; once one has, a team it

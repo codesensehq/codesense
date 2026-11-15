@@ -1110,6 +1110,53 @@ test("after create_team, only a good listing re-lists the switch: an empty, fail
     );
 });
 
+test("a switch the call's own result refused leaves the team in force alone", () => {
+  const empty = call(`${P}describe_setup`, {}, setupOf());
+  const run = (result) =>
+    checkConsent(
+      session(
+        [empty],
+        [card(1, TEAM)],
+        [click(2, 1, "Create web")],
+        [call(`${P}create_team`, { org: "acme/context", name: "web", activate: true }, result)],
+        [ledger()],
+      ),
+      GUIDE,
+    ).errors;
+  assert.deepEqual(run({ ok: true }), []);
+  assert.deepEqual(run({ status: "ok" }), []);
+  for (const refused of [
+    { error: "boom" },
+    { isError: true, content: "boom" },
+    { status: "validation", reason: "no such org" },
+    { status: "unauthorizedTeam" },
+    { data: { error: "boom" } },
+  ])
+    assert.match(
+      run(refused)[0],
+      /no describe_setup listed a team to write in/,
+      JSON.stringify(refused),
+    );
+});
+
+test("a set_active_team the engine refused switches nothing", () => {
+  const run = (result) =>
+    checkConsent(
+      session(
+        [describe(teamOf("web", ["acme/web"]), teamOf("sales", ["acme/web"]))],
+        [card(1, "card: team · local-write · add-ledger-schema=Connect mine | none=Not now")],
+        [click(2, 1, "Connect mine")],
+        [call(`${P}set_active_team`, { org: "acme/context", team: "sales" }, result)],
+        [ledger()],
+      ),
+      GUIDE,
+    ).errors;
+  // A switch to sales puts the write in sales' folder, so web's path is outside it.
+  assert.match(run({ ok: true })[0], /outside the content folder of acme\/context\/sales/);
+  for (const refused of [{ error: "unknown team" }, { isError: true }, { status: "validation" }])
+    assert.deepEqual(run(refused), [], JSON.stringify(refused));
+});
+
 test("an activating create_team must name a listed org, and a team with no folder holds no file", () => {
   const elsewhere = call(
     `${P}create_team`,
