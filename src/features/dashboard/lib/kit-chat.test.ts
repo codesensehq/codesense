@@ -954,6 +954,8 @@ describe("kit.chat activity: the live lead's prose from onSessionText", () => {
     ["a heading", "## Next step", "Next step"],
     ["a quote", "> Ship it when green.", "Ship it when green."],
     ["a closing fence", "Here it is:\n```", "Here it is:"],
+    ["a fenced block's code", "Running it:\n```sh\nnpm test\n```", "Running it:"],
+    ["a block still open", "Writing it:\n```\nconst a = 1;", "Writing it:"],
     ["a table", "The results:\n| a | b |\n|---|---|\n| 1 | 2 |", "The results:"],
   ])("the line reads as a sentence: %s", async (_kind, text, line) => {
     const { say } = host();
