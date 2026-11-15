@@ -22,6 +22,8 @@ export function useAgentPins(
   error: string | null;
   /** Show the list a pin call returned at once; the change event re-reads it anyway. */
   apply: (pins: AgentPin[]) => void;
+  /** Read the list again, after a read that failed. */
+  retry: () => void;
 } {
   // The thread's name: a result for an older thread is never shown under a newer one.
   const key =
@@ -68,5 +70,6 @@ export function useAgentPins(
     [key],
   );
   const current = state && state.key === key ? state : null;
-  return { pins: current?.pins ?? NO_PINS, error: current?.error ?? null, apply };
+  const retry = useCallback(() => void reload(), [reload]);
+  return { pins: current?.pins ?? NO_PINS, error: current?.error ?? null, apply, retry };
 }
