@@ -989,6 +989,7 @@ export function agentTeamInboxHandlers(
         storyId,
         handle: seat?.handle ?? members.find((s) => s.alive)?.handle ?? kept.at(-1) ?? "",
         sessions: kept,
+        addresses: kept,
         roles: [],
         messages: [...rows]
           .filter((r) => kept.includes(r.from) || kept.includes(r.to))

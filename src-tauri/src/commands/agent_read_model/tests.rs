@@ -2663,6 +2663,7 @@ async fn a_successor_reads_its_predecessors_mail_though_the_roster_no_longer_lis
     assert_eq!((view.agent_id.as_str(), view.story_id.as_str()), (REVIEWER, "STORY-1"));
     assert_eq!(view.handle, "H1");
     assert_eq!(view.sessions, vec!["H0".to_string(), "H1".to_string()]);
+    assert_eq!(view.addresses, vec!["S0", "H0", "S1", "H1"]);
     let got = texts(&view);
     for want in [
         "to the first session",
@@ -2716,6 +2717,7 @@ async fn a_recorded_handle_the_roster_now_holds_for_another_thread_is_not_this_t
     let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
     assert_eq!(texts(&view), vec!["the ended session, by its tab"]);
     assert!(view.sessions.is_empty());
+    assert_eq!(view.addresses, vec!["S-old"]);
 }
 
 #[tokio::test]
@@ -2756,21 +2758,38 @@ async fn a_crashed_seat_has_ended_and_an_offline_one_is_still_the_seat() {
 }
 
 #[tokio::test]
-async fn a_thread_with_no_story_reads_its_recorded_predecessor_and_names_its_newest() {
+async fn a_thread_with_no_seat_listed_is_named_by_its_newest_recorded_session() {
     let host = FakeHost::new();
     let default = host.store("default");
-    insert(&default, "H-old", HUMAN, "no-story predecessor", None);
-    insert(&default, "H-older", HUMAN, "an earlier one", None);
+    insert(&default, "H-old", HUMAN, "the newest recorded", None);
+    // H3 is listed on the thread but crashed, and has no record: it is no seat.
+    thread_of(&host, &[("H3", "1")], &[("S-older", "H-older"), ("S-old", "H-old")]);
+    host.states.lock().unwrap().insert("H3".into(), (true, true));
+    let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    assert_eq!(view.handle, "H-old");
+    assert_eq!(view.sessions, vec!["H-older", "H-old", "H3"]);
+}
+
+#[tokio::test]
+async fn a_thread_with_no_story_is_its_listed_sessions_only() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H1", HUMAN, "listed, no story", None);
+    host.threads
+        .lock()
+        .unwrap()
+        .insert("H1".into(), (format!("{REVIEWER}@1"), None));
+    // An off-roster session the store recorded with no story is not read.
+    insert(&default, "H-gone", HUMAN, "an old no-story session", None);
     host.recorded.lock().unwrap().insert(
         format!("{REVIEWER}|"),
-        vec![
-            ThreadSession { session_id: "S-older".into(), handle: Some("H-older".into()) },
-            ThreadSession { session_id: "S-old".into(), handle: Some("H-old".into()) },
-        ],
+        vec![ThreadSession {
+            session_id: "S-gone".into(),
+            handle: Some("H-gone".into()),
+        }],
     );
     let view = thread_inbox(&*host, REVIEWER, "", None).await.unwrap();
-    let got = texts(&view);
-    assert!(got.contains(&"no-story predecessor") && got.contains(&"an earlier one"), "{got:?}");
-    // No session listed: the newest recorded one names the thread.
-    assert_eq!(view.handle, "H-old");
+    assert_eq!(texts(&view), vec!["listed, no story"]);
+    assert_eq!(view.addresses, vec!["H1", "S1"]);
+    assert_eq!(view.handle, "H1");
 }
