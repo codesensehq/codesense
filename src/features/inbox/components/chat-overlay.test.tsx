@@ -1071,6 +1071,32 @@ describe("ChatOverlay: the person pins a message", () => {
       expect(screen.getByTestId("chat-overlay-pin-3")).toHaveAttribute("data-replacing", "true");
     });
 
+    it("a click on a row that isn't current only arrives on it; the next click replaces", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.keyDown(choices()[0]!, { key: "ArrowDown" });
+      fireEvent.keyDown(choiceOf(1), { key: "ArrowDown" });
+      expect(choiceOf(2)).toHaveFocus();
+      fireEvent.click(choiceOf(3));
+      expect(replaceOps()).toEqual([]);
+      expect(choiceOf(3)).toHaveAttribute("data-current", "true");
+      expect(choiceOf(3)).toHaveTextContent("Replace");
+      expect(choiceOf(2)).not.toHaveTextContent("Replace");
+      expect(screen.getByTestId("chat-overlay-pin-3")).toHaveAttribute("data-replacing", "true");
+      fireEvent.click(choiceOf(3));
+      await within(row(4)).findByTestId("ibx-pin-note");
+      expect(replaceOps()).toEqual([["replace", 4, 3]]);
+    });
+
+    it("the icon-only Pin… carries the cap's count, and your own pin's row shows the strip's glyph", async () => {
+      await full();
+      expect(pinOf(4).querySelector(".ibx-pin-cap")).toHaveTextContent("3");
+      expect(pinOf(1).querySelector(".ibx-pin-cap")).toBeNull();
+      fireEvent.click(pinOf(4));
+      expect(choiceOf(2)).toHaveAttribute("data-own", "quote");
+      expect(choiceOf(3)).not.toHaveAttribute("data-own");
+    });
+
     it("moves between rows with the arrow keys, Home and End, which never reach the thread; Esc closes back to Pin…", async () => {
       await full();
       fireEvent.click(pinOf(4));

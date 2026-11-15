@@ -43,6 +43,10 @@ export function useThreadPins(
       const m = messages.find((x) => x.id === p.messageId);
       return m ? pinTitleOf(m, labelOf(view.dir, m.from)) : `Pin ${p.messageId}`;
     },
+    ownOf: (p) => {
+      const m = messages.find((x) => x.id === p.messageId);
+      return m ? (m.contentType === "html" ? "name" : "quote") : null;
+    },
     onShowPins: () => view.goTo(key),
   });
 }

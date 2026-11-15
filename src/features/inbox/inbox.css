@@ -2410,6 +2410,22 @@ button.ibx-media-open {
 .ibx-ov .ibx-pin-b .lbl {
   display: none;
 }
+/* The cap's count on Pin…: shown where the label is hidden (the overlay's 24 px icon). */
+.ibx-pin-cap {
+  display: none;
+}
+.ibx-ov .ibx-pin-b {
+  position: relative;
+}
+.ibx-ov .ibx-pin-cap {
+  display: block;
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+}
 @media (pointer: coarse) {
   .ibx-pin-b {
     min-width: 36px;
@@ -2533,6 +2549,12 @@ button.ibx-media-open {
   height: 8px;
   border-radius: 50%;
   background: var(--ibx-muted);
+}
+.ibx-pin-chooser .dot.own {
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--ibx-mfg);
 }
 .ibx-pin-chooser .dot[data-status="on-track"] {
   background: var(--ibx-green);

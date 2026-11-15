@@ -77,4 +77,4 @@ export const pinnedMeanwhileText = (who: string) =>
   `${who} pinned this message. Nothing was replaced.`;
 /** An Undo of a replace that can't happen any more, and why. */
 export const UNDO_FULL = "Can't undo: the list is full again.";
-export const UNDO_GONE = "Can't undo: that message was withdrawn.";
+export const UNDO_GONE = "Can't undo: that message was archived or withdrawn.";

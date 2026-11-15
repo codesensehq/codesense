@@ -244,6 +244,7 @@ export function ChatOverlay({
     sender: senderOf,
     labelOf: (from) => labelOf(dir, from),
     titleOf: (p) => p.preview?.shortName || pinTitle(p.messageId),
+    ownOf: (p) => ownCard(p)?.kind ?? null,
     onShowPins: () => {
       const first = pins[0];
       if (first) pinRefs.current.get(first.messageId)?.focus();

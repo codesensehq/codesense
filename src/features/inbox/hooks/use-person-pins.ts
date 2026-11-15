@@ -54,6 +54,8 @@ export type PinState = {
   busy: boolean;
   /** Its chooser is open. */
   choosing: boolean;
+  /** At the cap: how many are pinned, for the icon-only Pin…. */
+  capCount: number | null;
 };
 
 /** One row of the chooser: a pin as the list shows it. */
@@ -62,6 +64,8 @@ export type ChooserRow = {
   title: string;
   /** "Pinned by Story lead at 13:31". */
   line: string;
+  /** Your own pin, drawn as the strip draws it: a quote or a dashboard's name. */
+  own: "quote" | "name" | null;
   /** The agent added it while the chooser was open. */
   isNew: boolean;
   /** It can be replaced: not new, or the person has arrived on it since. */
@@ -147,6 +151,7 @@ export function usePersonPins({
   sender,
   labelOf,
   titleOf,
+  ownOf = () => null,
   onShowPins,
 }: {
   team: InboxTeam | null;
@@ -159,6 +164,8 @@ export function usePersonPins({
   labelOf: (from: string) => string;
   /** A pin's name as the Pinned strip shows it. */
   titleOf: (pin: AgentPin) => string;
+  /** How the strip draws a pin sent without a preview (the person's own). */
+  ownOf?: (pin: AgentPin) => "quote" | "name" | null;
   onShowPins: () => void;
 }): PersonPins | null {
   const [note, setNote] = useState<PinNote | null>(null);
@@ -295,21 +302,22 @@ export function usePersonPins({
         messageId: n.replaced.messageId,
         replacing: n.message.id,
       });
-      if (r.status !== "pins") throw new Error(r.message);
+      if (r.status !== "pins") {
+        // The engine refused: the list has no room for the old pin, or its message is gone.
+        // Retrying can't help, so Undo goes away and the note says which, from the list.
+        const text = pinsRef.current.length >= PIN_CAP ? UNDO_FULL : UNDO_GONE;
+        setNote({ mid: n.mid, kind: "info", text });
+        setLive(text);
+        return;
+      }
       apply(r.pins);
       setNote(null);
       setLive(liveText("restored", titleOf(n.replaced), r.pins.length));
       setFresh(n.replaced.messageId);
       setFocusPin(n.mid);
-    } catch (error) {
-      const why = String((error as Error)?.message ?? error);
-      if (/at most \d+ pins/.test(why) || /no message/.test(why)) {
-        const text = /at most/.test(why) ? UNDO_FULL : UNDO_GONE;
-        setNote({ mid: n.mid, kind: "info", text });
-        setLive(text);
-      } else {
-        setNote({ ...n, kind: "replace-undo-failed" });
-      }
+    } catch {
+      // The call didn't reach the engine: it can be tried again.
+      setNote({ ...n, kind: "replace-undo-failed" });
     } finally {
       setBusy(null);
     }
@@ -329,6 +337,7 @@ export function usePersonPins({
               return {
                 pin,
                 title: titleOf(pin),
+                own: pin.preview ? null : ownOf(pin),
                 line: pinnedAtLine(whoPinned(pin.pinnedBy, labelOf), formatClock(pin.pinnedAtMs)),
                 isNew,
                 armed: !isNew,
@@ -364,6 +373,7 @@ export function usePersonPins({
         label: pin ? "Unpin" : atCap ? replaceLabel(pins.length) : "Pin",
         busy: busy === msgKey(m),
         choosing: open?.mid === msgKey(m),
+        capCount: atCap ? pins.length : null,
       };
     },
     toggle(m) {

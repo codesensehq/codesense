@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef } from "react";
-import { Info, Pin, PinOff, Replace, TriangleAlert } from "lucide-react";
+import { Info, LayoutDashboard, Pin, PinOff, Quote, Replace, TriangleAlert } from "lucide-react";
 
 import type { ConversationMessage } from "../api";
 import type { PersonPins, PinChooser as Chooser } from "../hooks/use-person-pins";
@@ -41,6 +41,12 @@ export function PinButton({ pins, m }: { pins: PersonPins; m: ConversationMessag
     >
       <Ico icon={pinned ? PinOff : Pin} sm />
       <span className="lbl">{pinned ? "Unpin" : state.atCap ? "Pin…" : "Pin"}</span>
+      {state.capCount !== null && (
+        // Where the label is hidden (the overlay's icon), the cap still shows.
+        <span className="ibx-pin-cap" aria-hidden>
+          {state.capCount}
+        </span>
+      )}
     </button>
   );
 }
@@ -228,19 +234,37 @@ function PinChooser({ pins, chooser }: { pins: PersonPins; chooser: Chooser }) {
                   data-pin-id={row.pin.messageId}
                   data-current={current || undefined}
                   data-new={row.isNew || undefined}
+                  data-own={row.own ?? undefined}
                   tabIndex={current || (chooser.current === null && row === rows[0]) ? 0 : -1}
                   onPointerEnter={() => {
                     // The pointer moves the current row only while focus is in the chooser.
                     if (root.current?.contains(document.activeElement)) goTo(rows.indexOf(row));
                   }}
-                  onClick={() => pins.choose(row.pin.messageId)}
+                  onClick={() => {
+                    // A click on a row that isn't current only arrives on it: what replaces
+                    // is always the row the mark, "Replace" and Enter name. A row new since
+                    // the chooser opened says so as it arrives.
+                    if (!row.armed) {
+                      pins.choose(row.pin.messageId);
+                      rowEl(row.pin.messageId)?.focus();
+                      return;
+                    }
+                    if (!current) return goTo(rows.indexOf(row));
+                    pins.choose(row.pin.messageId);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key !== "Enter") return;
                     e.preventDefault();
                     pins.choose(row.pin.messageId);
                   }}
                 >
-                  <span className="dot" data-status={status ?? "none"} aria-hidden />
+                  {row.own ? (
+                    <span className="dot own" aria-hidden>
+                      <Ico icon={row.own === "quote" ? Quote : LayoutDashboard} sm />
+                    </span>
+                  ) : (
+                    <span className="dot" data-status={status ?? "none"} aria-hidden />
+                  )}
                   <span className="t">{row.title}</span>
                   {row.pin.preview?.value && <b className="v">{row.pin.preview.value}</b>}
                   {row.isNew && <span className="new">New</span>}
