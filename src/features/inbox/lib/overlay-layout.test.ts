@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
-import { overlayLayout, overlayPlacement } from "./overlay-layout";
+import { overlayLayout, overlayPlacement, pinLineWraps } from "./overlay-layout";
 
 describe("overlayLayout", () => {
   // The design's breakpoints: the four reference pane sizes and the docked overlay.
@@ -27,6 +27,14 @@ describe("overlayLayout", () => {
     expect(overlayLayout(470, 600).head).toBe("two-line");
     expect(overlayLayout(399, 700).showKind).toBe(false);
     expect(overlayLayout(400, 600).showKind).toBe(true);
+  });
+
+  it("keeps the line of chips on one row while every chip fits at its floor, else wraps rather than drop one", () => {
+    expect(pinLineWraps(250, 2)).toBe(false);
+    expect(pinLineWraps(250, 3)).toBe(true);
+    expect(pinLineWraps(479, 3)).toBe(false);
+    expect(pinLineWraps(250, 1)).toBe(false);
+    expect(pinLineWraps(250, 0)).toBe(false);
   });
 
   it("uses the line of chips when short and narrow, or medium and under 480 wide", () => {

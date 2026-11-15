@@ -342,6 +342,47 @@ describe("ChatOverlay", () => {
     expect(tests).toHaveTextContent("stopped 14:05");
   });
 
+  it("the one-line strip keeps to one row with 2 pins, and wraps with 3 rather than drop one, each keeping its full name", async () => {
+    await renderOverlay(250, 250);
+    await screen.findByTestId("chat-overlay-pin-1");
+    expect(screen.getByRole("group", { name: /^Pinned/ })).not.toHaveAttribute("data-wrap", "true");
+    const three = [
+      ...PINS,
+      {
+        messageId: 2,
+        position: 2,
+        pinnedBy: LEAD,
+        pinnedAtMs: NOW,
+        preview: { shortName: "Review rounds", value: "2", status: "running" as const },
+        previewAtMs: NOW,
+      },
+    ];
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "agent_pins"
+        ? { status: "pins", ...TEAM, agentId: "builtin/claude", storyId: "BUG-142", pins: three }
+        : undefined,
+    );
+    act(() =>
+      listeners
+        .get(AGENT_PINS_CHANGED_EVENT)
+        ?.forEach((h) =>
+          h({ payload: { ...TEAM, agentId: "builtin/claude", storyId: "BUG-142" } }),
+        ),
+    );
+    const third = await screen.findByTestId("chat-overlay-pin-2");
+    expect(screen.getByRole("group", { name: /^Pinned/ })).toHaveAttribute("data-wrap", "true");
+    for (const [id, name] of [
+      [3, "QA"],
+      [1, "Tests"],
+      [2, "Review rounds"],
+    ] as const) {
+      const pin = id === 2 ? third : screen.getByTestId(`chat-overlay-pin-${id}`);
+      expect(pin).toHaveAccessibleName(expect.stringContaining(name));
+      expect(pin.querySelector(".ibx-pk-t")).toHaveAttribute("title", name);
+      expect(pin.querySelector(".ibx-pk-v")).not.toBeNull();
+    }
+  });
+
   it("a stopped pin in the one-line strip says stopped without its time, so it keeps to one row", async () => {
     await renderOverlay(250, 250);
     const tests = await screen.findByTestId("chat-overlay-pin-1");
