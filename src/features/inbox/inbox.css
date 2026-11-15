@@ -276,41 +276,14 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* The one-line strip keeps to one row, names shortened to their floor, and wraps only when
-   every chip at its floor still doesn't fit (`data-wrap`), rather than drop a pin. */
+/* The one-line strip: each chip's own floor (its dot, 4 characters of its name, its value)
+   decides when the row wraps, so it keeps to one row while the floors fit, wraps rather than
+   drop a pin, and never runs past the pane. */
 .ibx-ov-pins[data-shape="line"] {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 4px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-.ibx-ov-pins[data-shape="line"][data-wrap="true"] {
   flex-wrap: wrap;
-}
-/* A pins read that failed: one line in the zone, with Retry. */
-.ibx-ov-pins.ibx-ov-pins-failed {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--ibx-mfg);
-}
-.ibx-ov-pins-retry {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: var(--ibx-accent);
-  cursor: pointer;
-}
-.ibx-ov-pins-retry:hover {
-  text-decoration: underline;
-}
-.ibx-ov-pins-retry:focus-visible {
-  outline: 2px solid var(--ibx-accent);
-  outline-offset: 2px;
-  border-radius: 2px;
+  gap: 4px;
+  padding: 4px;
 }
 .ibx-ov[data-pins="rail"] {
   display: grid;
@@ -442,24 +415,32 @@
 /* Line: chips of dot, short name and value; a third chip wraps rather than hide. */
 .ibx-pk[data-shape="line"] {
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 100%;
-  height: 24px;
+  min-height: 24px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: 12px;
   font-size: 11px;
 }
+/* The name's floor is 4 characters; it grows into the row's room. */
 .ibx-pk[data-shape="line"] .ibx-pk-t {
+  flex: 1 1 4ch;
+  width: 4ch;
   min-width: 4ch;
-  flex: 0 1 auto;
 }
-.ibx-pk[data-shape="line"] .ibx-pk-d,
+.ibx-pk[data-shape="line"] .ibx-pk-d {
+  flex: none;
+}
+/* The value shows in full: only a chip alone on its row and still too wide wraps it. */
 .ibx-pk[data-shape="line"] .ibx-pk-v,
 .ibx-pk[data-shape="line"] .ibx-pk-s {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* An opened pin: above the chat (≤ 45%) on a tall pane, else in the chat's place. */

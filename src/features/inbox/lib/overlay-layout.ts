@@ -59,20 +59,6 @@ export function overlayLayout(w: number, h: number): OverlayLayout {
   };
 }
 
-/** The narrowest a chip of the one-line strip gets: its dot, 4 characters of its name, its
- *  value and padding. */
-const PIN_CHIP_FLOOR_PX = 110;
-/** The strip's horizontal padding and the gap between chips. */
-const PIN_LINE_PAD_PX = 20;
-const PIN_LINE_GAP_PX = 4;
-
-/** Whether the one-line strip of `count` pins wraps on a `width` pane: it keeps to one row,
- *  names shortened, while every chip fits at its floor, and wraps rather than drop a pin. */
-export function pinLineWraps(width: number, count: number): boolean {
-  if (count < 2) return false;
-  return count * PIN_CHIP_FLOOR_PX + (count - 1) * PIN_LINE_GAP_PX > width - PIN_LINE_PAD_PX;
-}
-
 /** The docked overlay's width. */
 export const OVERLAY_DOCK_WIDTH = 420;
 

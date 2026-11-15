@@ -346,10 +346,9 @@ describe("ChatOverlay", () => {
     expect(tests).toHaveTextContent("stopped 14:05");
   });
 
-  it("the one-line strip keeps to one row with 2 pins, and wraps with 3 rather than drop one, each keeping its full name", async () => {
+  it("the one-line strip shows every pin, each keeping its full name and its value", async () => {
     await renderOverlay(250, 250);
     await screen.findByTestId("chat-overlay-pin-1");
-    expect(screen.getByRole("group", { name: /^Pinned/ })).not.toHaveAttribute("data-wrap", "true");
     const three = [
       ...PINS,
       {
@@ -374,7 +373,6 @@ describe("ChatOverlay", () => {
         ),
     );
     const third = await screen.findByTestId("chat-overlay-pin-2");
-    expect(screen.getByRole("group", { name: /^Pinned/ })).toHaveAttribute("data-wrap", "true");
     for (const [id, name] of [
       [3, "QA"],
       [1, "Tests"],

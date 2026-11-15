@@ -314,6 +314,46 @@ test.describe("the thread keeps its room", () => {
   }
 });
 
+test.describe("the one-line pins strip", () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  test("a value as long as a preview allows wraps the strip rather than overflow or clip it", async ({
+    page,
+  }) => {
+    await expand(page, BUG);
+    await openInbox(page, AGENT_TAB);
+    await page.evaluate(
+      ({ tabId }) => {
+        const el = document.querySelector<HTMLElement>(`[data-testid="inbox-split-${tabId}"]`)!;
+        Object.assign(el.style, { flex: "none", width: "250px", height: "250px" });
+      },
+      { tabId: AGENT_TAB },
+    );
+    const chat = page.locator(paneOf(AGENT_TAB));
+    const pins = chat.locator('[data-testid^="chat-overlay-pin-"]');
+    await expect(pins).toHaveCount(2);
+    // A preview value may be 32 characters (the engine's cap).
+    await pins.first().evaluate((pin) => {
+      pin.querySelector<HTMLElement>(".ibx-pk-v b")!.textContent = "W".repeat(32);
+    });
+    const fit = await chat.evaluate((root) => {
+      const strip = root.querySelector<HTMLElement>(".ibx-ov-pins")!;
+      const chips = [...strip.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]')];
+      return {
+        stripOverflows: strip.scrollWidth > strip.clientWidth + 1,
+        chatOverflows: root.scrollWidth > root.clientWidth + 1,
+        clipped: chips.some((chip) => {
+          const value = chip.querySelector<HTMLElement>(".ibx-pk-v")!.getBoundingClientRect();
+          const box = chip.getBoundingClientRect();
+          return value.right > box.right + 1 || box.right > strip.getBoundingClientRect().right + 1;
+        }),
+        rows: new Set(chips.map((chip) => chip.offsetTop)).size,
+      };
+    });
+    expect(fit).toEqual({ stripOverflows: false, chatOverflows: false, clipped: false, rows: 2 });
+  });
+});
+
 test.describe("every agent's chat entry, and none for a headless run", () => {
   test("a headless run in the agent list has no chat icon; a running agent does", async ({
     page,
