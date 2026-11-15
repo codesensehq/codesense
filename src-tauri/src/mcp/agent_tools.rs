@@ -368,6 +368,7 @@ pub struct AgentDraft {
     /// a `skills` key there is not this field and does nothing.
     #[serde(
         default,
+        alias = "skill_allowlist",
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
     pub skill_allowlist: Option<Option<Vec<String>>>,
@@ -552,6 +553,7 @@ pub struct AgentUpdateParams {
     /// Replaces the skill allowlist. Omit to keep it, null to offer every skill.
     #[serde(
         default,
+        alias = "skill_allowlist",
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
     pub skill_allowlist: Option<Option<Vec<String>>>,

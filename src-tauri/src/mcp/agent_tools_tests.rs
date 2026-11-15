@@ -223,6 +223,19 @@ fn a_skill_allowlist_round_trips_and_previews_the_effective_skills() {
     ));
     assert!(p["launch"].get("skill_allowlist").is_none());
 
+    // A definition passed back as agent_get returns it keeps its list.
+    let copied = ok(create_as(
+        home,
+        &alice(),
+        team(),
+        json!({"name": "Copied lead", "runtime": "claude", "skill_allowlist": ["bmad-build"]}),
+    ));
+    let copied = ok(get(home, &alice(), params(json!({"id": copied["id"]}))));
+    assert_eq!(
+        copied["definition"]["skill_allowlist"],
+        json!(["bmad-build"])
+    );
+
     for skills in [json!(["bmad build"]), json!(["a", "a"])] {
         let error = refused_with(
             create_as(
