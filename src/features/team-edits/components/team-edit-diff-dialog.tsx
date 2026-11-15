@@ -179,7 +179,7 @@ export function TeamEditDiffDialog({
     .filter((note) => !(raster && note === BINARY_NOTE))
     .filter(Boolean);
   const conflict = file?.kind === "conflict";
-  const teamLabel = conflict ? "Team's version now" : "Team's version";
+  const teamLabel = conflict ? "Team\u2019s version now" : "Team\u2019s version";
   const mineLabel = `${workspace.name}\u2019s version`;
   const sides: FileDiffSides = {
     before: sideText(team),

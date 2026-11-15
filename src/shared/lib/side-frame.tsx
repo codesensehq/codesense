@@ -101,6 +101,8 @@ export function SideFrame({ html, title }: { html: string; title: string }) {
   if (left === drawing)
     return (
       <OverlayCenteredState
+        // It replaces the side under the reader's eyes, so it is said politely.
+        role="status"
         testId="side-frame-left"
         action={
           <button
