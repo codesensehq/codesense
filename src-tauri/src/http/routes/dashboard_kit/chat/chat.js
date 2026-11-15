@@ -5,7 +5,7 @@
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
-//  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the peer's current step while it runs, else Working…).
+//  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the live lead's prose from the host's onSessionText, else the peer's current step while it runs, else Working…).
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
 //  faces: true|(row)->{src|face,name,label}: opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run (src draws that image, face or a name goes to kit.avatar, true draws initials from the sender's name), and a run of messages from one sender is one meta line (label is the name on it, else the sender's name); the person's own messages carry no avatar. Unset, the thread is unchanged.
@@ -24,6 +24,7 @@ import {CHAT_COPY,failureText,mergeCopy,modelLabel,timeLabel} from './copy.js';
 import {joinable,parseFailure} from './launch.js';
 import {DEFAULT_TIMERS,createSendState,systemClock} from './send-state.js';
 import {activityOf,leadRowsOf,liveOf,presenceOf} from './presence.js';
+import {createProse} from './prose.js';
 import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
@@ -241,10 +242,23 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(item.mark!=='sent')return item.mark;
   return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles()),delivery:deliveryRow(item.messageId)});
  }
- // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the peer's current step while it runs.
+ // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the live lead's prose, else the peer's current step while it runs.
+ // The prose row is one node whose line is updated in place. The log is a live region, so the line turns announcing off for itself (each chunk is not read out); the row's status says Working… once.
+ const prose=activity?createProse({win,clock,render:()=>render()}):null;
+ let proseRow=null;
+ function proseItem(said){
+  if(!proseRow)proseRow=h('div',{class:'act','data-row':'activity'},face('working',copy.row.working),h('span',{class:'sr',role:'status','aria-live':'polite'},copy.row.working),h('span',{class:'prose','aria-live':'off'}));
+  const line=proseRow.querySelector('.prose');
+  line.textContent=said.line;line.title=said.text;
+  return {id:'activity',node:proseRow};
+ }
  function activityItem(){
   if(!activity)return null;
   const here=state(),own=activity.text?activity.text(here):null,p=presence();
+  prose.follow(live()?live().sessionId:null);
+  const said=own?null:prose.current(newestFrom(thread,leadHandles()));
+  if(said)return proseItem(said);
+  proseRow=null;
   const line=own||(p.key==='running'?(p.activity===copy.header.activityNone?copy.row.working:p.activity):null);
   return line?{id:'activity',sig:'a|'+line,make:()=>h('div',{class:'act',role:'status','aria-live':'polite','data-row':'activity'},face('working',copy.row.working),h('span',{},line))}:null;
  }
@@ -407,7 +421,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();pin.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),

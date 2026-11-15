@@ -568,6 +568,45 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/prose.js
+  function lastSentence(text) {
+    const line = String(text || "").split("\n").map((part) => part.trim()).filter(Boolean).pop() || "";
+    const sentences = line.match(/[^.!?]+(?:[.!?]+|$)/g) || [line];
+    return sentences[sentences.length - 1].trim();
+  }
+  function createProse({ win, clock, render }) {
+    let sid = null, off = null, now = null;
+    function follow(next) {
+      if (next === sid) return;
+      if (typeof off === "function") off();
+      off = null;
+      sid = next;
+      now = null;
+      const host = win.codesense;
+      if (!next || !host || typeof host.onSessionText !== "function") return;
+      try {
+        off = host.onSessionText(next, (said, error) => {
+          if (sid !== next) return;
+          now = !said || error || said.kind === "final" ? null : { text: said.text, line: lastSentence(said.text), at: clock.now() };
+          render();
+        });
+      } catch {
+        off = null;
+      }
+    }
+    return {
+      follow,
+      /** The prose to show now: none once a lead message newer than it is in the thread. */
+      current(newestLeadAt) {
+        if (now && newestLeadAt > now.at) now = null;
+        return now;
+      },
+      release() {
+        follow(null);
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/thread.js
   var rowsOf = (answer) => Array.isArray(answer) ? answer : Array.isArray(answer && answer.messages) ? answer.messages : [];
   function mergeThread(...lists) {
@@ -1118,9 +1157,22 @@
       if (item.mark !== "sent") return item.mark;
       return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()), delivery: deliveryRow(item.messageId) });
     }
+    const prose = activity ? createProse({ win, clock, render: () => render() }) : null;
+    let proseRow = null;
+    function proseItem(said) {
+      if (!proseRow) proseRow = h("div", { class: "act", "data-row": "activity" }, face("working", copy.row.working), h("span", { class: "sr", role: "status", "aria-live": "polite" }, copy.row.working), h("span", { class: "prose", "aria-live": "off" }));
+      const line = proseRow.querySelector(".prose");
+      line.textContent = said.line;
+      line.title = said.text;
+      return { id: "activity", node: proseRow };
+    }
     function activityItem() {
       if (!activity) return null;
       const here = state(), own2 = activity.text ? activity.text(here) : null, p = presence();
+      prose.follow(live() ? live().sessionId : null);
+      const said = own2 ? null : prose.current(newestFrom(thread, leadHandles()));
+      if (said) return proseItem(said);
+      proseRow = null;
       const line = own2 || (p.key === "running" ? p.activity === copy.header.activityNone ? copy.row.working : p.activity : null);
       return line ? { id: "activity", sig: "a|" + line, make: () => h("div", { class: "act", role: "status", "aria-live": "polite", "data-row": "activity" }, face("working", copy.row.working), h("span", {}, line)) } : null;
     }
@@ -1348,6 +1400,7 @@
       unmount() {
         gone = true;
         offs.forEach((off) => off && off());
+        if (prose) prose.release();
         pin.release();
         mountSlot.release();
         if (sendOpt) detach();

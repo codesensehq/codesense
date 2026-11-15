@@ -932,8 +932,8 @@ describe("kit.chat activity: the live lead's prose from onSessionText", () => {
     expect(line.getAttribute("title")).toBe(
       "Reading the diff.\nNow the tests pass. Writing the summary.",
     );
-    // each chunk is not announced: the prose sits outside any live region, which says Working… once
-    expect(line.closest("[aria-live]")).toBeNull();
+    // each chunk is not announced: the log is a live region, so the line turns it off for itself; the row's status says Working… once
+    expect(line.closest("[aria-live]")!.getAttribute("aria-live")).toBe("off");
     expect(row.querySelector('[role="status"]')!.textContent).toBe("Working…");
     await say("s1", prose("Opening the PR."));
     expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe("Opening the PR.");

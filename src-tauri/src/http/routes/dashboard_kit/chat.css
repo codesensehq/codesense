@@ -63,7 +63,9 @@
 @keyframes cs-chat-spin{to{transform:rotate(360deg)}}
 @keyframes cs-chat-breathe{50%{box-shadow:0 0 0 3px color-mix(in srgb,var(--cs-accent) 30%,transparent)}}
 @media (prefers-reduced-motion:reduce){.cs-chat .av[data-face]{animation:none}.cs-chat .av[data-face=starting]{border-style:dashed}}
-.cs-chat .act{display:flex;align-items:center;gap:8px;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .act{position:relative;display:flex;align-items:center;gap:8px;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+/* The live lead's prose: one line, the whole chunk in its title; no motion, so reduced motion needs nothing. */
+.cs-chat .act .prose{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cs-chat .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 max(24px,calc((100% - 720px)/2)) 8px}
 .cs-chat .pchip{display:inline-flex;align-items:stretch}
 .cs-chat .pchip .btn:first-child{border-top-right-radius:0;border-bottom-right-radius:0}

@@ -19029,7 +19029,7 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "f6caafda5b33486c2c11cdd67942d2d15f5becd9bd2619ff981848b62f95e987",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "dc7997dd23874a0d83df03912d8fc302538fd306de293bdf7c2567c46df7f20e",
     "src-tauri/src/verbs/registry.generated.json": "271d7884186ce3673068d876757b581ffde291ef749a52ad7cd14eb44c78ae41",
     "src-tauri/src/verbs/registry.rs": "d2ffa628840cefb158709b3b676a87facdf7e8c2a6232753c353b3b1671b4b5d",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
