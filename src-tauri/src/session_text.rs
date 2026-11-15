@@ -276,6 +276,7 @@ pub fn install_app_emitter(app: tauri::AppHandle) {
 fn emit(session_id: &str, events: Vec<StreamEvent>) {
     let Some(sink) = EMIT.get() else { return };
     for event in &events {
+        crate::shared::invoke_stats::metric_count("session_text.emit");
         sink(session_id, event);
     }
 }

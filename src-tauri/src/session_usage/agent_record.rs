@@ -330,6 +330,7 @@ pub async fn read(
     launch_stories: HashMap<String, String>,
     scope: &CallerScope,
 ) -> Result<Value, String> {
+    crate::shared::invoke_stats::metric_count("session_record.read");
     let (owned_home, handle, owned_scope) = (home.to_owned(), params.handle.clone(), scope.clone());
     let half = crate::commands::await_blocking("session_record", move || {
         usage_half(&owned_home, &handle, launch_stories, &owned_scope)

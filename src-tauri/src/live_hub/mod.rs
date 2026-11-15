@@ -36,7 +36,7 @@ use crate::mcp::{
 use projection::{FieldProviders, Snapshot, SubscriptionReply, TopicRegistry};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU16, Ordering},
     Mutex,
 };
 use std::time::Duration;
@@ -47,13 +47,15 @@ fn now_ms() -> u64 {
 }
 
 pub const COALESCE: Duration = Duration::from_millis(50);
-const REBUILD: u8 = 1;
-const MACHINE_STATS: u8 = 32;
-const DEFINITIONS: u8 = 16;
-const FILES: u8 = 64;
-const INBOX: u8 = 2;
-const HOSTS: u8 = 4;
-const FOOTPRINT: u8 = 8;
+const REBUILD: u16 = 1;
+const MACHINE_STATS: u16 = 32;
+const DEFINITIONS: u16 = 16;
+const FILES: u16 = 64;
+const ACTIVITY_REBUILD: u16 = 128;
+const OTHER_REBUILD: u16 = 256;
+const INBOX: u16 = 2;
+const HOSTS: u16 = 4;
+const FOOTPRINT: u16 = 8;
 const DOMAIN_EVENTS: &[&str] = &[
     crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
     "sessions-waiter-changed",
@@ -93,8 +95,19 @@ fn definition_membership_event(event: &str) -> bool {
             | crate::commands::scratch_use::SCRATCH_USE_CHANGED_EVENT
     )
 }
-fn event_flags(event: &str) -> u8 {
+fn event_flags(event: &str) -> u16 {
+    let cause = if matches!(
+        event,
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT
+            | "agent-state-changed"
+            | "agents-changed"
+    ) {
+        ACTIVITY_REBUILD
+    } else {
+        OTHER_REBUILD
+    };
     REBUILD
+        | cause
         | if matches!(
             event,
             "machines-changed" | "terminal-layout-admission-changed"
@@ -220,7 +233,7 @@ impl Model {
 }
 pub struct LiveHub {
     model: Mutex<Model>,
-    dirty: AtomicU8,
+    dirty: AtomicU16,
     wake: std::sync::Arc<tokio::sync::Notify>,
     run_review: std::sync::Arc<Mutex<run_review::Owner>>,
     changes: tokio::sync::watch::Sender<u64>,
@@ -307,7 +320,7 @@ impl Default for LiveHub {
         effective_status::register(&mut providers);
         Self {
             model: Mutex::new(Model::default()),
-            dirty: AtomicU8::new(0),
+            dirty: AtomicU16::new(0),
             wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             run_review: Default::default(),
             changes: tokio::sync::watch::channel(0).0,
@@ -343,17 +356,20 @@ impl LiveHub {
     pub(crate) fn invalidate_sessions(&self) {
         self.invalidate(REBUILD | HOSTS);
     }
-    fn invalidate(&self, flags: u8) {
+    fn invalidate(&self, mut flags: u16) {
+        if flags & REBUILD != 0 && flags & (ACTIVITY_REBUILD | OTHER_REBUILD) == 0 {
+            flags |= OTHER_REBUILD;
+        }
         self.dirty.fetch_or(flags, Ordering::Release);
         self.wake.notify_one();
     }
-    async fn next_batch(&self) -> u8 {
+    async fn next_batch(&self) -> u16 {
         let deadline = self.model.lock().unwrap().stall_deadline;
         tokio::select! {
             () = self.wake.notified() => {},
             () = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                 self.model.lock().unwrap().stall_deadline = None;
-                self.dirty.fetch_or(REBUILD | HOSTS, Ordering::Release);
+                self.dirty.fetch_or(REBUILD | HOSTS | OTHER_REBUILD, Ordering::Release);
             }
         }
         tokio::time::sleep(COALESCE).await;
@@ -710,7 +726,7 @@ pub fn start(app: &tauri::AppHandle) {
                 refresh_definitions(&handle).await;
             }
             if flags & REBUILD != 0 {
-                if let Err(e) = rebuild(&handle).await {
+                if let Err(e) = rebuild(&handle, flags).await {
                     log::warn!("sessions projection: {e}");
                 }
             }
@@ -721,7 +737,7 @@ pub fn start(app: &tauri::AppHandle) {
     });
 }
 
-async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> u8 {
+async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> u16 {
     let flags = app.state::<LiveHub>().next_batch().await;
     if let Err(error) = run_review::refresh(app) {
         log::warn!("run review projection: {error}");
@@ -1105,7 +1121,11 @@ async fn refresh_definitions<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-async fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
+async fn rebuild(app: &tauri::AppHandle, flags: u16) -> Result<(), String> {
+    crate::shared::invoke_stats::metric_count("live_hub.rebuild");
+    if flags & ACTIVITY_REBUILD != 0 && flags & OTHER_REBUILD == 0 {
+        crate::shared::invoke_stats::metric_count("live_hub.rebuild.activity_only");
+    }
     use crate::commands::agent_inbox::InboxHost;
     let hub = app.state::<LiveHub>();
     let live = hub.model.lock().unwrap().live_tabs();
@@ -1739,8 +1759,28 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, deltas: Vec<projection:
     publish_subscriptions(app, sent);
     for delta in deltas {
         if delta.topic != "inbox" {
+            let topic = delta.topic.as_str();
+            if let Ok(bytes) = serde_json::to_vec(&delta) {
+                crate::shared::invoke_stats::metric_add(
+                    &format!("live_hub.delta.bytes.{topic}"),
+                    bytes.len(),
+                );
+            }
             let _ = app.emit("codesense:delta", delta);
         }
+    }
+    record_projection_metrics(app);
+}
+
+fn record_projection_metrics<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let hub = app.state::<LiveHub>();
+    let model = hub.model.lock().unwrap_or_else(|e| e.into_inner());
+    crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", model.agent_views.len());
+    let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+    crate::shared::invoke_stats::metric_gauge("live_hub.delta_log_entries", entries);
+    crate::shared::invoke_stats::metric_gauge("live_hub.subscriptions", subscriptions);
+    for (topic, views, _) in topics {
+        crate::shared::invoke_stats::metric_gauge(&format!("live_hub.views.{topic}"), views);
     }
 }
 
@@ -1811,7 +1851,7 @@ struct InboxGate {
 async fn inbox_pass<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     host: &dyn crate::commands::agent_inbox::InboxHost,
-    flags: u8,
+    flags: u16,
     gate: &mut InboxGate,
 ) -> Result<(), String> {
     let inputs = inbox_inputs(app);

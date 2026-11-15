@@ -161,6 +161,37 @@ fn context_index_changes_refresh_agent_definitions() {
     }
 }
 
+#[test]
+fn event_flags_distinguish_activity_only_rebuilds() {
+    use super::*;
+    let activity = event_flags("agent-state-changed");
+    assert_ne!(activity & ACTIVITY_REBUILD, 0);
+    assert_eq!(activity & OTHER_REBUILD, 0);
+    let mixed_cause = event_flags("sessions-waiter-changed");
+    assert_ne!(mixed_cause & OTHER_REBUILD, 0);
+    assert_eq!(mixed_cause & ACTIVITY_REBUILD, 0);
+}
+
+#[test]
+fn projection_metrics_include_message_delivery_and_change_with_deltas() {
+    let mut registry = TopicRegistry::default();
+    let (entries, subscriptions, topics) = registry.metrics_snapshot();
+    assert_eq!((entries, subscriptions), (0, 0));
+    let delivery = topics.iter().find(|(topic, _, _)| topic == "messageDelivery").unwrap();
+    assert_eq!(delivery.1, 0);
+    registry
+        .replace_view(
+            "messageDelivery",
+            "all",
+            vec![(Some("row-1".into()), json!({"id":"row-1"}))],
+        )
+        .unwrap();
+    let (entries, _, topics) = registry.metrics_snapshot();
+    assert_eq!(entries, 1);
+    let delivery = topics.iter().find(|(topic, _, _)| topic == "messageDelivery").unwrap();
+    assert_eq!((delivery.1, delivery.2), (1, 1));
+}
+
 #[tokio::test]
 async fn every_domain_source_invalidates_the_projection_and_bursts_coalesce() {
     use super::*;
@@ -173,7 +204,14 @@ async fn every_domain_source_invalidates_the_projection_and_bursts_coalesce() {
     assert!(started.elapsed() >= COALESCE);
     assert_eq!(
         flags,
-        REBUILD | INBOX | HOSTS | FOOTPRINT | DEFINITIONS | MACHINE_STATS
+        REBUILD
+            | INBOX
+            | HOSTS
+            | FOOTPRINT
+            | DEFINITIONS
+            | MACHINE_STATS
+            | ACTIVITY_REBUILD
+            | OTHER_REBUILD
     );
     assert_eq!(hub.dirty.load(Ordering::Acquire), 0);
     for event in DOMAIN_EVENTS {

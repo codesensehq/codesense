@@ -789,7 +789,7 @@ pub(super) fn collect_refs(
                 .or_default()
                 .push(root.to_owned());
         }
-        crate::attribution::git_ai::GitAiSource::for_home(home).drain(root);
+        crate::attribution::git_ai::GitAiSource::for_story_changes(home).drain(root);
         let bound_key = attachments
             .iter()
             .find_map(|set| {
@@ -1051,7 +1051,7 @@ fn read_notes(
     if std::collections::BTreeSet::is_empty(commits) {
         return std::collections::BTreeMap::new();
     }
-    let source = crate::attribution::git_ai::GitAiSource::for_home(home);
+    let source = crate::attribution::git_ai::GitAiSource::for_story_changes(home);
     let result = crate::attribution::why_line::read_notes_snapshot(repo, |_| {
         Ok(commits
             .iter()

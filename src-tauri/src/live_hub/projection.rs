@@ -362,6 +362,18 @@ impl Default for TopicRegistry {
     }
 }
 impl TopicRegistry {
+    /// Current retained projection sizes, grouped by topic for perf diagnostics.
+    pub fn metrics_snapshot(&self) -> (usize, usize, Vec<(String, usize, usize)>) {
+        let mut topics = self.topics.iter().map(|(name, projection)| {
+            let views = projection.views.len();
+            let entries = projection.views.values().map(|view| view.log.len()).sum();
+            (name.clone(), views, entries)
+        }).collect::<Vec<_>>();
+        topics.sort_by(|a, b| a.0.cmp(&b.0));
+        let total_entries = topics.iter().map(|(_, _, entries)| entries).sum();
+        (total_entries, self.subscriptions.len(), topics)
+    }
+
     fn topic(&mut self, topic: &str) -> Result<&mut CachedProjection, String> {
         if topic.starts_with("ui:") && topic.len() > 3 {
             self.topics

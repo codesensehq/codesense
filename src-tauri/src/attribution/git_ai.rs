@@ -33,6 +33,7 @@ const DRAIN_SECONDS: &str = "5";
 pub(crate) struct GitAiSource {
     git: String,
     drain: Option<Drain>,
+    count_story_changes_children: bool,
 }
 
 /// Ambient variables that would point git at another repository, index or object store.
@@ -67,6 +68,7 @@ impl GitAiSource {
         Self {
             git: git.into(),
             drain: None,
+            count_story_changes_children: false,
         }
     }
 
@@ -81,6 +83,12 @@ impl GitAiSource {
         } else {
             source
         }
+    }
+
+    pub(crate) fn for_story_changes(home: &Path) -> Self {
+        let mut source = Self::for_home(home);
+        source.count_story_changes_children = true;
+        source
     }
 
     /// Run `git-ai await` before each read.
@@ -106,6 +114,9 @@ impl GitAiSource {
         local_read_env(&mut command);
         #[cfg(test)]
         crate::test_support::strip_attribution_env(&mut command);
+        if self.count_story_changes_children {
+            crate::shared::invoke_stats::metric_count("story_changes.git_child");
+        }
         let output = command
             .stdin(Stdio::null())
             .output()
@@ -140,6 +151,9 @@ impl GitAiSource {
             .current_dir(repo)
             .envs(drain.env.iter().map(|(k, v)| (k, v)));
         local_read_env(&mut command);
+        if self.count_story_changes_children {
+            crate::shared::invoke_stats::metric_count("story_changes.git_child");
+        }
         let _ = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
