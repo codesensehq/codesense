@@ -16,6 +16,8 @@
 .cs-chat .msg .who{display:flex;align-items:center}
 .cs-chat .msg .body{white-space:pre-wrap;overflow-wrap:anywhere;padding:7px 11px;border-radius:var(--cs-radius-lg);background:var(--cs-surface);border:1px solid var(--cs-border)}
 .cs-chat .msg.you .body{background:color-mix(in srgb,var(--cs-accent) 10%,var(--cs-bg))}
+/* A message's inline markdown (chat/inline.js): code is set in the mono face on the inset; strong and em keep the browser's weight and slant. */
+.cs-chat .msg .body code{padding:0 3px;border-radius:var(--cs-radius-sm);background:var(--cs-inset);font-family:var(--cs-font-mono);font-size:.92em}
 .cs-chat .msg .note,.cs-chat .msg .mark{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .msg .mark[data-mark=kept]{color:var(--cs-danger)}
 .cs-chat .msg.typing{flex-direction:row;align-items:center;gap:6px}
@@ -78,6 +80,7 @@
 .cs-chat .card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .card-h b{color:var(--cs-fg);font-size:var(--cs-text-sm)}
 .cs-chat .card-h .sp{flex:1}
+.cs-chat .card .why{margin:0;font-size:var(--cs-text-sm);color:var(--cs-muted-fg)}
 .cs-chat .card .body{padding:0;border:0;background:transparent}
 .cs-chat .card .opts{display:flex;flex-wrap:wrap;gap:6px}
 .cs-chat .card .opts .btn{white-space:normal;height:auto;min-height:28px;padding-top:4px;padding-bottom:4px;text-align:left}
@@ -90,9 +93,10 @@
 @container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .act-foot{padding:0 16px 4px}.cs-chat .composer{padding:8px 16px 10px}}
 /* The person's pins (onPin): an action row over the message's top edge, shown on hover and while focus is inside it; a tag and a note under it. Nothing moves with reduced motion. */
 .cs-chat .msg{position:relative}
-.cs-chat .msg .pin-acts{position:absolute;top:-12px;right:6px;z-index:2;display:none;padding:1px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-bg)}
+/* Hidden by opacity, not display:none: a redrawn Pin… or Unpin must be able to take focus back (after a replace, its Undo, Esc in the chooser or a pin), and then focus-within shows it. */
+.cs-chat .msg .pin-acts{position:absolute;top:-12px;right:6px;z-index:2;display:flex;opacity:0;pointer-events:none;padding:1px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-bg)}
 .cs-chat .msg.you .pin-acts{right:auto;left:6px}
-.cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts{display:flex}
+.cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts{opacity:1;pointer-events:auto}
 .cs-chat .pin-b{display:inline-flex;align-items:center;height:24px;padding:0 8px;border:0;border-radius:var(--cs-radius);background:none;color:var(--cs-muted-fg);font-size:var(--cs-text-xs);cursor:pointer}
 .cs-chat .pin-b:hover{background:var(--cs-surface);color:var(--cs-fg)}
 .cs-chat .pin-b:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px}
@@ -105,3 +109,30 @@
 .cs-chat .pin-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;max-width:100%;padding:4px 6px 4px 8px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-surface);font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .pin-note.danger{border-color:var(--cs-danger)}
 .cs-chat .pin-live{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+/* At the cap with onPin.replace: Pin… carries a small count, and its chooser opens under the message, the full width of the column. One row is current; the others are quiet. */
+.cs-chat .pin-b[aria-expanded="true"]{background:var(--cs-surface);color:var(--cs-accent)}
+.cs-chat .pin-cap{margin-left:4px;font-variant-numeric:tabular-nums;font-weight:600}
+.cs-chat .pin-chooser{display:grid;gap:6px;width:min(440px,100%);padding:8px;border:1px solid var(--cs-border);border-radius:var(--cs-radius-lg);background:var(--cs-bg);font-size:var(--cs-text-sm)}
+.cs-chat .msg.you .pin-chooser{justify-self:end}
+.cs-chat .pin-chooser .hd{padding:0 4px;font-weight:600}
+.cs-chat .pin-chooser .chg,.cs-chat .pin-chooser .room{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--cs-radius);background:var(--cs-surface);font-size:var(--cs-text-xs)}
+.cs-chat .pin-chooser .chg:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-1px}
+.cs-chat .pin-chooser .rows{display:grid;gap:2px}
+.cs-chat .pin-chooser .choice{display:grid;grid-template-columns:13px minmax(0,1fr) auto;grid-template-areas:"d t v" ". by go";gap:1px 8px;align-items:center;width:100%;padding:6px 8px;border:1px solid transparent;border-radius:var(--cs-radius);background:none;color:var(--cs-fg);font:inherit;text-align:left;cursor:pointer}
+.cs-chat .pin-chooser .choice:hover{background:color-mix(in srgb,var(--cs-surface) 50%,transparent)}
+.cs-chat .pin-chooser .choice[data-current]{background:var(--cs-surface);border-color:var(--cs-border)}
+.cs-chat .pin-chooser .choice:focus-visible{outline:2px solid var(--cs-accent);outline-offset:-1px}
+.cs-chat .pin-chooser .dot{grid-area:d;width:8px;height:8px;justify-self:center;border-radius:50%;background:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .dot[data-status="on-track"]{background:var(--cs-success)}
+.cs-chat .pin-chooser .dot[data-status="running"]{background:var(--cs-accent)}
+.cs-chat .pin-chooser .dot[data-status="needs-you"]{background:var(--cs-warning)}
+.cs-chat .pin-chooser .dot.own{width:13px;height:13px;border-radius:0;background:none;color:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.cs-chat .pin-chooser .v{grid-area:v;font-size:var(--cs-text-xs);font-variant-numeric:tabular-nums}
+.cs-chat .pin-chooser .new{grid-area:v;justify-self:end;padding:0 5px;border-radius:var(--cs-radius-sm);background:var(--cs-accent);color:var(--cs-accent-fg);font-size:var(--cs-text-xs);font-weight:600}
+.cs-chat .pin-chooser .v+.new{grid-area:auto;grid-column:3;grid-row:1}
+.cs-chat .pin-chooser .by{grid-area:by;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-chat .pin-chooser .go{grid-area:go;justify-self:end;font-size:var(--cs-text-xs);font-weight:600;color:var(--cs-accent)}
+.cs-chat .pin-chooser .cancel{justify-self:start}
+.cs-chat .pin-chooser .room-pin{margin-left:auto}
+@media (pointer:coarse){.cs-chat .pin-chooser .choice{min-height:44px}}

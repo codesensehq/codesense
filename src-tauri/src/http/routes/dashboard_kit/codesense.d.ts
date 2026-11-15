@@ -566,16 +566,20 @@ declare namespace CodesenseSdk {
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
     /** The chat links its stylesheet (`/kit/v1/chat.css`, every rule under the chat's `.cs-chat` root) once per page. `false` keeps the page's own chat rules. Each mount takes its own element ids: the first chat on a page keeps the plain ones (`sv-composer-input`, `sv-status`, …), the next carry `-2`, `-3`; unmount gives the ids back. Default `true`. */
     styles?: boolean;
-    /** The person pins a message into its agent thread, through the page (the pins verbs). Each message gets a Pin in its action row (shown on hover and while focus is inside it); pinned, it is Unpin with a "Pinned by" tag. The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. An unpin offers Undo (`restore`) until the next pin, unpin or Esc. `pins()` is the thread's list now; `change` resolves the new list or rejects; `subscribe(fn)` repaints when the list changes; `showPins()` moves focus to the page's pins; `name(pinnedBy)` names an agent. */
+    /** The person pins a message into its agent thread, through the page (the pins verbs). Each message gets a Pin in its action row (shown on hover and while focus is inside it); pinned, it is Unpin with a "Pinned by" tag. The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. With `replace: true`, Pin at the cap is instead Pin…, which opens a chooser under the message of which pin to replace: choosing one calls `change('replace', messageId, {replaces})`, which puts the message in that pin's place, and its Undo calls `change('restore', replacedId, {replacing: messageId})`, which brings both back. A refusal the engine gives (the verbs' `invalid` reply) rejects with `refused: true`, so an Undo that can't happen goes away instead of offering Try again. `mark(messageId | null)` tells the page which of its pins the chooser's current row would replace; `title(pin)` names a pin as the page's pins do (else its preview's `shortName`, else its message). An unpin offers Undo (`restore`) until the next pin, unpin or Esc. `pins()` is the thread's list now; `change` resolves the new list or rejects; `subscribe(fn)` repaints when the list changes; `showPins()` moves focus to the page's pins; `name(pinnedBy)` names an agent. */
     onPin?: {
-      pins(): ReadonlyArray<{ messageId: number | string; pinnedBy: string }>;
+      pins(): ReadonlyArray<ChatPin>;
       change(
-        action: "pin" | "unpin" | "restore",
+        action: "pin" | "unpin" | "restore" | "replace",
         messageId: number | string,
-      ): Promise<ReadonlyArray<{ messageId: number | string; pinnedBy: string }>>;
+        options?: { replaces?: number | string; replacing?: number | string },
+      ): Promise<ReadonlyArray<ChatPin>>;
       subscribe?(listener: () => void): () => void;
       showPins?(): void;
       name?(pinnedBy: string): string;
+      replace?: boolean;
+      mark?(messageId: number | string | null): void;
+      title?(pin: ChatPin): string | null | undefined;
     };
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
     timers?: { slowMs: number; failMs: number };
@@ -584,6 +588,14 @@ declare namespace CodesenseSdk {
     done?: boolean;
     /** A send state the page keeps across mounts (`kit.chat.createSendState`). The send state (messages and their marks, the outbox, the launch and its timers, the cards answered from the page) survives an unmount and a new mount; the composer text, the typing row and the card drafts belong to the mount and start empty on the next one. The mount attaches to it and detaches on unmount. Without it the mount makes its own and ends it on unmount. */
     send?: ChatSendState;
+  }
+  /** A pin as `onPin.pins()` lists it: the pins verbs' row. `pinnedAtMs` and `preview` draw the replace chooser's rows. */
+  interface ChatPin {
+    messageId: number | string;
+    pinnedBy: string;
+    pinnedAtMs?: number;
+    preview?: { shortName?: string; value?: string; status?: "on-track" | "running" | "needs-you" | "not-updating"; [key: string]: unknown };
+    [key: string]: unknown;
   }
   /** What a layout or header callback sees. */
   interface ChatState {
@@ -700,6 +712,24 @@ declare namespace CodesenseSdk {
       pinLiveText(done: "pinned" | "unpinned" | "restored", title: string, count: number): string;
       /** What a pin of this message is called: an HTML message by its summary, `<title>`, first heading, else "Dashboard from <sender>"; any other by its summary, else its first sentence. */
       pinTitleOf(m: { text?: string | null; contentType?: string | null; summary?: string | null }, sender: string): string;
+      /** Pin…'s accessible name and tooltip at the cap: "Pin, replacing one (3 of 3 pinned)". */
+      pinReplaceLabel(count: number): string;
+      /** The replace chooser's heading, which names its group. */
+      pinChooserHeading(count: number): string;
+      /** A chooser row's line: who pinned it, and when. */
+      pinPinnedAtLine(who: string, at: string): string;
+      /** The note and live line after a replace. */
+      pinReplacedText(who: string, title: string): string;
+      /** A row the agent added while the chooser was open, before the person arrives on it. */
+      pinNewRowText(title: string): string;
+      /** What changed in the list while the chooser was open. */
+      pinListChangeText(added: readonly string[], left: readonly string[]): string;
+      /** The agent pinned this message while the chooser was open. */
+      pinPinnedMeanwhileText(who: string): string;
+      PIN_REPLACE_FAILED: string;
+      PIN_ROOM_NOW: string;
+      PIN_UNDO_FULL: string;
+      PIN_UNDO_GONE: string;
     };
     thread: {
       mergeThread(...lists: unknown[]): ChatRow[];

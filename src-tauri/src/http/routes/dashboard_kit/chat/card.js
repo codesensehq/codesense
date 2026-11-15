@@ -9,7 +9,9 @@ export function cardNode({id,text,parsed,meta=null,at,state,answer,failure,draft
  const answered=state==='answered',busy=state==='pending',inInbox=answered&&answer.where==='inbox';
  const head=h('div',{class:'card-h'},h('b',{},answered?(inInbox?CARD_COPY.answeredInbox:CARD_COPY.answered):CARD_COPY.needs),meta?h('span',{class:'cls','data-consent':meta.consent},CARD_COPY.consent[meta.consent]):null,h('span',{},CARD_COPY.from(lead,timeLabel(at))),h('span',{class:'sp'}),answered?null:h('span',{},CARD_COPY.alsoInbox));
  const body=h('div',{class:'body'},parsed?parsed.question:text);
- const parts=[head,body];
+ // The lead's reason for its pick, when it gave one, reads after the question and before the answers.
+ const why=parsed&&parsed.pick&&parsed.reason&&!(answered&&!inInbox)?h('p',{class:'why'},CARD_COPY.why(lead,parsed.pick,parsed.reason)):null;
+ const parts=[head,body,why];
  if(parsed&&!(answered&&!inInbox)){
   parts.push(h('div',{class:'opts',role:'group','aria-label':CARD_COPY.options},...parsed.options.map(option=>
    h('button',{type:'button',class:(option===parsed.pick||option===parsed.primary)&&!answered?'btn primary':'btn','data-ans':option,'data-act':meta?(meta.acts.find(item=>item.label===option)||{}).act:null,disabled:answered||busy?'':null,onclick:()=>onAnswer(option)},option,option===parsed.pick&&!answered?h('span',{class:'rec'},` · ${CARD_COPY.recommended}`):null))));

@@ -174,6 +174,24 @@ describe("kit.chat stylesheet", () => {
     for (const name of emitted) expect(styled, `.${name}`).toContain(`.${name}`);
     expect(styled).toContain("[data-variant=page]");
   });
+
+  // The declarations of `selector`'s own rule.
+  const ruleOf = (selector: string) => {
+    const at = css.indexOf(`${selector}{`);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf("}", at));
+  };
+  it("keeps a message's actions in the layout while hidden, so Pin… or Unpin can take focus back after a redraw", () => {
+    // display:none would make focus() a no-op on the rebuilt button: focus dropped to the page after a
+    // replace, its Undo, Esc in the chooser, or a pin. Hidden by opacity, the row shows on focus-within.
+    const hidden = ruleOf(".cs-chat .msg .pin-acts");
+    expect(hidden).not.toContain("display:none");
+    expect(hidden).toContain("opacity:0");
+    expect(hidden).toContain("pointer-events:none");
+    const shown = ruleOf(".cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts");
+    expect(shown).toContain("opacity:1");
+    expect(shown).toContain("pointer-events:auto");
+  });
 });
 
 describe("kit.chat mounts on one page", () => {
@@ -259,6 +277,10 @@ describe("kit.chat", () => {
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
       "CONSENT_CLASSES",
       "PIN_CAP",
+      "PIN_REPLACE_FAILED",
+      "PIN_ROOM_NOW",
+      "PIN_UNDO_FULL",
+      "PIN_UNDO_GONE",
       "cardAnswer",
       "createMarkLatch",
       "deliveryMark",
@@ -269,9 +291,16 @@ describe("kit.chat", () => {
       "parseNext",
       "pinCapLabel",
       "pinCapNote",
+      "pinChooserHeading",
       "pinFirstSentence",
       "pinFirstWords",
+      "pinListChangeText",
       "pinLiveText",
+      "pinNewRowText",
+      "pinPinnedAtLine",
+      "pinPinnedMeanwhileText",
+      "pinReplaceLabel",
+      "pinReplacedText",
       "pinTitleOf",
       "pinWho",
     ]);
@@ -360,6 +389,58 @@ describe("kit.chat", () => {
     expect(s.el.querySelector('[data-card="9"]')!.getAttribute("data-state")).toBe("answered");
   });
 
+  it("a card shows the lead's reason for its pick under the question, and none when it gave no reason", async () => {
+    const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
+    const plain = "Ship it?\n\nOptions: `Ship`, `Hold`.";
+    const s = setup(
+      [lead("idle")],
+      [
+        { messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 },
+        { messageId: 10, from: "lead-1", kind: "needs-you", text: plain, createdAtMs: 2000 },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const card = s.el.querySelector('[data-card="9"]')!;
+    const why = card.querySelector(".why")!;
+    expect(why.textContent).toBe("Story lead recommends Ship because green.");
+    // it reads after the question and before the answers
+    expect(card.querySelector(".body")!.compareDocumentPosition(why)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(why.compareDocumentPosition(card.querySelector(".opts")!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(s.el.querySelector('[data-card="10"] .why')).toBeNull();
+  });
+
+  it.each([
+    [
+      "a backticked pick is its label",
+      "My pick: `Ship`, because green.",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason's own end punctuation folds into one full stop",
+      "My pick: Ship, because green!!",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason that starts with because gets no second one",
+      "My pick: Ship, because because the tests are green.",
+      "Story lead recommends Ship because the tests are green.",
+    ],
+  ])("the reason line: %s", async (_why, pick, line) => {
+    const text = `Ship it?\n\nOptions: \`Ship\`, \`Hold\`. ${pick}`;
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 }],
+    );
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector('[data-card="9"] .why')!.textContent).toBe(line);
+  });
+
   it("cards: false shows a needs-you message as a message", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`.";
     const s = setup(
@@ -369,7 +450,10 @@ describe("kit.chat", () => {
     mountOn(s, { cards: false });
     await flush();
     expect(s.el.querySelector("[data-card]")).toBeNull();
-    expect(s.el.querySelector('[data-mid="9"] .body')!.textContent).toBe(text);
+    // as a message, its backticked options are drawn as code (the inline subset)
+    const body = s.el.querySelector('[data-mid="9"] .body')!;
+    expect(body.textContent).toBe(text.replace(/`/g, ""));
+    expect([...body.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["Ship", "Hold"]);
   });
 
   it("with no lead running, the first send launches once, a second is held, and it flushes when the lead joins", async () => {
@@ -889,6 +973,48 @@ describe("kit.chat page layout and activity", () => {
   });
 });
 
+describe("kit.chat message text: an inline markdown subset", () => {
+  const bodyOf = async (text: string, extra: Row = {}) => {
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 1, from: "lead-1", text, createdAtMs: 1, ...extra }],
+    );
+    mountOn(s);
+    await flush();
+    return s.el.querySelector<HTMLElement>('.log [data-mid="1"] .body')!;
+  };
+  const tags = (body: HTMLElement) =>
+    [...body.querySelectorAll("*")].map((el) => [el.tagName.toLowerCase(), el.textContent]);
+
+  it("draws **strong**, *em* or _em_, and `code`, and shows no markers", async () => {
+    const body = await bodyOf("**Merged** with `main`; see *the notes* and _this one_.");
+    expect(tags(body)).toEqual([
+      ["strong", "Merged"],
+      ["code", "main"],
+      ["em", "the notes"],
+      ["em", "this one"],
+    ]);
+    expect(body.textContent).toBe("Merged with main; see the notes and this one.");
+  });
+
+  it("leaves what isn't markup as it is: snake_case, arithmetic, lone and unclosed markers", async () => {
+    const text = "snake_case_name, 2*3*4, a ** lone pair **, **open and `open too";
+    const body = await bodyOf(text);
+    expect(tags(body)).toEqual([]);
+    expect(body.textContent).toBe(text);
+  });
+
+  it("reads nothing inside code, and never markup: tags stay text", async () => {
+    const body = await bodyOf("`**not bold**` and <b>tag</b> **bold**\nnext line");
+    expect(tags(body)).toEqual([
+      ["code", "**not bold**"],
+      ["strong", "bold"],
+    ]);
+    expect(body.textContent).toBe("**not bold** and <b>tag</b> bold\nnext line");
+    expect(body.querySelector("b")).toBeNull();
+  });
+});
+
 describe("kit.chat activity: the live lead's prose from onSessionText", () => {
   type Prose = { kind: "prose" | "final"; turn: string; key: string; text: string } | null;
   const running = (sessionId = "s1"): Row => ({ ...lead("running"), sessionId });
@@ -1060,7 +1186,8 @@ describe("kit.chat suggestion chips from the Next line", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".chips")).toBeNull();
-    expect(bodies(s.el)).toEqual([NEXT]);
+    // the line stays in the message, its backticked chips drawn as code (the inline subset)
+    expect(bodies(s.el)).toEqual([NEXT.replace(/`/g, "")]);
   });
 
   it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {
@@ -1848,6 +1975,387 @@ describe("kit.chat onPin: the person pins a message", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".pin-b")).toBeNull();
+  });
+});
+
+describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to replace", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  type Pin = {
+    messageId: number;
+    pinnedBy: string;
+    pinnedAtMs?: number;
+    preview?: { shortName?: string; value?: string; status?: string };
+  };
+  const at = (h: number, m: number) => new Date(2026, 10, 12, h, m).getTime();
+  const clock = (ms: number) =>
+    new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const QA: Pin = {
+    messageId: 1,
+    pinnedBy: "lead-1",
+    pinnedAtMs: at(13, 48),
+    preview: { shortName: "QA", value: "5 of 5", status: "on-track" },
+  };
+  const TESTS: Pin = {
+    messageId: 2,
+    pinnedBy: "lead-1",
+    pinnedAtMs: at(13, 31),
+    preview: { shortName: "Tests", value: "48", status: "not-updating" },
+  };
+  const MINE: Pin = { messageId: 3, pinnedBy: "human", pinnedAtMs: at(14, 11) };
+  const FULL = [QA, TESTS, MINE];
+  const THREAD = [
+    said(1, "QA: 5 of 5 ACs traced."),
+    said(2, "Tests are green."),
+    said(3, "Merge plan: squash onto main."),
+    said(5, "Review is clean."),
+  ];
+
+  async function mountReplace(
+    start: Pin[] = FULL,
+    change?: (action: string, id: number, opts?: Record<string, number>) => Promise<Pin[]>,
+  ) {
+    let pins = start;
+    const subs = new Set<() => void>();
+    const onPin = {
+      replace: true,
+      pins: () => pins,
+      change: vi.fn(async (action: string, id: number, opts?: Record<string, number>) => {
+        const next = change
+          ? await change(action, id, opts)
+          : action === "replace"
+            ? pins.map((p) =>
+                p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+              )
+            : action === "restore" && opts?.replacing !== undefined
+              ? pins.map((p) =>
+                  p.messageId === opts.replacing ? FULL.find((f) => f.messageId === id)! : p,
+                )
+              : action === "unpin"
+                ? pins.filter((p) => p.messageId !== id)
+                : [...pins, { messageId: id, pinnedBy: "human" }];
+        pins = next;
+        return next;
+      }),
+      subscribe: (fn: () => void) => (subs.add(fn), () => subs.delete(fn)),
+      showPins: vi.fn(),
+      mark: vi.fn(),
+      name: (by: string) => (by === "lead-1" ? "Story lead" : by),
+    };
+    // The agent changes the list: the page's subscribers repaint.
+    const agentSets = async (next: Pin[]) => {
+      pins = next;
+      subs.forEach((fn) => fn());
+      await flush();
+    };
+    const s = setup([lead("idle")], THREAD);
+    const chat = mountOn(s, { onPin });
+    await flush();
+    const row = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"]`)!;
+    const pinOf = (id: number) => row(id).querySelector<HTMLButtonElement>(".pin-b")!;
+    const chooser = () => s.el.querySelector<HTMLElement>(".pin-chooser");
+    const choices = () => [...(chooser()?.querySelectorAll<HTMLButtonElement>(".choice") ?? [])];
+    const choice = (id: number) =>
+      chooser()!.querySelector<HTMLButtonElement>(`.choice[data-pin-id="${id}"]`)!;
+    const live = () => s.el.querySelector(".pin-live")!.textContent;
+    const key = (el: HTMLElement, k: string) =>
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
+  }
+
+  it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
+    const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();
+    const pin = pinOf(5);
+    expect(pin.getAttribute("aria-disabled")).toBeNull();
+    expect(pin.getAttribute("aria-label")).toBe("Pin, replacing one (3 of 3 pinned)");
+    expect(pin.textContent).toContain("Pin…");
+    expect(pin.querySelector(".pin-cap")!.textContent).toBe("3");
+    expect(pin.getAttribute("aria-expanded")).toBe("false");
+    pin.click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    const group = chooser()!;
+    expect(row(5).contains(group)).toBe(true);
+    expect(pinOf(5).getAttribute("aria-expanded")).toBe("true");
+    expect(pinOf(5).getAttribute("aria-controls")).toBe(group.id);
+    expect(group.getAttribute("role")).toBe("group");
+    const head = document.getElementById(group.getAttribute("aria-labelledby")!)!;
+    expect(head.textContent).toBe("Replace a pin with this message · 3 of 3 pinned");
+    expect(choices().map((c) => c.getAttribute("data-pin-id"))).toEqual(["1", "2", "3"]);
+    expect(choice(1).textContent).toContain("QA");
+    expect(choice(1).textContent).toContain("5 of 5");
+    expect(choice(1).textContent).toContain(`Pinned by Story lead at ${clock(at(13, 48))}`);
+    // your own pin is named as its message, with your glyph
+    expect(choice(3).getAttribute("data-own")).toBe("quote");
+    expect(choice(3).textContent).toContain("Merge plan: squash onto main.");
+    expect(choice(3).textContent).toContain(`Pinned by you at ${clock(at(14, 11))}`);
+    // focus on the first row, the one Tab stop, and the page's pins mark it
+    expect(document.activeElement).toBe(choice(1));
+    expect(choices().map((c) => c.tabIndex)).toEqual([0, -1, -1]);
+    expect(onPin.mark).toHaveBeenLastCalledWith(1);
+    expect(group.querySelector("button.cancel")!.textContent).toBe("Cancel");
+  });
+
+  it("the arrow keys, Home and End move the current row and stop there; Esc and Cancel close it back to Pin…", async () => {
+    const { s, onPin, pinOf, chooser, choice, choices, key } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    const heard = vi.fn();
+    s.el.querySelector(".log")!.addEventListener("keydown", heard);
+    expect(key(choice(1), "ArrowDown")).toBe(false);
+    expect(document.activeElement).toBe(choice(2));
+    expect(choices().map((c) => c.tabIndex)).toEqual([-1, 0, -1]);
+    expect(onPin.mark).toHaveBeenLastCalledWith(2);
+    key(choice(2), "End");
+    expect(document.activeElement).toBe(choice(3));
+    key(choice(3), "ArrowDown");
+    expect(document.activeElement).toBe(choice(3));
+    key(choice(3), "Home");
+    expect(document.activeElement).toBe(choice(1));
+    key(choice(1), "ArrowUp");
+    expect(document.activeElement).toBe(choice(1));
+    expect(heard).not.toHaveBeenCalled();
+    key(choice(1), "Escape");
+    await flush();
+    expect(chooser()).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(pinOf(5).getAttribute("aria-expanded")).toBe("false");
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    pinOf(5).click();
+    await flush();
+    chooser()!.querySelector<HTMLButtonElement>("button.cancel")!.click();
+    await flush();
+    expect(chooser()).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+  });
+
+  it("a click on a row that isn't current only arrives on it; the next one replaces", async () => {
+    const { onPin, pinOf, choice } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    choice(2).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(choice(2));
+    choice(2).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 2 });
+  });
+
+  it("Enter replaces in place: the note says whose pin, Undo is offered, and focus goes to Unpin; one Undo restores both", async () => {
+    const { onPin, row, pinOf, chooser, choice, key, live } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "ArrowDown");
+    key(choice(2), "Enter");
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 2 });
+    expect(onPin.pins().map((p) => p.messageId)).toEqual([1, 5, 3]);
+    expect(chooser()).toBeNull();
+    const note = row(5).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("Replaced Story lead's pin “Tests”.");
+    expect(live()).toBe("Replaced Story lead's pin “Tests”.");
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    const undo = note.querySelector<HTMLButtonElement>("button")!;
+    expect(undo.textContent).toBe("Undo");
+    undo.click();
+    await flush();
+    expect(onPin.change).toHaveBeenLastCalledWith("restore", 2, { replacing: 5 });
+    expect(onPin.pins().map((p) => p.messageId)).toEqual([1, 2, 3]);
+    expect(row(5).querySelector(".pin-note")).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin, replacing one (3 of 3 pinned)");
+  });
+
+  it("while a replace is on its way, focus stays on the row that was chosen", async () => {
+    let settle!: (pins: Pin[]) => void;
+    const { pinOf, chooser, choice, key } = await mountReplace(
+      FULL,
+      () => new Promise<Pin[]>((resolve) => (settle = resolve)),
+    );
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    // the busy render redraws the message; the chooser and its current row keep focus
+    expect(chooser()!.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(choice(1));
+    settle(FULL.map((p) => (p.messageId === 1 ? { messageId: 5, pinnedBy: "human" } : p)));
+    await flush();
+    expect(chooser()).toBeNull();
+  });
+
+  it("with the thread one Tab stop, only the stop's Pin… and one chooser row are Tab stops, not every message's", async () => {
+    // The action row is hidden by opacity (so a redrawn Pin… can take focus back), which leaves every
+    // message's Pin focusable; the roving thread keeps all but the stop's out of the Tab order.
+    const { s, row, pinOf, choices } = await mountReplace();
+    const log = s.el.querySelector<HTMLElement>(".log")!;
+    const stops = () =>
+      [log, ...log.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tabIndex >= 0 && (el.matches("button, a[href], input") || el.hasAttribute("tabindex")),
+      );
+    const only = (owner: HTMLElement) => stops().every((el) => el === owner || owner.contains(el));
+    expect(only(row(5))).toBe(true);
+    for (const id of [1, 2, 3]) expect(pinOf(id).tabIndex).toBe(-1);
+    pinOf(5).click();
+    await flush();
+    expect(only(row(5))).toBe(true);
+    expect(choices().filter((c) => c.tabIndex >= 0)).toHaveLength(1);
+  });
+
+  it("unmounting with the chooser open takes the page's mark off its pin", async () => {
+    const { chat, onPin, pinOf } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(onPin.mark).toHaveBeenLastCalledWith(1);
+    chat.unmount();
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a pin the agent swaps in while it's open is New: the change line takes focus, and it must be chosen twice", async () => {
+    const { onPin, pinOf, chooser, choice, key, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    const LOG: Pin = {
+      messageId: 4,
+      pinnedBy: "lead-1",
+      pinnedAtMs: at(14, 12),
+      preview: { shortName: "QA trace", value: "ok" },
+    };
+    // The agent swaps QA (the current row) for QA trace.
+    await agentSets([LOG, TESTS, MINE]);
+    const change = chooser()!.querySelector<HTMLElement>(".chg")!;
+    expect(change.textContent).toBe("“QA trace” is new. “QA” left the list.");
+    expect(document.activeElement).toBe(change);
+    expect(choice(4).getAttribute("data-new")).toBe("true");
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    // From the change line, ↓ goes to the first row.
+    key(change, "ArrowDown");
+    expect(document.activeElement).toBe(choice(4));
+    // Arriving by the keys arms it; a click on a new row before that only says it's new.
+    await agentSets([LOG, TESTS, MINE]);
+    const fresh: Pin = { ...TESTS, messageId: 6, preview: { shortName: "Build" } };
+    await agentSets([LOG, fresh, MINE]);
+    choice(6).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    expect(chooser()!.querySelector(".chg")!.textContent).toBe(
+      "“Build” is new. Choose it again to replace it.",
+    );
+    choice(6).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 6 });
+  });
+
+  it("a pin leaving makes room: the chooser offers a plain Pin, and nothing is replaced on its own", async () => {
+    const { onPin, pinOf, chooser, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    await agentSets([QA, MINE]);
+    expect(chooser()!.textContent).toContain("There's room now.");
+    expect(chooser()!.querySelector(".choice")).toBeNull();
+    expect(onPin.change).not.toHaveBeenCalled();
+    chooser()!.querySelector<HTMLButtonElement>("button.room-pin")!.click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("pin", 5);
+    expect(chooser()).toBeNull();
+  });
+
+  it("the agent pinning this message closes the chooser and says nothing was replaced", async () => {
+    const { row, pinOf, chooser, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    await agentSets([QA, TESTS, { messageId: 5, pinnedBy: "lead-1" }]);
+    expect(chooser()).toBeNull();
+    expect(row(5).querySelector(".pin-note")!.textContent).toContain(
+      "Story lead pinned this message. Nothing was replaced.",
+    );
+  });
+
+  it("a replace that fails keeps the chooser and its row, with an alert", async () => {
+    const { pinOf, chooser, choice, key } = await mountReplace(FULL, async () => {
+      throw new Error("offline");
+    });
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    expect(chooser()).not.toBeNull();
+    expect(chooser()!.querySelector('[role="alert"]')!.textContent).toContain(
+      "Couldn't replace. Nothing changed.",
+    );
+    expect(choice(1).tabIndex).toBe(0);
+  });
+
+  it.each([
+    ["the list is full again", "refused", 3, "Can't undo: the list is full again."],
+    ["its message is gone", "refused", 2, "Can't undo: that message was archived or withdrawn."],
+  ] as const)(
+    "an Undo the engine refuses because %s goes away and says why",
+    async (_why, _how, count, text) => {
+      const { row, pinOf, choice, key, agentSets, onPin } = await mountReplace(
+        FULL,
+        async (action, id, opts) => {
+          if (action === "replace")
+            return FULL.map((p) =>
+              p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+            );
+          throw Object.assign(new Error("refused"), { refused: true });
+        },
+      );
+      pinOf(5).click();
+      await flush();
+      key(choice(1), "Enter");
+      await flush();
+      // The list as it stands when Undo is refused says which: full, or the old message gone.
+      await agentSets(onPin.pins().slice(0, count));
+      row(5).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+      await flush();
+      const note = row(5).querySelector(".pin-note")!;
+      expect(note.textContent).toContain(text);
+      expect(note.querySelector("button")).toBeNull();
+      expect(row(5).querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it("an Undo that didn't reach the engine offers Try again", async () => {
+    let offline = true;
+    const { onPin, row, pinOf, choice, key } = await mountReplace(
+      FULL,
+      async (action, id, opts) => {
+        if (action === "replace")
+          return FULL.map((p) =>
+            p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+          );
+        if (offline) throw new Error("offline");
+        return FULL;
+      },
+    );
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    row(5).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+    await flush();
+    const alert = row(5).querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("Couldn't undo the replace.");
+    const again = alert.querySelector("button")!;
+    expect(again.textContent).toBe("Try again");
+    offline = false;
+    again.click();
+    await flush();
+    expect(onPin.change).toHaveBeenLastCalledWith("restore", 1, { replacing: 5 });
+    expect(row(5).querySelector(".pin-note")).toBeNull();
   });
 });
 

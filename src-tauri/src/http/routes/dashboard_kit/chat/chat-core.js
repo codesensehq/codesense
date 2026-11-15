@@ -118,6 +118,27 @@ export function pinCapNote(pins,nameOf){
 export function pinFirstWords(text,words=4){const all=squashSpace(text).split(' ');return all.length<=words?all.join(' '):`${all.slice(0,words).join(' ')}…`;}
 // What the polite live region says after a pin, an unpin or an Undo.
 export function pinLiveText(done,title,count){const verb=done==='pinned'?'Pinned':done==='unpinned'?'Unpinned':'Restored';return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;}
+// At the cap, Pin… asks which pin to replace: the chooser's words, which the kit's chat and the app's overlay both say.
+// Pin…'s accessible name and tooltip at the cap.
+export const pinReplaceLabel=count=>`Pin, replacing one (${pinCapLabel(count)})`;
+// The chooser's heading, which names its group.
+export const pinChooserHeading=count=>`Replace a pin with this message · ${pinCapLabel(count)}`;
+// A row's line: who pinned it, and when (the pin, not the message).
+export const pinPinnedAtLine=(who,at)=>`Pinned by ${who} at ${at}`;
+// The note and live line after a replace: "your" for the person, else the agent's name with 's.
+export const pinReplacedText=(who,title)=>`Replaced ${who==='you'?'your':`${who}'s`} pin “${title}”.`;
+// A row the agent added while the chooser was open, before the person arrives on it.
+export const pinNewRowText=title=>`“${title}” is new. Choose it again to replace it.`;
+// What changed in the list while the chooser was open.
+export const pinListChangeText=(added,left)=>[...added.map(t=>`“${t}” is new.`),...left.map(t=>`“${t}” left the list.`)].join(' ');
+// The agent pinned this message while the chooser was open.
+export const pinPinnedMeanwhileText=who=>`${who} pinned this message. Nothing was replaced.`;
+export const PIN_REPLACE_FAILED="Couldn't replace. Nothing changed.";
+// The chooser when a pin left and there's room.
+export const PIN_ROOM_NOW="There's room now.";
+// An Undo of a replace that can't happen any more, and why.
+export const PIN_UNDO_FULL="Can't undo: the list is full again.";
+export const PIN_UNDO_GONE="Can't undo: that message was archived or withdrawn.";
 // A message's text with its tags dropped and its entities read, as a heading or title shows it: no DOM, so the kit and the app name pins the same way.
 const ENTITIES={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
 function plainText(markup){return squashSpace(String(markup||'').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,code)=>{if(code[0]==='#'){const n=code[1].toLowerCase()==='x'?parseInt(code.slice(2),16):parseInt(code.slice(1),10);return Number.isInteger(n)&&n>=0&&n<=0x10ffff&&!(n>=0xd800&&n<=0xdfff)?String.fromCodePoint(n):all;}const named=ENTITIES[code.toLowerCase()];return named===undefined?all:named;}));}
