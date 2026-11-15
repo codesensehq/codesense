@@ -299,6 +299,8 @@ export function usePersonPins({
         const text = pinsRef.current.length >= PIN_CAP ? UNDO_FULL : UNDO_GONE;
         setNote({ mid: n.mid, kind: "info", text });
         setLive(text);
+        // Undo leaves with the note's change; focus goes back to the message's pin button.
+        setFocusPin(n.mid);
         return;
       }
       apply(r.pins);

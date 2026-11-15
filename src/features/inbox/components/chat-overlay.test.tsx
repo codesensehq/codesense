@@ -1382,20 +1382,24 @@ describe("ChatOverlay: the person pins a message", () => {
       expect(screen.getByTestId("chat-overlay-pin-3")).toBeInTheDocument();
     });
 
-    it("an Undo refused because the list filled again goes away, keeps the new pin and says why", async () => {
+    it("an Undo refused because the list filled again goes away, keeps the new pin, says why and keeps focus on the message", async () => {
       await full();
       fireEvent.click(pinOf(4));
       fireEvent.click(choiceOf(3));
       const note = await within(row(4)).findByTestId("ibx-pin-note");
       // The agent takes the new pin off and fills its place: the restore would go past the cap.
       held[0] = { messageId: 5, position: 0, pinnedBy: LEAD, pinnedAtMs: NOW };
-      fireEvent.click(within(note).getByRole("button", { name: "Undo" }));
+      const undo = within(note).getByRole("button", { name: "Undo" });
+      undo.focus();
+      fireEvent.click(undo);
       await waitFor(() =>
         expect(within(row(4)).getByTestId("ibx-pin-note")).toHaveTextContent(
           "Can't undo: the list is full again.",
         ),
       );
       expect(within(row(4)).queryByRole("button", { name: "Undo" })).toBeNull();
+      // Undo left the page; focus goes back to the message's pin button, not to the page body.
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
     });
   });
 
