@@ -1227,6 +1227,7 @@ describe("kit.chat faces", () => {
   };
 
   it("with faces unset the thread is exactly what it was: one meta line and one body per message, no run marks", async () => {
+    // (role and tabindex are the thread's Tab stop, which every message carries; see "the thread is one Tab stop")
     const calls = withAvatar();
     const s = setup([lead("idle")], THREAD);
     mountOn(s);
@@ -1234,35 +1235,35 @@ describe("kit.chat faces", () => {
     expect(shape(s.el)).toEqual([
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "first",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "second",
       },
       {
         cls: "msg other",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Dev two",
         body: "from another agent",
       },
       {
         cls: "msg you",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "You",
         body: "my reply",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "back again",
