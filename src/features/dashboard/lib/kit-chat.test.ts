@@ -2092,6 +2092,14 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
 
+  it("a chooser with no change line and no error draws neither: no \"null\" text", async () => {
+    const { pinOf, chooser } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(chooser()!.textContent).not.toMatch(/\bnull\b/);
+    for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
+  });
+
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
     const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();
     const pin = pinOf(5);
