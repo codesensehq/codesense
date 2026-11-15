@@ -91,7 +91,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("terminal output refreshes the shared agent activity clock", () => {
+describe("terminal output leaves the shared agent activity clock to the host", () => {
   let now: number;
   beforeEach(() => {
     now = 1_000_000;
@@ -112,39 +112,46 @@ describe("terminal output refreshes the shared agent activity clock", () => {
   }
   const activityAt = (sessionId: string) =>
     useAgentStateStore.getState().bySession[sessionId]?.activityAt;
+  const mount = (sessionId: string) => {
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    manager.attach(sessionId, slot, { focus: false });
+  };
 
-  it("refreshes on admitted live bytes, but not snapshot restore, duplicate bytes or a retired stream", async () => {
+  it("admits live bytes once, never stamps activity, and ignores a retired stream", async () => {
     fake.server.open("local");
     observe("local");
     const original = now;
     fake.server.produce("local", "historical");
     now += 600_000 - 1_000;
     await until(manager.ensure("local", OPTS));
-    expect(activityAt("local")).toBe(original);
+    mount("local");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(text("local")).toBe("historical");
 
     const [stream] = fake.server.boundStreams();
     fake.server.produce("local", "live");
-    expect(activityAt("local")).toBe(now);
-    const liveAt = now;
     now += 2_000;
     fake.bus.emit(`pty-output-stream-${stream}`, {
       data: "live",
       seq: fake.server.seqOf("local"),
     });
-    expect(activityAt("local")).toBe(liveAt);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(text("local")).toBe("historicallive");
+    expect(activityAt("local")).toBe(original);
 
     manager.dispose("local");
     fake.bus.emit(`pty-output-stream-${stream}`, { data: "stale", seq: 100 });
-    expect(activityAt("local")).toBe(liveAt);
-    now = liveAt + 600_000;
+    expect(activityAt("local")).toBe(original);
   });
 
-  it("refuses unstamped and revoked private output without refreshing activity", async () => {
+  it("refuses unstamped and revoked private output", async () => {
     fake.server.open("private");
     observe("private");
     const original = now;
     privateSubscribe();
     await until(manager.ensure("private", OPTS));
+    mount("private");
     const [stream] = fake.server.boundStreams();
     now += 600_000 - 1_000;
     fake.bus.emit(`pty-output-stream-${stream}`, { data: "unowned", seq: 7 });
@@ -153,22 +160,23 @@ describe("terminal output refreshes the shared agent activity clock", () => {
       seq: 11,
       privateAuthorityEpoch: "500",
     });
-    expect(activityAt("private")).toBe(original);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(text("private")).toBe("");
     fake.bus.emit(`pty-output-stream-${stream}`, {
       data: "owned",
       seq: 5,
       privateAuthorityEpoch: "501",
     });
-    expect(activityAt("private")).toBe(now);
-    const liveAt = now;
-    now += 2_000;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(text("private")).toBe("owned");
     retirePrivate();
     fake.bus.emit(`pty-output-stream-${stream}`, {
       data: "revoked",
       seq: 12,
       privateAuthorityEpoch: "501",
     });
-    expect(activityAt("private")).toBe(liveAt);
+    expect(text("private")).not.toContain("revoked");
+    expect(activityAt("private")).toBe(original);
   });
 });
 
@@ -184,6 +192,9 @@ describe("a private-account session whose authority retires", () => {
     await until(manager.ensure("private", OPTS));
     manager.listen("private", { retired });
     await until(manager.ensure("local", OPTS));
+    const localSlot = document.createElement("div");
+    document.body.appendChild(localSlot);
+    manager.attach("local", localSlot, { focus: false });
     const slot = document.createElement("div");
     document.body.appendChild(slot);
     manager.attach("private", slot, { focus: false });
@@ -232,6 +243,9 @@ describe("a private-account session whose authority retires", () => {
     fake.server.open("private");
     privateSubscribe();
     await until(manager.ensure("private", OPTS));
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    manager.attach("private", slot, { focus: false });
     const [stream] = fake.server.boundStreams();
     fake.bus.emit(`pty-output-stream-${stream}`, { data: "downgrade", seq: 9 });
     fake.bus.emit(`pty-output-stream-${stream}`, {
