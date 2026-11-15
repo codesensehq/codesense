@@ -12,6 +12,7 @@ import {
   type HubRow,
   type HubSnapshot,
 } from "./live-hub";
+import { webviewPerfCounts } from "@/shared/lib/webview-perf-counters";
 import runReviewFixture from "../../../../tests/fixtures/run-review.json";
 import configurationFixture from "./configuration-writer-trace.json";
 import prefsFixture from "./prefs-writer-trace.json";
@@ -2531,11 +2532,14 @@ it.each([
       local.receive({ topic, viewKey: "all", rev: 2, upserts: [], removes: [] });
       const before = await local.snapshot(topic, "all");
       const upsert = Object.freeze({ ...update }) as HubRow;
+      const counted = webviewPerfCounts();
       const { sorts } = countSorts(() =>
         local.receive({ topic, viewKey: "all", rev: 3, upserts: [upsert], removes: [] }),
       );
       const after = await local.snapshot(topic, "all");
       expect(sorts).toBe(0);
+      expect(webviewPerfCounts().liveHubSorts).toBe(counted.liveHubSorts);
+      expect(webviewPerfCounts().liveHubPatches).toBe(counted.liveHubPatches + 1);
       expect(after.snapshot).not.toBe(before.snapshot);
       expect(after.snapshot).toEqual(
         orderedRows(topic, [...before.snapshot.filter((r) => r.id !== upsert.id), upsert]),

@@ -17,6 +17,7 @@ import {
 } from "@/tauri/commands";
 import { ORG_REGISTRY_CHANGED_EVENT, SOURCE_REPO_ATTACHMENTS_CHANGED_EVENT } from "@/tauri/events";
 import { logger } from "@/shared/lib/logger";
+import { countWebviewPerf } from "@/shared/lib/webview-perf-counters";
 import { readSharedUiState, writeSharedUiState, watchSharedUiState } from "./shared-ui-state";
 
 // Policy: hidden badge work is bounded independently of visible delivery.
@@ -210,6 +211,15 @@ const sessionIdsOf = (payload: unknown): string[] => {
 };
 const rowId = (row: HubRow) => row.id ?? String(row.handle);
 
+/** When an inbox row was written: what the inbox lists newest first. */
+const inboxAt = (row: HubRow) =>
+  Number(
+    row.createdAt ??
+      (row.message as { createdAtMs?: number } | undefined)?.createdAtMs ??
+      row.messageId ??
+      0,
+  );
+
 export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
   if (topic === "files")
     return rows.sort(
@@ -222,20 +232,73 @@ export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
       (a, b) => Number(a.order ?? 0) - Number(b.order ?? 0) || a.id.localeCompare(b.id),
     );
   if (topic !== "inbox") return rows.sort((a, b) => a.id.localeCompare(b.id));
-  const at = (row: HubRow) =>
-    Number(
-      row.createdAt ??
-        (row.message as { createdAtMs?: number } | undefined)?.createdAtMs ??
-        row.messageId ??
-        0,
-    );
   return rows.sort(
     (a, b) =>
       Number(b.rowType === "counts") - Number(a.rowType === "counts") ||
-      at(b) - at(a) ||
+      inboxAt(b) - inboxAt(a) ||
       Number(b.messageId ?? 0) - Number(a.messageId ?? 0) ||
       a.id.localeCompare(b.id),
   );
+}
+
+/** What {@link orderedRows} sorts a `topic` row by besides its id. An update that keeps
+ *  it keeps the row's place, so the view need not be sorted again. */
+export function orderKey(topic: string, row: HubRow): string {
+  if (topic === "files") return `${row.kind === "dir"}\u0000${String(row.name)}`;
+  if (topic === "agentList" || topic === "records" || topic === "pins")
+    return String(Number(row.order ?? 0));
+  if (topic !== "inbox") return "";
+  return `${row.rowType === "counts"}\u0000${inboxAt(row)}\u0000${Number(row.messageId ?? 0)}`;
+}
+
+/** Each patched view's row positions by id. Only {@link patchRows} sets one, so a seed, a
+ *  resync or a gap (a snapshot from anywhere else) starts from a full rebuild. */
+const rowIndexes = new WeakMap<HubSnapshot, ReadonlyMap<string, number>>();
+
+/**
+ * `current` with `delta` applied, as a new snapshot in `envelope`. Neither `current` nor
+ * its rows change: the result has its own array and holds the delta's row objects. An
+ * update that moves no order key replaces the row in place; an insert, a remove or a
+ * moved order key sorts the whole view.
+ */
+function patchRows(
+  current: HubSnapshot | undefined,
+  delta: Pick<HubDelta, "upserts" | "removes">,
+  envelope: Omit<HubSnapshot, "snapshot">,
+): HubSnapshot {
+  countWebviewPerf("liveHubPatches");
+  const rows = current?.snapshot ?? [];
+  const index = current && rowIndexes.get(current);
+  let snapshot: HubRow[] | undefined;
+  let moved = false;
+  if (index && !delta.removes.some((id) => index.has(id))) {
+    snapshot = rows;
+    for (const row of delta.upserts) {
+      const at = index.get(rowId(row));
+      if (at === undefined) {
+        snapshot = undefined;
+        break;
+      }
+      if (snapshot === rows) snapshot = rows.slice();
+      moved ||= orderKey(envelope.topic, snapshot[at]) !== orderKey(envelope.topic, row);
+      snapshot[at] = row;
+    }
+  }
+  if (snapshot && !moved) {
+    const next = { ...envelope, snapshot };
+    rowIndexes.set(next, index!);
+    return next;
+  }
+  if (!snapshot) {
+    const byId = new Map(rows.map((row) => [rowId(row), row]));
+    for (const id of delta.removes) byId.delete(id);
+    for (const row of delta.upserts) byId.set(rowId(row), row);
+    snapshot = [...byId.values()];
+  }
+  countWebviewPerf("liveHubSorts");
+  const next = { ...envelope, snapshot: orderedRows(envelope.topic, snapshot) };
+  rowIndexes.set(next, new Map(next.snapshot.map((row, at) => [rowId(row), at])));
+  return next;
 }
 
 export async function paneViewKey(frame: Pick<FrameRecord, "origin" | "token">): Promise<string> {
@@ -881,10 +944,7 @@ export class LiveHub {
     };
   }
   private applyScoped(subscription: ScopedSubscription, delta: HubDelta) {
-    const rows = new Map((subscription.value?.snapshot ?? []).map((row) => [row.id, row]));
-    for (const id of delta.removes) rows.delete(id);
-    for (const row of delta.upserts) rows.set(row.id, row);
-    subscription.value = {
+    subscription.value = patchRows(subscription.value, delta, {
       topic: delta.topic,
       viewKey: delta.viewKey,
       rev: delta.rev,
@@ -893,8 +953,7 @@ export class LiveHub {
         delta.topic === "records" || delta.topic === "files" || delta.topic === "stories"
           ? (delta.cursor ?? undefined)
           : subscription.value?.cursor,
-      snapshot: orderedRows(delta.topic, [...rows.values()]),
-    };
+    });
   }
   private releaseAfterRead(subscription: ScopedSubscription): Promise<void> {
     return Promise.resolve(subscription.read)
@@ -985,17 +1044,11 @@ export class LiveHub {
     if (current && delta.rev <= current.rev) return;
     const gap = !current || delta.rev !== current.rev + 1;
     if (gap) this.views.delete(key);
-    else {
-      const rows = new Map(current.snapshot.map((row) => [rowId(row), row]));
-      for (const id of delta.removes) rows.delete(id);
-      for (const row of delta.upserts) rows.set(rowId(row), row);
-      this.views.set(key, {
-        topic: delta.topic,
-        viewKey: delta.viewKey,
-        rev: delta.rev,
-        snapshot: orderedRows(delta.topic, [...rows.values()]),
-      });
-    }
+    else
+      this.views.set(
+        key,
+        patchRows(current, delta, { topic: delta.topic, viewKey: delta.viewKey, rev: delta.rev }),
+      );
     for (const frame of this.frames.values()) {
       if (
         frameKey(frame, delta.topic) !== delta.viewKey ||
