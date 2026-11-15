@@ -1168,11 +1168,7 @@ async fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
     });
     session_list::with_held(&mut rows, |handle| {
         let (machine, session) = crate::commands::host_inbox::inbox_target(&launch, handle)?;
-        let held = launch.host_inboxes().held(&machine, &session)?;
-        Some(session_list::HeldNotice {
-            gate: held.gate,
-            since_ms: held.since_ms,
-        })
+        launch.host_inboxes().held(&machine, &session)
     });
     if let Some(stream) = app.try_state::<crate::dashboard_stream::DashboardStreamHub>() {
         session_list::with_progress(&mut rows, |id| stream.latest_progress(id));

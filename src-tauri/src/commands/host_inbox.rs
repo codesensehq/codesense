@@ -27,6 +27,7 @@ use super::agent_inbox::{self, AppInboxHost, Check, InboxHost};
 use super::dashboard_launch::DashboardLaunchState;
 use super::host_connection_manager::{HostConnectionManager, HostConnectionState};
 use super::machines::LOCAL_MACHINE_ID;
+use crate::mcp::session_list::HeldNotice;
 
 /// Retry delay for a failed handoff before the host accepts the notice (for example,
 /// its session is not bound to this app yet, right after a connect).
@@ -46,16 +47,9 @@ struct Waiter {
     waiting: bool,
     /// Until when (on this Mac's clock) its agent reads as one new mail wakes.
     until: Option<Instant>,
-    /// The notice its host holds back from it past one cycle, if one.
-    held: Option<HeldMail>,
-}
-
-/// A notice a tab's host holds back from its waiter past one notice cycle: what holds
-/// it, and since when (epoch ms on this Mac's clock).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeldMail {
-    pub(crate) gate: String,
-    pub(crate) since_ms: u64,
+    /// The notice its host holds back from it past one cycle, if one, dated on this
+    /// Mac's clock.
+    held: Option<HeldNotice>,
 }
 
 impl Waiter {
@@ -65,7 +59,7 @@ impl Waiter {
             until: state
                 .grace_ms
                 .and_then(|grace| Instant::now().checked_add(Duration::from_millis(grace))),
-            held: state.held.as_ref().map(|held| HeldMail {
+            held: state.held.as_ref().map(|held| HeldNotice {
                 gate: held.gate.clone(),
                 since_ms: now_ms.saturating_sub(held.held_ms),
             }),
@@ -133,7 +127,7 @@ impl HostInboxes {
 
     /// The notice held back from the waiter of `session` on `machine` past one cycle, if
     /// one waits there and something holds it.
-    pub(crate) fn held(&self, machine: &str, session: &str) -> Option<HeldMail> {
+    pub(crate) fn held(&self, machine: &str, session: &str) -> Option<HeldNotice> {
         let machines = locked(&self.machines);
         let waiter = machines.get(machine)?.2.get(session)?;
         waiter.held.clone().filter(|_| waiter.waiting)
@@ -912,7 +906,7 @@ mod tests {
         let waiter = Waiter::of(&held, 1_790_000_100_000);
         assert_eq!(
             waiter.held,
-            Some(HeldMail {
+            Some(HeldNotice {
                 gate: "tools".into(),
                 since_ms: 1_790_000_010_000,
             })
