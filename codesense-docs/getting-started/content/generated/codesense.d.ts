@@ -1320,8 +1320,11 @@ declare namespace CodesenseSdk {
     humanStatus(args?: Record<string, unknown>): Promise<unknown>;
     /** read · inbox:read:team · MCP twin inbox_list */
     inbox(args?: {
+      agentId?: string;
       before?: number;
       conversation?: string;
+      sessionId?: string;
+      storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
     /** read · inbox:read:all-teams */

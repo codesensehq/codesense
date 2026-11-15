@@ -974,8 +974,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "inbox: sessionId must be a non-empty string",
     );
     if (sessionId) query.sessionId = sessionId;
-    // A saved agent's thread (the pins' key): every session of the agent on the story, ended
-    // ones included; an empty story is the agent's sessions launched with none.
+    // A saved agent's thread (the pins' key): every listed session of the agent on the story
+    // and every recorded one, ended ones included; an empty story is the agent's no-story
+    // thread, its listed sessions only. sessionId then names the seat.
     if (a.storyId !== undefined) {
       if (typeof a.storyId !== "string") throw new Error("inbox: storyId must be a string");
       if (!agentId) throw new Error("inbox: storyId needs agentId");

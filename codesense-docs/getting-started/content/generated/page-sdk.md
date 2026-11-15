@@ -880,8 +880,11 @@ Class: read; default grant: inbox:read:team; MCP twin: get_human_status.
 
 ```ts
 inbox(args?: {
+      agentId?: string;
       before?: number;
       conversation?: string;
+      sessionId?: string;
+      storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
 ```

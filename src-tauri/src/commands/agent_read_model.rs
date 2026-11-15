@@ -147,15 +147,15 @@ pub struct InboxQuery {
     /// instances, and every reply under them.
     #[serde(default, alias = "agent_id")]
     pub agent_id: Option<String>,
-    /// With `agentId`: the thread of that saved agent (any revision) and this story (empty
-    /// for the agent's sessions launched with none), as its pins are keyed. It reads every
-    /// session of the thread, ended ones included, so a successor finds its predecessor's
-    /// mail; with `sessionId`, a seat of the thread, the thread's other seats are left out.
-    /// The agent's role queue is not part of it (`role` reads that).
+    /// With `agentId`: the thread of that saved agent (any revision) and this story, as its
+    /// pins are keyed, so a successor finds its predecessor's mail: every listed session of
+    /// it and every recorded one, ended ones included. Empty is the agent's no-story thread:
+    /// its listed sessions only. `sessionId` then names a seat (a session that has not
+    /// ended), and the thread's other seats are left out. Not the agent's role queue.
     #[serde(default, alias = "story_id")]
     pub story_id: Option<String>,
     /// A session (a `list_sessions` handle or a session id): what it sent and received,
-    /// and every reply under them.
+    /// and every reply under them. With `agentId` and `storyId`, the seat of that thread.
     #[serde(default, alias = "session_id")]
     pub session_id: Option<String>,
     /// A role (any role name, usually a saved Agent's id): messages to and from it, and replies.
