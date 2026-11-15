@@ -765,6 +765,24 @@ mod tests {
     }
 
     #[test]
+    fn m4_delta_bytes_accumulate_and_rebuild_share_needs_a_rebuild() {
+        let r = Registry::new();
+        assert!(r.metric_at("live_hub.delta.bytes.sessions", 0).is_none());
+        r.metric_add_at("live_hub.delta.bytes.sessions", 100, secs(1));
+        r.metric_add_at("live_hub.delta.bytes.sessions", 50, secs(2));
+        assert_eq!(r.metric_at("live_hub.delta.bytes.sessions", 0).unwrap().count, 150);
+        // No rebuild recorded: no share is printed even with other metrics present.
+        let line = r.report_line(0).unwrap();
+        assert!(!line.contains("activity_only_share"), "{line}");
+        r.metric_count_at("live_hub.rebuild", secs(3));
+        r.metric_count_at("live_hub.rebuild", secs(3));
+        r.metric_count_at("live_hub.rebuild.activity_only", secs(3));
+        let line = r.report_line(0).unwrap();
+        assert!(line.contains("live_hub.rebuild.activity_only_share=50.00%"), "{line}");
+        assert!(line.contains("live_hub.delta.bytes.sessions count=150"), "{line}");
+    }
+
+    #[test]
     fn m4_event_metrics_change_only_after_their_event_is_recorded() {
         let r = Registry::new();
         assert!(r.metric_at("session_record.read", 0).is_none());
