@@ -171,7 +171,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         );
     }
     match name {
-        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
+        "agent" | "agents" | "gotoAgent" | "sessions" | "sessions.watchText"
+        | "sessions.unwatchText" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
         | "setPrefs" | "setUiState" | "subscribe" | "unsubscribe" | "page" | "moveWorkspace"
         | "openLauncher" | "openRoutineDraft" | "launchUnder" | "dismiss_agent_mark"
         | "showMenu" | "showPopover" | "focusOut" | "focusTerminal" | "commands.register" => {
@@ -994,6 +995,23 @@ fn register_resources(registry: &mut Registry) {
             false,
         ),
     );
+    // A page hears a session's assistant prose as it is written (`onSessionText`): the bridge
+    // also confines it to the page's own team.
+    for name in ["sessions.watchText", "sessions.unwatchText"] {
+        Registry::register(
+            registry,
+            "sessions",
+            spec(
+                name,
+                Class::Read,
+                false,
+                None,
+                Some("A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"),
+                false,
+                false,
+            ),
+        );
+    }
     registry.register_existing(
         "inbox",
         spec(

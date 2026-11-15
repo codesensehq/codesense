@@ -901,6 +901,26 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": null
   },
   {
+    "name": "sessions.unwatchText",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"
+  },
+  {
+    "name": "sessions.watchText",
+    "class": "read",
+    "grant": "sessions:read",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"
+  },
+  {
     "name": "setField",
     "class": "metadata",
     "grant": "context:write",

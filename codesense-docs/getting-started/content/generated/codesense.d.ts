@@ -381,6 +381,11 @@ declare namespace CodesenseSdk {
     /** Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
      * record's `sessionIds` to hear only about that agent's session. */
     onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
+    /** A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude session only, for now. */
+    onSessionText(
+      sessionId: string,
+      cb: (text: { kind: "prose" | "final"; turn: string; key: string; text: string } | null, error?: unknown) => void,
+    ): Unsubscribe;
     /** Runs `cb` when the answer to canPasteToTerminal() flips between true and false.
      * Re-read then. */
     onPasteTargetChanged(cb: () => void): Unsubscribe;
@@ -1974,6 +1979,14 @@ declare namespace CodesenseSdk {
     sessionUsage(args?: Record<string, unknown>): Promise<unknown>;
     /** read · sessions:read · MCP twin list_sessions */
     sessions(args?: Record<string, unknown>): Promise<Array<Record<string, unknown>>>;
+    /** read · sessions:read */
+    "sessions.unwatchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+    /** read · sessions:read */
+    "sessions.watchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
     /** metadata · context:write */
     setField(args: {
       field?: string;

@@ -17,6 +17,9 @@ pub fn args_schema(name: &str) -> Value {
     if name == "sessionRecord" {
         return json!({"type":"object","properties":{"handle":{"type":"string","minLength":1}},"required":["handle"],"additionalProperties":false});
     }
+    if matches!(name, "sessions.watchText" | "sessions.unwatchText") {
+        return json!({"type":"object","properties":{"sessionId":{"type":"string","minLength":1}},"required":["sessionId"],"additionalProperties":false});
+    }
     if name == "sessionRead" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::session_usage::session_read::Params)).expect("session read schema");
     }

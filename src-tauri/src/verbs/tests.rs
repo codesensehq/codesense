@@ -276,6 +276,25 @@ fn registration_has_module_and_parity_explanation() {
 }
 
 #[test]
+fn session_text_verbs_are_presentation_only_session_reads() {
+    let registry = Registry::default();
+    for name in ["sessions.watchText", "sessions.unwatchText"] {
+        let verb = registry.get(name).expect(name);
+        assert_eq!(verb.module, "sessions", "{name}");
+        assert_eq!(
+            (verb.class, verb.grant.as_str()),
+            (Class::Read, "sessions:read"),
+            "{name}"
+        );
+        assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+        assert_eq!(
+            verb.args_schema["required"],
+            serde_json::json!(["sessionId"])
+        );
+    }
+}
+
+#[test]
 fn send_prompt_uses_typed_send_policy_and_shared_budget() {
     let registry = Registry::default();
     let spec = registry.get("sendPrompt").unwrap();

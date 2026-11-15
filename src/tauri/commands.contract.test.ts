@@ -1323,8 +1323,10 @@ describe("Tauri IPC Contract", () => {
     // +3 on both sides for sourceImageSides/source_image_sides, openDiffImageRead/
     // open_diff_image_read and readImageFile/read_image_file (a rendered diff's raster
     // sides), so 532/551.
-    const EXPECTED_TS_COMMAND_COUNT = 532;
-    const EXPECTED_RUST_COMMAND_COUNT = 551;
+    // +2 on both sides for sessionTextWatch/session_text_watch and
+    // sessionTextUnwatch/session_text_unwatch (a page hears a session's prose), so 534/553.
+    const EXPECTED_TS_COMMAND_COUNT = 534;
+    const EXPECTED_RUST_COMMAND_COUNT = 553;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):
