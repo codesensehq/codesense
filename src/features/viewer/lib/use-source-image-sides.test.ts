@@ -4,18 +4,26 @@ import { renderHook, waitFor } from "@testing-library/react";
 
 vi.mock("@/features/git-sync/lib/source-redline-source", () => ({
   sourceFileImageSides: vi.fn(),
+  sourceRemoteImageSides: vi.fn(),
 }));
 
-import { sourceFileImageSides } from "@/features/git-sync/lib/source-redline-source";
+import {
+  sourceFileImageSides,
+  sourceRemoteImageSides,
+} from "@/features/git-sync/lib/source-redline-source";
 import { IMAGE_UNAVAILABLE } from "@/shared/lib/render-file-diff";
 import { useSourceImageSides } from "./use-source-image-sides";
 
 const read = vi.mocked(sourceFileImageSides);
+const readRemote = vi.mocked(sourceRemoteImageSides);
+const REMOTE = { kind: "remote", machineId: "m1", handle: "ws-1" } as const;
 const LOCAL = { kind: "local", cwd: "/wt/story" } as const;
 
 beforeEach(() => {
   read.mockReset();
   read.mockResolvedValue({ before: "QkVGT1JF", after: "QUZURVI=", tooLarge: false });
+  readRemote.mockReset();
+  readRemote.mockResolvedValue({ before: "QkVGT1JF", after: "QUZURVI=", tooLarge: false });
 });
 
 describe("useSourceImageSides", () => {
@@ -50,7 +58,50 @@ describe("useSourceImageSides", () => {
     await waitFor(() => expect(result.current).toEqual(ready({ after: "QUZURVI=" })));
   });
 
-  it("says why there are no bytes: past the size cap, a failed read, or a remote worktree", async () => {
+  it("reads a remote worktree's raster sides through its machine, at the working tree only", async () => {
+    const { result } = renderHook(() =>
+      useSourceImageSides(REMOTE, null, "art/logo.png", "art/old.png", "main"),
+    );
+    expect(result.current).toEqual({ imageState: { kind: "reading" } });
+    await waitFor(() =>
+      expect(result.current).toEqual(ready({ before: "QkVGT1JF", after: "QUZURVI=" })),
+    );
+    expect(readRemote).toHaveBeenCalledWith(REMOTE, "art/logo.png", {
+      oldPath: "art/old.png",
+      baseRef: "main",
+    });
+    expect(read).not.toHaveBeenCalled();
+    // Past the cap, or a read the machine refused, says why, as a local read does.
+    readRemote.mockResolvedValue({ before: null, after: null, tooLarge: true });
+    const big = renderHook(() =>
+      useSourceImageSides(REMOTE, null, "big.png", undefined, undefined),
+    );
+    await waitFor(() =>
+      expect(big.result.current).toEqual({
+        imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.tooLarge },
+      }),
+    );
+    readRemote.mockRejectedValue({ kind: "transportFailure", message: "not a raster image" });
+    const refused = renderHook(() =>
+      useSourceImageSides(REMOTE, null, "fake.png", undefined, undefined),
+    );
+    await waitFor(() =>
+      expect(refused.result.current).toEqual({
+        imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.failed },
+      }),
+    );
+    // A remote worktree has no commit view to read an image at.
+    readRemote.mockClear();
+    const atCommit = renderHook(() =>
+      useSourceImageSides(REMOTE, "abc123", "logo.png", undefined, undefined),
+    );
+    expect(atCommit.result.current).toEqual({
+      imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.remote },
+    });
+    expect(readRemote).not.toHaveBeenCalled();
+  });
+
+  it("says why there are no bytes: past the size cap or a failed read", async () => {
     read.mockResolvedValue({ before: "QkVGT1JF", after: null, tooLarge: true });
     const big = renderHook(() => useSourceImageSides(LOCAL, null, "big.png", undefined, undefined));
     await waitFor(() =>
@@ -67,20 +118,6 @@ describe("useSourceImageSides", () => {
         imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.failed },
       }),
     );
-    read.mockClear();
-    const remote = renderHook(() =>
-      useSourceImageSides(
-        { kind: "remote", machineId: "m1", handle: "ws-1" },
-        null,
-        "logo.png",
-        undefined,
-        undefined,
-      ),
-    );
-    expect(remote.result.current).toEqual({
-      imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.remote },
-    });
-    expect(read).not.toHaveBeenCalled();
   });
 
   it("reads nothing, and says nothing, for an SVG, a text file or no selection", () => {

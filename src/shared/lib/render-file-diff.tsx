@@ -44,7 +44,7 @@ import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-fi
 export const IMAGE_UNAVAILABLE = {
   tooLarge: "Over the 8 MB limit for drawing here",
   failed: "Couldn't read the image",
-  remote: "Images in a remote worktree aren't drawn yet",
+  remote: "Images at a commit in a remote worktree aren't drawn yet",
 } as const;
 
 /** Diff bodies narrower than this show one side at a time. */

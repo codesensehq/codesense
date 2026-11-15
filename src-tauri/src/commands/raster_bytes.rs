@@ -34,6 +34,16 @@ pub(crate) fn require_raster(path: &str) -> Result<(), String> {
     }
 }
 
+/// Whether `bytes` begin as a PNG, JPEG, GIF or WebP file does, whatever the path says: a
+/// side read from another machine is drawn only when its bytes are a raster image.
+pub(crate) fn sniff_raster(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()))
+}
+
 /// One present side: its bytes, or past [`MAX_RASTER_BYTES`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Capped {
@@ -140,6 +150,29 @@ mod tests {
         for path in ["a.svg", "b.html", "c.md", "png", "d.png.txt", "", "e.bmp"] {
             assert!(!is_raster(path), "{path}");
             assert!(require_raster(path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn only_bytes_that_begin_as_png_jpeg_gif_or_webp_sniff_as_raster() {
+        for bytes in [
+            b"\x89PNG\r\n\x1a\nrest".as_slice(),
+            &[0xff, 0xd8, 0xff, 0xe0, 0, 0x10],
+            b"GIF89a....",
+            b"GIF87a....",
+            b"RIFF\x10\0\0\0WEBPVP8 ",
+        ] {
+            assert!(sniff_raster(bytes), "{bytes:?}");
+        }
+        for bytes in [
+            b"<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>".as_slice(),
+            b"<html>",
+            b"\x89PNG",
+            b"RIFF\x10\0\0\0WAVEfmt ",
+            b"",
+            b"plain text",
+        ] {
+            assert!(!sniff_raster(bytes), "{bytes:?}");
         }
     }
 

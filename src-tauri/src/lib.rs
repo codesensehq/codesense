@@ -1728,6 +1728,7 @@ pub fn run() {
             commands::remote_source::source_remote_list_files,
             commands::remote_source::source_remote_changeset,
             commands::remote_source::source_remote_file_redline,
+            commands::remote_source::source_remote_image_sides,
             commands::remote_source::source_remote_watch_start,
             commands::remote_source::source_remote_watch_stop,
             commands::remote_source::source_remote_tracked_count,
