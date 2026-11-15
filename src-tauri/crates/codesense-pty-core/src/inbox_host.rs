@@ -266,10 +266,17 @@ struct WakeHolds {
 }
 
 impl WakeHolds {
+    /// What holds `session`'s wakes back: its hold's reason, or `undecided` before the
+    /// desktop decided for a host that requires a decision.
+    fn gate(&self, session: &str) -> Option<String> {
+        match self.sessions.get(session) {
+            Some((_, reason)) => reason.clone(),
+            None => self.required.then(|| "undecided".into()),
+        }
+    }
+
     fn allows(&self, session: &str) -> bool {
-        self.sessions
-            .get(session)
-            .map_or(!self.required, |(_, reason)| reason.is_none())
+        self.gate(session).is_none()
     }
 }
 
@@ -353,13 +360,9 @@ impl HostInbox {
         if !waiting {
             return None;
         }
-        let holds = lock(&self.wake_holds);
-        match holds.sessions.get(session) {
-            Some((_, Some(reason))) => return Some(format!("hold: {reason}")),
-            None if holds.required => return Some("hold: undecided".into()),
-            _ => {}
+        if let Some(gate) = lock(&self.wake_holds).gate(session) {
+            return Some(format!("hold: {gate}"));
         }
-        drop(holds);
         (outlet.has_tools(session) == Some(false)).then(|| "tools".into())
     }
 
