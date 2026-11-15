@@ -212,6 +212,20 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(ring).toContain("outline: 2px solid var(--ibx-accent)");
     expect(ring).not.toContain("outline: none");
   });
+  it("keeps a message's actions in the layout while hidden, so Pin… or Unpin can take focus back after a redraw", () => {
+    // display:none made focus() a no-op on the rebuilt PinButton: focus dropped to the page after a
+    // keyboard replace, its Undo, or Esc in the chooser. Hidden by opacity, the row shows on focus-within.
+    const hidden = ruleOf(".ibx-acts");
+    expect(hidden).not.toContain("display: none");
+    expect(hidden).toContain("opacity: 0");
+    expect(hidden).toContain("pointer-events: none");
+    const shown = ruleOf(".ibx-m[data-tapped] .ibx-acts");
+    expect(shown).toContain("opacity: 1");
+    expect(shown).toContain("pointer-events: auto");
+  });
+  it("sets the Pinned by tag at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-pin-tag")).toContain("font-size: 11px");
+  });
   it("sets the key hints at the 11 px meta floor", () => {
     expect(ruleOf(".ibx-comp-keys kbd")).toContain("font-size: 11px");
   });
@@ -998,6 +1012,47 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     expect(first.tabIndex).toBe(0);
     expect(rows().at(-1)!.tabIndex).toBe(-1);
     expect(stops().every((el) => el === first || first.contains(el))).toBe(true);
+  });
+
+  it("holds an older message's scrolling code block and table out of the Tab order, as its controls are", async () => {
+    // Chromium makes an overflowing scroller keyboard-focusable with no tabindex, so it would leak out of
+    // the one stop: forward Tab past the message, Shift+Tab onto every older block.
+    api.loadSessionInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        roles: [],
+        messages: [
+          msg(
+            1,
+            LEAD,
+            "human",
+            "Here:\n\n```\nlong line of code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+          ),
+          ...MESSAGES.slice(1),
+        ],
+      },
+      source: "live",
+    });
+    await renderOverlay(420, 700);
+    const older = rows()[0]!;
+    const blocks = [...older.querySelectorAll<HTMLElement>("pre, .inbox-table-scroll")];
+    expect(blocks.length).toBe(2);
+    for (const block of blocks) expect(block.getAttribute("tabindex")).toBe("-1");
+    // Its message becomes the stop: the blocks are as the browser made them again.
+    act(() => older.focus());
+    for (const block of blocks) expect(block.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("names a grouped follow-on message by its sender and time, as the message it follows is", async () => {
+    await renderOverlay(420, 700);
+    const grouped = rows().filter((r) => r.classList.contains("grouped"));
+    expect(grouped.length).toBeGreaterThan(0);
+    for (const row of grouped) {
+      const said = row.querySelector(".ibx-sr")!;
+      expect(said.textContent).toMatch(/^Login timeout lead · \d/);
+      // it comes first, so the article is read sender and time, then the text
+      expect(row.firstElementChild).toBe(said);
+    }
   });
 
   it("a message that lands while you read an older one leaves the stop where you are", async () => {

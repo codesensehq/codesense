@@ -13,7 +13,17 @@ import { Ico } from "./primitives";
  * opens the chooser of which pin to replace. It keeps focus after a click, so Unpin is one key
  * away, and takes focus back after a replace, its Undo or the chooser's Esc.
  */
-export function PinButton({ pins, m }: { pins: PersonPins; m: ConversationMessage }) {
+export function PinButton({
+  pins,
+  m,
+  tabStop = true,
+}: {
+  pins: PersonPins;
+  m: ConversationMessage;
+  /** Off for a hidden action row outside a roving thread: the Pin can still take focus back
+   *  after a redraw, but Tab doesn't stop on one per message. */
+  tabStop?: boolean;
+}) {
   const state = pins.stateOf(m);
   const pinned = state.pinnedBy !== null;
   const ref = useRef<HTMLButtonElement>(null);
@@ -37,6 +47,7 @@ export function PinButton({ pins, m }: { pins: PersonPins; m: ConversationMessag
       title={state.label}
       data-pin={pinned ? "pinned" : state.atCap ? "cap" : "pin"}
       data-testid="ibx-pin"
+      tabIndex={tabStop ? undefined : -1}
       onClick={() => pins.toggle(m)}
     >
       <Ico icon={pinned ? PinOff : Pin} sm />

@@ -826,7 +826,7 @@
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
-  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex]";
+  var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
   function setControl(el, on) {
