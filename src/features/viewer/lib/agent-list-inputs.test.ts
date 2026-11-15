@@ -242,7 +242,9 @@ it("a bySession change that moves no model does no stringify and no push", async
       bySession: { s1: { agent: "claude" }, s2: { agent: "codex" } },
     } as never);
     expect(transport.mirror).toHaveBeenLastCalledWith(
-      expect.objectContaining({ agentSessionModels: expect.objectContaining({ s2: expect.any(String) }) }),
+      expect.objectContaining({
+        agentSessionModels: expect.objectContaining({ s2: expect.any(String) }),
+      }),
     );
   } finally {
     stop();

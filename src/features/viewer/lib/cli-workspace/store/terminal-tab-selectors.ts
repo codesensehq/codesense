@@ -152,11 +152,7 @@ type MarkAgentSources = Pick<AgentState, "bySession" | "exitBySession" | "stateS
   Partial<
     Pick<
       AgentState,
-      | "activityBySession"
-      | "outputAtBySession"
-      | "completionSeqBySession"
-      | "processAgentBySession"
-      | "launchBySession"
+      "activityBySession" | "completionSeqBySession" | "processAgentBySession" | "launchBySession"
     >
   >;
 
@@ -559,7 +555,6 @@ function syncDotSince(): void {
     agent.bySession,
     agent.exitBySession,
     agent.activityBySession,
-    agent.outputAtBySession,
     agent.completionSeqBySession,
     s.progressTickBySession,
     outcomes,

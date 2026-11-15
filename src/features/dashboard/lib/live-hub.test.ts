@@ -2495,8 +2495,7 @@ function retentionHub(overrides: Partial<ConstructorParameters<typeof LiveHub>[0
   });
 }
 const frozen = (rows: HubRow[]) => rows.map((row) => Object.freeze({ ...row }));
-const sessionRows = () =>
-  frozen(["c", "a", "b"].map((id) => ({ id, handle: id, status: "idle" })));
+const sessionRows = () => frozen(["c", "a", "b"].map((id) => ({ id, handle: id, status: "idle" })));
 const agentRows = () =>
   frozen([
     { id: "x", order: 2, name: "x" },
@@ -2616,9 +2615,10 @@ it("a scoped subscription applies its deltas through the same patch: no sort wit
       ...(local as unknown as { scoped: Map<string, { value?: HubSnapshot }> }).scoped.values(),
     ][0];
     const apply = (delta: HubDelta) =>
-      (
-        local as unknown as { applyScoped: (s: unknown, d: HubDelta) => void }
-      ).applyScoped(subscription, delta);
+      (local as unknown as { applyScoped: (s: unknown, d: HubDelta) => void }).applyScoped(
+        subscription,
+        delta,
+      );
     apply({ topic: "records", viewKey: "records:one", rev: 2, upserts: [], removes: [] });
     const before = subscription.value!.snapshot;
     const upsert = Object.freeze({ id: "b", handle: "b", status: "working" });
@@ -2646,10 +2646,7 @@ it("opening then closing 50 watches and 50 seeding frames returns the view cache
     for (let i = 0; i < 50; i++) {
       const frame = local.attach(`page-${i}`, "team:o/t", () => {}, true);
       const viewKey = `team:o/t|frame:page-${i}`;
-      local.seed(
-        { topic: "agentDefinitions", viewKey, rev: 1, snapshot: [{ id: "d" }] },
-        frame,
-      );
+      local.seed({ topic: "agentDefinitions", viewKey, rev: 1, snapshot: [{ id: "d" }] }, frame);
       await frame.subscribe("agentDefinitions", undefined, { viewKey });
       frames.push(frame);
     }
@@ -2683,10 +2680,7 @@ it("a view another holder still has survives a release; rekey releases the old k
     const frame = local.attach("page", "team:o/a", () => {}, true);
     await frame.subscribe("messageDelivery");
     const seeded = "team:o/a|frame:page";
-    local.seed(
-      { topic: "agentDefinitions", viewKey: seeded, rev: 1, snapshot: [] },
-      frame,
-    );
+    local.seed({ topic: "agentDefinitions", viewKey: seeded, rev: 1, snapshot: [] }, frame);
     expect(internals(local).views.has(key)).toBe(true);
     frame.rekey("team:o/b");
     expect(internals(local).views.has(key)).toBe(false);
