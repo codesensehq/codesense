@@ -385,6 +385,33 @@ describe("kit.chat", () => {
     expect(s.el.querySelector('[data-card="10"] .why')).toBeNull();
   });
 
+  it.each([
+    [
+      "a backticked pick is its label",
+      "My pick: `Ship`, because green.",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason's own end punctuation folds into one full stop",
+      "My pick: Ship, because green!!",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason that starts with because gets no second one",
+      "My pick: Ship, because because the tests are green.",
+      "Story lead recommends Ship because the tests are green.",
+    ],
+  ])("the reason line: %s", async (_why, pick, line) => {
+    const text = `Ship it?\n\nOptions: \`Ship\`, \`Hold\`. ${pick}`;
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 }],
+    );
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector('[data-card="9"] .why')!.textContent).toBe(line);
+  });
+
   it("cards: false shows a needs-you message as a message", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`.";
     const s = setup(
