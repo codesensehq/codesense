@@ -240,7 +240,8 @@ pub(crate) trait InboxHost: Send + Sync {
     fn mail_stored(&self, _handle: &str) {}
     /// Message `message_id` was queued for `role` in `team`'s inbox. The app tells
     /// routines with a `role_pending` trigger (a controller watching the queues), which
-    /// decide whether to start a holder; nothing claims it here. `sender` is who the
+    /// decide whether to start a holder, and offers the role's live holders their notice
+    /// ([`offer_queued_role`]); nothing claims it here. `sender` is who the
     /// guard treats as sending it, so a routine never fires on a message its own run
     /// queued: the calling tab's session id for a local MCP call, the authority's handle
     /// for a remote one, otherwise the stored sender (a session handle), or the human.
@@ -911,16 +912,22 @@ where
     .await
 }
 
-/// Mail was queued for `role` in the store at `path`: each session holding the role live
-/// is offered its notice, as for direct mail, and the notice names the role to claim
-/// from. A session with no handle here has no notice to take.
-pub(crate) async fn offer_role_holders(host: &dyn InboxHost, path: PathBuf, role: &str) {
+/// Mail was queued for `role` in `team`: each session holding the role live is offered
+/// its notice, as for direct mail, and the notice names the role to claim from. Every
+/// role send reaches it through [`InboxHost::role_message_queued`]. A session with no
+/// handle here has no notice to take.
+pub(crate) async fn offer_queued_role(host: &dyn InboxHost, team: &LaunchTeam, role: &str) {
     let role = crate::weft::role_inbox::role_name(role).to_string();
     let now = chrono::Utc::now().timestamp();
-    let sessions = with_store("role_holders", path, move |store| {
-        crate::weft::role_inbox::live_role_sessions(store, &role, now)
-    })
-    .await;
+    let sessions = match host.team_store(team).await {
+        Ok(path) => {
+            with_store("role_holders", path, move |store| {
+                crate::weft::role_inbox::live_role_sessions(store, &role, now)
+            })
+            .await
+        }
+        Err(e) => Err(e),
+    };
     match sessions {
         Ok(Ok(sessions)) => {
             for handle in sessions.iter().filter_map(|s| host.handle_for_session(s)) {
@@ -1795,7 +1802,6 @@ async fn queue_role_reply(
                 ));
                 host.roles_changed();
                 host.role_message_queued(&own.team, &queued_role, message_id, &queued_sender);
-                offer_role_holders(&**host, own.path.clone(), &queued_role).await;
             }
             Ok((SendResult::sent(message_id), newly))
         }
@@ -3271,6 +3277,9 @@ impl InboxHost for AppInboxHost {
         crate::routines::role_pending::offer_role_pending(
             &self.app, team, role, message_id, sender,
         );
+        let host = self.clone();
+        let (team, role) = (team.clone(), role.to_string());
+        tauri::async_runtime::spawn(async move { offer_queued_role(&host, &team, &role).await });
     }
 
     async fn synced_teams(&self) -> Result<Vec<LaunchTeam>, String> {
