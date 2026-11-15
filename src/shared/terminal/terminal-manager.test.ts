@@ -591,6 +591,33 @@ describe("a parked display matches the reference (I4)", () => {
     expect(m.memory().estimatedBytes).toBe(before + 20_000);
   });
 
+  it("answers a query split across two parked chunks", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    m.detach("s1", target);
+    transport.writePty.mockClear();
+    fake.server.produce("s1", "text\x1b[");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.writePty).not.toHaveBeenCalled();
+    fake.server.produce("s1", "6n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(transport.writePty).toHaveBeenCalledTimes(1);
+  });
+
+  it("detaching a display whose pending output overflows the ring leaves nothing in the parking container", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false });
+    // No frame has run: the output is still in the coalescer when the tab hides.
+    fake.server.produce("s1", "z".repeat(2 * 1024 * 1024 + 1));
+    m.detach("s1", target);
+    expect(m.terminal("s1")).toBeNull();
+    expect(document.getElementById("cs-terminal-parking")?.childElementCount ?? 0).toBe(0);
+  });
+
   it("a display lent to the quick view parses while a hidden lender waits", async () => {
     const m = newManager();
     await open(m);

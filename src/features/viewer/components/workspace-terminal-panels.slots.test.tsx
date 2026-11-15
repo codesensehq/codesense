@@ -84,7 +84,11 @@ import { headlessFrom } from "@/shared/terminal/__test-utils__/headless-from";
 import { chunked, paneSteps, type PaneStep } from "@/shared/terminal/__test-utils__/pane-feed";
 import { loadPtylog, type PtylogFixture } from "@/shared/terminal/__fixtures__/ptylog";
 import type { ReferenceBuffer } from "@/shared/terminal/buffer-dump";
-import { terminalManager, type DisplayOpts } from "@/shared/terminal/terminal-manager";
+import {
+  terminalManager,
+  TERMINAL_QUERY,
+  type DisplayOpts,
+} from "@/shared/terminal/terminal-manager";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { writePty } from "@/tauri/commands";
@@ -429,11 +433,11 @@ describe("every surface change is a slot move", () => {
     await act(async () => new Promise((r) => setTimeout(r, 900)));
     // A parked terminal parses nothing, except a chunk that asks the terminal a
     // question (the program waits on the answer): that one is written at once.
-    // eslint-disable-next-line no-control-regex
-    const asks = /\x1b\[[?>=]?[0-9;]*(?:n|c|\$p)|\x1b\[\?u|\x1b\]1[01];\?/;
     for (const { id, writes } of spies) {
       const steps = feeds[id].slice(1).flat();
-      const queries = steps.filter((step) => step.kind === "output" && asks.test(step.data)).length;
+      const queries = steps.filter(
+        (step) => step.kind === "output" && TERMINAL_QUERY.test(step.data),
+      ).length;
       const resizes = steps.filter((step) => step.kind === "resize").length;
       // Every question drains what is held: one write, and one more before each resize.
       expect(writes.mock.calls.length, id).toBeLessThanOrEqual(queries * (1 + resizes));
