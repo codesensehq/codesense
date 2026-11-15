@@ -1569,7 +1569,7 @@ pub(crate) async fn inbox_rollup_for(
             messages.extend(rows.into_iter().take(500).map(|m| {
                 let key = conversation_key(&m, &all);
                 let mut row = attach_reactions(
-                    conversation_message(host, sessions, &holders, &team, m),
+                    conversation_message(host, &sessions, &holders, &team, m),
                     &reactions,
                 );
                 row.conversation = key;
