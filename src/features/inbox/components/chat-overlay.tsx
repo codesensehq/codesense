@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, SquareTerminal, X } from "lucide-react";
 
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
@@ -24,7 +24,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
-import { goToSession } from "../actions";
+import { goToSession, openStory } from "../actions";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { usePersonPins } from "../hooks/use-person-pins";
@@ -33,6 +33,7 @@ import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useMessageDelivery } from "../hooks/use-message-delivery";
 import { useSessionInbox } from "../hooks/use-session-inbox";
+import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
@@ -290,18 +291,55 @@ export function ChatOverlay({
 
   const now = useNow(visible, 60_000);
   const statusWord = status ? agentStatusWords(status, subagents) : null;
-  // The model, cost and files fields wait on a per-agent session record read.
-  const recordText: Partial<Record<OverlayRecordField, string | null>> = {
-    time: formatElapsed(row?.startedAtMs ?? null, now),
-    story: row?.story ?? null,
+  // The model, cost and files come from the agent's session record; a fact it does not have
+  // is left out, never guessed.
+  const facts = useSessionRecord(handle || null, sessionId);
+  const storyId = row?.story ?? facts?.story ?? null;
+  // A figure the record has only in part says so ("≥"), with the record's reason as its title.
+  type RecordPart = { text: string; title?: string };
+  const partial = (text: string, why: string | null): RecordPart =>
+    why ? { text: `≥ ${text}`, title: why } : { text };
+  const recordText: Partial<Record<OverlayRecordField, RecordPart | null>> = {
+    model: facts?.model ? { text: modelLabel(facts.model) } : null,
+    cost: facts?.costUsd != null ? partial(formatCost(facts.costUsd), facts.costPartial) : null,
+    files: facts?.files
+      ? partial(`${facts.files} ${facts.files === 1 ? "file" : "files"}`, facts.filesPartial)
+      : null,
+    time: ((t) => (t ? { text: t } : null))(formatElapsed(row?.startedAtMs ?? null, now)),
   };
-  const recordParts = [
-    ...(layout.statusInRecord && statusWord ? [statusWord] : []),
-    ...layout.recordFields.map((f) => recordText[f]).filter((v): v is string => !!v),
+  const recordParts: RecordPart[] = [
+    ...(layout.statusInRecord && statusWord ? [{ text: statusWord }] : []),
+    ...layout.recordFields
+      .filter((f) => f !== "story")
+      .map((f) => recordText[f])
+      .filter((v): v is RecordPart => !!v),
   ];
-  const record = recordParts.length > 0 && (
+  const record = (recordParts.length > 0 || storyId) && (
     <span className="ibx-ov-record" data-testid="chat-overlay-record">
-      {recordParts.join(" · ")}
+      {recordParts.map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && " · "}
+          {part.title ? <span title={part.title}>{part.text}</span> : part.text}
+        </Fragment>
+      ))}
+      {storyId && (
+        <>
+          {recordParts.length > 0 && " · "}
+          {/* The story's page, where its file opens. */}
+          <a
+            href="#"
+            role="link"
+            className="ibx-ov-story"
+            onClick={(e) => {
+              e.preventDefault();
+              void openStory(storyId);
+            }}
+          >
+            {storyId}
+            <span aria-hidden> ↗</span>
+          </a>
+        </>
+      )}
     </span>
   );
   const button = (label: string, icon: typeof X, onClick: () => void, title = label) => (
@@ -469,6 +507,7 @@ export function ChatOverlay({
                 request={null}
                 defaultTo={handle}
                 quick
+                avatars={layout.avatars}
                 compact={compact}
                 threadHidden={composerOnly}
                 marks={marks}
