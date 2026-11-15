@@ -15,18 +15,53 @@ pub fn mail_notice(count: u32, session_id: &str) -> String {
     )
 }
 
+/// The most roles one notice names; past them it points to `role_state`, so the notice
+/// stays within [`MAX_LINE`].
+const NOTICE_ROLES: usize = 5;
+
+/// One notice for direct mail, shared workspace posts and the pending mail of the roles
+/// the session holds (`(role, pending)`), copying none of them: each part names the call
+/// that reads it.
+pub fn inbox_notice(
+    count: u32,
+    session: &str,
+    chat: Option<(&str, u32)>,
+    roles: &[(&str, u32)],
+) -> String {
+    let plural = |n: u32| if n == 1 { "" } else { "s" };
+    let mut parts = Vec::new();
+    if count > 0 {
+        parts.push(format!(
+            "{count} new message{}. Call read_messages with session_id {session}.",
+            plural(count)
+        ));
+    }
+    if let Some((workspace, n)) = chat.filter(|(_, n)| *n > 0) {
+        let workspace = workspace.strip_prefix("story:").unwrap_or(workspace);
+        parts.push(format!(
+            "{n} new group-chat message{} in {workspace}. Call workspace_chat_read with sessionId {session}.",
+            plural(n)
+        ));
+    }
+    for (role, n) in roles.iter().take(NOTICE_ROLES) {
+        parts.push(format!(
+            "{n} pending message{} for role {role}. Call claim_role_messages with role {role}.",
+            plural(*n)
+        ));
+    }
+    if roles.len() > NOTICE_ROLES {
+        let more = roles.len() - NOTICE_ROLES;
+        parts.push(format!("mail for {more} more roles: see role_state."));
+    }
+    if parts.is_empty() {
+        return mail_notice(count, session);
+    }
+    format!("You have {}", parts.join(" You also have "))
+}
+
 /// One notice can point to direct mail and shared workspace posts without copying either.
 pub fn mail_and_chat_notice(count: u32, session: &str, chat: Option<(&str, u32)>) -> String {
-    let Some((workspace, group_count)) = chat.filter(|(_, n)| *n > 0) else {
-        return mail_notice(count, session);
-    };
-    let workspace = workspace.strip_prefix("story:").unwrap_or(workspace);
-    let group = format!("{group_count} new group-chat message{} in {workspace}. Call workspace_chat_read with sessionId {session}.", if group_count == 1 { "" } else { "s" });
-    if count == 0 {
-        format!("You have {group}")
-    } else {
-        format!("{} You also have {group}", mail_notice(count, session))
-    }
+    inbox_notice(count, session, chat, &[])
 }
 
 /// How an inbox wait ended.
@@ -117,5 +152,27 @@ mod tests {
             mail_notice(3, "S1"),
             "You have 3 new messages. Call read_messages with session_id S1."
         );
+    }
+
+    #[test]
+    fn a_role_notice_names_each_role_to_claim_its_mail_from() {
+        assert_eq!(
+            inbox_notice(0, "S1", None, &[("reviewer", 1)]),
+            "You have 1 pending message for role reviewer. \
+             Call claim_role_messages with role reviewer."
+        );
+        assert_eq!(
+            inbox_notice(2, "S1", Some(("story:demo", 1)), &[("a", 2), ("b", 1)]),
+            "You have 2 new messages. Call read_messages with session_id S1. \
+             You also have 1 new group-chat message in demo. Call workspace_chat_read with sessionId S1. \
+             You also have 2 pending messages for role a. Call claim_role_messages with role a. \
+             You also have 1 pending message for role b. Call claim_role_messages with role b."
+        );
+        let many: Vec<(String, u32)> = (0..40).map(|i| (format!("{i:0>90}"), 1)).collect();
+        let many: Vec<(&str, u32)> = many.iter().map(|(r, n)| (r.as_str(), *n)).collect();
+        let notice = inbox_notice(1, "S1", None, &many);
+        assert!(notice.len() < MAX_LINE / 2, "{}", notice.len());
+        assert!(notice.ends_with("You also have mail for 35 more roles: see role_state."));
+        assert_eq!(inbox_notice(1, "S1", None, &[]), mail_notice(1, "S1"));
     }
 }

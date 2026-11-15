@@ -246,6 +246,7 @@ pub async fn send_role_message_cmd(
     let queued_role = role_inbox::role_name(&role).to_string();
     let queued_sender = sender.clone();
     let path = team_store_path(&host, team.clone()).await?;
+    let holders_path = path.clone();
     let attach_file = attach_file
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -286,6 +287,7 @@ pub async fn send_role_message_cmd(
             ));
             // A dashboard send queues like any other: `role_pending` routines are offered it.
             host.role_message_queued(&launch_team, &queued_role, message_id, &queued_sender);
+            super::agent_inbox::offer_role_holders(&host, holders_path, &queued_role).await;
             super::agent_read_model::agent_state_changed(&host.app);
             Ok(SendRoleMessageResult::Sent {
                 message_id,
