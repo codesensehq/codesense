@@ -77,7 +77,7 @@ export const storyTarget=(storyId,leadRole)=>({
 });
 // The peer a chat talks to: the page's own target, else the story's lead rows. A page that makes the send state itself resolves its target the same way.
 export const targetOf=({target=null,storyId=null,leadRole=null})=>target||storyTarget(storyId,leadRole);
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null,send:sendOpt=null}){
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null,html=null,send:sendOpt=null}){
  const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
  if(styles)linkChatStyles(win.document);
  const target=targetOf({target:own,storyId,leadRole}),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
@@ -201,9 +201,27 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const holds=(name,who)=>String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
  const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),holds(info.name,who)?null:h('span',{class:'sr'},`${info.name}, `),meta):meta;
  // An HTML message is a page the chat doesn't draw: it shows by name (summary, <title>, first heading, as a pin names it) and sender, never as its source.
+ // A page that can show the message (html.open(message, slot) → release) gives the bubble an Open: the page fills a slot under the name, and Close, the message leaving the thread or
+ // unmount releases it. The toggle changes the bubble in place, so a repaint that changes nothing keeps an open frame; a bubble rebuilt for another reason takes the same slot back.
+ const htmlOpen=new Map();
+ const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.slot.remove();if(typeof open.release==='function')open.release();};
+ const htmlToggle=(item,title)=>{
+  if(!html||typeof html.open!=='function')return null;
+  const slotId=ids.htmlSlot(item.id),button=h('button',{type:'button',class:'btn sm quiet html-open','aria-controls':slotId});
+  const show=on=>{button.setAttribute('aria-expanded',on?'true':'false');button.textContent=on?copy.row.htmlClose:copy.row.htmlOpen;};
+  button.addEventListener('click',()=>{
+   if(htmlOpen.has(item.id)){htmlRelease(item.id);show(false);return;}
+   const slot=h('div',{class:'html-slot',id:slotId});
+   button.parentNode.append(slot);
+   htmlOpen.set(item.id,{slot,release:html.open({messageId:item.id,title,contentType:'html'},slot)});
+   show(true);
+  });
+  show(htmlOpen.has(item.id));
+  return button;
+ };
  const htmlName=(item,who)=>{
-  const from=copy.row.htmlFrom(who),name=htmlNameOf({text:item.said||item.text,summary:item.summary});
-  return name?[h('div',{class:'html-t'},name),h('div',{class:'html-from'},from)]:[from];
+  const from=copy.row.htmlFrom(who),name=htmlNameOf({text:item.said||item.text,summary:item.summary}),open=htmlOpen.get(item.id);
+  return [...(name?[h('div',{class:'html-t'},name),h('div',{class:'html-from'},from)]:[from]),htmlToggle(item,name||from),open?open.slot:null];
  };
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
@@ -392,6 +410,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   const held=roving.focused();
   reconcile(log,cache,want);
+  for(const id of [...htmlOpen.keys()])if(!cache.has('m'+id))htmlRelease(id);
   roving.refresh(held);
   if(actFoot)reconcile(actFoot,actCache,act?[act]:[]);
   paintChips();
@@ -469,7 +488,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();if(typeof releaseSlot==='function')releaseSlot();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;for(const id of [...htmlOpen.keys()])htmlRelease(id);offs.forEach(off=>off&&off());if(prose)prose.release();if(typeof releaseSlot==='function')releaseSlot();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
