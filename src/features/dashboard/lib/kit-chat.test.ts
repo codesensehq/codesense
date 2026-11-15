@@ -889,6 +889,132 @@ describe("kit.chat page layout and activity", () => {
   });
 });
 
+describe("kit.chat activity: the live lead's prose from onSessionText", () => {
+  type Prose = { kind: "prose" | "final"; turn: string; key: string; text: string } | null;
+  const running = (sessionId = "s1"): Row => ({ ...lead("running"), sessionId });
+  const activityRow = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-row="activity"]');
+  // The host's onSessionText: one subscriber per session; say(sessionId, text) pushes to it.
+  function host() {
+    const subs = new Map<string, (text: Prose, error?: unknown) => void>();
+    const offs: string[] = [];
+    const onSessionText = vi.fn((sessionId: string, cb: (text: Prose, error?: unknown) => void) => {
+      subs.set(sessionId, cb);
+      return () => {
+        offs.push(sessionId);
+        subs.delete(sessionId);
+      };
+    });
+    (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText =
+      onSessionText;
+    const say = async (sessionId: string, text: Prose, error?: unknown) => {
+      subs.get(sessionId)?.(text, error);
+      await flush();
+    };
+    return { onSessionText, say, offs, subs };
+  }
+  const prose = (text: string, kind: "prose" | "final" = "prose"): Prose => ({
+    kind,
+    turn: "t1",
+    key: "k1",
+    text,
+  });
+
+  it("shows the latest prose's last sentence in the working row, one line with the whole text in its title, and announces only Working…", async () => {
+    const { onSessionText, say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    expect(onSessionText).toHaveBeenCalledWith("s1", expect.any(Function));
+    await say("s1", prose("Reading the diff.\nNow the tests pass. Writing the summary."));
+    const row = activityRow(s.el)!;
+    const line = row.querySelector<HTMLElement>(".prose")!;
+    expect(line.textContent).toBe("Writing the summary.");
+    expect(line.getAttribute("title")).toBe(
+      "Reading the diff.\nNow the tests pass. Writing the summary.",
+    );
+    // each chunk is not announced: the prose sits outside any live region, which says Working… once
+    expect(line.closest("[aria-live]")).toBeNull();
+    expect(row.querySelector('[role="status"]')!.textContent).toBe("Working…");
+    await say("s1", prose("Opening the PR."));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe("Opening the PR.");
+  });
+
+  it("clears on the turn's final message and on the lead's next message in the thread", async () => {
+    const { say } = host();
+    const thread: Row[] = [];
+    const s = setup([running()], thread);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("Thinking it through."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    await say("s1", prose("Done.", "final"));
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    await say("s1", prose("Next step."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    thread.push({
+      messageId: 9,
+      from: "lead-1",
+      text: "Here's the plan.",
+      createdAtMs: Date.now() + 1000,
+    });
+    s.emit("inbox");
+    await flush();
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+
+  it("follows the live lead's session, and lets it go on a peer change and on unmount", async () => {
+    const { onSessionText, say, offs } = host();
+    const roster = [running("s1")];
+    const s = setup(roster);
+    const chat = mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("On the first session."));
+    roster[0] = running("s2");
+    await s.reads.sessions();
+    await flush();
+    expect(offs).toEqual(["s1"]);
+    expect(onSessionText).toHaveBeenLastCalledWith("s2", expect.any(Function));
+    // the old session's prose doesn't carry over
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    chat.unmount();
+    expect(offs).toEqual(["s1", "s2"]);
+  });
+
+  it("works without it: a refusal, a host without onSessionText, or no activity row shows today's row", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", null, new Error("refused: a remote session"));
+    const row = activityRow(s.el)!;
+    expect(row.querySelector(".prose")).toBeNull();
+    expect(row.querySelector('[role="alert"]')).toBeNull();
+    expect(row.textContent).toContain("Working…");
+
+    const off = setup([running()]);
+    const { onSessionText } = host();
+    mountOn(off);
+    await flush();
+    expect(onSessionText).not.toHaveBeenCalled();
+
+    delete (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText;
+    const bare = setup([running()]);
+    mountOn(bare, { activity: true });
+    await flush();
+    expect(activityRow(bare.el)!.textContent).toContain("Working…");
+  });
+
+  it("the page's own activity line still wins over the prose", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: { text: () => "Cloning acme/api · 62%" } });
+    await flush();
+    await say("s1", prose("Reading files."));
+    expect(activityRow(s.el)!.textContent).toContain("Cloning acme/api · 62%");
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+});
+
 describe("kit.chat suggestion chips from the Next line", () => {
   const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
     messageId: id,
