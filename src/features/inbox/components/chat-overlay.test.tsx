@@ -1498,4 +1498,27 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(chip).toHaveTextContent("Merge board");
     expect(chip).not.toHaveTextContent("<");
   });
+
+  it("a real needs-you snapshot pins from its title bar through the pins bridge, named by the message's summary", async () => {
+    // The live dashboard a lead sends when asked what needs you (its first heading is "What needs you").
+    const snapshot = readFileSync(
+      resolve(__dirname, "../../../../tests/fixtures/needs-you-snapshot.html"),
+      "utf-8",
+    );
+    arrive(
+      msg(6, LEAD, "human", snapshot, {
+        contentType: "html",
+        summary: "Two things wait on you",
+      }),
+    );
+    await renderOverlay(420, 700);
+    await screen.findByTestId("chat-overlay-pin-3");
+    const bar = within(row(6)).getByTestId("ibx-dm-bar");
+    expect(bar).toHaveTextContent("Two things wait on you");
+    fireEvent.click(within(bar).getByTestId("ibx-pin"));
+    await waitFor(() => expect(ops()).toContainEqual(["pin", 6]));
+    const chip = await screen.findByTestId("chat-overlay-pin-6");
+    expect(chip).toHaveTextContent("Two things wait on you");
+    expect(chip).not.toHaveTextContent("What needs you");
+  });
 });
