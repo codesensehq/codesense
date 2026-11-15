@@ -215,6 +215,7 @@ pub(crate) async fn inbox_matching(
     // as an agent or session filter it names nothing, as a role filter does below.
     let not_human = |v: &String| !v.eq_ignore_ascii_case(HUMAN);
     let mut addresses: Vec<String> = Vec::new();
+    let mut thread_sessions: Option<Vec<String>> = None;
     let agent = trimmed(&query.agent_id).filter(not_human);
     match (agent, query.story_id.as_deref()) {
         // A thread: its sessions, the session filter naming its seat.
@@ -225,6 +226,7 @@ pub(crate) async fn inbox_matching(
             let seat = trimmed(&query.session_id);
             let seats = thread_addresses(host, &known, &thread, seat.as_deref()).await?;
             addresses.extend(seats.addresses);
+            thread_sessions = Some(seats.handles);
         }
         (agent, _) => {
             if let Some(agent) = agent {
@@ -263,6 +265,7 @@ pub(crate) async fn inbox_matching(
     if query.has_filter() && addresses.is_empty() {
         view.messages.clear();
     }
+    view.thread_sessions = thread_sessions;
     view.messages.retain(|m| keep(m));
     if let Some(kind) = query.kind {
         view.messages.retain(|m| m.kind == kind);
