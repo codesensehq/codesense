@@ -16,6 +16,7 @@
     node.append(...kids.flat(Infinity).filter((kid) => kid !== null && kid !== void 0 && kid !== false));
     return node;
   }
+  var imeKey = (event) => Boolean(event && (event.isComposing || event.keyCode === 229));
 
   // src-tauri/src/http/routes/dashboard_kit/chat/copy.js
   var CHAT_COPY = {
@@ -817,7 +818,7 @@
       });
     };
     input.addEventListener("keydown", (event) => {
-      if ((event.code === "Enter" || event.code === "NumpadEnter") && (!event.shiftKey || event.metaKey || event.ctrlKey) && !event.isComposing) {
+      if ((event.code === "Enter" || event.code === "NumpadEnter") && (!event.shiftKey || event.metaKey || event.ctrlKey) && !imeKey(event)) {
         event.preventDefault();
         submit();
       }
@@ -1239,7 +1240,7 @@
       };
       input.addEventListener("input", () => onDraft(input.value));
       input.addEventListener("keydown", (event) => {
-        if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !event.isComposing) {
+        if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !imeKey(event)) {
           event.preventDefault();
           send();
         }

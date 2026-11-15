@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). It is a two-row box: the textarea, then the hint, its keys and Send on one row under it.
 // Enter sends, Shift+Enter is a newline, and ⌘↵ (Ctrl↵) sends with Shift held too; typing and focus never launch.
-import {h} from './dom.js';
+import {h,imeKey} from './dom.js';
 import {CHAT_COPY} from './copy.js';
 import {idsOf} from './mount-ids.js';
 // rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes, and the input's name (label) while the page gives one.
@@ -22,7 +22,7 @@ export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.com
   if(!held||typeof held.then!=='function'){input.value='';return;}
   setPending(true);held.then(sent=>{setPending(false);if(sent&&input.value===raw)input.value='';},()=>{setPending(false);});
  };
- input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&(!event.shiftKey||event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();submit();}});
+ input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&(!event.shiftKey||event.metaKey||event.ctrlKey)&&!imeKey(event)){event.preventDefault();submit();}});
  send.addEventListener('click',submit);
  return {region,input,send,
   update({placeholder,disabled:off,hint:nextHint,send:nextSend,label:nextLabel}){

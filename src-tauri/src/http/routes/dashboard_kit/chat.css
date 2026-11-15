@@ -97,6 +97,9 @@
 .cs-chat .card[data-state=answered]{background:var(--cs-bg)}
 .cs-chat .card .chosen{font-size:var(--cs-text-sm);color:var(--cs-fg)}
 .cs-chat .card .sys{margin:0}
+/* WF-62: under 600 tall or 320 wide the composer is one line: the textarea beside Send, the hint left to the placeholder. */
+@media (max-height:600px),(max-width:320px){.cs-chat .composer{min-height:0}.cs-chat .composer .box{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto;align-items:center}.cs-chat .composer .box-foot .hint{display:none}.cs-chat .composer textarea{height:calc(1.5em + 4px);max-height:calc(1.5em + 4px)}}
+@media (max-width:320px){.cs-chat .composer .keys{display:none}}
 @container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .act-foot{padding:0 16px 4px}.cs-chat .composer{padding:8px 16px 10px}}
 /* The person's pins (onPin): an action row over the message's top edge, shown on hover and while focus is inside it; a tag and a note under it. Nothing moves with reduced motion. */
 .cs-chat .msg{position:relative}
