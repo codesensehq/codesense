@@ -7,6 +7,99 @@ fn only(arrays: Value) -> Params {
     serde_json::from_value(json!({"storyId":"SV-29","only":arrays})).unwrap()
 }
 
+#[derive(Clone, Copy)]
+struct SyntheticStoryScale {
+    commits: usize,
+    files: usize,
+    notes_per_commit: usize,
+    sessions: usize,
+}
+
+/// Rebuild the same dimensions measured in the real-app baseline without checking a user repo in.
+fn synthetic_story_at_scale(
+    scale: SyntheticStoryScale,
+) -> (tempfile::TempDir, UsageStore, GitStory) {
+    assert!(scale.commits >= 2);
+    assert!(scale.files >= 1);
+    assert!(scale.sessions >= 1);
+    assert!(scale.notes_per_commit <= crate::attribution::git_ai::NOTES_REFS.len());
+
+    let (home, mut store, fixture) = git_story();
+    let first_session: String = store
+        .conn
+        .query_row("SELECT session_id FROM session_record LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let branch = store
+        .read_session_record(&first_session)
+        .unwrap()
+        .unwrap()
+        .branch
+        .unwrap();
+    let mut commit_ids = vec![fixture.repo.refname_to_id(&branch).unwrap()];
+    let mut parent = *commit_ids.last().unwrap();
+    let mut files_left = scale.files.saturating_sub(1);
+
+    for commit_index in 1..scale.commits {
+        let commits_left = scale.commits - commit_index;
+        let files_here = (files_left + commits_left - 1) / commits_left;
+        files_left -= files_here;
+        let parent_commit = fixture.repo.find_commit(parent).unwrap();
+        let parent_tree = parent_commit.tree().unwrap();
+        let mut tree = fixture.repo.treebuilder(Some(&parent_tree)).unwrap();
+        for file_index in 0..files_here {
+            let path = format!("synthetic-{commit_index}-{file_index}.txt");
+            let bytes = format!("change {commit_index} {file_index}\n");
+            let blob = fixture.repo.blob(bytes.as_bytes()).unwrap();
+            tree.insert(path, blob, 0o100644).unwrap();
+        }
+        let tree = fixture.repo.find_tree(tree.write().unwrap()).unwrap();
+        let signature = parent_commit.author();
+        parent = fixture
+            .repo
+            .commit(
+                Some(&branch),
+                &signature,
+                &signature,
+                "synthetic story change",
+                &tree,
+                &[&parent_commit],
+            )
+            .unwrap();
+        commit_ids.push(parent);
+    }
+
+    let signature = fixture.repo.find_commit(fixture.root).unwrap().author();
+    for (commit_index, oid) in commit_ids.iter().enumerate() {
+        for notes_ref in crate::attribution::git_ai::NOTES_REFS
+            .iter()
+            .take(scale.notes_per_commit)
+        {
+            fixture
+                .repo
+                .note(
+                    &signature,
+                    &signature,
+                    Some(&format!("refs/notes/{notes_ref}")),
+                    *oid,
+                    "---\n{\"schema_version\":\"authorship/3.0.0\",\"sessions\":{}}",
+                    true,
+                )
+                .unwrap_or_else(|error| panic!("note {commit_index}: {error}"));
+        }
+    }
+
+    for session_index in 1..scale.sessions {
+        let session = format!("synthetic-session-{session_index}");
+        seed(&mut store, home.path(), &session, true, false);
+        let mut record = store.read_session_record(&session).unwrap().unwrap();
+        record.branch = Some(branch.clone());
+        record.worktree = Some(fixture.dir.path().to_string_lossy().into_owned());
+        record.workspace = record.worktree.clone();
+        store.write_session_record(&record).unwrap();
+    }
+    (home, store, fixture)
+}
+
 /// The answer the bridge gives for `params` (the read, then its pruning).
 async fn answer(home: &Path, params: &Params) -> Value {
     let mut value =
@@ -407,13 +500,19 @@ async fn story_reads_reuse_the_kept_git_half_until_a_branch_tip_moves() {
 /// not invalidate its cached facts.
 #[tokio::test]
 async fn story_read_warm_cache_survives_an_unrelated_note() {
-    let (home, _s, f) = git_story();
+    let scale = SyntheticStoryScale {
+        commits: 3,
+        files: 3,
+        notes_per_commit: 1,
+        sessions: 2,
+    };
+    let (home, _s, f) = synthetic_story_at_scale(scale);
     let asked = only(json!(["commits", "prs", "branches"]));
     let cold_at = std::time::Instant::now();
     let first = read(home.path(), &asked, &CallerScope::Human).await.unwrap();
     let cold = cold_at.elapsed();
     assert!(cold < std::time::Duration::from_secs(1), "cold read took {cold:?}");
-    assert_eq!(first.commits.len(), 1);
+    assert_eq!(first.commits.len(), scale.commits);
     let children = crate::attribution::git_ai::child_processes(f.dir.path());
 
     let signature = f.repo.find_commit(f.root).unwrap().author();

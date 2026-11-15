@@ -26,6 +26,10 @@ pub(crate) struct Drain {
 /// The notes refs read, first match wins: CodeSense's local-only ref, then git-ai's default.
 pub(crate) const NOTES_REFS: [&str; 2] = [super::managed::NOTES_REF, "ai"];
 
+pub(crate) fn is_missing_object(error: &git2::Error) -> bool {
+    error.code() == git2::ErrorCode::NotFound && error.class() == git2::ErrorClass::Odb
+}
+
 /// How long a drain may wait, in seconds.
 const DRAIN_SECONDS: &str = "5";
 
@@ -191,10 +195,7 @@ impl GitAiSource {
         for notes_ref in NOTES_REFS {
             match repository.find_note(Some(&format!("refs/notes/{notes_ref}")), oid) {
                 Ok(note) => return Ok(Some(note.message().unwrap_or_default().to_owned())),
-                Err(error)
-                    if error.code() == git2::ErrorCode::NotFound
-                        && error.class() == git2::ErrorClass::Odb =>
-                {
+                Err(error) if is_missing_object(&error) => {
                     return Err(AttributionError::ObjectsNotLocal)
                 }
                 Err(error) if error.code() == git2::ErrorCode::NotFound => {}

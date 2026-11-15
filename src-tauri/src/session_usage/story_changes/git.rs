@@ -1068,8 +1068,7 @@ fn read_notes(
                                 break;
                             }
                             Err(error)
-                                if error.code() == git2::ErrorCode::NotFound
-                                    && error.class() == git2::ErrorClass::Odb =>
+                                if crate::attribution::git_ai::is_missing_object(&error) =>
                             {
                                 reason = Some(crate::attribution::ranges::OBJECTS_NOT_LOCAL);
                                 break;
