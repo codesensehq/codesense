@@ -49,6 +49,8 @@ import {
   FileDiffModeSwitch,
   renderFileDiff,
   rendersFromText,
+  rendersInline,
+  type FileDiffSides,
   type FileDiffState,
 } from "@/shared/lib/render-file-diff";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
@@ -76,6 +78,7 @@ import {
   useSourceDiffBase,
   useSourceFileRedline,
 } from "../lib/use-source-diff";
+import { useSourceImageSides } from "../lib/use-source-image-sides";
 import { comparisonLabel, effectiveBaseRef } from "../lib/source-diff-base";
 import { useRepoWorktreeWatch } from "../lib/use-repo-worktree-watch";
 import { useRemoteWatchNonce } from "../lib/use-remote-worktree-watch";
@@ -420,6 +423,14 @@ export function SourceDiffOverlay({
       : null;
   const { redline, error: redlineError } = useSourceFileRedline(
     changesetKey,
+    paneFile,
+    selected?.renamedFrom,
+    baseRef,
+    liveNonce + refreshNonce,
+  );
+  const imageBytes = useSourceImageSides(
+    changesetKey,
+    null,
     paneFile,
     selected?.renamedFrom,
     baseRef,
@@ -1175,17 +1186,18 @@ export function SourceDiffOverlay({
                   <Divider />
                 </>
               )}
-              {paneFile != null && rendersFromText(paneFile) && !redline?.binary && (
-                <>
-                  <FileDiffModeSwitch
-                    kind="html"
-                    mode={fileDiffModes.html}
-                    onChange={(m) => setFileDiffMode("html", m)}
-                    testId={`source-diff-html-mode-${ws.id}`}
-                  />
-                  <Divider />
-                </>
-              )}
+              {paneFile != null &&
+                drawsPages(paneFile, selected?.status, redline?.binary, imageBytes) && (
+                  <>
+                    <FileDiffModeSwitch
+                      kind="html"
+                      mode={fileDiffModes.html}
+                      onChange={(m) => setFileDiffMode("html", m)}
+                      testId={`source-diff-html-mode-${ws.id}`}
+                    />
+                    <Divider />
+                  </>
+                )}
               {paneIsCodeDiff && (
                 <>
                   <div
@@ -1293,6 +1305,7 @@ export function SourceDiffOverlay({
               badges={selected?.badges}
               before={redline?.before ?? null}
               after={redline?.after ?? null}
+              imageBytes={imageBytes}
               inline={inline}
               wordWrap={wordWrap}
               expandAll={expandAll}
@@ -1467,6 +1480,19 @@ function DiffCodeControls({
   );
 }
 
+/** Whether a file's diff can draw rendered pages here (so its view options offer
+ *  Side by side | Source): an HTML, SVG or Excalidraw file read as text, or a raster
+ *  image whose bytes this surface holds for every present side. */
+function drawsPages(
+  path: string,
+  status: PublishFile["status"] | undefined,
+  binary: boolean | undefined,
+  imageBytes: FileDiffSides["imageBytes"],
+): boolean {
+  const state: FileDiffState = { kind: binary ? "binary" : "ready" };
+  return rendersInline(path, { before: "", after: "", status, imageBytes }, state);
+}
+
 /** Whether a file's diff is the code diff the code controls drive: any
  *  non-markdown file, and markdown shown as Source. */
 function readsAsCode(path: string, modes: FileDiffModes): boolean {
@@ -1493,6 +1519,7 @@ export function SourceDiffPane({
   badges,
   before,
   after,
+  imageBytes,
   error,
   inline,
   wordWrap,
@@ -1505,6 +1532,9 @@ export function SourceDiffPane({
   filePath: string;
   binary: boolean;
   status: PublishFile["status"];
+  /** A raster image's sides, base64, where this surface read them: its rendered
+   *  Before | After draws from these. */
+  imageBytes?: FileDiffSides["imageBytes"];
   /** The file's classification badges — a `mode` badge explains an identical
    *  before/after. */
   badges?: PublishFile["badges"];
@@ -1524,18 +1554,27 @@ export function SourceDiffPane({
 }) {
   const { modes } = useFileDiffModes();
 
+  // The binary placeholder REUSES the shared `FileWarningPlaceholder` (the WD-2
+  // binary-affordance idiom) but OMITS its context-viewer "open current version"
+  // action. It is a raster image's Source mode too.
+  const binaryNote = (
+    <FileWarningPlaceholder
+      icon={Binary}
+      message={`${STATUS_LABEL[status]} · Binary file — no text diff to show`}
+      filename={basename(filePath)}
+      testId="source-diff-binary-placeholder"
+    />
+  );
   if (binary) {
-    // The binary placeholder REUSES the shared `FileWarningPlaceholder` (the WD-2
-    // binary-affordance idiom) but OMITS its context-viewer "open current
-    // version" action (a true source-baseline image diff is a scoped WD follow-up).
-    return (
-      <FileWarningPlaceholder
-        icon={Binary}
-        message={`${STATUS_LABEL[status]} · Binary file — no text diff to show`}
-        filename={basename(filePath)}
-        testId="source-diff-binary-placeholder"
-      />
-    );
+    // A raster image whose bytes were read draws its rendered Before | After.
+    if (!drawsPages(filePath, status, binary, imageBytes)) return binaryNote;
+    return renderFileDiff({
+      fileType: getViewerFileType(filePath),
+      filePath,
+      sides: { before: "", after: "", status, imageBytes },
+      state: { kind: "binary" },
+      prefs: { modes, testIdPrefix: "source-diff", binary: binaryNote },
+    });
   }
 
   // Identical text on both sides: a mode-only change (or an empty file added or
@@ -1661,6 +1700,14 @@ function CommitDetailPane({
     selected?.renamedFrom,
   );
   const redline = sha === null ? workingRedline.redline : commitRedline.redline;
+  const imageBytes = useSourceImageSides(
+    effectiveCwd,
+    sha,
+    selectedFile,
+    selected?.renamedFrom,
+    baseRef,
+    worktreeNonce,
+  );
   const redlineError = sha === null ? workingRedline.error : commitRedline.error;
 
   const label = sha === null ? "Working tree" : sha.slice(0, 7);
@@ -1687,14 +1734,15 @@ function CommitDetailPane({
                 testId={`commit-diff-markdown-mode-${ws.id}`}
               />
             )}
-            {selectedFile && rendersFromText(selectedFile) && !redline?.binary && (
-              <FileDiffModeSwitch
-                kind="html"
-                mode={fileDiffModes.html}
-                onChange={(m) => setFileDiffMode("html", m)}
-                testId={`commit-diff-html-mode-${ws.id}`}
-              />
-            )}
+            {selectedFile &&
+              drawsPages(selectedFile, selected?.status, redline?.binary, imageBytes) && (
+                <FileDiffModeSwitch
+                  kind="html"
+                  mode={fileDiffModes.html}
+                  onChange={(m) => setFileDiffMode("html", m)}
+                  testId={`commit-diff-html-mode-${ws.id}`}
+                />
+              )}
             {redline != null &&
               !redline.binary &&
               // A mode-only change renders a sentence and an error its message:
@@ -1763,6 +1811,7 @@ function CommitDetailPane({
             badges={selected?.badges}
             before={redline?.before ?? null}
             after={redline?.after ?? null}
+            imageBytes={imageBytes}
             inline={inline}
             wordWrap={wordWrap}
             expandAll={expandAll}

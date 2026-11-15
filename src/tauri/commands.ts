@@ -3174,6 +3174,12 @@ export const checkPathExists = (path: string) => invoke<boolean>("check_path_exi
 
 export const readFile = (path: string) => invoke<string>("read_file", { path });
 
+/** One raster image's bytes (base64) for a team edit's rendered diff, under the same
+ *  roots `readFile` reads. `null` with `tooLarge` past the size cap; a missing file
+ *  rejects with "not found". */
+export const readImageFile = (path: string) =>
+  invoke<{ base64: string | null; tooLarge: boolean }>("read_image_file", { path });
+
 /** SW-DX-11: one child of a `readWorkspace` directory listing. */
 export interface WorkspaceDirEntry {
   name: string;
@@ -4806,6 +4812,24 @@ export const sourceCommitFileRedline = (
   filePath: string,
   oldPath?: string,
 ) => invoke<FileRedline>("source_commit_file_redline", { repoPath, sha, filePath, oldPath });
+
+/** A raster file's Before | After bytes (base64) for its rendered diff. A side is
+ *  `null` when the file has none there (added, deleted) or it is past the size cap
+ *  (`tooLarge`), when the diff stays Source only. */
+export interface ImageSides {
+  before: string | null;
+  after: string | null;
+  tooLarge: boolean;
+}
+
+/** The source diff's raster sides: at the working tree (no `sha`, before at the
+ *  merge-base or `baseRef`) or at a commit (its first parent, then itself). PNG,
+ *  JPEG, GIF and WebP only; `oldPath` is set only for a rename. */
+export const sourceImageSides = (
+  repoPath: string,
+  filePath: string,
+  opts: { oldPath?: string; baseRef?: string; sha?: string } = {},
+) => invoke<ImageSides>("source_image_sides", { repoPath, filePath, ...opts });
 
 // SW-GS-19 (A3): live list of open PRs for the in-UI review panel (source of
 // truth, not the session openPrs map). Owner/repo resolved server-side.
@@ -10404,6 +10428,22 @@ export const sessionRecord = (params: { handle: string }, frameId?: string, page
     ...(frameId !== undefined ? { frameId } : {}),
     ...(page !== undefined ? { page } : {}),
   });
+
+/** A raster file's Before | After bytes for the open-diff tab, revalidated as
+ *  {@link openDiffRead} is. */
+export const openDiffImageRead = (
+  params: import("@/features/git-sync/lib/open-diff-types").OpenDiffParams,
+  frameId?: string,
+  page?: string,
+) =>
+  invoke<import("@/features/git-sync/lib/open-diff-types").OpenDiffImageRead>(
+    "open_diff_image_read",
+    {
+      params,
+      ...(frameId ? { frameId } : {}),
+      ...(page ? { page } : {}),
+    },
+  );
 
 /** Read-only diff target, resolved afresh from a configured source slug. */
 export const openDiffRead = (

@@ -90,8 +90,9 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js
   var isBusy = (lead) => Boolean(lead) && lead.state !== "idle";
-  function deliveryMark({ sentAt, busyAtSend, lead, newestLeadAt = 0 }) {
+  function deliveryMark({ sentAt, busyAtSend, lead, newestLeadAt = 0, delivery = null }) {
     if (!busyAtSend) return "delivered";
+    if (delivery && typeof delivery.state === "string") return delivery.state === "delivered" ? "delivered" : "queued";
     if (Number.isFinite(newestLeadAt) && newestLeadAt > sentAt) return "delivered";
     if (!lead) return "queued";
     const notified = Date.parse(lead.notifiedAt);
@@ -1027,11 +1028,12 @@
         make: () => cardNode({ lead: target.leadName(row), id, text, parsed, meta: line, at: row.createdAtMs, state: state2, answer, failure, draft: drafts.get(id), onAnswer: (value) => answerCard(row, value), onDraft: (value) => drafts.set(id, value) })
       };
     }
+    const deliveryRow = (id) => id !== void 0 && typeof reads.delivery === "function" ? reads.delivery(id) : null;
     const deliveryOf = createMarkLatch();
     function markOfItem(item) {
       if (item.mark === "starting" && launch.stuck) return "stuck";
       if (item.mark !== "sent") return item.mark;
-      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()) });
+      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()), delivery: deliveryRow(item.messageId) });
     }
     function activityItem() {
       if (!activity) return null;
@@ -1230,6 +1232,7 @@
       readThread();
     }), reads.on("activity", () => render())];
     if (onPin && typeof onPin.subscribe === "function") offs.push(onPin.subscribe(() => render()));
+    if (typeof reads.delivery === "function") offs.push(reads.on("delivery", () => render()));
     if (typeof transport.stream === "function") offs.push(transport.stream((chunk) => {
       streams.set(chunk.messageId, (streams.get(chunk.messageId) || "") + chunk.text);
       render();

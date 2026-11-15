@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
-import { renderFileDiff } from "@/shared/lib/render-file-diff";
+import { renderFileDiff, type FileDiffSides } from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { createIntentReader } from "../../../../src-tauri/assets/dashboards/story-trail/intent-reader.mjs";
-import { readOpenDiff } from "../lib/source-redline-source";
+import { readOpenDiff, readOpenDiffImages } from "../lib/source-redline-source";
 import { diffTabAddress, openDiffTab, type DiffTabAddress } from "../lib/open-diff-route";
 import type { OpenDiffRead } from "../lib/open-diff-types";
 
@@ -54,6 +55,37 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
       readerRef.current = null;
     };
   }, [params]);
+  // A raster image's redline is binary: its rendered sides draw from its bytes, read
+  // at the same revision with the same revalidation, once per opened read.
+  const [images, setImages] = useState<{
+    of: OpenDiffRead;
+    bytes: FileDiffSides["imageBytes"];
+  } | null>(null);
+  useEffect(() => {
+    if (result?.status !== "opened" || !result.redline.binary || !isRasterImage(params.path))
+      return;
+    let cancelled = false;
+    const { range: _range, ...target } = params;
+    void _range;
+    readOpenDiffImages(target).then(
+      (read) => {
+        if (cancelled) return;
+        const sides =
+          read.status === "opened" && !read.images.tooLarge
+            ? {
+                ...(read.images.before != null ? { before: read.images.before } : {}),
+                ...(read.images.after != null ? { after: read.images.after } : {}),
+              }
+            : undefined;
+        setImages({ of: result, bytes: sides });
+      },
+      () => !cancelled && setImages({ of: result, bytes: undefined }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [result, params]);
+  const imageBytes = images?.of === result ? images.bytes : undefined;
   const retry = () => readerRef.current?.intent({ read: true });
   const openWorkspace = async () => {
     try {
@@ -134,6 +166,7 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
               before: result.redline.before,
               after: result.redline.after,
               status: result.redline.status,
+              imageBytes,
             },
             state: result.redline.binary ? { kind: "binary" } : { kind: "ready" },
             prefs: {

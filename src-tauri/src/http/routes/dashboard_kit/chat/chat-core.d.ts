@@ -29,11 +29,17 @@ export interface ChatThreadRow {
 /** Only an idle lead takes a message at once; anything else holds it. */
 export function isBusy(lead: ChatLeadRow | null | undefined): boolean;
 /** Queued or Delivered for one sent message. */
+/** The message's own row on the `messageDelivery` topic, when the host pushes it. */
+export interface ChatDelivery {
+  state: "queued" | "delivered";
+  deliveredAtMs?: number | null;
+}
 export function deliveryMark(input: {
   sentAt: number;
   busyAtSend: boolean;
   lead: ChatLeadRow | null | undefined;
   newestLeadAt?: number;
+  delivery?: ChatDelivery | null;
 }): "queued" | "delivered";
 /** A mark rule that latches Delivered per message key: a later change in the lead never un-delivers it. */
 export function createMarkLatch(): (
@@ -43,6 +49,7 @@ export function createMarkLatch(): (
     busyAtSend: boolean;
     lead: ChatLeadRow | null | undefined;
     newestLeadAt?: number;
+    delivery?: ChatDelivery | null;
   },
 ) => "queued" | "delivered";
 /** A needs-you message read as buttons, or null when it is not in the card format. */

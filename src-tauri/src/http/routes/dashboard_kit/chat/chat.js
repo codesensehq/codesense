@@ -222,12 +222,13 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   return {t:row.createdAtMs||0,id:'m'+id,sig:['c',id,said,state,answer&&answer.text,answer&&answer.where,failure,row.createdAtMs].join('|'),
    make:()=>cardNode({lead:target.leadName(row),id,text,parsed,meta:line,at:row.createdAtMs,state,answer,failure,draft:drafts.get(id),onAnswer:value=>answerCard(row,value),onDraft:value=>drafts.set(id,value)})};
  }
- // A sent message is Queued or Delivered by chat-core's rule over the lead's row now; the others are the launch machine's own marks.
+ // A sent message is Queued or Delivered by chat-core's rule over the lead's row now, or by its own messageDelivery row when the page's reads offer one (reads.delivery(messageId)); the others are the launch machine's own marks.
+ const deliveryRow=id=>id!==undefined&&typeof reads.delivery==='function'?reads.delivery(id):null;
  const deliveryOf=createMarkLatch();
  function markOfItem(item){
   if(item.mark==='starting'&&launch.stuck)return 'stuck';
   if(item.mark!=='sent')return item.mark;
-  return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles())});
+  return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles()),delivery:deliveryRow(item.messageId)});
  }
  // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the peer's current step while it runs.
  function activityItem(){
@@ -372,6 +373,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  const offs=[reads.on('sessions',()=>onRows(reads.latestSessions())),reads.on('inbox',()=>{readThread();}),reads.on('activity',()=>render())];
  if(onPin&&typeof onPin.subscribe==='function')offs.push(onPin.subscribe(()=>render()));
+ if(typeof reads.delivery==='function')offs.push(reads.on('delivery',()=>render()));
  if(typeof transport.stream==='function')offs.push(transport.stream(chunk=>{streams.set(chunk.messageId,(streams.get(chunk.messageId)||'')+chunk.text);render();}));
  const onUnload=event=>{if(launch.hasHeld()){const text=launch.hasKept()?copy.unloadKept:copy.unload;event.preventDefault();event.returnValue=text;return text;}};
  win.addEventListener('beforeunload',onUnload);

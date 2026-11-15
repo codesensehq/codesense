@@ -439,3 +439,28 @@ describe("pinTitleOf (DOM-free, so the kit and the app name pins the same)", () 
     expect(pinTitleOf({ text: " " }, "Lead")).toBe("Message from Lead");
   });
 });
+
+describe("deliveryMark with the messageDelivery topic", () => {
+  it("the topic's row decides once it is there: queued until told or read, then delivered", () => {
+    // The roster says told, but the topic is the message's own state: still queued.
+    const told = lead({ mailNotice: "told", notifiedAt: new Date(SENT + 1000).toISOString() });
+    expect(mark({ lead: told, delivery: { state: "queued" } })).toBe("queued");
+    expect(mark({ delivery: { state: "delivered" } })).toBe("delivered");
+  });
+
+  it("an idle send is still Delivered at once, whatever the row says", () => {
+    expect(mark({ busyAtSend: false, delivery: { state: "queued" } })).toBe("delivered");
+  });
+
+  it("delivered means told: a busy lead posting mid-turn leaves a queued row Queued", () => {
+    expect(mark({ newestLeadAt: SENT + 1, delivery: { state: "queued" } })).toBe("queued");
+    // Without a row the lead's later message still delivers it, as before.
+    expect(mark({ newestLeadAt: SENT + 1, delivery: null })).toBe("delivered");
+  });
+
+  it("with no row (no topic, or not this kind of message) it falls back to today's marks", () => {
+    const told = lead({ mailNotice: "told", notifiedAt: new Date(SENT + 1000).toISOString() });
+    expect(mark({ lead: told, delivery: null })).toBe("delivered");
+    expect(mark({ delivery: undefined })).toBe("queued");
+  });
+});

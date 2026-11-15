@@ -115,6 +115,11 @@ vi.mock("../lib/use-source-diff", () => ({
 // it) and the commit-graph rail (a marker — the component is tested separately).
 vi.mock("../lib/use-worktree-watch", () => ({ useWorktreeWatch: vi.fn() }));
 
+const imageSidesMock = vi.fn((..._a: unknown[]): unknown => undefined);
+vi.mock("../lib/use-source-image-sides", () => ({
+  useSourceImageSides: (...a: unknown[]) => imageSidesMock(...a),
+}));
+
 // SW-VE-12: the per-tab resolver that answers "is this cwd a git working tree?"
 // — threaded into the overlay to drive the "No git repo at this path." body
 // state. Default is a resolved local worktree so existing suites unchanged.
@@ -1018,7 +1023,18 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
   });
 
-  it("a changed PNG keeps the binary placeholder, with no rendered mode offered", () => {
+  function openPng(bytes: unknown, width = 1200) {
+    const ro = stubResizeObserver(width);
+    const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    URL.createObjectURL = vi.fn(() => "blob:side");
+    URL.revokeObjectURL = vi.fn();
+    onTestFinished(() => {
+      ro.restore();
+      URL.createObjectURL = blob.create;
+      URL.revokeObjectURL = blob.revoke;
+      imageSidesMock.mockReset();
+    });
+    imageSidesMock.mockReturnValue(bytes);
     stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
     stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
@@ -1030,8 +1046,85 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
         isFocused
       />,
     );
+  }
+  const images = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
+
+  it("a changed PNG draws its Before and After from their bytes, side by side at 900 px", () => {
+    openPng({ before: "QkVGT1JF", after: "QUZURVI=" });
+    expect(imageSidesMock.mock.calls.map((call) => call.slice(0, 4))).toContainEqual([
+      "/wt/story",
+      null,
+      "art/logo.png",
+      undefined,
+    ]);
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).not.toBeInTheDocument();
+    // Its Source mode is the binary note, chosen in the view options.
+    const modes = screen.getByTestId("source-diff-html-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
+    expect(images()).toEqual([]);
+  });
+
+  it("a changed PNG shows one side at a time below 900 px", () => {
+    openPng({ before: "QkVGT1JF", after: "QUZURVI=" }, 899);
+    expect(images()).toEqual(["After"]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(images()).toEqual(["Before"]);
+  });
+
+  it("a changed PNG with no bytes (a remote worktree, past the cap) keeps the binary placeholder", () => {
+    openPng(undefined);
     expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
     expect(screen.queryByTestId("source-diff-html-mode-w1")).not.toBeInTheDocument();
+    expect(images()).toEqual([]);
+  });
+
+  it("a PNG in a commit draws its sides from that commit", () => {
+    const ro = stubResizeObserver(1200);
+    const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    URL.createObjectURL = vi.fn(() => "blob:side");
+    URL.revokeObjectURL = vi.fn();
+    onTestFinished(() => {
+      ro.restore();
+      URL.createObjectURL = blob.create;
+      URL.revokeObjectURL = blob.revoke;
+      imageSidesMock.mockReset();
+    });
+    imageSidesMock.mockReturnValue({ before: "QkVGT1JF", after: "QUZURVI=" });
+    commitChangesetMock.mockReturnValue({
+      files: [{ path: "art/logo.png", status: "modified" }],
+      loading: false,
+      error: null,
+    });
+    commitRedlineMock.mockReturnValue({
+      redline: { status: "modified", binary: true, before: "", after: "" },
+      error: null,
+    } as never);
+    onTestFinished(() => {
+      commitRedlineMock.mockReturnValue({ redline: null, error: null });
+    });
+    useViewerStore.setState({
+      sourceDiffHistoryMode: { "sid-ws": true },
+      sourceDiffSelectedSha: { "sid-ws": "abc123" },
+    });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(imageSidesMock.mock.calls.map((call) => call.slice(0, 4))).toContainEqual([
+      "/wt/story",
+      "abc123",
+      "art/logo.png",
+      undefined,
+    ]);
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.getByTestId("commit-diff-html-mode-w1")).toBeInTheDocument();
   });
 
   it("SLW-DV-2: the Hide control hides the whole overlay (no compact size to fall to)", () => {
