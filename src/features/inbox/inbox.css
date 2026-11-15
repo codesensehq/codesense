@@ -285,6 +285,15 @@
   gap: 4px;
   padding: 4px;
 }
+/* The Foreman's hosted setup is running: one line, with Open full view (its messages are there). */
+.ibx-ov-setup {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--ibx-border);
+}
 /* A pins read that failed: one line in the zone, with Retry. */
 .ibx-ov-pins.ibx-ov-pins-failed {
   display: flex;

@@ -114,7 +114,11 @@ export function ChatOverlay({
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too), the same
   // pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);
-  const thread = useForemanThread(foreman && handle ? handle : null, conversation);
+  const { thread, setupLive } = useForemanThread(foreman && handle ? handle : null, conversation);
+  // While the page's hosted setup runs, its messages and cards are the full view's: the overlay
+  // says so once, with Open full view. A published session that has since ended is not running.
+  const setupRunning =
+    foreman && setupLive.some((h) => roster?.some((r) => r.handle === h && r.alive) ?? false);
   const pinTeam = foreman ? FOREMAN_TEAM : (team ?? home);
   const delivery = useMessageDelivery(team ?? home);
   const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
@@ -500,6 +504,15 @@ export function ChatOverlay({
               )}
             </div>
           </section>
+        )}
+        {setupRunning && (
+          <div className="ibx-ov-setup" role="status" data-testid="chat-overlay-setup">
+            <b>Setup is running</b>
+            <span aria-hidden>·</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={openForeman}>
+              Open full view
+            </button>
+          </div>
         )}
         {error && data && (
           <StaleNotice error={error} onRetry={() => void reload()} what="the chat" />
