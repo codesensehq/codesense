@@ -86,9 +86,10 @@
 @container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .composer{padding:8px 16px 10px}}
 /* The person's pins (onPin): an action row over the message's top edge, shown on hover and while focus is inside it; a tag and a note under it. Nothing moves with reduced motion. */
 .cs-chat .msg{position:relative}
-.cs-chat .msg .pin-acts{position:absolute;top:-12px;right:6px;z-index:2;display:none;padding:1px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-bg)}
+/* Hidden by opacity, not display:none: a redrawn Pin… or Unpin must be able to take focus back (after a replace, its Undo, Esc in the chooser or a pin), and then focus-within shows it. */
+.cs-chat .msg .pin-acts{position:absolute;top:-12px;right:6px;z-index:2;display:flex;opacity:0;pointer-events:none;padding:1px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-bg)}
 .cs-chat .msg.you .pin-acts{right:auto;left:6px}
-.cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts{display:flex}
+.cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts{opacity:1;pointer-events:auto}
 .cs-chat .pin-b{display:inline-flex;align-items:center;height:24px;padding:0 8px;border:0;border-radius:var(--cs-radius);background:none;color:var(--cs-muted-fg);font-size:var(--cs-text-xs);cursor:pointer}
 .cs-chat .pin-b:hover{background:var(--cs-surface);color:var(--cs-fg)}
 .cs-chat .pin-b:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px}
