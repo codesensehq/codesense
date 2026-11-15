@@ -1941,6 +1941,39 @@ describe("kit.chat onPin: the person pins a message", () => {
     expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
   });
 
+  it("draws an HTML message as its name and sender, never its markup", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<!doctype html><title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0 + 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const body = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"] .body`)!;
+    expect(body(9).textContent).not.toContain("<");
+    expect(body(9).dataset.html).toBe("1");
+    expect(body(9).querySelector(".html-t")!.textContent).toBe("Merge board");
+    expect(body(9).querySelector(".html-from")!.textContent).toBe("Dashboard from Story lead");
+    // No title or heading: the sender line is its name, said once.
+    expect(body(10).textContent).toBe("Dashboard from Story lead");
+  });
+
   it("names an HTML message by its title, not its markup, in the live region", async () => {
     const s = setup(
       [lead("idle")],
