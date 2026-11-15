@@ -450,7 +450,10 @@ describe("kit.chat", () => {
     mountOn(s, { cards: false });
     await flush();
     expect(s.el.querySelector("[data-card]")).toBeNull();
-    expect(s.el.querySelector('[data-mid="9"] .body')!.textContent).toBe(text);
+    // as a message, its backticked options are drawn as code (the inline subset)
+    const body = s.el.querySelector('[data-mid="9"] .body')!;
+    expect(body.textContent).toBe(text.replace(/`/g, ""));
+    expect([...body.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["Ship", "Hold"]);
   });
 
   it("with no lead running, the first send launches once, a second is held, and it flushes when the lead joins", async () => {
@@ -970,6 +973,48 @@ describe("kit.chat page layout and activity", () => {
   });
 });
 
+describe("kit.chat message text: an inline markdown subset", () => {
+  const bodyOf = async (text: string, extra: Row = {}) => {
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 1, from: "lead-1", text, createdAtMs: 1, ...extra }],
+    );
+    mountOn(s);
+    await flush();
+    return s.el.querySelector<HTMLElement>('.log [data-mid="1"] .body')!;
+  };
+  const tags = (body: HTMLElement) =>
+    [...body.querySelectorAll("*")].map((el) => [el.tagName.toLowerCase(), el.textContent]);
+
+  it("draws **strong**, *em* or _em_, and `code`, and shows no markers", async () => {
+    const body = await bodyOf("**Merged** with `main`; see *the notes* and _this one_.");
+    expect(tags(body)).toEqual([
+      ["strong", "Merged"],
+      ["code", "main"],
+      ["em", "the notes"],
+      ["em", "this one"],
+    ]);
+    expect(body.textContent).toBe("Merged with main; see the notes and this one.");
+  });
+
+  it("leaves what isn't markup as it is: snake_case, arithmetic, lone and unclosed markers", async () => {
+    const text = "snake_case_name, 2*3*4, a ** lone pair **, **open and `open too";
+    const body = await bodyOf(text);
+    expect(tags(body)).toEqual([]);
+    expect(body.textContent).toBe(text);
+  });
+
+  it("reads nothing inside code, and never markup: tags stay text", async () => {
+    const body = await bodyOf("`**not bold**` and <b>tag</b> **bold**\nnext line");
+    expect(tags(body)).toEqual([
+      ["code", "**not bold**"],
+      ["strong", "bold"],
+    ]);
+    expect(body.textContent).toBe("**not bold** and <b>tag</b> bold\nnext line");
+    expect(body.querySelector("b")).toBeNull();
+  });
+});
+
 describe("kit.chat suggestion chips from the Next line", () => {
   const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
     messageId: id,
@@ -988,7 +1033,8 @@ describe("kit.chat suggestion chips from the Next line", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".chips")).toBeNull();
-    expect(bodies(s.el)).toEqual([NEXT]);
+    // the line stays in the message, its backticked chips drawn as code (the inline subset)
+    expect(bodies(s.el)).toEqual([NEXT.replace(/`/g, "")]);
   });
 
   it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {

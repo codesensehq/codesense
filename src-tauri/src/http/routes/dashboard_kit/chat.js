@@ -121,8 +121,8 @@
     if (at < 1) return null;
     const question = lines.slice(0, at).join("\n").trim();
     if (!question) return null;
-    const rest = lines[at].replace(/^\s*Options:\s*/i, ""), split = rest.search(/My pick:/i);
-    const listed = split < 0 ? rest : rest.slice(0, split), after = split < 0 ? "" : rest.slice(split).replace(/^My pick:\s*/i, "");
+    const rest = lines[at].replace(/^\s*Options:\s*/i, ""), split2 = rest.search(/My pick:/i);
+    const listed = split2 < 0 ? rest : rest.slice(0, split2), after = split2 < 0 ? "" : rest.slice(split2).replace(/^My pick:\s*/i, "");
     const options = [...listed.matchAll(/`([^`]+)`/g)].map((match) => match[1].trim());
     const distinct = new Set(options.map((option) => option.toLowerCase()));
     if (options.length < 2 || options.length > MAX_OPTIONS || distinct.size !== options.length) return null;
@@ -1135,6 +1135,32 @@
     return h("div", { class: "msg lead", "data-mid": String(id) }, h("div", { class: "card", "data-card": String(id), "data-state": state, "data-step": meta ? meta.step : null, "data-consent": meta ? meta.consent : null }, ...parts));
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/inline.js
+  var CODE = /`([^`\n]+)`/g;
+  var STRONG = /\*\*(?=\S)([^*\n]*?\S)\*\*/g;
+  var EM = /(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<!\w)_(?=\S)([^_\n]*?\S)_(?!\w)/g;
+  function split(parts, re, make) {
+    return parts.flatMap((part) => {
+      if (typeof part !== "string") return [part];
+      const out = [];
+      let at = 0;
+      for (const match of part.matchAll(re)) {
+        if (match.index > at) out.push(part.slice(at, match.index));
+        out.push(make(match.slice(1).find((group) => group !== void 0)));
+        at = match.index + match[0].length;
+      }
+      if (at < part.length) out.push(part.slice(at));
+      return out;
+    });
+  }
+  function inlineNodes(text) {
+    let parts = [String(text ?? "")];
+    parts = split(parts, CODE, (inner) => h("code", {}, inner));
+    parts = split(parts, STRONG, (inner) => h("strong", {}, inner));
+    parts = split(parts, EM, (inner) => h("em", {}, inner));
+    return parts;
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
   var initialsOf = (name) => {
     const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
@@ -1376,7 +1402,7 @@
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
         first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`)) : null,
         pin2 ? pin2.acts : null,
-        h("div", { class: "body" }, item.text),
+        h("div", { class: "body" }, item.contentType === "html" ? item.text : inlineNodes(item.text)),
         item.note ? h("div", { class: "note" }, item.note) : null,
         item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null,
         pin2 ? pin2.tag : null,
