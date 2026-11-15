@@ -994,7 +994,10 @@ pub(crate) async fn evaluate_and_publish<R: tauri::Runtime>(
     })
     .await;
     if let Ok(value) = &result {
-        crate::live_hub::spend_changed(app, value)?;
+        // Publishing is a projection: the evaluation, and its cap holds, stand without it.
+        if let Err(error) = crate::live_hub::spend_changed(app, value) {
+            log::warn!(target:"spend_caps", "spend publish: {error}");
+        }
     }
     Ok((caller, result))
 }
