@@ -20,7 +20,7 @@ test("the agent chat overlay respects reduced motion in its conversation and com
                   {
                     id: 1,
                     team: { org: "acme", team: "widgets" },
-                    from: args.handle,
+                    from: args.handle ?? args.session,
                     fromName: "Lead",
                     to: "human",
                     toName: "You",
