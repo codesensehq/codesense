@@ -1807,27 +1807,37 @@ fn metric_topic(topic: &str) -> &str {
     }
 }
 
-/// Sample the retained-size gauges at most once per reporting window, and record them
-/// after the model lock is released.
+/// The retained-size gauges: delta-log entries, subscriptions, agent views and the view
+/// count per topic (the page-created `ui:` topics summed into one).
+fn projection_gauges(model: &Model) -> Vec<(String, usize)> {
+    let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+    let mut gauges = vec![
+        ("live_hub.agent_views".to_owned(), model.agent_views.len()),
+        ("live_hub.delta_log_entries".to_owned(), entries),
+        ("live_hub.subscriptions".to_owned(), subscriptions),
+    ];
+    let mut views = BTreeMap::<&str, usize>::new();
+    for (topic, count, _) in &topics {
+        *views.entry(metric_topic(topic)).or_default() += count;
+    }
+    gauges.extend(
+        views
+            .into_iter()
+            .map(|(topic, count)| (format!("live_hub.views.{topic}"), count)),
+    );
+    gauges
+}
+
+/// Sample the gauges at most once per reporting window, and record them after the model
+/// lock is released.
 fn record_projection_metrics<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if !crate::shared::invoke_stats::gauge_window_open() {
         return;
     }
     let hub = app.state::<LiveHub>();
-    let (agent_views, entries, subscriptions, topics) = {
-        let model = hub.model.lock().unwrap_or_else(|e| e.into_inner());
-        let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
-        (model.agent_views.len(), entries, subscriptions, topics)
-    };
-    crate::shared::invoke_stats::metric_gauge("live_hub.agent_views", agent_views);
-    crate::shared::invoke_stats::metric_gauge("live_hub.delta_log_entries", entries);
-    crate::shared::invoke_stats::metric_gauge("live_hub.subscriptions", subscriptions);
-    let mut views = BTreeMap::<&str, usize>::new();
-    for (topic, count, _) in &topics {
-        *views.entry(metric_topic(topic)).or_default() += count;
-    }
-    for (topic, count) in views {
-        crate::shared::invoke_stats::metric_gauge(&format!("live_hub.views.{topic}"), count);
+    let gauges = projection_gauges(&hub.model.lock().unwrap_or_else(|e| e.into_inner()));
+    for (name, value) in gauges {
+        crate::shared::invoke_stats::metric_gauge(&name, value);
     }
 }
 

@@ -186,6 +186,9 @@ pub struct Registry {
     maps: [RwLock<HashMap<Box<str>, Arc<Entry>>>; 3],
     reported_epoch: AtomicU64,
     metrics: Mutex<HashMap<Box<str>, [MetricBucket; 2]>>,
+    /// Never reset, so a test's before/after reads can't straddle a window rollover.
+    #[cfg(test)]
+    lifetime: Mutex<HashMap<String, u64>>,
 }
 
 impl Default for Registry {
@@ -200,6 +203,8 @@ impl Registry {
             maps: Default::default(),
             reported_epoch: AtomicU64::new(0),
             metrics: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            lifetime: Mutex::new(HashMap::new()),
         }
     }
 
@@ -244,6 +249,11 @@ impl Registry {
 
     /// Add an amount to an internal event counter.
     pub fn metric_add_at(&self, name: &str, amount: u64, now: Duration) -> Option<String> {
+        #[cfg(test)]
+        {
+            let mut lifetime = self.lifetime.lock().unwrap_or_else(|e| e.into_inner());
+            *lifetime.entry(name.to_owned()).or_default() += amount;
+        }
         self.update_metric(name, now, |m| m.count = m.count.saturating_add(amount));
         self.rollover(now.as_secs() / WINDOW_SECS)
     }
@@ -263,14 +273,11 @@ impl Registry {
             .filter(|b| b.epoch == epoch)
     }
 
-    /// The count over both live buckets, so a test that straddles a window boundary
-    /// still sees the same total.
+    /// The count of `name` since the registry was made, over every window.
     #[cfg(test)]
-    fn metric_recent_total(&self, name: &str) -> u64 {
-        let metrics = self.metrics.lock().unwrap_or_else(|e| e.into_inner());
-        metrics
-            .get(name)
-            .map_or(0, |buckets| buckets.iter().map(|b| b.count).sum())
+    fn metric_lifetime_total(&self, name: &str) -> u64 {
+        let lifetime = self.lifetime.lock().unwrap_or_else(|e| e.into_inner());
+        lifetime.get(name).copied().unwrap_or(0)
     }
 
     fn update_metric(&self, name: &str, now: Duration, update: impl FnOnce(&mut MetricBucket)) {
@@ -550,18 +557,21 @@ pub fn snapshot_json(mcp_tool_names: bool) -> serde_json::Value {
     global().snapshot_json_at(since_start(), mcp_tool_names)
 }
 
-/// The global count of `name` over the live windows, for tests that read before and after.
+/// The global count of `name` since start, for tests that read before and after.
 #[cfg(test)]
 pub(crate) fn metric_total(name: &str) -> u64 {
-    global().metric_recent_total(name)
+    global().metric_lifetime_total(name)
 }
 
 /// True once per reporting window, for the first caller in it: gauges that walk state
 /// sample then, not on every call.
 pub fn gauge_window_open() -> bool {
     static LAST: AtomicU64 = AtomicU64::new(u64::MAX);
-    let epoch = since_start().as_secs() / WINDOW_SECS;
-    LAST.swap(epoch, Ordering::AcqRel) != epoch
+    window_open(&LAST, since_start().as_secs() / WINDOW_SECS)
+}
+
+fn window_open(last: &AtomicU64, epoch: u64) -> bool {
+    last.swap(epoch, Ordering::AcqRel) != epoch
 }
 
 /// Record a low-cardinality internal event in the same sixty-second report.
@@ -849,9 +859,17 @@ mod tests {
             r.metric_count_at(&format!("m{i}"), secs(70));
         }
         r.metric_count_at("late", secs(70));
-        assert!(r.metric_recent_total("late") == 0);
-        assert!(r.metric_recent_total(OVERFLOW) >= 21);
+        assert!(r.metric_at("late", 1).is_none());
+        assert!(r.metric_at(OVERFLOW, 1).unwrap().count >= 21);
         assert!(r.metrics.lock().unwrap().len() <= MAX_NAMES_PER_KIND + 1);
+    }
+
+    #[test]
+    fn the_gauge_gate_opens_once_per_window() {
+        let last = AtomicU64::new(u64::MAX);
+        assert!(window_open(&last, 5));
+        assert!(!window_open(&last, 5));
+        assert!(window_open(&last, 6));
     }
 
     #[test]
