@@ -1002,13 +1002,13 @@
         slot.replaceChildren(...made.nodes);
       }
     };
-    const whoLine = (info, meta) => info ? h("div", { class: "who" }, faceNode(info), meta) : meta;
+    const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), info.name !== who ? h("span", { class: "sr" }, `${info.name}, `) : null, meta) : meta;
     const bubble = (item, side, first = true, info = null) => {
-      const pin2 = item.pin ? item.pin.make() : null;
+      const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
       return h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
-        first ? whoLine(info, h("div", { class: "meta" }, `${info && info.label || item.who} · ${timeLabel(item.at)}`)) : null,
+        first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`)) : null,
         pin2 ? pin2.acts : null,
         h("div", { class: "body" }, item.text),
         item.note ? h("div", { class: "note" }, item.note) : null,

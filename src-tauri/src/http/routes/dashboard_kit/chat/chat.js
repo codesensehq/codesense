@@ -166,11 +166,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
  // first/info belong to the faces option: a run's later messages have no meta line, and its first carries the avatar beside it. Unset, first is true and info null, so the node is what it always was.
- const whoLine=(info,meta)=>info?h('div',{class:'who'},faceNode(info),meta):meta;
+ // A face name the line doesn't show (a person's name beside a role word) is said once before it, as a sighted reader gets it from the face; the visible line is unchanged.
+ const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),info.name!==who?h('span',{class:'sr'},`${info.name}, `):null,meta):meta;
  const bubble=(item,side,first=true,info=null)=>{
-  const pin=item.pin?item.pin.make():null;
+  const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
   return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-   first?whoLine(info,h('div',{class:'meta'},`${info&&info.label||item.who} · ${timeLabel(item.at)}`)):null,pin?pin.acts:null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`)):null,pin?pin.acts:null,h('div',{class:'body'},item.text),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
  };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
