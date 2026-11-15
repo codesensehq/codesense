@@ -1447,7 +1447,8 @@ describe("kit.chat faces", () => {
       () => ({ face: "builtin-funny:coffee-bot", name: "Story lead" }),
     ],
     ["an image", false, () => ({ src: "/img/lead.png", name: "Story lead" })],
-    ["an emoji name", false, () => ({ name: "🦊 Story lead" }), "🦊 Story lead, "],
+    // the face name holds the line's name, so nothing is said before the line
+    ["an emoji name", false, () => ({ name: "🦊 Story lead" })],
   ])(
     "with faces on (%s) the meta line reads only the name and the time, and the face is read by no one",
     async (_kind, kitAvatar, faces, said = "") => {
@@ -1488,6 +1489,12 @@ describe("kit.chat faces", () => {
     const once = same.el.querySelector<HTMLElement>(".log .msg")!;
     expect(once.querySelector(".sr")).toBeNull();
     expect(spoken(once)).toBe(`${line}first`);
+
+    // nor when it holds the line's name in another case or with more around it
+    const holds = setup([lead("idle")], thread);
+    mountOn(holds, { faces: () => ({ name: " story LEAD (codex) ", label: "Story lead" }) });
+    await flush();
+    expect(holds.el.querySelector(".log .msg .sr")).toBeNull();
   });
 
   it("a face swapped in for an image that fails to load is hidden as well", async () => {
