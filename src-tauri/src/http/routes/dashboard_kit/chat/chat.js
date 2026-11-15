@@ -5,7 +5,7 @@
 //  target: {rows(sessions)->peer rows, read(peerRows, transport)->Promise<thread lists>, queue, follow, leadName(row)}: who the peer is, what its thread reads, where a message goes while no peer runs (queue, instead of a launch) and whether the thread moves when the peer does (follow).
 //  headerSlot: {slot, render(state)->{sig,nodes}}: the peer's controls, painted into the page's own header slot.
 //  layout: {head(state)->{sig,nodes}, source, composer(state)->{placeholder,hint,send}, composerRows, composerLabel, logLabel, empty, autofocus}: the words and the rows above the log; source is the plain line shown there when there is no head. variant:'page' marks the column (data-variant, class page) for a full-page layout.
-//  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the peer's current step while it runs, else Working…).
+//  activity: true|{text(state)->line|null}: the working row under the thread, off by default (the page's line, else the live lead's prose from the host's onSessionText, else the peer's current step while it runs, else Working…).
 //  cards: {parse(text)->card|null} replaces chat-core's parser; false turns inline cards off (a needs-you row reads as a message). consent:true reads the card line that ends a card's text (chat-core parseCardLine) into its buttons, its consent class in the header and data-step/data-act; the line is not shown. Off by default.
 //  chips: [{label, text, edit}]: one-tap messages above the composer, sent like typed text; edit adds a pencil that puts the text in the composer instead.
 //  faces: true|(row)->{src|face,name,label}: opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run (src draws that image, face or a name goes to kit.avatar, true draws initials from the sender's name), and a run of messages from one sender is one meta line (label is the name on it, else the sender's name); the person's own messages carry no avatar. Unset, the thread is unchanged.
@@ -24,6 +24,7 @@ import {CHAT_COPY,failureText,mergeCopy,modelLabel,timeLabel} from './copy.js';
 import {joinable,parseFailure} from './launch.js';
 import {DEFAULT_TIMERS,createSendState,systemClock} from './send-state.js';
 import {activityOf,leadRowsOf,liveOf,presenceOf} from './presence.js';
+import {createProse} from './prose.js';
 import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
@@ -100,6 +101,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  const showTerminal=()=>{const target=terminalTarget();if(target)transport.gotoAgent(target);};
  // --- DOM: the thread is role=log (focusable, so a long thread scrolls by keyboard), the composer is pinned under it.
  const log=h('div',{class:'log',role:'log',tabindex:'0','aria-live':'polite','aria-label':layout.logLabel||copy.logLabel});
+ // The working row (activity) sits at the thread's foot, after the log and outside its live region.
+ const actFoot=activity?h('div',{class:'act-foot'}):null,actCache=new Map();
  // onPin: the person pins a message into its agent thread, through the page: {pins() -> [{messageId, pinnedBy}], change(action 'pin'|'unpin'|'restore', messageId) -> the new list (rejects on failure), subscribe?(fn) -> off, showPins?(), name?(pinnedBy)}.
  // The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. An unpin offers Undo until the next pin, unpin or Esc. No timers.
  const pinCopy=copy.pin||CHAT_COPY.pin,pinState={note:null,busy:null,refocus:null};
@@ -176,7 +179,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  };
  const chipsBox=chips.length||nextOpt?h('div',{class:'chips',role:'group','aria-label':copy.chips}):null,chipSig={v:null};
  const variant=layout.variant==='page'?'page':null;
- el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,pinLive,chipsBox,composer.region));
+ el.replaceChildren(h('div',{class:variant?`chatcol cs-chat ${variant}`:'chatcol cs-chat','data-variant':variant},layout.head?headBox:layout.source?h('div',{class:'src'},layout.source):null,log,actFoot,pinLive,chipsBox,composer.region));
  const state=()=>({lead:live(),fail:(what,text)=>{fails.set(what,text);render();},clear:what=>{if(fails.delete(what))render();}});
  // A slot is repainted only when its signature changes, so focus on its buttons survives a pushed event that changes nothing.
  const paint=(slot,key,made)=>{if(made.sig!==headSig[key]){headSig[key]=made.sig;slot.replaceChildren(...made.nodes);}};
@@ -256,10 +259,24 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(item.mark!=='sent')return item.mark;
   return deliveryOf(item.id,{sentAt:item.sentAt,busyAtSend:item.busyAtSend,lead:live(),newestLeadAt:newestFrom(thread,leadHandles()),delivery:deliveryRow(item.messageId)});
  }
- // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the peer's current step while it runs.
+ // The activity row (off unless the page asks): the page's own line (activity.text(state)), else the live lead's prose, else the peer's current step while it runs.
+ // The working row sits at the thread's foot, after the log: outside its live region, so a line it shows is never read out with the row. The prose row is one node whose line
+ // is updated in place, and its status says Working… once.
+ const prose=activity?createProse({win,clock,render:()=>render()}):null;
+ let proseRow=null;
+ function proseItem(said){
+  if(!proseRow)proseRow=h('div',{class:'act','data-row':'activity'},face('working',copy.row.working),h('span',{class:'sr',role:'status','aria-live':'polite'},copy.row.working),h('span',{class:'prose'}));
+  const line=proseRow.querySelector('.prose');
+  line.textContent=said.line;line.title=said.text;
+  return {id:'activity',node:proseRow};
+ }
  function activityItem(){
   if(!activity)return null;
   const here=state(),own=activity.text?activity.text(here):null,p=presence();
+  prose.follow(live()?live().sessionId:null);
+  const said=own?null:prose.current(newestFrom(thread,leadHandles()));
+  if(said)return proseItem(said);
+  proseRow=null;
   const line=own||(p.key==='running'?(p.activity===copy.header.activityNone?copy.row.working:p.activity):null);
   return line?{id:'activity',sig:'a|'+line,make:()=>h('div',{class:'act',role:'status','aria-live':'polite','data-row':'activity'},face('working',copy.row.working),h('span',{},line))}:null;
  }
@@ -349,10 +366,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
   if(replacer)replacer.sync();
   const inChooser=replacer?replacer.within():false;
-  const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   const held=roving.focused();
   reconcile(log,cache,want);
   roving.refresh(held);
+  if(actFoot)reconcile(actFoot,actCache,act?[act]:[]);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
@@ -427,7 +445,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
