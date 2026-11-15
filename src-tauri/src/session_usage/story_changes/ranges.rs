@@ -318,7 +318,7 @@ fn prepare_bound(
     let commit =
         git2::Repository::find_commit(&repo, id).map_err(|_| REVISION_NOT_LOCAL)?;
     if !for_totals {
-        match crate::attribution::git_ai::GitAiSource::for_home(home).note(path, sha) {
+        match crate::attribution::git_ai::note_in(&repo, sha) {
             Ok(Some(_)) => {}
             Ok(None) => {
                 // An unsupported CLI's commit has no note by design: say whose it is.
