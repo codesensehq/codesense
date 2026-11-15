@@ -174,6 +174,24 @@ describe("kit.chat stylesheet", () => {
     for (const name of emitted) expect(styled, `.${name}`).toContain(`.${name}`);
     expect(styled).toContain("[data-variant=page]");
   });
+
+  // The declarations of `selector`'s own rule.
+  const ruleOf = (selector: string) => {
+    const at = css.indexOf(`${selector}{`);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf("}", at));
+  };
+  it("keeps a message's actions in the layout while hidden, so Pin… or Unpin can take focus back after a redraw", () => {
+    // display:none would make focus() a no-op on the rebuilt button: focus dropped to the page after a
+    // replace, its Undo, Esc in the chooser, or a pin. Hidden by opacity, the row shows on focus-within.
+    const hidden = ruleOf(".cs-chat .msg .pin-acts");
+    expect(hidden).not.toContain("display:none");
+    expect(hidden).toContain("opacity:0");
+    expect(hidden).toContain("pointer-events:none");
+    const shown = ruleOf(".cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts");
+    expect(shown).toContain("opacity:1");
+    expect(shown).toContain("pointer-events:auto");
+  });
 });
 
 describe("kit.chat mounts on one page", () => {
