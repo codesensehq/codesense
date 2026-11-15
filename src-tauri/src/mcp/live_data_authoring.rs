@@ -336,7 +336,14 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         verb: "unpin",
         tier: "metadata",
         args: "{agentId: string, storyId?: string, messageId: number}",
-        purpose: "Take a message out of an agent thread's pin list; the pins after it move up. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
+        purpose: "Take a message out of an agent thread's pin list; the pins after it move up. The pin is kept aside, so restorePin can undo this. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "restorePin",
+        tier: "metadata",
+        args: "{agentId: string, storyId?: string, messageId: number}",
+        purpose: "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {

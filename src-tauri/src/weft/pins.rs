@@ -192,6 +192,8 @@ pub enum PinOutcome {
     Updated,
     /// The pin was already there (a pin) or already gone (an unpin).
     Unchanged,
+    /// An unpinned pin came back as it was (see [`pin_restore`]).
+    Restored,
 }
 
 fn invalid(msg: &str) -> super::sqlite::WvWriteError {
@@ -208,7 +210,8 @@ const LIVE: &str = "EXISTS (SELECT 1 FROM wv_inbox m WHERE m.id = p.message_id \
 fn ordered(tx: &Transaction, thread: &ThreadKey) -> WvWriteResult<(Vec<i64>, Vec<i64>)> {
     let mut stmt = tx.prepare_cached(&format!(
         "SELECT p.message_id, {LIVE} FROM wv_pins p \
-         WHERE p.agent_id = ?1 AND p.story_id = ?2 ORDER BY p.position, p.id"
+         WHERE p.agent_id = ?1 AND p.story_id = ?2 AND p.removed_at IS NULL \
+         ORDER BY p.position, p.id"
     ))?;
     let rows = stmt
         .query_map(params![thread.agent_id, thread.story_id], |r| {
@@ -302,6 +305,13 @@ pub fn pin_add(
         )));
     }
     let preview_at = preview.as_ref().map(|_| now);
+    // A message unpinned earlier keeps its row (for a restore); pinning it again is a new
+    // pin, so the row starts over.
+    tx.execute(
+        "DELETE FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 AND message_id = ?3 \
+         AND removed_at IS NOT NULL",
+        params![thread.agent_id, thread.story_id, message_id],
+    )?;
     tx.execute(
         "INSERT INTO wv_pins \
          (agent_id, story_id, message_id, position, pinned_by, created_at, preview, preview_at) \
@@ -326,17 +336,21 @@ pub fn pin_add(
     Ok(PinOutcome::Pinned)
 }
 
-/// Unpin message `message_id` from `thread`; the pins after it move up.
+/// Unpin message `message_id` from `thread`; the pins after it move up. The pin is
+/// removed softly: its row keeps who pinned it, when, its preview and its place, so
+/// [`pin_restore`] can bring it back as it was.
 pub fn pin_remove(
     store: &WeftStore,
     thread: &ThreadKey,
     message_id: i64,
 ) -> WvWriteResult<PinOutcome> {
+    let now = chrono::Utc::now().timestamp_millis();
     let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let id: Option<i64> = tx
         .query_row(
-            "SELECT id FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 AND message_id = ?3",
+            "SELECT id FROM wv_pins WHERE agent_id = ?1 AND story_id = ?2 AND message_id = ?3 \
+             AND removed_at IS NULL",
             params![thread.agent_id, thread.story_id, message_id],
             |r| r.get(0),
         )
@@ -344,13 +358,67 @@ pub fn pin_remove(
     let Some(id) = id else {
         return Ok(PinOutcome::Unchanged);
     };
-    tx.execute("DELETE FROM wv_pins WHERE id = ?1", params![id])?;
-    write_audit_public(&tx, PINS, "delete", id)?;
+    tx.execute(
+        "UPDATE wv_pins SET removed_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )?;
+    write_audit_public(&tx, PINS, "mutate", id)?;
     let (mut order, gone) = ordered(&tx, thread)?;
     order.extend(gone);
     renumber(&tx, thread, &order)?;
     rusqlite::Transaction::commit(tx)?;
     Ok(PinOutcome::Unpinned)
+}
+
+/// Bring back message `message_id`'s unpinned pin in `thread` as it was: who pinned it,
+/// when, its preview, and its place in the list (the end when the list is shorter now).
+/// The Undo of an unpin. A pin that is live is `Unchanged`; a message never pinned here,
+/// one archived or withdrawn since, or a list at [`PIN_CAP`] is refused.
+pub fn pin_restore(
+    store: &WeftStore,
+    thread: &ThreadKey,
+    message_id: i64,
+) -> WvWriteResult<PinOutcome> {
+    let mut conn = WeftStore::conn(store)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let row: Option<(i64, i64, Option<i64>, bool)> = tx
+        .query_row(
+            &format!(
+                "SELECT p.id, p.position, p.removed_at, {LIVE} FROM wv_pins p \
+                 WHERE p.agent_id = ?1 AND p.story_id = ?2 AND p.message_id = ?3"
+            ),
+            params![thread.agent_id, thread.story_id, message_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((id, place, removed_at, live)) = row else {
+        return Err(invalid(&format!(
+            "message {message_id} has no pin to restore"
+        )));
+    };
+    if Option::is_none(&removed_at) {
+        return Ok(PinOutcome::Unchanged);
+    }
+    if !live {
+        return Err(invalid(&format!("no message {message_id}")));
+    }
+    let (mut order, gone) = ordered(&tx, thread)?;
+    if order.len() >= PIN_CAP {
+        return Err(invalid(&format!(
+            "a thread holds at most {PIN_CAP} pins; unpin one first"
+        )));
+    }
+    tx.execute(
+        "UPDATE wv_pins SET removed_at = NULL WHERE id = ?1",
+        params![id],
+    )?;
+    write_audit_public(&tx, PINS, "mutate", id)?;
+    let at = usize::try_from(place).unwrap_or(0).min(order.len());
+    order.insert(at, message_id);
+    order.extend(gone);
+    renumber(&tx, thread, &order)?;
+    rusqlite::Transaction::commit(tx)?;
+    Ok(PinOutcome::Restored)
 }
 
 /// Put `thread`'s shown pins in `message_ids` order. The ids must be exactly the pins
@@ -384,7 +452,8 @@ pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin
     let conn = WeftStore::conn(store)?;
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT p.message_id, p.pinned_by, p.created_at, p.preview, p.preview_at \
-         FROM wv_pins p WHERE p.agent_id = ?1 AND p.story_id = ?2 AND {LIVE} \
+         FROM wv_pins p WHERE p.agent_id = ?1 AND p.story_id = ?2 \
+         AND p.removed_at IS NULL AND {LIVE} \
          ORDER BY p.position, p.id LIMIT ?3"
     ))?;
     let rows = stmt
@@ -549,6 +618,101 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(a, 0), (c, 1)]
         );
+    }
+
+    fn row_times(store: &WeftStore, t: &ThreadKey, id: i64) -> (String, i64, Option<i64>) {
+        let p = pins_list(store, t)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.message_id == id)
+            .unwrap();
+        (p.pinned_by, p.pinned_at_ms, p.preview_at_ms)
+    }
+
+    #[test]
+    fn a_store_from_before_soft_unpin_migrates_forward_and_keeps_its_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("weft.sqlite3");
+        // The pins table as main shipped it, with one pin, and no removed_at column.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE wv_pins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL,
+                    story_id TEXT NOT NULL DEFAULT '', message_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL, pinned_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    preview TEXT, preview_at INTEGER, UNIQUE (agent_id, story_id, message_id));
+                 INSERT INTO wv_pins (agent_id, story_id, message_id, position, pinned_by, created_at)
+                    VALUES ('team/claude-dev', '', 1, 0, 'agent-a', 7);",
+            )
+            .unwrap();
+        }
+        let store = WeftStore::open(&path).unwrap();
+        let a = message(&store);
+        assert_eq!(a, 1);
+        let t = thread(None);
+        assert_eq!(ids(&store, &t), vec![a]);
+        assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unpinned);
+        assert_eq!(pin_restore(&store, &t, a).unwrap(), PinOutcome::Restored);
+        assert_eq!(row_times(&store, &t, a), ("agent-a".to_string(), 7, None));
+    }
+
+    #[test]
+    fn restore_brings_an_unpinned_pin_back_in_its_place_as_it_was() {
+        let (_d, store) = open_temp();
+        let t = thread(Some("DEMO-1"));
+        let (a, b, c) = (message(&store), message(&store), message(&store));
+        let preview = PinPreview {
+            short_name: Some("Plan".into()),
+            ..Default::default()
+        };
+        pin_add(&store, &t, a, "human", None, None).unwrap();
+        pin_add(&store, &t, b, "agent-a", None, Some(&preview)).unwrap();
+        pin_add(&store, &t, c, "human", None, None).unwrap();
+        let before = row_times(&store, &t, b);
+        assert_eq!(pin_remove(&store, &t, b).unwrap(), PinOutcome::Unpinned);
+        assert_eq!(ids(&store, &t), vec![a, c]);
+        assert_eq!(pin_restore(&store, &t, b).unwrap(), PinOutcome::Restored);
+        assert_eq!(ids(&store, &t), vec![a, b, c]);
+        assert_eq!(row_times(&store, &t, b), before);
+        let restored = pins_list(&store, &t).unwrap().remove(1);
+        assert_eq!(
+            restored.preview.and_then(|p| p.short_name),
+            Some("Plan".to_string())
+        );
+        // A pin that is live, or was never pinned, has nothing to restore.
+        assert_eq!(pin_restore(&store, &t, b).unwrap(), PinOutcome::Unchanged);
+        assert!(pin_restore(&store, &t, message(&store)).is_err());
+    }
+
+    #[test]
+    fn restore_waits_for_room_under_the_cap_and_a_new_pin_starts_afresh() {
+        let (_d, store) = open_temp();
+        let t = thread(None);
+        let (a, b, c, d) = (
+            message(&store),
+            message(&store),
+            message(&store),
+            message(&store),
+        );
+        for id in [a, b, c] {
+            pin_add(&store, &t, id, "agent-a", None, None).unwrap();
+        }
+        pin_remove(&store, &t, a).unwrap();
+        pin_add(&store, &t, d, "human", None, None).unwrap();
+        assert!(pin_restore(&store, &t, a).is_err(), "three are pinned");
+        assert_eq!(ids(&store, &t), vec![b, c, d]);
+        // Pinning a removed message again is a new pin: by whoever pins it, now, at the end.
+        pin_remove(&store, &t, d).unwrap();
+        assert_eq!(
+            pin_add(&store, &t, a, "human", None, None).unwrap(),
+            PinOutcome::Pinned
+        );
+        assert_eq!(ids(&store, &t), vec![b, c, a]);
+        assert_eq!(row_times(&store, &t, a).0, "human");
+        assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unpinned);
+        assert_eq!(pin_remove(&store, &t, a).unwrap(), PinOutcome::Unchanged);
+        assert_eq!(pin_threads_for(&store, &[a]).unwrap(), vec![t.clone()]);
     }
 
     #[test]

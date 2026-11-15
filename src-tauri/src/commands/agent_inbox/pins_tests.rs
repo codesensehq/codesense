@@ -185,6 +185,15 @@ async fn an_agent_pins_into_its_own_thread_and_a_page_reads_the_same_list() {
         .unwrap();
     assert_eq!(outcome(&removed), Some(PinOutcome::Unpinned));
     assert!(listed(&human(&fake, Some("DEMO-1"), PinOp::Read).await).is_empty());
+    // The agent's Undo: its unpinned pin comes back.
+    let restored = pin_request(&*fake, Some("S1"), view, None, None, PinChange::Restore)
+        .await
+        .unwrap();
+    assert_eq!(outcome(&restored), Some(PinOutcome::Restored));
+    assert_eq!(
+        listed(&human(&fake, Some("DEMO-1"), PinOp::Read).await),
+        vec![view]
+    );
 }
 
 #[tokio::test]
@@ -357,4 +366,39 @@ fn the_change_event_payload_names_the_team_and_thread() {
         payload,
         serde_json::json!({"org":"acme","team":"default","agentId":AGENT,"storyId":""})
     );
+}
+
+#[tokio::test]
+async fn the_person_restores_an_unpinned_pin_as_it_was_and_the_restore_fires_once() {
+    let fake = FakeHost::new();
+    let a = mail(&fake, "S1", "human", "view a").await;
+    let b = mail(&fake, "S1", "human", "view b").await;
+    let story = Some("DEMO-1");
+    for id in [a, b] {
+        human(
+            &fake,
+            story,
+            PinOp::Pin {
+                message_id: id,
+                position: None,
+                preview: None,
+            },
+        )
+        .await;
+    }
+    human(&fake, story, PinOp::Unpin { message_id: a }).await;
+    let restored = human(&fake, story, PinOp::Restore { message_id: a }).await;
+    assert_eq!(outcome(&restored), Some(PinOutcome::Restored));
+    assert_eq!(listed(&restored), vec![a, b], "back in its place");
+    let again = human(&fake, story, PinOp::Restore { message_id: a }).await;
+    assert_eq!(outcome(&again), Some(PinOutcome::Unchanged));
+    // pin, pin, unpin, restore: the second restore changed nothing.
+    assert_eq!(fake.pin_events().len(), 4);
+    let never = mail(&fake, "S1", "human", "view c").await;
+    match human(&fake, story, PinOp::Restore { message_id: never }).await {
+        PinResult::Invalid { message } => {
+            assert!(message.contains("no pin to restore"), "{message}")
+        }
+        other => panic!("expected invalid, got {other:?}"),
+    }
 }

@@ -98,3 +98,39 @@ export function cardAnswer(cardId,thread){
  const row=(Array.isArray(thread)?thread:[]).find(item=>item&&item.from==='human'&&item.inReplyTo===cardId);
  return row?{text:row.text||'',at:row.createdAtMs||0}:null;
 }
+// The person's pins of a chat's messages: the words the kit's chat and the app's overlay both say. A thread shows at most PIN_CAP pins, the person's and its agent's together.
+export const PIN_CAP=3;
+const squashSpace=text=>String(text||'').replace(/\s+/g,' ').trim();
+// The first sentence of a message's first non-empty line: up to its first . ! or ?.
+export function pinFirstSentence(text){const line=String(text||'').split('\n').find(l=>l.trim())||'';const end=/^.*?[.!?](?=\s|$)/.exec(line.trim());return squashSpace(end?end[0]:line);}
+// "you" for the person, else the agent's name.
+export const pinWho=(pinnedBy,nameOf)=>pinnedBy==='human'?'you':nameOf(pinnedBy);
+// The dimmed Pin's accessible name and tooltip at the cap.
+export const pinCapLabel=count=>`${count} of ${PIN_CAP} pinned`;
+// The note at the cap: whose pins fill the list, the most first. Nothing is replaced.
+export function pinCapNote(pins,nameOf){
+ const counts=new Map();
+ for(const p of pins){const who=pinWho(p.pinnedBy,nameOf);counts.set(who,(counts.get(who)||0)+1);}
+ const parts=[...counts].sort((a,b)=>b[1]-a[1]).map(([who,n])=>`${n} by ${who}`).join(', ');
+ return `${pinCapLabel(pins.length)} (${parts}). Unpin one to pin this.`;
+}
+// A message named by its first words, as the line chip and the live region show it.
+export function pinFirstWords(text,words=4){const all=squashSpace(text).split(' ');return all.length<=words?all.join(' '):`${all.slice(0,words).join(' ')}…`;}
+// What the polite live region says after a pin, an unpin or an Undo.
+export function pinLiveText(done,title,count){const verb=done==='pinned'?'Pinned':done==='unpinned'?'Unpinned':'Restored';return `${verb} "${pinFirstWords(title)}". ${pinCapLabel(count)}.`;}
+// A message's text with its tags dropped and its entities read, as a heading or title shows it: no DOM, so the kit and the app name pins the same way.
+const ENTITIES={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
+function plainText(markup){return squashSpace(String(markup||'').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,code)=>{if(code[0]==='#'){const n=code[1].toLowerCase()==='x'?parseInt(code.slice(2),16):parseInt(code.slice(1),10);return Number.isInteger(n)&&n>=0&&n<=0x10ffff&&!(n>=0xd800&&n<=0xdfff)?String.fromCodePoint(n):all;}const named=ENTITIES[code.toLowerCase()];return named===undefined?all:named;}));}
+// What a pin of this message is called. An HTML message: its summary, then its <title>, then its first heading, then "Dashboard from <sender>"; never its markup. Any other message: its summary, else its first sentence, else "Message from <sender>".
+export function pinTitleOf(m,sender){
+ const summary=squashSpace(m&&m.summary);
+ if(summary)return summary;
+ const text=String((m&&m.text)||'');
+ if(m&&m.contentType==='html'){
+  const title=/<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+  if(title&&plainText(title[1]))return plainText(title[1]);
+  for(const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)){const name=plainText(heading[2]);if(name)return name;}
+  return `Dashboard from ${sender}`;
+ }
+ return pinFirstSentence(text)||`Message from ${sender}`;
+}

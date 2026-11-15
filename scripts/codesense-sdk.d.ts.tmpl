@@ -561,6 +561,17 @@ declare namespace CodesenseSdk {
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
     /** The chat links its stylesheet (`/kit/v1/chat.css`, every rule under the chat's `.cs-chat` root) once per page. `false` keeps the page's own chat rules. Each mount takes its own element ids: the first chat on a page keeps the plain ones (`sv-composer-input`, `sv-status`, …), the next carry `-2`, `-3`; unmount gives the ids back. Default `true`. */
     styles?: boolean;
+    /** The person pins a message into its agent thread, through the page (the pins verbs). Each message gets a Pin in its action row (shown on hover and while focus is inside it); pinned, it is Unpin with a "Pinned by" tag. The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. An unpin offers Undo (`restore`) until the next pin, unpin or Esc. `pins()` is the thread's list now; `change` resolves the new list or rejects; `subscribe(fn)` repaints when the list changes; `showPins()` moves focus to the page's pins; `name(pinnedBy)` names an agent. */
+    onPin?: {
+      pins(): ReadonlyArray<{ messageId: number | string; pinnedBy: string }>;
+      change(
+        action: "pin" | "unpin" | "restore",
+        messageId: number | string,
+      ): Promise<ReadonlyArray<{ messageId: number | string; pinnedBy: string }>>;
+      subscribe?(listener: () => void): () => void;
+      showPins?(): void;
+      name?(pinnedBy: string): string;
+    };
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
     timers?: { slowMs: number; failMs: number };
     /** Builds the launch prompt from the first message. Default: the text itself. */
@@ -623,6 +634,22 @@ declare namespace CodesenseSdk {
         cardId: string | number,
         thread: readonly ChatThreadRow[] | null | undefined,
       ): { text: string; at: number } | null;
+      /** A thread shows at most this many pins, the person's and its agent's together. */
+      PIN_CAP: number;
+      /** The first sentence of a message's first non-empty line. */
+      pinFirstSentence(text: string): string;
+      /** "you" for the person, else the agent's name. */
+      pinWho(pinnedBy: string, nameOf: (pinnedBy: string) => string): string;
+      /** The dimmed Pin's accessible name at the cap: "3 of 3 pinned". */
+      pinCapLabel(count: number): string;
+      /** The note at the cap: whose pins fill the list, the most first. */
+      pinCapNote(pins: ReadonlyArray<{ pinnedBy: string }>, nameOf: (pinnedBy: string) => string): string;
+      /** A message named by its first words. */
+      pinFirstWords(text: string, words?: number): string;
+      /** What the polite live region says after a pin, an unpin or an Undo. */
+      pinLiveText(done: "pinned" | "unpinned" | "restored", title: string, count: number): string;
+      /** What a pin of this message is called: an HTML message by its summary, `<title>`, first heading, else "Dashboard from <sender>"; any other by its summary, else its first sentence. */
+      pinTitleOf(m: { text?: string | null; contentType?: string | null; summary?: string | null }, sender: string): string;
     };
     thread: {
       mergeThread(...lists: unknown[]): ChatRow[];

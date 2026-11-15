@@ -151,6 +151,7 @@ fn spec(
                 | "pins"
                 | "pin"
                 | "unpin"
+                | "restorePin"
                 | "reorderPins"
         ),
         confirmable,
@@ -187,7 +188,7 @@ fn capability_for_verb(name: &str) -> &'static str {
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
         | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
-        | "unpin" | "reorderPins" => "inbox:write",
+        | "unpin" | "restorePin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -279,6 +280,8 @@ fn register_resources(registry: &mut Registry) {
         ),
         ("pin", Class::Metadata, Some("pin"), None),
         ("unpin", Class::Metadata, Some("pin"), None),
+        // The Undo of an unpin: the pin comes back as it was.
+        ("restorePin", Class::Metadata, Some("pin"), None),
         (
             "reorderPins",
             Class::Metadata,

@@ -165,6 +165,11 @@ const INVOKE_META = {
     description: "Take a message out of an agent thread's pin list; the pins after it move up.",
     examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
   },
+  restorePin: {
+    description:
+      "Undo an unpin: the message's unpinned pin comes back as it was (who pinned it, when, its preview and its place).",
+    examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
+  },
   reorderPins: {
     description:
       "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
