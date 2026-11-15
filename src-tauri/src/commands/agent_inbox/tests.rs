@@ -2223,6 +2223,15 @@ async fn mail_waiting_when_an_agent_arms_is_announced_once() {
 /// Role mail offers each live holder of the role its notice, as a direct message does,
 /// and the notice names the role to claim from; once the holder releases the role, role
 /// mail offers it nothing.
+/// What the app's `role_message_queued` does with each role send: its holders are offered.
+async fn offer_queued(fake: &FakeHost) {
+    let queued = std::mem::take(&mut *fake.queued.lock().unwrap());
+    assert!(!queued.is_empty(), "the send reached role_message_queued");
+    for (team, role, _, _) in queued {
+        offer_queued_role(fake, &launch_team(&team), &role).await;
+    }
+}
+
 #[tokio::test]
 async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
     use crate::weft::role_inbox::{register_role, release_role};
@@ -2257,6 +2266,7 @@ async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
             .await
             .unwrap(),
     );
+    offer_queued(&fake).await;
     assert_eq!(*fake.stored_for.lock().unwrap(), vec!["H2".to_string()]);
     let notice = hook_notice(&*host, "S2").await.expect("the holder is told");
     assert!(
@@ -2271,6 +2281,7 @@ async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
     let asked = ask("role:triage").await;
     fake.stored_for.lock().unwrap().clear();
     sent_id(reply(&host, Some("S1"), asked, "red", None).await.unwrap());
+    offer_queued(&fake).await;
     assert_eq!(*fake.stored_for.lock().unwrap(), Vec::<String>::new());
     assert_eq!(hook_notice(&*host, "S2").await, None);
 }

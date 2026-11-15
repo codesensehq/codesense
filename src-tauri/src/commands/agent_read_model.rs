@@ -783,9 +783,6 @@ async fn send_role_as_human(
             host.inbox_event(InboxEvent::new(InboxChange::Stored, team, [message_id]));
             host.roles_changed();
             host.role_message_queued(team, &queued_role, message_id, crate::weft::inbox::HUMAN);
-            if let Ok(path) = host.team_store(team).await {
-                super::agent_inbox::offer_role_holders(&**host, path, &queued_role).await;
-            }
             Ok(HumanSendResult::Sent {
                 message_id,
                 delivery_id: Some(delivery_id),

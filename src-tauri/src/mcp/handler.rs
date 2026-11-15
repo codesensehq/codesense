@@ -7354,7 +7354,6 @@ impl CodesenseHandler {
             reply_to,
             summary,
         };
-        let holders = (path.clone(), send.role.clone());
         let outcome =
             crate::commands::role_inbox::send_role_and_notify(path, send, |role, message_id| {
                 host.inbox_event(crate::live_hub::inbox_events::InboxEvent::new(
@@ -7368,7 +7367,6 @@ impl CodesenseHandler {
             .map_err(|e| ErrorData::internal_error(e, None))?;
         if outcome["status"] == "sent" {
             crate::commands::agent_read_model::agent_state_changed(&self.app_handle);
-            crate::commands::agent_inbox::offer_role_holders(&host, holders.0, &holders.1).await;
         }
         ok_json(outcome)
     }
