@@ -2640,6 +2640,11 @@ button.ibx-media-open {
   color: var(--ibx-accent);
   font-weight: 600;
 }
+/* On the highlighted row's accent wash the muted and accent inks drop under AA (light: 4.36:1, 4.25:1); the full ink holds, and the row's line and wash still mark it. */
+.ibx-pin-chooser .choice[data-current] .by,
+.ibx-pin-chooser .choice[data-current] .go {
+  color: var(--ibx-fg);
+}
 .ibx-pin-chooser .room {
   display: flex;
   align-items: center;
