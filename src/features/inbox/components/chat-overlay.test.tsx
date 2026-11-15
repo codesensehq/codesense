@@ -982,7 +982,12 @@ describe("ChatOverlay: the person pins a message", () => {
       // An HTML message looks up its team's pages; there are none here.
       if (cmd === "list_panes") return { panes: [], contentRoot: null };
       if (cmd !== "agent_pins") return undefined;
-      const a = args as { op: string; messageId?: number };
+      const a = args as {
+        op: string;
+        messageId?: number;
+        replaces?: number | null;
+        replacing?: number | null;
+      };
       if (failNext && a.op !== "read") {
         failNext = false;
         throw new Error("offline");
@@ -1001,7 +1006,25 @@ describe("ChatOverlay: the person pins a message", () => {
         removed.push({ ...held[at]!, position: at });
         held.splice(at, 1);
         outcome = "unpinned";
+      } else if (a.op === "replace") {
+        const at = held.findIndex((p) => p.messageId === a.replaces);
+        if (at < 0) {
+          return {
+            status: "invalid",
+            message: `message ${a.replaces} is no longer pinned here; the list changed`,
+          };
+        }
+        removed.push({ ...held[at]!, position: at });
+        held[at] = { messageId: a.messageId!, position: at, pinnedBy: "human", pinnedAtMs: NOW };
+        outcome = "replaced";
       } else if (a.op === "restore") {
+        if (a.replacing != null) {
+          const gone = held.findIndex((p) => p.messageId === a.replacing);
+          if (gone >= 0) held.splice(gone, 1);
+        }
+        if (held.length >= 3) {
+          return { status: "invalid", message: "a thread holds at most 3 pins; unpin one first" };
+        }
         const back = removed.find((p) => p.messageId === a.messageId)!;
         held.splice(back.position, 0, back);
         outcome = "restored";
@@ -1045,24 +1068,213 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(await screen.findByTestId("chat-overlay-pin-4")).toBeInTheDocument();
   });
 
-  it("at the cap every Pin is dimmed ahead of time; a click names whose pins fill it and replaces nothing", async () => {
-    held.push({ messageId: 2, position: 2, pinnedBy: "human", pinnedAtMs: NOW });
-    await renderOverlay(420, 700);
-    await screen.findByTestId("chat-overlay-pin-2");
-    const pin = pinOf(4);
-    expect(pin).toHaveAttribute("aria-disabled", "true");
-    expect(pin).toHaveAccessibleName("Pin (3 of 3 pinned)");
-    fireEvent.click(pin);
-    const note = within(row(4)).getByTestId("ibx-pin-note");
-    expect(note).toHaveTextContent(
-      "3 of 3 pinned (2 by Login timeout lead, 1 by you). Unpin one to pin this.",
-    );
-    expect(ops()).toEqual([]);
-    fireEvent.keyDown(note, { key: "Escape" });
-    expect(within(row(4)).queryByTestId("ibx-pin-note")).toBeNull();
-    fireEvent.click(pin);
-    fireEvent.click(within(row(4)).getByRole("button", { name: "Show pins" }));
-    expect(screen.getByTestId("chat-overlay-pin-3")).toHaveFocus();
+  describe("at the cap: Pin… asks which pin to replace", () => {
+    const full = async () => {
+      held.push({ messageId: 2, position: 2, pinnedBy: "human", pinnedAtMs: NOW });
+      await renderOverlay(420, 700);
+      await screen.findByTestId("chat-overlay-pin-2");
+    };
+    const chooser = () =>
+      within(row(4)).getByRole("group", {
+        name: "Replace a pin with this message · 3 of 3 pinned",
+      });
+    const choices = () => within(chooser()).getAllByTestId("ibx-pin-choice");
+    const choiceOf = (id: number) => choices().find((c) => c.dataset.pinId === String(id))!;
+    const pinsChanged = () =>
+      act(() =>
+        listeners
+          .get(AGENT_PINS_CHANGED_EVENT)
+          ?.forEach((h) =>
+            h({ payload: { ...TEAM, agentId: "builtin/claude", storyId: "BUG-142" } }),
+          ),
+      );
+    const replaceOps = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(
+          ([cmd, a]) => cmd === "agent_pins" && (a as { op: string }).op !== "read",
+        )
+        .map(([, a]) => {
+          const call = a as {
+            op: string;
+            messageId: number;
+            replaces?: number;
+            replacing?: number;
+          };
+          return [call.op, call.messageId, call.replaces ?? call.replacing ?? null];
+        });
+
+    it("Pin… works at the cap and opens the chooser under the message, every pin in list order, focus on the first", async () => {
+      await full();
+      const pin = pinOf(4);
+      expect(pin).not.toHaveAttribute("aria-disabled");
+      expect(pin).toHaveAccessibleName("Pin, replacing one (3 of 3 pinned)");
+      expect(pin).toHaveTextContent("Pin…");
+      expect(pin).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(pin);
+      expect(pin).toHaveAttribute("aria-expanded", "true");
+      expect(pin.getAttribute("aria-controls")).toBe(chooser().id);
+      expect(choices().map((c) => c.dataset.pinId)).toEqual(["3", "1", "2"]);
+      expect(choices()[0]).toHaveFocus();
+      expect(choiceOf(3)).toHaveTextContent("QA");
+      expect(choiceOf(3)).toHaveTextContent(/Pinned by Login timeout lead at \d\d:\d\d/);
+      expect(choiceOf(2)).toHaveTextContent(/Pinned by you at/);
+      expect(replaceOps()).toEqual([]);
+      // The strip marks the pin the current row would replace.
+      expect(screen.getByTestId("chat-overlay-pin-3")).toHaveAttribute("data-replacing", "true");
+    });
+
+    it("a click on a row that isn't current only arrives on it; the next click replaces", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.keyDown(choices()[0]!, { key: "ArrowDown" });
+      fireEvent.keyDown(choiceOf(1), { key: "ArrowDown" });
+      expect(choiceOf(2)).toHaveFocus();
+      fireEvent.click(choiceOf(3));
+      expect(replaceOps()).toEqual([]);
+      expect(choiceOf(3)).toHaveAttribute("data-current", "true");
+      expect(choiceOf(3)).toHaveTextContent("Replace");
+      expect(choiceOf(2)).not.toHaveTextContent("Replace");
+      expect(screen.getByTestId("chat-overlay-pin-3")).toHaveAttribute("data-replacing", "true");
+      fireEvent.click(choiceOf(3));
+      await within(row(4)).findByTestId("ibx-pin-note");
+      expect(replaceOps()).toEqual([["replace", 4, 3]]);
+    });
+
+    it("the icon-only Pin… carries the cap's count, and your own pin's row shows the strip's glyph", async () => {
+      await full();
+      expect(pinOf(4).querySelector(".ibx-pin-cap")).toHaveTextContent("3");
+      expect(pinOf(1).querySelector(".ibx-pin-cap")).toBeNull();
+      fireEvent.click(pinOf(4));
+      expect(choiceOf(2)).toHaveAttribute("data-own", "quote");
+      expect(choiceOf(3)).not.toHaveAttribute("data-own");
+    });
+
+    it("moves between rows with the arrow keys, Home and End, which never reach the thread; Esc closes back to Pin…", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.keyDown(choices()[0]!, { key: "ArrowDown" });
+      expect(choiceOf(1)).toHaveFocus();
+      expect(screen.getByTestId("chat-overlay-pin-1")).toHaveAttribute("data-replacing", "true");
+      fireEvent.keyDown(choiceOf(1), { key: "End" });
+      expect(choiceOf(2)).toHaveFocus();
+      fireEvent.keyDown(choiceOf(2), { key: "ArrowDown" });
+      expect(choiceOf(2)).toHaveFocus();
+      fireEvent.keyDown(choiceOf(2), { key: "Home" });
+      expect(choiceOf(3)).toHaveFocus();
+      // One Tab stop among the rows; Tab goes on to Cancel.
+      expect(choices().filter((c) => c.tabIndex === 0)).toEqual([choiceOf(3)]);
+      expect(within(chooser()).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      fireEvent.keyDown(choiceOf(3), { key: "Escape" });
+      expect(within(row(4)).queryByTestId("ibx-pin-chooser")).toBeNull();
+      expect(pinOf(4)).toHaveFocus();
+      expect(screen.getByTestId("chat-overlay")).toBeInTheDocument();
+    });
+
+    it("one choice replaces in place, says so with Undo and moves focus to Unpin; one Undo puts both back", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.keyDown(choices()[0]!, { key: "ArrowDown" });
+      fireEvent.keyDown(choiceOf(1), { key: "Enter" });
+      const note = await within(row(4)).findByTestId("ibx-pin-note");
+      expect(note).toHaveTextContent("Replaced Login timeout lead's pin “Tests”.");
+      expect(replaceOps()).toEqual([["replace", 4, 1]]);
+      // In the replaced pin's place, and nothing else moved.
+      const strip = () =>
+        [...document.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]')].map(
+          (el) => el.dataset.testid,
+        );
+      expect(strip()).toEqual(["chat-overlay-pin-3", "chat-overlay-pin-4", "chat-overlay-pin-2"]);
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
+      expect(pinOf(4)).toHaveAccessibleName("Unpin");
+      expect(screen.getByTestId("ibx-pin-live")).toHaveTextContent(
+        "Replaced Login timeout lead's pin “Tests”.",
+      );
+      fireEvent.click(within(note).getByRole("button", { name: "Undo" }));
+      await waitFor(() =>
+        expect(strip()).toEqual(["chat-overlay-pin-3", "chat-overlay-pin-1", "chat-overlay-pin-2"]),
+      );
+      expect(replaceOps()).toEqual([
+        ["replace", 4, 1],
+        ["restore", 1, 4],
+      ]);
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
+      expect(pinOf(4)).toHaveAccessibleName("Pin, replacing one (3 of 3 pinned)");
+      expect(within(row(4)).queryByRole("button", { name: "Undo" })).toBeNull();
+    });
+
+    it("a pin the agent swapped in while the chooser is open is new and must be arrived on before it can be replaced", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      // The agent swaps "QA" (3) for message 1's neighbour 5.
+      arrive(msg(5, LEAD, "human", "Trace for QA"));
+      await screen.findByText("Trace for QA");
+      held[0] = {
+        messageId: 5,
+        position: 0,
+        pinnedBy: LEAD,
+        pinnedAtMs: NOW,
+        preview: { shortName: "QA trace" },
+      };
+      pinsChanged();
+      await waitFor(() => expect(choiceOf(5)).toBeDefined());
+      const fresh = choiceOf(5);
+      expect(fresh).toHaveTextContent("New");
+      const changed = await within(chooser()).findByTestId("ibx-pin-change");
+      expect(changed).toHaveTextContent("“QA trace” is new");
+      // The row the person was on left: no row is chosen, focus is on the change line.
+      await waitFor(() => expect(within(chooser()).getByTestId("ibx-pin-change")).toHaveFocus());
+      expect(choices().filter((c) => c.dataset.current)).toEqual([]);
+      fireEvent.click(fresh);
+      expect(within(chooser()).getByTestId("ibx-pin-change")).toHaveTextContent(
+        "“QA trace” is new. Choose it again to replace it.",
+      );
+      expect(replaceOps()).toEqual([]);
+      fireEvent.click(fresh);
+      await within(row(4)).findByTestId("ibx-pin-note");
+      expect(replaceOps()).toEqual([["replace", 4, 5]]);
+    });
+
+    it("a pin that left while the chooser is open leaves room: it offers a plain Pin and replaces nothing", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      held.splice(2, 1);
+      pinsChanged();
+      const room = await within(row(4)).findByText("There's room now.");
+      expect(within(row(4)).queryAllByTestId("ibx-pin-choice")).toEqual([]);
+      fireEvent.click(
+        within(room.closest("[role=group]") as HTMLElement).getByRole("button", { name: "Pin" }),
+      );
+      await screen.findByTestId("chat-overlay-pin-4");
+      expect(replaceOps()).toEqual([["pin", 4, null]]);
+    });
+
+    it("a replace that fails keeps the chooser and its row, and says nothing changed", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      failNext = true;
+      fireEvent.click(choiceOf(3));
+      const alert = await within(chooser()).findByRole("alert");
+      expect(alert).toHaveTextContent("Couldn't replace. Nothing changed.");
+      expect(choiceOf(3)).toHaveFocus();
+      expect(screen.getByTestId("chat-overlay-pin-3")).toBeInTheDocument();
+    });
+
+    it("an Undo refused because the list filled again goes away, keeps the new pin and says why", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.click(choiceOf(3));
+      const note = await within(row(4)).findByTestId("ibx-pin-note");
+      // The agent takes the new pin off and fills its place: the restore would go past the cap.
+      held[0] = { messageId: 5, position: 0, pinnedBy: LEAD, pinnedAtMs: NOW };
+      fireEvent.click(within(note).getByRole("button", { name: "Undo" }));
+      await waitFor(() =>
+        expect(within(row(4)).getByTestId("ibx-pin-note")).toHaveTextContent(
+          "Can't undo: the list is full again.",
+        ),
+      );
+      expect(within(row(4)).queryByRole("button", { name: "Undo" })).toBeNull();
+    });
   });
 
   it("unpins an agent's pin with Undo, which puts it back as it was until the next pin, unpin or Esc", async () => {

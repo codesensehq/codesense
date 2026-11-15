@@ -2450,6 +2450,22 @@ button.ibx-media-open {
 .ibx-ov .ibx-pin-b .lbl {
   display: none;
 }
+/* The cap's count on Pin…: shown where the label is hidden (the overlay's 24 px icon). */
+.ibx-pin-cap {
+  display: none;
+}
+.ibx-ov .ibx-pin-b {
+  position: relative;
+}
+.ibx-ov .ibx-pin-cap {
+  display: block;
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+}
 @media (pointer: coarse) {
   .ibx-pin-b {
     min-width: 36px;
@@ -2511,6 +2527,131 @@ button.ibx-media-open {
 .ibx-pin-act:focus-visible {
   outline: 2px solid var(--ibx-accent);
   outline-offset: 1px;
+}
+
+/* At the cap, under the message: which pin to replace. The full width of the column. */
+.ibx-pin-chooser {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 8px;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .hd {
+  font-weight: 600;
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .chg {
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .chg:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.ibx-pin-chooser .rows {
+  display: grid;
+  gap: 2px;
+}
+.ibx-pin-chooser .choice {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  grid-template-areas: "dot t v go" ". by by by";
+  align-items: center;
+  gap: 2px 8px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ibx-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ibx-pin-chooser .choice:hover {
+  background: color-mix(in srgb, var(--ibx-fg) 5%, transparent);
+}
+.ibx-pin-chooser .choice[data-current] {
+  border-color: var(--ibx-accent-line);
+  background: var(--ibx-accent-wash);
+}
+.ibx-pin-chooser .choice:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+.ibx-pin-chooser .dot {
+  grid-area: dot;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ibx-muted);
+}
+.ibx-pin-chooser .dot.own {
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .dot[data-status="on-track"] {
+  background: var(--ibx-green);
+}
+.ibx-pin-chooser .dot[data-status="running"] {
+  background: var(--ibx-accent);
+}
+.ibx-pin-chooser .dot[data-status="needs-you"] {
+  background: var(--ibx-amber);
+}
+.ibx-pin-chooser .dot[data-status="not-updating"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ibx-mfg);
+}
+.ibx-pin-chooser .t {
+  grid-area: t;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ibx-pin-chooser .v {
+  grid-area: v;
+  font-weight: 650;
+}
+.ibx-pin-chooser .new {
+  grid-area: go;
+  color: var(--ibx-accent);
+  font-weight: 600;
+}
+.ibx-pin-chooser .by {
+  grid-area: by;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .go {
+  grid-area: go;
+  color: var(--ibx-accent);
+  font-weight: 600;
+}
+.ibx-pin-chooser .room {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .cancel {
+  justify-self: start;
+}
+/* The pin the chooser's current row would replace, in the Pinned strip. */
+.ibx-pk[data-replacing="true"] {
+  border-style: dashed;
+  border-color: var(--ibx-mfg);
+}
+.ibx-pk[data-replacing="true"] .ibx-pk-t,
+.ibx-pk[data-replacing="true"] .ibx-pk-v b {
+  text-decoration: line-through;
 }
 .ibx-dm-bar {
   display: flex;
