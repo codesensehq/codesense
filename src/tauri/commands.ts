@@ -1270,7 +1270,8 @@ export interface InboxView {
   hasMore: boolean;
   messages: InboxMessageRow[];
   humanUnread: number;
-  /** When the read named a saved agent's thread (`agentId` with `storyId`): its sessions' handles. */
+  /** When the read named a saved agent's thread (`agentId` with `storyId`): every address of its
+   *  sessions (handles and tab session ids). */
   threadSessions?: string[];
 }
 

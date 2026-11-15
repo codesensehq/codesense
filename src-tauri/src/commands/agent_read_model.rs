@@ -225,8 +225,8 @@ pub(crate) async fn inbox_matching(
             let known = InboxHost::sessions(host).await?;
             let seat = trimmed(&query.session_id);
             let seats = thread_addresses(host, &known, &thread, seat.as_deref()).await?;
+            thread_sessions = Some(seats.addresses.clone());
             addresses.extend(seats.addresses);
-            thread_sessions = Some(seats.handles);
         }
         (agent, _) => {
             if let Some(agent) = agent {
