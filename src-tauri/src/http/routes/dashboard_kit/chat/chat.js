@@ -28,6 +28,7 @@ import {mergeThread,newestFrom,sideOf} from './thread.js';
 import {createSources} from './sources.js';
 import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
+import {rovingThread} from './roving.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
 import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinTitleOf,pinWho} from './chat-core.js';
 import {cardNode} from './card.js';
@@ -148,6 +149,8 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  if(onPin)log.addEventListener('keydown',event=>{if(event.key==='Escape'&&pinState.note){pinState.note=null;render();}});
  const pin=pinToBottom(log,{win});
+ // The thread is one Tab stop: its active message (the newest, until the person moves), with Up, Down, Home and End between messages.
+ const roving=rovingThread(log);
  const status=h('div',{class:'status-slot',id:ids.status,tabindex:'-1'});
  const composer=createComposer({ids,onSend:text=>{awaitBase=leadCount();fails.clear();launch.send(text);},rows:layout.composerRows,label:layout.composerLabel===undefined?copy.composerLabel:layout.composerLabel,hint:copy.hint,send:copy.send});
  const headBox=h('div',{class:'chat-head'}),headSig={head:null,header:null};
@@ -333,7 +336,9 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   if(layout.head)paint(headBox,'head',layout.head(here));
   if(headerSlot)paint(headerSlot.slot,'header',headerSlot.render(here));
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(act?[act]:[]),...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
+  const held=roving.focused();
   reconcile(log,cache,want);
+  roving.refresh(held);
   paintChips();
   pin.onContentChanged();
   // The button that sent is gone once the card answers: focus follows to its answered line.
@@ -407,7 +412,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;offs.forEach(off=>off&&off());pin.release();roving.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),
