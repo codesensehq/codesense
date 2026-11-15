@@ -44,6 +44,8 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
  const clearTimers=()=>{if(slowTimer!==null)clock.clearTimeout(slowTimer);if(failTimer!==null)clock.clearTimeout(failTimer);slowTimer=failTimer=null;};
  const enqueue=job=>{chain=chain.then(job,job);return chain;};
  const texts=list=>list.map(item=>item.text).join('\n\n');
+ // A resolved status other than 'sent' (for example 'invalid') is a failure, in parseFailure's shape; null for a sent answer.
+ const statusFailure=result=>result&&result.status!==undefined&&result.status!=='sent'?{kind:'other',code:String(result.status),why:result.message||String(result.status)}:null;
  const deliver=(list,handle)=>{
   // busyAtSend is read once, here: the Queued/Delivered rule (chat-core) asks whether the lead was busy when the message went.
   const busy=handle===queue||isBusy(peerRows().find(row=>row.handle===handle));list.forEach(item=>{item.mark='sent';item.busyAtSend=busy;});sendFailure=null;emit();
@@ -51,8 +53,7 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
   inflight++;
   return enqueue(()=>transport.send(handle,texts(list))).then(result=>{
    inflight--;
-   // A resolved status other than 'sent' (for example 'invalid') is a failure too.
-   if(result&&result.status!==undefined&&result.status!=='sent'){list.forEach(item=>{item.mark='kept';});sendFailure={kind:'other',code:String(result.status),why:result.message||String(result.status)};emit();return;}
+   if(statusFailure(result)){list.forEach(item=>{item.mark='kept';});sendFailure=statusFailure(result);emit();return;}
    if(result&&result.messageId!==undefined)for(const item of list)item.messageId=result.messageId;emit();
   },error=>{inflight--;list.forEach(item=>{item.mark='kept';});sendFailure=parseFailure(error);emit();});
  };
@@ -134,6 +135,17 @@ export function createLaunch({transport,clock,storyId,leadRole,timers,card,onCha
    if(queue)return deliver([...messages.filter(other=>other!==item&&other.mark==='kept'),item],queue);
    // With the lead gone, text kept from a failed send rides along with the new launch.
    return startLaunch([...messages.filter(other=>other!==item&&other.mark==='kept'),item]);
+  },
+  // A message to another agent (the page's target.recipient, {handle, name}): straight to its handle, never a launch, the outbox or a kept message. Only a sent one joins the messages, with its recipient (to), so its bubble carries the mark;
+  // a failure rejects with parseFailure's shape and leaves no message behind (the composer keeps the text).
+  sendTo(to,text){
+   // busyAtSend is read at the call, as deliver does, not when the answer comes back.
+   const sentAt=clock.now(),busy=isBusy(rows.find(row=>row.handle===to.handle));inflight++;emit();
+   return enqueue(()=>transport.send(to.handle,text)).then(result=>{
+    inflight--;
+    const failed=statusFailure(result);if(failed){emit();throw failed;}
+    messages.push({id:++ids,text,mark:'sent',busyAtSend:busy,sentAt,to,messageId:result&&result.messageId});emit();
+   },error=>{inflight--;emit();throw parseFailure(error);});
   },
   // Launch from the header, with no message of its own: kept text rides along as it does on a send. A live or starting lead needs nothing.
   start(){

@@ -23,7 +23,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}` },
+    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -289,6 +289,7 @@
       return chain;
     };
     const texts = (list) => list.map((item) => item.text).join("\n\n");
+    const statusFailure = (result) => result && result.status !== void 0 && result.status !== "sent" ? { kind: "other", code: String(result.status), why: result.message || String(result.status) } : null;
     const deliver = (list, handle) => {
       const busy = handle === queue || isBusy(peerRows().find((row) => row.handle === handle));
       list.forEach((item) => {
@@ -300,11 +301,11 @@
       inflight++;
       return enqueue(() => transport.send(handle, texts(list))).then((result) => {
         inflight--;
-        if (result && result.status !== void 0 && result.status !== "sent") {
+        if (statusFailure(result)) {
           list.forEach((item) => {
             item.mark = "kept";
           });
-          sendFailure = { kind: "other", code: String(result.status), why: result.message || String(result.status) };
+          sendFailure = statusFailure(result);
           emit();
           return;
         }
@@ -488,6 +489,27 @@
         if (row) return deliver([...messages.filter((other) => other !== item && other.mark === "kept"), item], row.handle);
         if (queue) return deliver([...messages.filter((other) => other !== item && other.mark === "kept"), item], queue);
         return startLaunch([...messages.filter((other) => other !== item && other.mark === "kept"), item]);
+      },
+      // A message to another agent (the page's target.recipient, {handle, name}): straight to its handle, never a launch, the outbox or a kept message. Only a sent one joins the messages, with its recipient (to), so its bubble carries the mark;
+      // a failure rejects with parseFailure's shape and leaves no message behind (the composer keeps the text).
+      sendTo(to, text) {
+        const sentAt = clock.now(), busy = isBusy(rows.find((row) => row.handle === to.handle));
+        inflight++;
+        emit();
+        return enqueue(() => transport.send(to.handle, text)).then((result) => {
+          inflight--;
+          const failed = statusFailure(result);
+          if (failed) {
+            emit();
+            throw failed;
+          }
+          messages.push({ id: ++ids, text, mark: "sent", busyAtSend: busy, sentAt, to, messageId: result && result.messageId });
+          emit();
+        }, (error) => {
+          inflight--;
+          emit();
+          throw parseFailure(error);
+        });
       },
       // Launch from the header, with no message of its own: kept text rides along as it does on a send. A live or starting lead needs nothing.
       start() {
@@ -746,11 +768,32 @@
     const input = h("textarea", { id: ids.input, rows, "aria-label": label, "aria-describedby": ids.hint, spellcheck: "true" });
     const send = h("button", { id: ids.send, type: "button", class: "btn primary" }, sendLabel);
     const region = h("div", { id: ids.region, class: "composer" }, h("div", { class: "box" }, input, send), h("div", { class: "hint", id: ids.hint }, hint));
+    let pending = false, disabled = false;
+    const setPending = (on) => {
+      pending = on;
+      send.disabled = on || disabled;
+      if (on) input.setAttribute("aria-busy", "true");
+      else input.removeAttribute("aria-busy");
+    };
+    const nameInput = (name) => {
+      if (name == null) input.removeAttribute("aria-label");
+      else input.setAttribute("aria-label", name);
+    };
     const submit = () => {
-      const text = input.value.trim();
-      if (!text || input.disabled) return;
-      input.value = "";
-      onSend(text);
+      const raw = input.value, text = raw.trim();
+      if (!text || input.disabled || pending) return;
+      const held = onSend(text);
+      if (!held || typeof held.then !== "function") {
+        input.value = "";
+        return;
+      }
+      setPending(true);
+      held.then((sent) => {
+        setPending(false);
+        if (sent && input.value === raw) input.value = "";
+      }, () => {
+        setPending(false);
+      });
     };
     input.addEventListener("keydown", (event) => {
       if ((event.code === "Enter" || event.code === "NumpadEnter") && !event.shiftKey && !event.isComposing) {
@@ -763,10 +806,12 @@
       region,
       input,
       send,
-      update({ placeholder, disabled, hint: nextHint, send: nextSend }) {
+      update({ placeholder, disabled: off, hint: nextHint, send: nextSend, label: nextLabel }) {
+        disabled = Boolean(off);
         input.placeholder = placeholder;
-        input.disabled = Boolean(disabled);
-        send.disabled = Boolean(disabled);
+        nameInput(nextLabel == null ? label : nextLabel);
+        input.disabled = disabled;
+        send.disabled = disabled || pending;
         if (nextHint !== void 0) region.querySelector(".hint").textContent = nextHint;
         if (nextSend !== void 0) send.textContent = nextSend;
       },
@@ -1402,17 +1447,24 @@
     const pin = pinToBottom(log, { win });
     const roving = rovingThread(log);
     const status = h("div", { class: "status-slot", id: ids.status, tabindex: "-1" });
-    const composer = createComposer({ ids, onSend: (text) => {
-      awaitBase = leadCount();
+    const sendPeer = (text) => {
       fails.clear();
-      launch.send(text);
-    }, rows: layout.composerRows, label: layout.composerLabel === void 0 ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
-    const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
-    const sendChip = (text) => {
       awaitBase = leadCount();
-      fails.clear();
       launch.send(text);
+      return void 0;
     };
+    const sendText = (text) => {
+      const to = target.recipient ? target.recipient() : null;
+      if (!to) return sendPeer(text);
+      fails.clear();
+      return launch.sendTo(to, text).then(() => true, (failure) => {
+        fails.set("send", copy.failure.send(failure.why || failure.code));
+        render();
+        return false;
+      });
+    };
+    const composer = createComposer({ ids, onSend: sendText, rows: layout.composerRows, label: layout.composerLabel == null ? copy.composerLabel : layout.composerLabel, hint: copy.hint, send: copy.send });
+    const headBox = h("div", { class: "chat-head" }), headSig = { head: null, header: null };
     const nextOpt = next ? typeof next === "object" ? next : {} : null;
     const pencil = () => {
       const svg = document.createElementNS(ALERT_NS2, "svg"), path = document.createElementNS(ALERT_NS2, "path");
@@ -1425,7 +1477,7 @@
     };
     const chipNode = (chip) => {
       const main = h("button", { type: "button", class: "btn sm", "data-chip": chip.label, onclick: () => {
-        if (!isDone) sendChip(chip.text);
+        if (!isDone) (chip.peer ? sendPeer : sendText)(chip.text);
       } }, chip.label);
       return chip.edit ? h("span", { class: "pchip" }, main, h("button", { type: "button", class: "btn sm ed", "data-chip-edit": chip.label, "aria-label": copy.chipEdit.label(chip.label), title: copy.chipEdit.title, onclick: () => {
         if (!isDone) composer.setText(chip.text);
@@ -1433,6 +1485,8 @@
     };
     const chipsBox = chips.length || nextOpt ? h("div", { class: "chips", role: "group", "aria-label": copy.chips }) : null, chipSig = { v: null };
     const variant = layout.variant === "page" ? "page" : null;
+    const composerSlot = layout.composerSlot ? h("div", { "data-composer-slot": "" }) : null;
+    if (composerSlot) composer.region.insertBefore(composerSlot, composer.region.firstChild);
     el.replaceChildren(h("div", { class: variant ? `chatcol cs-chat ${variant}` : "chatcol cs-chat", "data-variant": variant }, layout.head ? headBox : layout.source ? h("div", { class: "src" }, layout.source) : null, log, actFoot, pinLive, chipsBox, composer.region));
     const state = () => ({ lead: live(), fail: (what, text) => {
       fails.set(what, text);
@@ -1453,7 +1507,7 @@
       return h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
-        first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`)) : null,
+        first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
         pin2 ? pin2.acts : null,
         h("div", { class: "body" }, item.contentType === "html" ? item.text : inlineNodes(item.text)),
         item.note ? h("div", { class: "note" }, item.note) : null,
@@ -1560,7 +1614,8 @@
     function markOfItem(item) {
       if (item.mark === "starting" && launch.stuck) return "stuck";
       if (item.mark !== "sent") return item.mark;
-      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead: live(), newestLeadAt: newestFrom(thread, leadHandles()), delivery: deliveryRow(item.messageId) });
+      const to = item.to ? item.to.handle : null, lead = to ? rows.find((row) => row.handle === to) || null : live();
+      return deliveryOf(item.id, { sentAt: item.sentAt, busyAtSend: item.busyAtSend, lead, newestLeadAt: newestFrom(thread, to ? /* @__PURE__ */ new Set([to]) : leadHandles()), delivery: deliveryRow(item.messageId) });
     }
     const prose = activity ? createProse({ win, clock, render: () => render() }) : null;
     let proseRow = null;
@@ -1594,7 +1649,7 @@
       for (const item of launch.messages) mine = Math.max(mine, item.sentAt);
       if (!newest || newest.at < mine || cards !== false && newest.row.kind === "needs-you") return [];
       const parsed = parseNext(newest.row.text || newest.row.summary || "");
-      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit) })) : [];
+      return parsed ? parsed.chips.map((text) => ({ label: text, text, edit: Boolean(nextOpt.edit), peer: true })) : [];
     }
     function paintChips() {
       if (!chipsBox) return;
@@ -1611,6 +1666,8 @@
       const given = typeof faces === "function" ? faces(row) : null;
       return { name: given && given.name || who, label: given && given.label || null, src: given && given.src || null, face: given && given.face || null };
     }
+    const toLabel = (item) => item && item.to ? copy.row.to(item.to.name) : null;
+    const youKey = (item) => item && item.to ? "you|" + item.to.handle : "you";
     function threadItems() {
       let lastLead = null;
       const handles = leadHandles(), entries = [], rowIds = new Set(thread.map((row) => row.messageId)), sentHere = new Map(launch.messages.filter((item) => item.messageId !== void 0).map((item) => [item.messageId, item]));
@@ -1624,21 +1681,21 @@
         const who = side === "you" ? copy.who.you : side === "lead" ? target.leadName(row) : row.fromName || row.from || "", own2 = sentHere.get(row.messageId), mark = own2 ? markOfItem(own2) : null;
         const said = row.text || row.summary || "", shown = nextOpt && side === "lead" && row.text ? (parseNext(row.text) || { text: said }).text : said;
         if (nextOpt && side === "lead" && row.text && !shown) continue;
-        const item = { id: row.messageId, text: shown, said, contentType: row.contentType, summary: row.summary, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs }, info = faceInfo(row, side, who);
+        const label = toLabel(own2), item = { id: row.messageId, text: shown, said, contentType: row.contentType, summary: row.summary, mark: mark && copy.mark[mark], markKey: mark, who, at: row.createdAtMs, label }, info = faceInfo(row, side, who);
         item.pin = pinParts(item);
         entries.push({
           t: row.createdAtMs || 0,
           id: "m" + row.messageId,
-          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark, item.pin ? item.pin.sig : ""].join("|"),
+          sig: ["m", row.messageId, shown, side, row.createdAtMs, mark, label, item.pin ? item.pin.sig : ""].join("|"),
           make: () => bubble(item, side),
-          run: faces ? { key: side === "you" ? "you" : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
+          run: faces ? { key: side === "you" ? youKey(own2) : side + "|" + (row.from || ""), info, make: (first, info2) => bubble(item, side, first, info2) } : null
         });
       }
       for (const item of launch.messages) {
         if (item.messageId !== void 0 && rowIds.has(item.messageId)) continue;
         const mark = markOfItem(item);
-        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt };
-        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: "you", info: null, make: (first) => bubble(sent, "you", first) } : null });
+        const sent = { text: item.text, mark: copy.mark[mark] || null, markKey: mark, who: copy.who.you, at: item.sentAt, label: toLabel(item) };
+        entries.push({ t: item.sentAt, id: "l" + item.id, sig: ["l", item.id, mark, item.text, sent.label].join("|"), make: () => bubble(sent, "you"), run: faces ? { key: youKey(item), info: null, make: (first) => bubble(sent, "you", first) } : null });
       }
       entries.sort((a, b) => a.t - b.t);
       for (const [id, text] of streams) {
@@ -1787,6 +1844,7 @@
       streams.set(chunk.messageId, (streams.get(chunk.messageId) || "") + chunk.text);
       render();
     }));
+    const releaseSlot = composerSlot ? layout.composerSlot(composerSlot) : null;
     render();
     if (layout.autofocus !== false) composer.input.focus();
     if (sources) {
@@ -1812,6 +1870,7 @@
         gone = true;
         offs.forEach((off) => off && off());
         if (prose) prose.release();
+        if (typeof releaseSlot === "function") releaseSlot();
         pin.release();
         roving.release();
         if (replacer) replacer.release();
@@ -1849,6 +1908,7 @@
         isDone = Boolean(value);
         render();
       },
+      repaint: () => render(),
       subscribe(fn) {
         listeners.add(fn);
         return () => listeners.delete(fn);

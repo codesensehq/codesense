@@ -524,6 +524,8 @@ declare namespace CodesenseSdk {
     bindLaunched?: boolean;
     /** A failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order. */
     keepUnsent?: boolean;
+    /** Read at each send (Enter, Send, a page chip, `post`). A `next` chip is the peer's own suggested reply, so it always goes to the peer. A recipient takes the message straight to its handle with `transport.send`, never through the launch: the box clears only once it is sent, a failure keeps the text and shows an alert row, and its bubble says "To <name>" in its meta line. `null` sends to the peer as without it. */
+    recipient?(): { handle: string; name: string } | null;
   }
   /** A header or head slot's paint: nodes are replaced only when sig changes. */
   interface ChatPaint {
@@ -541,7 +543,10 @@ declare namespace CodesenseSdk {
     layout?: {
       head?(state: ChatState): ChatPaint;
       source?: string;
-      composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string };
+      /** `label` names the input while it is given (a recipient's name); without it, or `null`, the input is named by `composerLabel`. */
+      composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string; label?: string };
+      /** The page's own control in the composer, above the box (a "To" chip): called once with the slot's element; the function it returns runs on unmount. A filled slot grows the composer past its 96px; an empty one takes no room. */
+      composerSlot?(element: HTMLElement): (() => void) | void;
       composerRows?: string;
       composerLabel?: string;
       logLabel?: string;
@@ -620,6 +625,8 @@ declare namespace CodesenseSdk {
     threadSettled(): boolean;
     thread(): ChatRow[];
     setDone(value: boolean): void;
+    /** Paints the chat again after a change in the page's own state, such as a recipient picked in the composer slot. */
+    repaint(): void;
     subscribe(listener: () => void): () => void;
     [member: string]: unknown;
   }
@@ -644,7 +651,8 @@ declare namespace CodesenseSdk {
   /** The launch controller a chat sends through. */
   interface ChatLaunch {
     readonly state: "idle" | "starting" | "slow" | "failed" | "joined";
-    readonly messages: Array<{ id: number; text: string; mark: string | null }>;
+    /** `to` and `messageId` are set on a message sent to a recipient. */
+    readonly messages: Array<{ id: number; text: string; mark: string | null; to?: { handle: string; name: string }; messageId?: string | number }>;
     /** True while the send state still has work: a launch starting or failed, or a message held, kept or in flight. */
     unsettled(): boolean;
     /** The session the launch opened, or null until it names one. */
