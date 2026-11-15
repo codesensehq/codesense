@@ -1952,6 +1952,10 @@ pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
 pub(crate) struct FactsMap(HashMap<PathBuf, super::worktree_probe::GitFacts>);
 
 impl FactsMap {
+    fn empty() -> Self {
+        Self(HashMap::new())
+    }
+
     fn get(&self, worktree: &Path) -> super::worktree_probe::GitFacts {
         self.0
             .get(worktree)
@@ -2431,7 +2435,7 @@ pub(crate) fn managed_row_from_record(
     r: crate::install::worktree_index::WorktreeStoryRecord,
     live_cli_session: bool,
 ) -> ManagedWorktreeRow {
-    managed_row_with_facts(r, live_cli_session, &FactsMap::default())
+    managed_row_with_facts(r, live_cli_session, &FactsMap::empty())
 }
 
 fn managed_row_with_facts(
