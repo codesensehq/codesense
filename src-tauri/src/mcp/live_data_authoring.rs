@@ -1564,6 +1564,17 @@ mod tests {
     }
 
     #[test]
+    fn the_pin_contract_text_lists_the_message_field() {
+        let payload = super::local_contract_payload();
+        let fields = "message: {from, createdAtMs, text, contentType?, summary?}";
+        let purpose = payload["action"]["verbs"]["pin"]["purpose"].as_str().unwrap();
+        assert!(purpose.contains(fields), "{purpose}");
+        let topic = payload["sdk"]["live_hub"]["pins"].as_str().unwrap();
+        assert!(topic.contains(fields), "{topic}");
+        assert!(topic.contains("absent when unset"), "{topic}");
+    }
+
+    #[test]
     fn emit_local_contract() {
         let payload = super::local_contract_payload();
         let text = serde_json::to_string_pretty(&payload).unwrap() + "\n";
