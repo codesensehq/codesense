@@ -426,8 +426,10 @@ fn a_team_workspace_open_needs_the_foreman_launch_grant_beside_launch() {
         FramePolicy::default(),
         None,
     );
-    let team_workspace =
-        json!({"target":{"kind":"team-workspace","name":"foreman"},"agent":"foreman-claude"});
+    let team_workspace = json!({
+        "target": {"kind": "team-workspace", "name": "foreman"},
+        "agent": foreman_launch::FOREMAN_KEY,
+    });
     let story = json!({"target":{"kind":"story","storyId":"S-1"}});
     // Every grantable capability, `launch` included, still refuses a team-workspace open.
     record.effective_grant = capabilities::full();
