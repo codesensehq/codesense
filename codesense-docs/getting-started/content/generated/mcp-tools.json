@@ -42,6 +42,7 @@
         "commit_registry_edit_local",
         "save_source_repo_attachment",
         "describe_setup",
+        "probe_environment",
         "list_orgs_teams",
         "set_active_team"
       ],
@@ -213,6 +214,34 @@
       ]
     },
     {
+      "id": "inbox-pins",
+      "title": "Pinning messages in your thread",
+      "tools": [
+        "pin"
+      ],
+      "docs": "arc-f-inboxes-and-triage/messages.html#tool-pin",
+      "searchTerms": [
+        "pin",
+        "pins",
+        "unpin",
+        "preview"
+      ],
+      "calls": [
+        {
+          "tool": "pin",
+          "arguments": {
+            "message_id": 42,
+            "preview": {
+              "shortName": "QA",
+              "value": "5 of 5",
+              "unit": "ACs traced",
+              "status": "on-track"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "machines",
       "title": "Remote machines",
       "tools": [
@@ -261,6 +290,28 @@
             "branch": "feature/example",
             "repoPath": "/home/dev/repos/app",
             "worktreePath": "/home/dev/worktrees/app-example"
+          }
+        }
+      ]
+    },
+    {
+      "id": "packs",
+      "title": "Pack validation",
+      "tools": [
+        "pack_validate"
+      ],
+      "docs": "arc-e-agents/packs.html",
+      "searchTerms": [
+        "pack",
+        "packs",
+        "validate",
+        "manifest"
+      ],
+      "calls": [
+        {
+          "tool": "pack_validate",
+          "arguments": {
+            "path": "/path/to/team/content/packs/my-pack"
           }
         }
       ]
@@ -849,7 +900,8 @@
         "set_team_parent",
         "set_team_starter_page",
         "add_source_repo",
-        "attach_source_repo_path"
+        "attach_source_repo_path",
+        "clone_repo"
       ],
       "docs": "arc-l-factory/team-and-notes-tools.html",
       "searchTerms": [
@@ -1258,8 +1310,8 @@
     }
   ],
   "coverage": {
-    "familyCovered": 269,
-    "namedOnPage": 230,
+    "familyCovered": 273,
+    "namedOnPage": 234,
     "documentationGaps": [
       {
         "tool": "agent_delete",
@@ -1506,7 +1558,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6947"
+      "sourceRef": "handler.rs:7005"
     },
     {
       "name": "ack_role_message",
@@ -1580,7 +1632,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7021"
+      "sourceRef": "handler.rs:7079"
     },
     {
       "name": "add_source_repo",
@@ -1635,12 +1687,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9766"
+      "sourceRef": "handler.rs:9861"
     },
     {
       "name": "agent_create",
       "arc": "B",
-      "description": "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes Codex bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused.\nDocs: arc-e-agents/agent-design.html",
+      "description": "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes Codex bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused.\nDocs: arc-e-agents/agent-design.html",
       "write": true,
       "starter": false,
       "core": false,
@@ -1923,6 +1975,17 @@
               "null"
             ]
           },
+          "skillAllowlist": {
+            "default": null,
+            "description": "The skills a launch offers, by name (e.g. `[\"bmad-build\"]`); null/omitted\noffers every skill the workspace has. A Claude launch turns off every other\nskill its startup places or the workspace's `.claude/skills/` holds, context\nworktrees included; personal (`~/.claude/skills`) and plugin skills stay on.\nOther runtimes warn and offer every skill. Names are 1-128 ASCII letters,\ndigits, `_`, `-` or `:`, each once. Stored as agent.yaml `skill_allowlist`;\na `skills` key there is not this field and does nothing.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "startup": {
             "default": null,
             "description": "Ordered plain content-relative paths the agent starts with (default none: only\nwhat CodeSense itself needs): each a file, or a directory that brings\neverything under it, e.g. `CLAUDE.md`, `.claude/skills/bmad-build/`,\n`.claude/commands/bmad-help.md`; never `skill:`/`command:` keys, absolute\npaths, `..`, globs, reserved top-level dirs such as `.git`, duplicates or\nan entry inside another. A file may list more content paths it needs in\n`requires:` frontmatter, and they come along. A path no content layer has\nis a manifest error, except the runtime's root instructions file\n(`CLAUDE.md` / `AGENTS.md`), skipped where the team has none.",
@@ -1964,7 +2027,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5335"
+      "sourceRef": "handler.rs:5343"
     },
     {
       "name": "agent_delete",
@@ -2016,7 +2079,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5393"
+      "sourceRef": "handler.rs:5401"
     },
     {
       "name": "agent_get",
@@ -2050,7 +2113,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5283"
+      "sourceRef": "handler.rs:5291"
     },
     {
       "name": "agent_list",
@@ -2095,12 +2158,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5268"
+      "sourceRef": "handler.rs:5276"
     },
     {
       "name": "agent_preview",
       "arc": "B",
-      "description": "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared Codex bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
+      "description": "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared Codex bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -2402,6 +2465,17 @@
               "null"
             ]
           },
+          "skillAllowlist": {
+            "default": null,
+            "description": "The skills a launch offers, by name (e.g. `[\"bmad-build\"]`); null/omitted\noffers every skill the workspace has. A Claude launch turns off every other\nskill its startup places or the workspace's `.claude/skills/` holds, context\nworktrees included; personal (`~/.claude/skills`) and plugin skills stay on.\nOther runtimes warn and offer every skill. Names are 1-128 ASCII letters,\ndigits, `_`, `-` or `:`, each once. Stored as agent.yaml `skill_allowlist`;\na `skills` key there is not this field and does nothing.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "startup": {
             "default": null,
             "description": "Ordered plain content-relative paths the agent starts with (default none: only\nwhat CodeSense itself needs): each a file, or a directory that brings\neverything under it, e.g. `CLAUDE.md`, `.claude/skills/bmad-build/`,\n`.claude/commands/bmad-help.md`; never `skill:`/`command:` keys, absolute\npaths, `..`, globs, reserved top-level dirs such as `.git`, duplicates or\nan entry inside another. A file may list more content paths it needs in\n`requires:` frontmatter, and they come along. A path no content layer has\nis a manifest error, except the runtime's root instructions file\n(`CLAUDE.md` / `AGENTS.md`), skipped where the team has none.",
@@ -2445,7 +2519,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5299"
+      "sourceRef": "handler.rs:5307"
     },
     {
       "name": "agent_restore",
@@ -2501,7 +2575,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5424"
+      "sourceRef": "handler.rs:5432"
     },
     {
       "name": "agent_unarchive",
@@ -2555,12 +2629,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5448"
+      "sourceRef": "handler.rs:5456"
     },
     {
       "name": "agent_update",
       "arc": "B",
-      "description": "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
+      "description": "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist` (`null` lifts the list), `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
       "write": true,
       "starter": false,
       "core": false,
@@ -2825,6 +2899,17 @@
               "null"
             ]
           },
+          "skillAllowlist": {
+            "default": null,
+            "description": "Replaces the skill allowlist. Omit to keep it, null to offer every skill.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "startup": {
             "default": null,
             "items": {
@@ -2858,7 +2943,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5368"
+      "sourceRef": "handler.rs:5376"
     },
     {
       "name": "apply_canvas",
@@ -3006,7 +3091,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3306"
+      "sourceRef": "handler.rs:3314"
     },
     {
       "name": "archive_team",
@@ -3050,7 +3135,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9681"
+      "sourceRef": "handler.rs:9776"
     },
     {
       "name": "ask_user",
@@ -3119,7 +3204,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3978"
+      "sourceRef": "handler.rs:3986"
     },
     {
       "name": "attach_context_repository",
@@ -3154,7 +3239,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1442"
+      "sourceRef": "handler.rs:1444"
     },
     {
       "name": "attach_source_repo_path",
@@ -3201,7 +3286,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9791"
+      "sourceRef": "handler.rs:9886"
     },
     {
       "name": "avatar_add",
@@ -3269,7 +3354,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5526"
+      "sourceRef": "handler.rs:5534"
     },
     {
       "name": "avatar_list",
@@ -3304,7 +3389,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5510"
+      "sourceRef": "handler.rs:5518"
     },
     {
       "name": "avatar_share",
@@ -3338,7 +3423,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5557"
+      "sourceRef": "handler.rs:5565"
     },
     {
       "name": "cancel_context_operation",
@@ -3376,7 +3461,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3282"
+      "sourceRef": "handler.rs:3290"
     },
     {
       "name": "cancel_remote_agent_task",
@@ -3410,7 +3495,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2156"
+      "sourceRef": "handler.rs:2158"
     },
     {
       "name": "cancel_wakeup",
@@ -3452,7 +3537,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5248"
+      "sourceRef": "handler.rs:5256"
     },
     {
       "name": "capture_machine_passphrase",
@@ -3489,7 +3574,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1963"
+      "sourceRef": "handler.rs:1965"
     },
     {
       "name": "claim_role_messages",
@@ -3561,7 +3646,78 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6883"
+      "sourceRef": "handler.rs:6941"
+    },
+    {
+      "name": "clone_repo",
+      "arc": "L",
+      "description": "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. git never prompts for a credential (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`): with none it can use, the clone ends at once with `gitExited` and the tab says why. A second clone into a folder whose clone is still on record is refused (rule `busy`). The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, starting (the clone's tab hasn't opened yet; still recorded, so call Stop again), not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "write": true,
+      "starter": false,
+      "core": false,
+      "family": "arc-l",
+      "docs": "arc-l-factory/team-and-notes-tools.html",
+      "namedOnPage": true,
+      "feature": null,
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "org": {
+            "default": null,
+            "description": "The team's org (`owner/repo` slug) whose tracked `repo` the clone is bound to.\nRequired unless `stop` is true.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The absolute folder to clone into: `<a parent folder that exists>/<name>`, under\nyour home folder but not `~/Library`, with no segment below home starting with\n`.`. Its last segment must equal the repo's name; the target must be absent or\nempty; the parent must be a real directory with no symlink in its path.",
+            "type": "string"
+          },
+          "repo": {
+            "description": "`owner/name` on GitHub, e.g. `acme/api`. A URL, `@`, `:`, a space or any\nnon-ASCII character is refused.",
+            "type": "string"
+          },
+          "stop": {
+            "default": null,
+            "description": "`true` stops the clone: it closes the clone's tab, then removes `path` only when\nan earlier `clone_repo` call created it and the clone hasn't finished. Nothing\nelse is touched. Use it when the person stops a clone.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "team": {
+            "default": null,
+            "description": "The team that tracks `repo`. Required unless `stop` is true.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspaceId": {
+            "default": null,
+            "description": "The viewer id of an open workspace that hosts the visible tab. Required unless\n`stop` is true.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "repo",
+          "path"
+        ],
+        "type": "object"
+      },
+      "returns": null,
+      "outputSchemaAvailable": false,
+      "examples": [
+        {
+          "tool": "notes_list",
+          "arguments": {}
+        }
+      ],
+      "sourceRef": "handler.rs:9916"
     },
     {
       "name": "close_terminal_tab",
@@ -3596,7 +3752,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8324"
+      "sourceRef": "handler.rs:8414"
     },
     {
       "name": "close_workspace",
@@ -3656,7 +3812,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8438"
+      "sourceRef": "handler.rs:8533"
     },
     {
       "name": "codesense_call_tool",
@@ -3701,7 +3857,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9933"
+      "sourceRef": "handler.rs:10225"
     },
     {
       "name": "codesense_get_tool_schema",
@@ -3737,7 +3893,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9912"
+      "sourceRef": "handler.rs:10204"
     },
     {
       "name": "codesense_overview",
@@ -3769,7 +3925,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2181"
+      "sourceRef": "handler.rs:2183"
     },
     {
       "name": "codesense_search_tools",
@@ -3815,7 +3971,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9875"
+      "sourceRef": "handler.rs:10167"
     },
     {
       "name": "command_list",
@@ -3840,7 +3996,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2581"
+      "sourceRef": "handler.rs:2589"
     },
     {
       "name": "command_run",
@@ -3877,7 +4033,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2594"
+      "sourceRef": "handler.rs:2602"
     },
     {
       "name": "commit_registry_edit_local",
@@ -4273,7 +4429,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1412"
+      "sourceRef": "handler.rs:1414"
     },
     {
       "name": "connect_machine",
@@ -4310,7 +4466,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1909"
+      "sourceRef": "handler.rs:1911"
     },
     {
       "name": "context_operation_status",
@@ -4396,7 +4552,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3248"
+      "sourceRef": "handler.rs:3256"
     },
     {
       "name": "context_repo_history",
@@ -4494,7 +4650,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6503"
+      "sourceRef": "handler.rs:6544"
     },
     {
       "name": "context_repo_status",
@@ -4544,7 +4700,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6462"
+      "sourceRef": "handler.rs:6503"
     },
     {
       "name": "copy_between_contexts",
@@ -4640,7 +4796,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9521"
+      "sourceRef": "handler.rs:9616"
     },
     {
       "name": "create_content_file",
@@ -4687,7 +4843,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6311"
+      "sourceRef": "handler.rs:6352"
     },
     {
       "name": "create_dashboard",
@@ -4774,7 +4930,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11748"
+      "sourceRef": "handler.rs:12069"
     },
     {
       "name": "create_local_organization",
@@ -4814,7 +4970,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1397"
+      "sourceRef": "handler.rs:1399"
     },
     {
       "name": "create_team",
@@ -4866,7 +5022,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9643"
+      "sourceRef": "handler.rs:9738"
     },
     {
       "name": "delete_content_file",
@@ -4906,7 +5062,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6322"
+      "sourceRef": "handler.rs:6363"
     },
     {
       "name": "delete_team",
@@ -4945,12 +5101,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9692"
+      "sourceRef": "handler.rs:9787"
     },
     {
       "name": "describe_setup",
       "arc": "A",
-      "description": "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors?, teams:[...]}`; each team has `{name, archived, parent?, starterPage?, synced, sourceRepos:[{repo, status, localPath}]}` (`starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html) where `status` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create.\nDocs: arc-b-model/orgs.html",
+      "description": "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs, repo}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors, teams:[...]}` (`teams` is empty when `loadErrors` is not); each team has `{name, archived, parentTeam, starterPage?, synced, sourceRepos:[{slug, remoteKey, attachment, localPath}]}` (`parentTeam`: null for a top-level team; `starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html; `slug` is owner/repo; `localPath` is the bound checkout or null) where `attachment` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create.\nDocs: arc-b-model/orgs.html",
       "write": false,
       "starter": false,
       "core": true,
@@ -4970,7 +5126,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9635"
+      "sourceRef": "handler.rs:9730"
     },
     {
       "name": "detach_context_repository",
@@ -5004,7 +5160,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1474"
+      "sourceRef": "handler.rs:1476"
     },
     {
       "name": "disconnect_machine",
@@ -5041,7 +5197,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1927"
+      "sourceRef": "handler.rs:1929"
     },
     {
       "name": "dismiss_agent_mark",
@@ -5084,7 +5240,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9972"
+      "sourceRef": "handler.rs:10264"
     },
     {
       "name": "end_unowned_terminal_session",
@@ -5124,7 +5280,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1785"
+      "sourceRef": "handler.rs:1787"
     },
     {
       "name": "enroll_private_machine_account",
@@ -5286,7 +5442,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1564"
+      "sourceRef": "handler.rs:1566"
     },
     {
       "name": "feedback_send",
@@ -5344,7 +5500,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6725"
+      "sourceRef": "handler.rs:6783"
     },
     {
       "name": "forget_missing_workspace",
@@ -5385,7 +5541,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3023"
+      "sourceRef": "handler.rs:3031"
     },
     {
       "name": "get_active_agent_account",
@@ -5419,7 +5575,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2287"
+      "sourceRef": "handler.rs:2289"
     },
     {
       "name": "get_human_status",
@@ -5472,7 +5628,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7102"
+      "sourceRef": "handler.rs:7160"
     },
     {
       "name": "get_live_data_contract",
@@ -5500,7 +5656,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2382"
+      "sourceRef": "handler.rs:2384"
     },
     {
       "name": "get_publish_set",
@@ -5542,7 +5698,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6429"
+      "sourceRef": "handler.rs:6470"
     },
     {
       "name": "get_story_format",
@@ -5567,7 +5723,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2621"
+      "sourceRef": "handler.rs:2629"
     },
     {
       "name": "get_sync_status",
@@ -5709,7 +5865,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3038"
+      "sourceRef": "handler.rs:3046"
     },
     {
       "name": "get_viewer_state",
@@ -5747,7 +5903,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2401"
+      "sourceRef": "handler.rs:2403"
     },
     {
       "name": "health_ping",
@@ -5772,7 +5928,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2231"
+      "sourceRef": "handler.rs:2233"
     },
     {
       "name": "hydrate_story",
@@ -5966,7 +6122,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2794"
+      "sourceRef": "handler.rs:2802"
     },
     {
       "name": "hydrate_worktree",
@@ -6165,7 +6321,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3208"
+      "sourceRef": "handler.rs:3216"
     },
     {
       "name": "inbox_list",
@@ -6316,7 +6472,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7123"
+      "sourceRef": "handler.rs:7181"
     },
     {
       "name": "inbox_post",
@@ -6376,7 +6532,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6014"
+      "sourceRef": "handler.rs:6022"
     },
     {
       "name": "install_terminal_server",
@@ -6538,7 +6694,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1583"
+      "sourceRef": "handler.rs:1585"
     },
     {
       "name": "list_agent_accounts",
@@ -6570,7 +6726,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2257"
+      "sourceRef": "handler.rs:2259"
     },
     {
       "name": "list_agent_updates",
@@ -6631,7 +6787,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7201"
+      "sourceRef": "handler.rs:7259"
     },
     {
       "name": "list_context_attachments",
@@ -6657,7 +6813,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1460"
+      "sourceRef": "handler.rs:1462"
     },
     {
       "name": "list_context_content",
@@ -6723,7 +6879,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9460"
+      "sourceRef": "handler.rs:9555"
     },
     {
       "name": "list_hydrated",
@@ -6806,7 +6962,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2818"
+      "sourceRef": "handler.rs:2826"
     },
     {
       "name": "list_machines",
@@ -6848,7 +7004,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1511"
+      "sourceRef": "handler.rs:1513"
     },
     {
       "name": "list_move_intents",
@@ -6873,7 +7029,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2075"
+      "sourceRef": "handler.rs:2077"
     },
     {
       "name": "list_orgs_teams",
@@ -6898,7 +7054,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8868"
+      "sourceRef": "handler.rs:8963"
     },
     {
       "name": "list_out_of_date_terminal_servers",
@@ -6946,7 +7102,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1652"
+      "sourceRef": "handler.rs:1654"
     },
     {
       "name": "list_run_events",
@@ -7016,7 +7172,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4782"
+      "sourceRef": "handler.rs:4790"
     },
     {
       "name": "list_runs",
@@ -7053,7 +7209,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4769"
+      "sourceRef": "handler.rs:4777"
     },
     {
       "name": "list_sessions",
@@ -7088,7 +7244,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6641"
+      "sourceRef": "handler.rs:6682"
     },
     {
       "name": "list_source_repos",
@@ -7113,7 +7269,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2633"
+      "sourceRef": "handler.rs:2641"
     },
     {
       "name": "list_ssh_sources",
@@ -7142,7 +7298,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1529"
+      "sourceRef": "handler.rs:1531"
     },
     {
       "name": "list_wakeups",
@@ -7179,7 +7335,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5230"
+      "sourceRef": "handler.rs:5238"
     },
     {
       "name": "list_worktrees",
@@ -7224,7 +7380,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:5011"
+      "sourceRef": "handler.rs:5019"
     },
     {
       "name": "mark_unread",
@@ -7275,7 +7431,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7152"
+      "sourceRef": "handler.rs:7210"
     },
     {
       "name": "model_rates",
@@ -7300,7 +7456,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4981"
+      "sourceRef": "handler.rs:4989"
     },
     {
       "name": "move_between_contexts",
@@ -7396,7 +7552,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9510"
+      "sourceRef": "handler.rs:9605"
     },
     {
       "name": "move_content_file",
@@ -7441,7 +7597,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6344"
+      "sourceRef": "handler.rs:6385"
     },
     {
       "name": "move_workspace",
@@ -7522,7 +7678,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2045"
+      "sourceRef": "handler.rs:2047"
     },
     {
       "name": "notes_create",
@@ -7593,7 +7749,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3598"
+      "sourceRef": "handler.rs:3606"
     },
     {
       "name": "notes_history",
@@ -7643,7 +7799,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3641"
+      "sourceRef": "handler.rs:3649"
     },
     {
       "name": "notes_list",
@@ -7678,7 +7834,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3572"
+      "sourceRef": "handler.rs:3580"
     },
     {
       "name": "notes_read",
@@ -7719,7 +7875,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3585"
+      "sourceRef": "handler.rs:3593"
     },
     {
       "name": "notes_read_at",
@@ -7764,7 +7920,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3654"
+      "sourceRef": "handler.rs:3662"
     },
     {
       "name": "notes_restore",
@@ -7831,7 +7987,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3667"
+      "sourceRef": "handler.rs:3675"
     },
     {
       "name": "notes_search",
@@ -7882,7 +8038,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3628"
+      "sourceRef": "handler.rs:3636"
     },
     {
       "name": "notes_write",
@@ -7998,7 +8154,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3613"
+      "sourceRef": "handler.rs:3621"
     },
     {
       "name": "open_remote_tab",
@@ -8137,7 +8293,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1982"
+      "sourceRef": "handler.rs:1984"
     },
     {
       "name": "open_terminal_tab",
@@ -8189,7 +8345,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7974"
+      "sourceRef": "handler.rs:8032"
     },
     {
       "name": "open_workspace",
@@ -8273,6 +8429,14 @@
           "mode": {
             "default": null,
             "description": "How the workspace surfaces — `\"headed\"` (visible + focused, the\ndefault) · `\"visible-unfocused\"` (a real tab that does not steal focus) ·\n`\"headless\"` (background; opt-in only). Absent → resolved from `headed`\n(default headed). An unrecognized value is refused `denied:`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "default": null,
+            "description": "The model to run (with `target`), such as `opus` or `sonnet`: passed to the agent's CLI\nas `--model <model>` after the agent's own args. Omitted, the agent's own model.",
             "type": [
               "string",
               "null"
@@ -8363,7 +8527,43 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6567"
+      "sourceRef": "handler.rs:6608"
+    },
+    {
+      "name": "pack_validate",
+      "arc": "L",
+      "description": "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`).\nDocs: arc-e-agents/packs.html",
+      "write": false,
+      "starter": false,
+      "core": false,
+      "family": "packs",
+      "docs": "arc-e-agents/packs.html",
+      "namedOnPage": true,
+      "feature": null,
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "The pack folder's absolute path: the one holding `pack.yml`, inside a context repo\nyou can read.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "returns": null,
+      "outputSchemaAvailable": false,
+      "examples": [
+        {
+          "tool": "pack_validate",
+          "arguments": {
+            "path": "/path/to/team/content/packs/my-pack"
+          }
+        }
+      ],
+      "sourceRef": "handler.rs:6287"
     },
     {
       "name": "pane_list",
@@ -8409,7 +8609,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3347"
+      "sourceRef": "handler.rs:3355"
     },
     {
       "name": "pane_open",
@@ -8477,7 +8677,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3412"
+      "sourceRef": "handler.rs:3420"
     },
     {
       "name": "pane_write",
@@ -8542,7 +8742,248 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3379"
+      "sourceRef": "handler.rs:3387"
+    },
+    {
+      "name": "pin",
+      "arc": "F",
+      "description": "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {restore} (optional boolean: true brings back an unpinned pin as it was, keeping who pinned it, when, its preview and its place; refused at 3 pins), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"restored\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}.\nDocs: arc-f-inboxes-and-triage/messages.html#tool-pin",
+      "write": true,
+      "starter": false,
+      "core": false,
+      "family": "inbox-pins",
+      "docs": "arc-f-inboxes-and-triage/messages.html#tool-pin",
+      "namedOnPage": true,
+      "feature": null,
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "message_id": {
+            "description": "The message to pin, from `send_message`, `reply` or `read_messages`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "position": {
+            "default": null,
+            "description": "Where it goes among the pins: 0 is first; omitted or past the end, it goes last.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "What a folded pin shows of its view: a short name, a headline value and unit, a\nstatus, a small chart and its key lines. Every field is optional.",
+                "properties": {
+                  "chart": {
+                    "anyOf": [
+                      {
+                        "description": "The small chart of a preview. `label` says what it shows in words, for a screen\nreader and for a pane too small to draw it.",
+                        "oneOf": [
+                          {
+                            "description": "One segment per item, each with its status (ACs traced, review rounds).",
+                            "properties": {
+                              "kind": {
+                                "const": "segments",
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "segments": {
+                                "items": {
+                                  "description": "How a pinned view is doing, as its status dot shows it.",
+                                  "enum": [
+                                    "on-track",
+                                    "running",
+                                    "needs-you",
+                                    "not-updating"
+                                  ],
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "segments",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "description": "A share done, 0 to 100 (test files run).",
+                            "properties": {
+                              "kind": {
+                                "const": "progress",
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "percent": {
+                                "format": "double",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "percent",
+                              "label"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "description": "Parts of a whole by size (stories by stage, spend by runtime).",
+                            "properties": {
+                              "kind": {
+                                "const": "stack",
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "parts": {
+                                "items": {
+                                  "description": "One part of a [`PinChart::Stack`].",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "format": "double",
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parts",
+                              "label"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lines": {
+                    "description": "Up to three key lines, most important first.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "shortName": {
+                    "description": "A few words for the line of chips (\"QA\", \"Review\").",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "description": "How a pinned view is doing, as its status dot shows it.",
+                        "enum": [
+                          "on-track",
+                          "running",
+                          "needs-you",
+                          "not-updating"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "unit": {
+                    "description": "What the value counts (\"ACs traced\").",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "The headline value (\"5 of 5\", \"0H 0M 0L\", \"$20.70\").",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.\nOn a message already pinned it replaces that pin's preview."
+          },
+          "remove": {
+            "default": null,
+            "description": "`true` unpins it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "restore": {
+            "default": null,
+            "description": "`true` brings back its unpinned pin as it was (who pinned it, when, its preview and\nplace): the Undo of an unpin.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_id": {
+            "default": null,
+            "description": "Omit to pin as this connection's verified tab. If supplied, it must name that\nsame tab. An unbound connection is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "type": "object"
+      },
+      "returns": null,
+      "outputSchemaAvailable": false,
+      "examples": [
+        {
+          "tool": "pin",
+          "arguments": {
+            "message_id": 42,
+            "preview": {
+              "shortName": "QA",
+              "value": "5 of 5",
+              "unit": "ACs traced",
+              "status": "on-track"
+            }
+          }
+        }
+      ],
+      "sourceRef": "handler.rs:6765"
     },
     {
       "name": "post_agent_message",
@@ -8616,7 +9057,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3751"
+      "sourceRef": "handler.rs:3759"
     },
     {
       "name": "prepare_machine_terminal_server_replacement",
@@ -8650,7 +9091,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1602"
+      "sourceRef": "handler.rs:1604"
     },
     {
       "name": "prepare_remote_workspace",
@@ -8751,7 +9192,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2002"
+      "sourceRef": "handler.rs:2004"
     },
     {
       "name": "preview_reverse_sync_worktree",
@@ -8953,7 +9394,50 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3169"
+      "sourceRef": "handler.rs:3177"
+    },
+    {
+      "name": "probe_environment",
+      "arc": "L",
+      "description": "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned.\nDocs: arc-b-model/orgs.html",
+      "write": false,
+      "starter": false,
+      "core": false,
+      "family": "local-setup",
+      "docs": "arc-b-model/orgs.html",
+      "namedOnPage": true,
+      "feature": null,
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "envNames": {
+            "default": [],
+            "description": "Environment variable names to test in the login shell (at most 32). Each is\nreported as set or not; a value is never read back.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gitRepoPath": {
+            "default": null,
+            "description": "An absolute folder path to test for being a git repository (it holds `.git`). At\nmost 1024 bytes, with no `..`; a folder under ~/Documents, ~/Desktop, ~/Downloads,\nthe cloud storage folders in ~/Library or /Volumes is refused unless it is inside a\nfolder already attached as a source repo.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "returns": null,
+      "outputSchemaAvailable": false,
+      "examples": [
+        {
+          "tool": "list_orgs_teams",
+          "arguments": {}
+        }
+      ],
+      "sourceRef": "handler.rs:6271"
     },
     {
       "name": "publish_dashboard",
@@ -8996,7 +9480,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11803"
+      "sourceRef": "handler.rs:12124"
     },
     {
       "name": "query_context",
@@ -9094,7 +9578,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8852"
+      "sourceRef": "handler.rs:8947"
     },
     {
       "name": "react",
@@ -9150,7 +9634,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6707"
+      "sourceRef": "handler.rs:6748"
     },
     {
       "name": "read_content_file",
@@ -9193,7 +9677,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6290"
+      "sourceRef": "handler.rs:6331"
     },
     {
       "name": "read_epic_repos",
@@ -9227,7 +9711,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6246"
+      "sourceRef": "handler.rs:6254"
     },
     {
       "name": "read_messages",
@@ -9262,7 +9746,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6675"
+      "sourceRef": "handler.rs:6716"
     },
     {
       "name": "read_remote_agent_task",
@@ -9302,7 +9786,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2130"
+      "sourceRef": "handler.rs:2132"
     },
     {
       "name": "read_rendered_document",
@@ -9345,7 +9829,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3690"
+      "sourceRef": "handler.rs:3698"
     },
     {
       "name": "read_run",
@@ -9389,7 +9873,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4795"
+      "sourceRef": "handler.rs:4803"
     },
     {
       "name": "read_run_evidence",
@@ -9431,7 +9915,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4808"
+      "sourceRef": "handler.rs:4816"
     },
     {
       "name": "read_run_work_product",
@@ -9465,7 +9949,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4821"
+      "sourceRef": "handler.rs:4829"
     },
     {
       "name": "read_terminal_tab",
@@ -9542,7 +10026,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8139"
+      "sourceRef": "handler.rs:8229"
     },
     {
       "name": "read_worktree_config",
@@ -9578,7 +10062,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2994"
+      "sourceRef": "handler.rs:3002"
     },
     {
       "name": "records_collections",
@@ -9712,7 +10196,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3462"
+      "sourceRef": "handler.rs:3470"
     },
     {
       "name": "records_create",
@@ -9846,7 +10330,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3522"
+      "sourceRef": "handler.rs:3530"
     },
     {
       "name": "records_delete",
@@ -9980,7 +10464,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3552"
+      "sourceRef": "handler.rs:3560"
     },
     {
       "name": "records_history",
@@ -10114,7 +10598,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3502"
+      "sourceRef": "handler.rs:3510"
     },
     {
       "name": "records_list",
@@ -10248,7 +10732,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3472"
+      "sourceRef": "handler.rs:3480"
     },
     {
       "name": "records_read",
@@ -10382,7 +10866,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3482"
+      "sourceRef": "handler.rs:3490"
     },
     {
       "name": "records_read_at",
@@ -10516,7 +11000,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3512"
+      "sourceRef": "handler.rs:3520"
     },
     {
       "name": "records_restore",
@@ -10650,7 +11134,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3562"
+      "sourceRef": "handler.rs:3570"
     },
     {
       "name": "records_search",
@@ -10784,7 +11268,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3492"
+      "sourceRef": "handler.rs:3500"
     },
     {
       "name": "records_set_fields",
@@ -10918,7 +11402,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3542"
+      "sourceRef": "handler.rs:3550"
     },
     {
       "name": "records_write",
@@ -11052,7 +11536,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:3532"
+      "sourceRef": "handler.rs:3540"
     },
     {
       "name": "refresh_frontmatter_cache",
@@ -11088,7 +11572,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6366"
+      "sourceRef": "handler.rs:6407"
     },
     {
       "name": "refresh_history",
@@ -11154,7 +11638,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4866"
+      "sourceRef": "handler.rs:4874"
     },
     {
       "name": "register_role",
@@ -11235,7 +11719,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6785"
+      "sourceRef": "handler.rs:6843"
     },
     {
       "name": "release_role",
@@ -11296,7 +11780,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7075"
+      "sourceRef": "handler.rs:7133"
     },
     {
       "name": "remote_workspace_fetch",
@@ -11377,7 +11861,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2026"
+      "sourceRef": "handler.rs:2028"
     },
     {
       "name": "remove_from_context",
@@ -11424,7 +11908,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9532"
+      "sourceRef": "handler.rs:9627"
     },
     {
       "name": "remove_machine",
@@ -11461,7 +11945,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1894"
+      "sourceRef": "handler.rs:1896"
     },
     {
       "name": "remove_source_repo",
@@ -11506,7 +11990,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9816"
+      "sourceRef": "handler.rs:10108"
     },
     {
       "name": "rename_team",
@@ -11550,7 +12034,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9670"
+      "sourceRef": "handler.rs:9765"
     },
     {
       "name": "rename_terminal_tab",
@@ -11617,7 +12101,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8237"
+      "sourceRef": "handler.rs:8327"
     },
     {
       "name": "rename_workspace",
@@ -11656,7 +12140,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9755"
+      "sourceRef": "handler.rs:9850"
     },
     {
       "name": "render_canvas",
@@ -11692,7 +12176,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3735"
+      "sourceRef": "handler.rs:3743"
     },
     {
       "name": "reorder_workspace",
@@ -11741,7 +12225,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2565"
+      "sourceRef": "handler.rs:2573"
     },
     {
       "name": "reply",
@@ -11863,7 +12347,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6692"
+      "sourceRef": "handler.rs:6733"
     },
     {
       "name": "report_artifact",
@@ -11923,7 +12407,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4395"
+      "sourceRef": "handler.rs:4403"
     },
     {
       "name": "report_context_sync",
@@ -12023,7 +12507,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6541"
+      "sourceRef": "handler.rs:6582"
     },
     {
       "name": "report_step_result",
@@ -12121,7 +12605,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4336"
+      "sourceRef": "handler.rs:4344"
     },
     {
       "name": "resolve_agent_account",
@@ -12171,7 +12655,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2310"
+      "sourceRef": "handler.rs:2312"
     },
     {
       "name": "resolve_machine_identity",
@@ -12216,7 +12700,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1823"
+      "sourceRef": "handler.rs:1825"
     },
     {
       "name": "restart_machine_terminal_server",
@@ -12259,7 +12743,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1625"
+      "sourceRef": "handler.rs:1627"
     },
     {
       "name": "restart_terminal_server",
@@ -12379,7 +12863,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1761"
+      "sourceRef": "handler.rs:1763"
     },
     {
       "name": "retry_machine",
@@ -12416,7 +12900,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1945"
+      "sourceRef": "handler.rs:1947"
     },
     {
       "name": "reverse_sync_worktree",
@@ -12669,7 +13153,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:3125"
+      "sourceRef": "handler.rs:3133"
     },
     {
       "name": "role_save",
@@ -12734,12 +13218,12 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5490"
+      "sourceRef": "handler.rs:5498"
     },
     {
       "name": "role_state",
       "arc": "F",
-      "description": "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "description": "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, inReplyTo, text, textTruncated, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. `inReplyTo` is the messageId the message answers (the card a reply is for), null for none. `text` is the message, up to 4000 characters (`textTruncated` when cut), for an open delivery; null once acknowledged. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message.\nDocs: arc-f-inboxes-and-triage/messages.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -12805,7 +13289,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7179"
+      "sourceRef": "handler.rs:7237"
     },
     {
       "name": "roles_list",
@@ -12840,7 +13324,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5472"
+      "sourceRef": "handler.rs:5480"
     },
     {
       "name": "route_file_to_context",
@@ -12930,7 +13414,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2764"
+      "sourceRef": "handler.rs:2772"
     },
     {
       "name": "routine_arm_on",
@@ -12978,7 +13462,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4573"
+      "sourceRef": "handler.rs:4581"
     },
     {
       "name": "routine_cancel",
@@ -13026,7 +13510,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4753"
+      "sourceRef": "handler.rs:4761"
     },
     {
       "name": "routine_context",
@@ -13070,7 +13554,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5107"
+      "sourceRef": "handler.rs:5115"
     },
     {
       "name": "routine_create",
@@ -13427,7 +13911,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4427"
+      "sourceRef": "handler.rs:4435"
     },
     {
       "name": "routine_delete",
@@ -13471,7 +13955,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5024"
+      "sourceRef": "handler.rs:5032"
     },
     {
       "name": "routine_done",
@@ -13526,7 +14010,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5129"
+      "sourceRef": "handler.rs:5137"
     },
     {
       "name": "routine_get",
@@ -13570,7 +14054,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4483"
+      "sourceRef": "handler.rs:4491"
     },
     {
       "name": "routine_handover_release",
@@ -13623,7 +14107,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4649"
+      "sourceRef": "handler.rs:4657"
     },
     {
       "name": "routine_list",
@@ -13664,7 +14148,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4462"
+      "sourceRef": "handler.rs:4470"
     },
     {
       "name": "routine_publish_result",
@@ -13706,7 +14190,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5049"
+      "sourceRef": "handler.rs:5057"
     },
     {
       "name": "routine_refresh_on_machine",
@@ -13749,7 +14233,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4610"
+      "sourceRef": "handler.rs:4618"
     },
     {
       "name": "routine_result",
@@ -13793,7 +14277,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5084"
+      "sourceRef": "handler.rs:5092"
     },
     {
       "name": "routine_run",
@@ -13831,7 +14315,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4738"
+      "sourceRef": "handler.rs:4746"
     },
     {
       "name": "routine_run_now",
@@ -13886,7 +14370,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4683"
+      "sourceRef": "handler.rs:4691"
     },
     {
       "name": "routine_runs",
@@ -13943,7 +14427,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4723"
+      "sourceRef": "handler.rs:4731"
     },
     {
       "name": "routine_set_enabled",
@@ -13995,7 +14479,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4540"
+      "sourceRef": "handler.rs:4548"
     },
     {
       "name": "routine_update",
@@ -14320,7 +14804,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4504"
+      "sourceRef": "handler.rs:4512"
     },
     {
       "name": "run_in_terminal_tab",
@@ -14414,7 +14898,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7834"
+      "sourceRef": "handler.rs:7892"
     },
     {
       "name": "save_machine",
@@ -14630,7 +15114,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1801"
+      "sourceRef": "handler.rs:1803"
     },
     {
       "name": "save_source_repo_attachment",
@@ -14723,7 +15207,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1427"
+      "sourceRef": "handler.rs:1429"
     },
     {
       "name": "schedule_wakeup",
@@ -14825,7 +15309,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5200"
+      "sourceRef": "handler.rs:5208"
     },
     {
       "name": "send_message",
@@ -15042,7 +15526,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6660"
+      "sourceRef": "handler.rs:6701"
     },
     {
       "name": "send_role_message",
@@ -15220,7 +15704,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7222"
+      "sourceRef": "handler.rs:7280"
     },
     {
       "name": "send_to_session",
@@ -15261,7 +15745,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7741"
+      "sourceRef": "handler.rs:7799"
     },
     {
       "name": "sense_sync_adopt",
@@ -15348,7 +15832,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2748"
+      "sourceRef": "handler.rs:2756"
     },
     {
       "name": "sense_sync_list_layers",
@@ -15412,7 +15896,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2859"
+      "sourceRef": "handler.rs:2867"
     },
     {
       "name": "sense_sync_move_layer",
@@ -15498,7 +15982,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2928"
+      "sourceRef": "handler.rs:2936"
     },
     {
       "name": "sense_sync_read_layer_file",
@@ -15575,7 +16059,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2886"
+      "sourceRef": "handler.rs:2894"
     },
     {
       "name": "sense_sync_read_lockfile",
@@ -15634,7 +16118,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2906"
+      "sourceRef": "handler.rs:2914"
     },
     {
       "name": "session_read",
@@ -15714,7 +16198,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4848"
+      "sourceRef": "handler.rs:4856"
     },
     {
       "name": "session_usage",
@@ -15795,7 +16279,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4878"
+      "sourceRef": "handler.rs:4886"
     },
     {
       "name": "set_active_agent_account",
@@ -15850,7 +16334,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2337"
+      "sourceRef": "handler.rs:2339"
     },
     {
       "name": "set_active_team",
@@ -15889,7 +16373,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9587"
+      "sourceRef": "handler.rs:9682"
     },
     {
       "name": "set_epic_repos",
@@ -15931,7 +16415,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6263"
+      "sourceRef": "handler.rs:6304"
     },
     {
       "name": "set_machine_auto_connect",
@@ -15972,7 +16456,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1863"
+      "sourceRef": "handler.rs:1865"
     },
     {
       "name": "set_machine_hidden",
@@ -16013,7 +16497,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1844"
+      "sourceRef": "handler.rs:1846"
     },
     {
       "name": "set_machine_remote_mcp_control",
@@ -16054,7 +16538,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1492"
+      "sourceRef": "handler.rs:1494"
     },
     {
       "name": "set_model_rate",
@@ -16160,7 +16644,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:4992"
+      "sourceRef": "handler.rs:5000"
     },
     {
       "name": "set_private_items_use",
@@ -16201,7 +16685,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9597"
+      "sourceRef": "handler.rs:9692"
     },
     {
       "name": "set_team_parent",
@@ -16248,7 +16732,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9703"
+      "sourceRef": "handler.rs:9798"
     },
     {
       "name": "set_team_starter_page",
@@ -16299,7 +16783,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9725"
+      "sourceRef": "handler.rs:9820"
     },
     {
       "name": "set_viewer_state",
@@ -16333,7 +16817,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2464"
+      "sourceRef": "handler.rs:2472"
     },
     {
       "name": "share_dashboard",
@@ -16387,7 +16871,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11844"
+      "sourceRef": "handler.rs:12165"
     },
     {
       "name": "signal_done",
@@ -16485,7 +16969,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4082"
+      "sourceRef": "handler.rs:4090"
     },
     {
       "name": "signal_progress",
@@ -16555,7 +17039,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4258"
+      "sourceRef": "handler.rs:4266"
     },
     {
       "name": "start_remote_agent_task",
@@ -16615,7 +17099,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2104"
+      "sourceRef": "handler.rs:2106"
     },
     {
       "name": "start_terminal_server",
@@ -16641,7 +17125,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1745"
+      "sourceRef": "handler.rs:1747"
     },
     {
       "name": "stop_terminal_server",
@@ -16761,7 +17245,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1723"
+      "sourceRef": "handler.rs:1725"
     },
     {
       "name": "story_changes",
@@ -16868,7 +17352,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4832"
+      "sourceRef": "handler.rs:4840"
     },
     {
       "name": "story_totals",
@@ -16921,7 +17405,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4840"
+      "sourceRef": "handler.rs:4848"
     },
     {
       "name": "task_list",
@@ -17015,7 +17499,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4947"
+      "sourceRef": "handler.rs:4955"
     },
     {
       "name": "task_read",
@@ -17064,7 +17548,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4964"
+      "sourceRef": "handler.rs:4972"
     },
     {
       "name": "task_start",
@@ -17185,7 +17669,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4895"
+      "sourceRef": "handler.rs:4903"
     },
     {
       "name": "task_update",
@@ -17348,7 +17832,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4930"
+      "sourceRef": "handler.rs:4938"
     },
     {
       "name": "terminal_server_status",
@@ -17374,7 +17858,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1707"
+      "sourceRef": "handler.rs:1709"
     },
     {
       "name": "test_machine_connection",
@@ -17539,7 +18023,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1545"
+      "sourceRef": "handler.rs:1547"
     },
     {
       "name": "unpublish_dashboard",
@@ -17577,7 +18061,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:11826"
+      "sourceRef": "handler.rs:12147"
     },
     {
       "name": "unroute_file_from_context",
@@ -17647,7 +18131,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2839"
+      "sourceRef": "handler.rs:2847"
     },
     {
       "name": "unshare_machine",
@@ -17684,7 +18168,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:1880"
+      "sourceRef": "handler.rs:1882"
     },
     {
       "name": "update_codesense_docs",
@@ -17709,7 +18193,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2197"
+      "sourceRef": "handler.rs:2199"
     },
     {
       "name": "update_terminal_servers",
@@ -17823,7 +18307,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:1674"
+      "sourceRef": "handler.rs:1676"
     },
     {
       "name": "update_workspace_base",
@@ -17896,7 +18380,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2085"
+      "sourceRef": "handler.rs:2087"
     },
     {
       "name": "validate_live_data_doc",
@@ -17942,7 +18426,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2390"
+      "sourceRef": "handler.rs:2392"
     },
     {
       "name": "validate_story",
@@ -17985,7 +18469,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:2718"
+      "sourceRef": "handler.rs:2726"
     },
     {
       "name": "who_am_i",
@@ -18020,7 +18504,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:6771"
+      "sourceRef": "handler.rs:6829"
     },
     {
       "name": "why_line",
@@ -18103,7 +18587,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:4856"
+      "sourceRef": "handler.rs:4864"
     },
     {
       "name": "workspace_chat_read",
@@ -18161,7 +18645,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9862"
+      "sourceRef": "handler.rs:10154"
     },
     {
       "name": "workspace_chat_send",
@@ -18292,7 +18776,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9849"
+      "sourceRef": "handler.rs:10141"
     },
     {
       "name": "workspace_group_add",
@@ -18367,7 +18851,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8677"
+      "sourceRef": "handler.rs:8772"
     },
     {
       "name": "workspace_group_create",
@@ -18442,7 +18926,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8641"
+      "sourceRef": "handler.rs:8736"
     },
     {
       "name": "workspace_group_delete",
@@ -18517,7 +19001,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8699"
+      "sourceRef": "handler.rs:8794"
     },
     {
       "name": "workspace_group_list",
@@ -18592,7 +19076,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8629"
+      "sourceRef": "handler.rs:8724"
     },
     {
       "name": "workspace_group_remove",
@@ -18667,7 +19151,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8688"
+      "sourceRef": "handler.rs:8783"
     },
     {
       "name": "workspace_group_rename",
@@ -18742,7 +19226,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8653"
+      "sourceRef": "handler.rs:8748"
     },
     {
       "name": "workspace_group_set_members",
@@ -18817,7 +19301,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8665"
+      "sourceRef": "handler.rs:8760"
     },
     {
       "name": "write_worktree_config",
@@ -18858,7 +19342,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:2966"
+      "sourceRef": "handler.rs:2974"
     },
     {
       "name": "wv_audit_prune",
@@ -18898,7 +19382,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9400"
+      "sourceRef": "handler.rs:9495"
     },
     {
       "name": "wv_audit_query",
@@ -18983,7 +19467,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9373"
+      "sourceRef": "handler.rs:9468"
     },
     {
       "name": "wv_check_t2_window",
@@ -19028,7 +19512,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5799"
+      "sourceRef": "handler.rs:5807"
     },
     {
       "name": "wv_claim_queue",
@@ -19128,7 +19612,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8919"
+      "sourceRef": "handler.rs:9014"
     },
     {
       "name": "wv_classify_action",
@@ -19197,7 +19681,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5711"
+      "sourceRef": "handler.rs:5719"
     },
     {
       "name": "wv_close_t2_window",
@@ -19242,7 +19726,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5820"
+      "sourceRef": "handler.rs:5828"
     },
     {
       "name": "wv_close_task",
@@ -19295,7 +19779,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9126"
+      "sourceRef": "handler.rs:9221"
     },
     {
       "name": "wv_coord_read",
@@ -19339,7 +19823,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9253"
+      "sourceRef": "handler.rs:9348"
     },
     {
       "name": "wv_dispatch_state",
@@ -19378,7 +19862,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7503"
+      "sourceRef": "handler.rs:7561"
     },
     {
       "name": "wv_enqueue",
@@ -19449,7 +19933,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8887"
+      "sourceRef": "handler.rs:8982"
     },
     {
       "name": "wv_escalate",
@@ -19501,7 +19985,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9321"
+      "sourceRef": "handler.rs:9416"
     },
     {
       "name": "wv_handoff_state",
@@ -19540,7 +20024,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7620"
+      "sourceRef": "handler.rs:7678"
     },
     {
       "name": "wv_list_overdue_harvests",
@@ -19580,7 +20064,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9420"
+      "sourceRef": "handler.rs:9515"
     },
     {
       "name": "wv_mark_dispatched",
@@ -19638,7 +20122,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9062"
+      "sourceRef": "handler.rs:9157"
     },
     {
       "name": "wv_open_t2_window",
@@ -19689,7 +20173,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5766"
+      "sourceRef": "handler.rs:5774"
     },
     {
       "name": "wv_pause_t2_windows",
@@ -19719,7 +20203,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5841"
+      "sourceRef": "handler.rs:5849"
     },
     {
       "name": "wv_peer_read_file",
@@ -19768,7 +20252,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9288"
+      "sourceRef": "handler.rs:9383"
     },
     {
       "name": "wv_post_assertion",
@@ -19825,7 +20309,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6104"
+      "sourceRef": "handler.rs:6112"
     },
     {
       "name": "wv_queue_list",
@@ -19865,7 +20349,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9174"
+      "sourceRef": "handler.rs:9269"
     },
     {
       "name": "wv_read_posture",
@@ -19895,7 +20379,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5877"
+      "sourceRef": "handler.rs:5885"
     },
     {
       "name": "wv_read_recent",
@@ -19934,7 +20418,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7639"
+      "sourceRef": "handler.rs:7697"
     },
     {
       "name": "wv_report_cycle",
@@ -19969,7 +20453,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9205"
+      "sourceRef": "handler.rs:9300"
     },
     {
       "name": "wv_report_handoff",
@@ -20030,7 +20514,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7579"
+      "sourceRef": "handler.rs:7637"
     },
     {
       "name": "wv_resolve_queue",
@@ -20086,7 +20570,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8991"
+      "sourceRef": "handler.rs:9086"
     },
     {
       "name": "wv_resume_t2_windows",
@@ -20116,7 +20600,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5859"
+      "sourceRef": "handler.rs:5867"
     },
     {
       "name": "wv_retire_decision",
@@ -20156,7 +20640,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5619"
+      "sourceRef": "handler.rs:5627"
     },
     {
       "name": "wv_scope_state",
@@ -20195,7 +20679,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6201"
+      "sourceRef": "handler.rs:6209"
     },
     {
       "name": "wv_set_posture",
@@ -20267,7 +20751,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5898"
+      "sourceRef": "handler.rs:5906"
     },
     {
       "name": "wv_settle_approval",
@@ -20312,7 +20796,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5748"
+      "sourceRef": "handler.rs:5756"
     },
     {
       "name": "wv_spawn_worker",
@@ -20375,7 +20859,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:7319"
+      "sourceRef": "handler.rs:7377"
     },
     {
       "name": "wv_upsert_attention",
@@ -20464,7 +20948,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5970"
+      "sourceRef": "handler.rs:5978"
     },
     {
       "name": "wv_upsert_watermark",
@@ -20513,7 +20997,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5947"
+      "sourceRef": "handler.rs:5955"
     },
     {
       "name": "wv_verify_done",
@@ -20552,7 +21036,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7530"
+      "sourceRef": "handler.rs:7588"
     },
     {
       "name": "wv_wait",
@@ -20606,7 +21090,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7670"
+      "sourceRef": "handler.rs:7728"
     },
     {
       "name": "wv_watch_list",
@@ -20653,7 +21137,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:6225"
+      "sourceRef": "handler.rs:6233"
     },
     {
       "name": "wv_write_approval",
@@ -20746,7 +21230,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5637"
+      "sourceRef": "handler.rs:5645"
     },
     {
       "name": "wv_write_decision",
@@ -20813,7 +21297,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:5592"
+      "sourceRef": "handler.rs:5600"
     },
     {
       "name": "wv_write_dispatch",
@@ -20886,7 +21370,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:7440"
+      "sourceRef": "handler.rs:7498"
     }
   ]
 }
