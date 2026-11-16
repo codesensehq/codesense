@@ -31,12 +31,23 @@ describe("storyTypeOfMarkdown", () => {
     expect(storyTypeOfMarkdown("---\ntype: spike # a timebox\n---\n")).toBe("spike");
   });
 
+  it("follows the pipeline's rule: any case, a leading BOM, a padded quoted value, the canonical type back", () => {
+    expect(storyTypeOfMarkdown("---\ntype: Story\n---\n")).toBe("story");
+    expect(storyTypeOfMarkdown("---\ntype: BUG # a comment\n---\n")).toBe("bug");
+    expect(storyTypeOfMarkdown("\uFEFF---\ntype: story\n---\n")).toBe("story");
+    expect(storyTypeOfMarkdown('---\ntype: " Spike "\n---\n')).toBe("spike");
+  });
+
+  it("reads a # with no space before it as part of the value, as YAML does", () => {
+    expect(storyTypeOfMarkdown("---\ntype: story#draft\n---\n")).toBeNull();
+    expect(storyTypeOfMarkdown("---\ntype: story\t# tabbed comment\n---\n")).toBe("story");
+  });
+
   it("is null for a plain doc, another type, no front matter, or a type only in the body", () => {
     expect(storyTypeOfMarkdown("# Notes\n")).toBeNull();
     expect(storyTypeOfMarkdown("---\ntype: doc\n---\n")).toBeNull();
     expect(storyTypeOfMarkdown("---\ntitle: x\n---\ntype: story\n")).toBeNull();
     expect(storyTypeOfMarkdown("text\n---\ntype: story\n---\n")).toBeNull();
-    expect(storyTypeOfMarkdown("---\ntype: Story\n---\n")).toBeNull();
     expect(storyTypeOfMarkdown("---\ntype: story\n")).toBeNull();
   });
 });
@@ -69,6 +80,10 @@ describe("storyTypeOfHtml", () => {
       "story",
     );
     expect(storyTypeOfHtml("<meta content='bug' name='cs:type'>")).toBe("bug");
+  });
+
+  it("reads the meta in any case and padded, as the pipeline does", () => {
+    expect(storyTypeOfHtml('<meta name="cs:type" content=" Story ">')).toBe("story");
   });
 
   it("is null for any other page", () => {

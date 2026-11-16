@@ -17,6 +17,14 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # tauri build refuses a crate and its npm package on different minors, and Dependabot bumps
+    # each side alone, so minor updates of the pairs are made by hand on both sides together.
+    # scripts/tauri-versions.node-test.mjs checks the pairs.
+    ignore:
+      - dependency-name: "tauri"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "tauri-plugin-*"
+        update-types: ["version-update:semver-minor"]
   - package-ecosystem: npm
     # Dependabot uses the existing pnpm-lock.yaml.
     directory: /
@@ -25,3 +33,9 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # The npm sides of the Tauri pairs above.
+    ignore:
+      - dependency-name: "@tauri-apps/api"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@tauri-apps/plugin-*"
+        update-types: ["version-update:semver-minor"]

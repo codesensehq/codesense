@@ -147,6 +147,7 @@ export const META = {
   inbox_post: { arc: "F", write: true },
   mark_unread: { arc: "F", write: true },
   react: { arc: "F", write: true },
+  pin: { arc: "F", write: true },
   read_messages: { arc: "F", write: false },
   register_role: { arc: "F", write: true },
   release_role: { arc: "F", write: true },

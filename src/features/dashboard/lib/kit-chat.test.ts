@@ -2976,6 +2976,88 @@ describe("kit.chat recipient, composer slot and row label", () => {
     expect(s.send).toHaveBeenCalledWith("helper-1", "line");
   });
 
+  it("the composer is a two-row box: the textarea, then the hint and Send on one row under it", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    const box = s.el.querySelector<HTMLElement>(".composer .box")!;
+    expect(box.firstElementChild).toBe(input(s.el));
+    const foot = box.querySelector<HTMLElement>(".box-foot")!;
+    expect(foot).not.toBeNull();
+    const hint = foot.querySelector<HTMLElement>(".hint")!;
+    expect(input(s.el).getAttribute("aria-describedby")).toBe(hint.id);
+    // One send key is named, in words: Enter. ⌘↵ (Ctrl↵) still sends but is never shown beside it.
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line");
+    expect(foot.querySelector(".keys")).toBeNull();
+    expect(foot.textContent).not.toMatch(/⌘|Ctrl/);
+    expect(foot.querySelector("button")!.textContent).toBeTruthy();
+    expect(s.el.querySelectorAll(".composer .hint").length).toBe(1);
+  });
+
+  it("⌘↵ and Ctrl↵ send, with Shift held too; Shift+Enter alone is a newline", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    input(s.el).value = "one";
+    key(s.el, { code: "Enter", metaKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "one");
+    input(s.el).value = "two";
+    key(s.el, { code: "Enter", ctrlKey: true, shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "two");
+    input(s.el).value = "three";
+    key(s.el, { code: "Enter", shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("the Enter that commits an IME candidate (keyCode 229, isComposing false in WebKit) sends nothing, in the composer and a card's reply", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          kind: "needs-you",
+          text: "What should I do next?",
+          createdAtMs: 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    input(s.el).value = "half";
+    key(s.el, { code: "Enter", keyCode: 229 });
+    const reply = s.el.querySelector<HTMLTextAreaElement>('[data-card="9"] .reply textarea')!;
+    reply.value = "half";
+    reply.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Enter",
+        keyCode: 229,
+      }),
+    );
+    await flush();
+    expect(s.send).not.toHaveBeenCalled();
+    expect(s.reply).not.toHaveBeenCalled();
+    expect(input(s.el).value).toBe("half");
+  });
+
+  it("the composer is one line on a short or narrow pane (WF-62: under 600 tall or 320 wide)", () => {
+    const css = readFileSync(
+      join(__dirname, "../../../../src-tauri/src/http/routes/dashboard_kit/chat.css"),
+      "utf8",
+    );
+    const rule = css.match(
+      /@media \(max-height:600px\),\(max-width:320px\)\{([^@]*?)\}\s*(?:\n|$)/,
+    );
+    expect(rule, "a short-or-narrow rule for the composer").not.toBeNull();
+    expect(rule![1]).toContain(".cs-chat .composer .box{grid-template-columns:minmax(0,1fr) auto");
+    expect(rule![1]).toContain(".cs-chat .composer .box-foot .hint{display:none}");
+  });
+
   it("a second Enter while the send is in flight sends nothing more", async () => {
     const s = setup([helper]);
     mountOn(s, {
