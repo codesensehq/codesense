@@ -2014,6 +2014,31 @@ test("run.sh: the claude driver is accepted and its report records the driver an
   assert.equal(front.model, "claude-sonnet-5-5");
 });
 
+test("run.sh: SIGTERM leaves no fixture root in TMPDIR", async (t) => {
+  const script = new URL("run.sh", evals).pathname;
+  const fake = fakeClaude(t, [{ ...ok(), steps: [{ grandchild: "free" }, { sleep: 20000 }] }]);
+  const tmpdir = tmp(t);
+  const args = [script, "foreman-claude", "--driver", "claude", "--k", "1", "--out", tmp(t)];
+  const env = {
+    ...process.env,
+    TMPDIR: tmpdir,
+    FOREMAN_EVAL_CLAUDE: fake.bin,
+    FOREMAN_EVAL_LOGS: tmp(t),
+  };
+  const runner = spawn("sh", args, { env, stdio: "ignore" });
+  const exited = new Promise((resolve) => runner.on("exit", resolve));
+  for (const end = Date.now() + 10000; !fake.pids() && Date.now() < end; ) await sleep(50);
+  assert.ok(fake.pids(), "the run is under way");
+  const live = readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`));
+  assert.ok(live.length > 0, "a fixture root exists while the case runs");
+  runner.kill("SIGTERM");
+  await exited;
+  assert.deepEqual(
+    readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`)),
+    [],
+  );
+});
+
 test("run.sh: SIGTERM ends the running claude and what it started", async (t) => {
   const script = new URL("run.sh", evals).pathname;
   const fake = fakeClaude(t, [{ ...ok(), steps: [{ grandchild: "free" }, { sleep: 20000 }] }]);

@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
 import { claudeDriver, killGroups } from "./claude-driver.mjs";
 import { InfraError } from "./errors.mjs";
-import { TMP_PREFIX, fixtureFor } from "./fixture.mjs";
+import { TMP_PREFIX, fixtureFor, removeLiveFixtures } from "./fixture.mjs";
 import { CASE_IDS, packDir, runtimeOf } from "./floor.mjs";
 import { grade, loadCases, loadExtraCases } from "./graders.mjs";
 import { claudeJudge } from "./judge.mjs";
@@ -192,15 +192,15 @@ async function main(argv) {
   const bin = process.env.FOREMAN_EVAL_CLAUDE || "claude";
   // Transcripts stay on this machine, never in the repo: in FOREMAN_EVAL_LOGS when set.
   const logDir = real ? process.env.FOREMAN_EVAL_LOGS || mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-logs-`)) : undefined;
-  // Each CLI runs in its own process group, outside the terminal's: end them with the runner.
-  if (real) {
-    process.on("exit", killGroups);
-    for (const [signal, code] of [
-      ["SIGINT", 130],
-      ["SIGTERM", 143],
-    ])
-      process.once(signal, () => process.exit(code));
-  }
+  // Each CLI runs in its own process group, outside the terminal's: end them with the runner,
+  // then remove the fixture of the case it was running.
+  if (real) process.on("exit", killGroups);
+  process.on("exit", removeLiveFixtures);
+  for (const [signal, code] of [
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ])
+    process.once(signal, () => process.exit(code));
   const driver = real ? claudeDriver({ model, bin, logDir }) : DRIVERS[flags.driver];
   const judge = real ? claudeJudge({ bin }) : undefined;
   const suite = flags.suite ?? "floor";

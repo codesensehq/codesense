@@ -214,6 +214,13 @@ export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 // `//**/foreman-*/**` would then match the whole sandbox (home, HOME, the gh shim, origin).
 export const TMP_PREFIX = "fm-eval";
 
+// The roots of the fixtures not yet torn down: a runner ended by a signal removes them on exit.
+const live = new Set();
+export const removeLiveFixtures = () => {
+  for (const root of live) rmSync(root, { recursive: true, force: true });
+  live.clear();
+};
+
 // The fixture a case asks for.
 export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 
@@ -281,10 +288,12 @@ export async function createFixture(options = {}) {
     foremanTeam: options.foreman_team === "user" ? { org: CONFIG.team, team: CONFIG.team } : DOCS,
   };
   const root = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-${process.pid}-`));
+  live.add(root);
   try {
     return build(root, opts);
   } catch (error) {
     rmSync(root, { recursive: true, force: true });
+    live.delete(root);
     throw error;
   }
 }
@@ -578,6 +587,7 @@ function build(root, opts) {
     },
     teardown() {
       rmSync(root, { recursive: true, force: true });
+      live.delete(root);
     },
   };
   return fx;
