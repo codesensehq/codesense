@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { teamContentRoot } from "@/features/viewer/lib/team-landing-page";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
 import { teamContentPage } from "@/shared/lib/team-content-page";
 import type { Org } from "@/shared/types/domain";
@@ -7,14 +8,17 @@ import type { Org } from "@/shared/types/domain";
 export const agentPageHash = (handle: string) => `#session=${encodeURIComponent(handle)}`;
 
 /**
- * The agent page a team declares in `teams.yml` (`agent_page:`, relative to the team's content),
- * or `null` when it declares none. The app names no page of its own: a team without the setting
- * has no Full view.
+ * The absolute path of the agent page a team declares in `teams.yml` (`agent_page:`, relative to the
+ * team's content), or `null` when it declares none or the org has no root. The app names no page of
+ * its own: a team without the setting has no Full view.
  */
-export const teamAgentPage = (orgs: readonly Org[], org: string, team: string) =>
-  teamContentPage(orgs, org, team, "agent_page");
+export function teamAgentPage(orgs: readonly Org[], org: string, team: string): string | null {
+  const declared = teamContentPage(orgs, org, team, "agent_page");
+  const orgRoot = orgs.find((o) => o.slug === org)?.org_root;
+  return declared && orgRoot ? `${teamContentRoot(orgRoot, team)}/${declared}` : null;
+}
 
-/** Open the agent's page (`page`, a path in `team`'s content) for the session `handle`, as a pinned tab. */
+/** Open the agent's page (`page`, its absolute path) for the session `handle`, as a pinned tab. */
 export function openAgentFullView(
   { org, team, handle, page }: { org: string; team: string; handle: string; page: string },
   open: typeof openFileInTeam = openFileInTeam,
