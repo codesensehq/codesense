@@ -2100,14 +2100,11 @@ test("run.sh: SIGTERM leaves no fixture root in TMPDIR", async (t) => {
   const exited = new Promise((resolve) => runner.on("exit", resolve));
   for (const end = Date.now() + 10000; !fake.pids() && Date.now() < end; ) await sleep(50);
   assert.ok(fake.pids(), "the run is under way");
-  const live = readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`));
-  assert.ok(live.length > 0, "a fixture root exists while the case runs");
+  const ours = () => readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`));
+  assert.ok(ours().length > 0, "a fixture root exists while the case runs");
   runner.kill("SIGTERM");
   await exited;
-  assert.deepEqual(
-    readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`)),
-    [],
-  );
+  assert.deepEqual(ours(), []);
 });
 
 test("run.sh: SIGTERM ends the running claude and what it started", async (t) => {

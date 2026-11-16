@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
+import { constant as rustConstant } from "./lib/foreman-constants.mjs";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
 const text = (rel) => readFileSync(new URL(rel, pack), "utf8");
@@ -160,13 +161,20 @@ function ruleMatches(cwd, target, tool, { deny = false } = {}) {
     return new RegExp(`^${re}$`).test(target);
   };
 }
-const TOOLS_THAT_WRITE = ["Edit", "Write", "NotebookEdit"];
-const denied = (cwd, target, tool) => deny.some(ruleMatches(cwd, target, tool, { deny: true }));
-const allowed = (cwd, target, tool) =>
-  !denied(cwd, target, tool) && allow.some(ruleMatches(cwd, target, tool));
-const writeDenied = (cwd, target) => TOOLS_THAT_WRITE.every((tool) => denied(cwd, target, tool));
+// Only `Edit` denies count for files, and one denies every tool that writes a file.
+const writeDenied = (cwd, target) => deny.some(ruleMatches(cwd, target, "Edit", { deny: true }));
 const writeAllowed = (cwd, target, tools = ["Edit", "Write"]) =>
-  tools.every((tool) => allowed(cwd, target, tool));
+  !writeDenied(cwd, target) && tools.every((tool) => allow.some(ruleMatches(cwd, target, tool)));
+// Each home layout: two plain ones, and home under a foreman-* parent.
+const LAYOUTS = ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"];
+// A stand-in user home, for the runtimes' home dirs.
+const USER_HOME = "/home/someone";
+// Denied outright, and neither an Edit nor a Write is allowed.
+function assertLocked(home, target) {
+  assert.equal(writeDenied(home, target), true, `${home}: ${target} is denied`);
+  for (const tool of ["Edit", "Write"])
+    assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+}
 
 test("the rule model matches the probe: ../ never, // absolute, ./ relative, Edit denies only", () => {
   const cwd = "/r/home";
@@ -188,7 +196,7 @@ test("the rule model matches the probe: ../ never, // absolute, ./ relative, Edi
 });
 
 test("edits are denied in home and allowed in a foreman-* worktree, in three layouts", () => {
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+  for (const home of LAYOUTS) {
     const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
     for (const file of ["README.md", "stories/a.md"]) {
       assert.equal(writeDenied(home, path.join(home, file)), true, `${home} is denied outright`);
@@ -221,26 +229,23 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
 test("no foreman-* path inside an agent-config or agent tree is writable, in three layouts", () => {
   // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
   // any agent's skills; the agent-config trees are denied for that reason.
-  const userHome = "/home/someone";
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+  for (const home of LAYOUTS) {
     const root = path.dirname(home);
     for (const target of [
       path.join(root, "repo/.agents/skills/foreman-x/SKILL.md"),
-      path.join(userHome, ".codex/skills/foreman-x/SKILL.md"),
-      path.join(userHome, ".claude/skills/foreman-x/SKILL.md"),
+      path.join(USER_HOME, ".codex/skills/foreman-x/SKILL.md"),
+      path.join(USER_HOME, ".claude/skills/foreman-x/SKILL.md"),
       path.join(root, "foreman-fix-docs-9f2a/.claude/settings.json"),
       // CodeSense's own agent configs: the Foreman's, its routines, any foreman-* agent.
       path.join(root, "team/config/agents/foreman-claude/agent.yaml"),
       path.join(root, "team/config/agents/foreman-claude/routines/x/routine.yml"),
       // The other runtimes' config trees CodeSense stages.
-      path.join(userHome, ".hermes/skills/foreman-x/SKILL.md"),
-      path.join(userHome, ".opencode/agent/foreman-x.md"),
+      path.join(USER_HOME, ".hermes/skills/foreman-x/SKILL.md"),
+      path.join(USER_HOME, ".opencode/agent/foreman-x.md"),
       path.join(root, "repo/.opencode/skills/foreman-x/SKILL.md"),
-      path.join(userHome, ".config/opencode/skills/foreman-x/SKILL.md"),
+      path.join(USER_HOME, ".config/opencode/skills/foreman-x/SKILL.md"),
     ]) {
-      assert.equal(writeDenied(home, target), true, `${home}: ${target} is denied`);
-      for (const tool of ["Edit", "Write"])
-        assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+      assertLocked(home, target);
     }
     assert.equal(
       writeAllowed(home, path.join(root, "foreman-fix-docs-9f2a/stories/a.md")),
@@ -255,9 +260,9 @@ test("no foreman-* path inside an agent-config or agent tree is writable, in thr
 function loaderRoots() {
   const src = (rel) => readFileSync(new URL(`../src-tauri/${rel}`, import.meta.url), "utf8");
   const constant = (text, name, file) => {
-    const m = new RegExp(`const ${name}: &str = "([^"]+)";`).exec(text);
-    assert.ok(m, `${file} defines ${name}`);
-    return m[1];
+    const value = rustConstant(text, name);
+    assert.ok(typeof value === "string", `${file} defines ${name}`);
+    return value;
   };
   const layout = src("src/routines/layout.rs");
   const config = constant(layout, "CONFIG_DIR", "layout.rs");
@@ -275,27 +280,22 @@ function loaderRoots() {
   for (const root of runtimeRoots) roots.add(root);
   // Every runtime in `AgentCli::ALL`, each with its descriptor in `agent_cli/<name>.rs`.
   const all = /pub const ALL: \[AgentCli; \d+\] = \[([^\]]*)\];/.exec(
-    readFileSync(
-      new URL("../src-tauri/crates/codesense-host-proto/src/agent_cli.rs", import.meta.url),
-      "utf8",
-    ),
+    src("crates/codesense-host-proto/src/agent_cli.rs"),
   );
   assert.ok(all, "agent_cli.rs defines AgentCli::ALL");
   const dir = "crates/codesense-pty-core/src/agent_cli/";
   const runtimes = [...all[1].matchAll(/AgentCli::(\w+)/g)].map((m) => `${m[1].toLowerCase()}.rs`);
   assert.ok(runtimes.length, "AgentCli::ALL lists runtimes");
-  for (const f of runtimes)
-    assert.ok(
-      existsSync(new URL(`../src-tauri/${dir}${f}`, import.meta.url)) &&
-        /\bskills_dir: "/.test(src(dir + f)),
-      `${f}: the descriptor of an AgentCli::ALL runtime sets skills_dir to a literal`,
-    );
   for (const f of runtimes) {
+    assert.ok(existsSync(new URL(`../src-tauri/${dir}${f}`, import.meta.url)), `${f} exists`);
     const text = src(dir + f);
     const field = (name) => new RegExp(`\\b${name}: (?:Some\\()?"([^"]+)"`).exec(text)?.[1];
     const skills = field("skills_dir");
     const homeEnv = field("home_env");
-    assert.ok(skills && homeEnv, `${f}: skills_dir and home_env`);
+    assert.ok(
+      skills && homeEnv,
+      `${f}: the descriptor of an AgentCli::ALL runtime sets skills_dir and home_env to literals`,
+    );
     roots.add(skills.replace(/\/$/, ""));
     const commands = field("commands_dir");
     if (commands) roots.add(commands.replace(/\/$/, ""));
@@ -310,8 +310,8 @@ function loaderRoots() {
 test("every loader root the source defines is denied, in three layouts", () => {
   const roots = loaderRoots();
   assert.ok(roots.length >= 10, roots.join(", "));
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
-    for (const base of ["/home/someone", path.join(path.dirname(home), "repo")]) {
+  for (const home of LAYOUTS) {
+    for (const base of [USER_HOME, path.join(path.dirname(home), "repo")]) {
       for (const root of roots) {
         const target = path.join(base, root, "foreman-x/f");
         assert.equal(writeDenied(home, target), true, `${home}: ${target}`);
@@ -321,16 +321,14 @@ test("every loader root the source defines is denied, in three layouts", () => {
 });
 
 test("routines, account homes and git internals are denied; team config in a worktree is not", () => {
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+  for (const home of LAYOUTS) {
     const root = path.dirname(home);
     for (const target of [
       path.join(root, "team/config/routines/foreman-x/routine.yml"),
-      "/home/someone/agent-account-homes/abc/skills/foreman-x/SKILL.md",
+      path.join(USER_HOME, "agent-account-homes/abc/skills/foreman-x/SKILL.md"),
       path.join(root, "repo/.git/worktrees/foreman-x/config.worktree"),
     ]) {
-      assert.equal(writeDenied(home, target), true, `${home}: ${target}`);
-      for (const tool of ["Edit", "Write"])
-        assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+      assertLocked(home, target);
     }
     for (const file of ["acme/config/sprints.yaml", "src/config/app.ts"])
       assert.equal(

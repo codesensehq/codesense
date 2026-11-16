@@ -225,7 +225,7 @@ export const removeLiveFixtures = () => {
 // one before it, and `--git-dir`/`--work-tree` against the last. Any other option there is
 // `refused`: one this doesn't know may take a value that would read as the subcommand and hide a
 // later path.
-export function gitPaths(args, cwd) {
+function gitPaths(args, cwd) {
   const dirs = [];
   let dir = cwd;
   for (let i = 0; i < args.length; i++) {
