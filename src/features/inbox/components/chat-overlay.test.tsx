@@ -1077,6 +1077,111 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     for (const block of blocks) expect(block.hasAttribute("tabindex")).toBe(false);
   });
 
+  it("names a code block or table that scrolls, which Chromium makes a Tab stop, and leaves one that fits alone", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const wide = new Set<string>(["PRE"]);
+    // jsdom has no layout: the code block overflows, the table fits.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.matches(BLOCK) && wide.has(this.tagName) ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            ...MESSAGES,
+            msg(
+              9,
+              LEAD,
+              "human",
+              "Here:\n\n```\nlong line of code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            ),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      const table = newest.querySelector<HTMLElement>(".inbox-table-scroll")!;
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+      expect(table).not.toHaveAttribute("role");
+      expect(table).not.toHaveAttribute("aria-label");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("names the active message's block once a thread drawn hidden is shown and focus comes into it", async () => {
+    let shown = false;
+    // Drawn hidden, a block measures 0 (it fits); shown, it scrolls.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return shown && this.matches("pre") ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [...MESSAGES, msg(9, LEAD, "human", "Here:\n\n```\nlong line of code\n```")],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      expect(code).not.toHaveAttribute("role");
+      shown = true;
+      act(() => newest.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("measures only the active message's blocks, and names an older one's when focus moves into it", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const measured: Element[] = [];
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        if (!this.matches(BLOCK)) return 0;
+        measured.push(this);
+        return 400;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            msg(1, LEAD, "human", "Here:\n\n```\nlong line of code\n```"),
+            ...MESSAGES.slice(1),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const older = rows()[0]!;
+      const code = older.querySelector<HTMLElement>("pre")!;
+      // An older message's block is out of the Tab order: it is neither measured nor named.
+      expect(measured).not.toContain(code);
+      expect(code).not.toHaveAttribute("role");
+      act(() => older.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("names a grouped follow-on message by its sender and time, as the message it follows is", async () => {
     await renderOverlay(420, 700);
     const grouped = rows().filter((r) => r.classList.contains("grouped"));
