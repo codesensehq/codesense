@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import type { Block } from "@/shared/lib/markdown-worker/types";
 
@@ -105,5 +105,50 @@ describe("MarkdownViewer view-state (RF-perf-12 T3)", () => {
     const { container: c2 } = await renderAndResolve();
     const el2 = c2.querySelector<HTMLElement>(".overflow-y-auto")!;
     expect(el2.scrollTop).toBe(320);
+  });
+
+  describe("when its tab is hidden and shown again", () => {
+    let observers: ResizeObserverCallback[];
+
+    beforeEach(() => {
+      observers = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(cb: ResizeObserverCallback) {
+            observers.push(cb);
+          }
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const resize = (width: number, height: number) =>
+      act(() => {
+        for (const cb of observers)
+          cb(
+            [{ contentRect: { width, height } } as unknown as ResizeObserverEntry],
+            {} as ResizeObserver,
+          );
+      });
+
+    it("puts the scroll position back when the tab is shown again", async () => {
+      const { container } = await renderAndResolve();
+      const el = container.querySelector<HTMLElement>(".overflow-y-auto")!;
+      resize(400, 300);
+      el.scrollTop = 320;
+      el.dispatchEvent(new Event("scroll"));
+      resize(0, 0);
+      // A hidden box loses its scroll offset in the engine.
+      el.scrollTop = 0;
+      resize(400, 300);
+      expect(el.scrollTop).toBe(320);
+    });
   });
 });
