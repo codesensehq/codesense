@@ -36,8 +36,10 @@ pub(crate) struct UsageHalf {
     pub report: UsageReport,
     /// What the session's rows that have a price add up to.
     pub priced_usd: f64,
-    /// The handoff chain before this session: the earlier sessions of the same saved agent and
-    /// story, oldest first. Their usage and commits count toward the record.
+    /// The rest of its thread, oldest first: on a story, the handoff chain before this session
+    /// (the earlier sessions of the same saved agent and story); with no story, the other listed
+    /// no-story sessions of its saved agent, by the thread read's seat rule. Their usage and
+    /// commits count toward the record.
     pub earlier: Vec<UsageHalf>,
 }
 
@@ -118,11 +120,15 @@ pub(crate) fn thread_sessions_in(
 }
 
 /// The earlier sessions of the same saved agent and story as `record`, oldest first. A session
-/// with no agent or no story has no chain.
+/// with no agent or no story (none, or blank) has no handoff chain.
 fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<String>, String> {
-    let (Some(agent), Some(story)) = (record.agent.as_ref(), record.story_id.as_ref()) else {
+    let (Some(agent), Some(story)) = (record.agent.as_ref(), record.story_id.as_deref()) else {
         return Ok(vec![]);
     };
+    let story = str::trim(story);
+    if str::is_empty(story) {
+        return Ok(vec![]);
+    }
     let key = crate::weft::pins::saved_agent(agent);
     let mut stmt = rusqlite::Connection::prepare(
         &store.conn,
@@ -316,7 +322,7 @@ fn duration_of(half: &UsageHalf) -> Option<i64> {
     first.zip(last).map(|(first, last)| last - first)
 }
 
-/// The record: usage figures summed over `half` and the sessions before it in its handoff chain,
+/// The record: usage figures summed over `half` and the rest of its thread (`half.earlier`),
 /// files from the story's `commits` made by any of them. `commits` is `None` with its reason when
 /// the story has none to read.
 pub(crate) fn assemble(

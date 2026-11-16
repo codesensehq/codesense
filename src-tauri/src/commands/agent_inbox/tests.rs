@@ -5984,10 +5984,22 @@ fn a_no_story_thread_is_the_listed_no_story_sessions_of_its_saved_agent() {
             row.meta.story = Some("DEMO-1".into());
         }
     }
-    let mut peers = no_story_peers(&rows, "dev-b");
-    peers.sort();
-    assert_eq!(peers, vec!["dev-a".to_string(), "dev-c".to_string()]);
+    // dev-a has ended; dev-b and dev-c are live seats (the thread read's seat rule).
+    let ended = |handle: &str| handle == "dev-a";
+    // A live seat's thread is its own and the ended ones: another live seat is left out, as the
+    // thread read leaves its conversation out, so nothing is counted twice.
+    assert_eq!(
+        no_story_peers(&rows, ended, "dev-b"),
+        vec!["dev-a".to_string()]
+    );
+    // An ended session is no seat: every listed session of its thread is its thread.
+    let mut after = no_story_peers(&rows, ended, "dev-a");
+    after.sort();
+    assert_eq!(after, vec!["dev-b".to_string(), "dev-c".to_string()]);
     // A session on a story, or with no saved agent, has no listed no-story thread.
-    assert_eq!(no_story_peers(&rows, "dev-story"), Vec::<String>::new());
-    assert_eq!(no_story_peers(&rows, "bare"), Vec::<String>::new());
+    assert_eq!(
+        no_story_peers(&rows, ended, "dev-story"),
+        Vec::<String>::new()
+    );
+    assert_eq!(no_story_peers(&rows, ended, "bare"), Vec::<String>::new());
 }

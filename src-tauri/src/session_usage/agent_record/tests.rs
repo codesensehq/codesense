@@ -342,6 +342,33 @@ fn a_no_story_session_sums_the_listed_no_story_sessions_of_its_saved_agent() {
 }
 
 #[test]
+fn a_blank_story_is_no_story_so_its_thread_is_the_listed_one() {
+    let (dir, _store) = store();
+    // A record stored with a blank story (a launch's meta.story of "") is a no-story session: it
+    // takes no chain of every blank-story session, only the listed ones.
+    chain_session(dir.path(), "dev-x", "dev@3", " ", AT, 100);
+    chain_session(dir.path(), "dev-y", "dev@3", "", AT + 1_000, 200);
+    chain_session(dir.path(), "dev-z", "dev@3", "", AT + 2_000, 400);
+    let alone = half(dir.path(), "dev-z");
+    assert_eq!(
+        assemble("dev-z", &alone, None, None)["chain"],
+        json!(["tab-dev-z"])
+    );
+    let listed = usage_half(
+        dir.path(),
+        "dev-z",
+        HashMap::new(),
+        &["dev-y".to_owned()],
+        &CallerScope::Human,
+    )
+    .unwrap();
+    assert_eq!(
+        assemble("dev-z", &listed, None, None)["chain"],
+        json!(["tab-dev-y", "tab-dev-z"])
+    );
+}
+
+#[test]
 fn a_session_with_no_story_or_agent_is_its_own_chain() {
     let (dir, _store) = store();
     launched(dir.path(), AgentCli::Claude, "solo", "claude-sonnet-5-5", None);
