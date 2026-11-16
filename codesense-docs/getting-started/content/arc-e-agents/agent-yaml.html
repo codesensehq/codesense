@@ -369,7 +369,8 @@ revision: 7</code></pre>
                 (<code>claude:</code>, <code>codex:</code>, <code>opencode:</code>).
                 Only the block matching <code>runtime</code> applies; blocks for
                 other runtimes are kept untouched. Passed through to the CLI;
-                CodeSense never enforces it itself.
+                CodeSense never enforces it itself. The one rewrite is
+                <code>{{launch_parent}}</code> in a Claude file rule, below.
               </td>
             </tr>
             <tr>
@@ -378,7 +379,18 @@ revision: 7</code></pre>
               <td>
                 Claude's own allowlist strings
                 (<code>Read</code>, <code>Grep</code>, <code>"Bash(npm test:*)"</code>,
-                <code>"mcp__slack__*"</code>). Unique, non-empty.
+                <code>"mcp__slack__*"</code>). Unique, non-empty. A
+                <code>Read</code>, <code>Edit</code>, <code>Write</code> or
+                <code>NotebookEdit</code> rule may start its path with
+                <code>//{{launch_parent}}/</code>: at a launch on this Mac it
+                becomes the launch folder's parent as an absolute path
+                (<code>Edit(//{{launch_parent}}/foreman-*/**)</code> in
+                <code>/a/b/content</code> is <code>Edit(//a/b/foreman-*/**)</code>).
+                The token anywhere else is not expanded. An allow is dropped,
+                with a launch warning, when the folder has no usable parent or
+                the parent holds a glob or rule character
+                (<code>* ? [ ] { } ( ) \</code>). A remote launch of an agent
+                with the token is refused.
               </td>
             </tr>
             <tr>
@@ -395,7 +407,12 @@ revision: 7</code></pre>
                 Blocklist. Same string shape as <code>allow</code>. CodeSense
                 only adds allows its own tools need
                 (<code>signal_done</code> and friends); a rule that blocks
-                those is kept as written and warned about.
+                those is kept as written and warned about. A deny or ask
+                holding <code>{{launch_parent}}</code> is expanded as for
+                <code>allow</code>, glob characters in the parent included
+                (they only widen it); when it can't be (a misplaced token, no
+                usable parent, or <code>( ) \</code> in the parent), it is kept
+                as written, matching nothing, with a launch warning.
               </td>
             </tr>
             <tr>

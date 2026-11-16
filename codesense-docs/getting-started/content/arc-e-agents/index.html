@@ -347,7 +347,10 @@
               The runtime's own permission config, enforced by the CLI and
               passed through verbatim. Claude takes
               <code>{allow, ask, deny, …}</code>; Codex takes
-              <code>{approvalPolicy, sandboxMode}</code>.
+              <code>{approvalPolicy, sandboxMode}</code>. One exception: a
+              Claude file rule whose path starts
+              <code>//{{launch_parent}}/</code> gets the launch folder's
+              parent at launch.
             </p>
           </div>
         </div>

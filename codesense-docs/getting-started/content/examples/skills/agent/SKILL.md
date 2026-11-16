@@ -165,7 +165,14 @@ verbatim. They apply per launch: Claude gets them through its own `--settings`
 file, Codex through its own scoped home, so they never leak to another agent
 launched in the same folder. CodeSense only adds the allows its own tools
 need (`signal_done` and friends); a rule that blocks those is kept as written
-and only warned about.
+and only warned about. One exception to verbatim: a Claude `Read`, `Edit`,
+`Write` or `NotebookEdit` rule whose path starts `//{{launch_parent}}/` gets the
+launch folder's parent as an absolute path at a launch on this Mac
+(`Edit(//{{launch_parent}}/x/**)` in `/a/b/content` is `Edit(//a/b/x/**)`). It
+fails closed: an allow it can't expand exactly (no usable parent, or a glob or
+rule character in it) is dropped, and a deny or ask that can't take it is kept
+as written, each with a launch warning. A remote launch of such an agent is
+refused.
 
 Claude takes `{claude: {allow, ask, deny, additionalDirectories, defaultMode,
 disableBypassPermissionsMode}}` with Claude's own rule strings. Codex takes

@@ -404,6 +404,9 @@ pub struct AgentDraft {
     /// none: the CLI's own defaults): `{claude: {allow, ask, deny,
     /// additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with
     /// Claude's own rule strings, or `{codex: {approvalPolicy, sandboxMode}}`.
+    /// One exception: a Claude `Read`, `Edit`, `Write` or `NotebookEdit` rule
+    /// whose path starts `//{{launch_parent}}/` gets the launch folder's parent at
+    /// launch; an allow it can't expand exactly is dropped, a deny or ask kept.
     #[serde(default)]
     #[schemars(schema_with = "open_object_schema")]
     pub permissions: Option<serde_json::Value>,

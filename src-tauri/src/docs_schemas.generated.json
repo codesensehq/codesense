@@ -62,7 +62,7 @@
         },
         "ClaudePermissions": {
           "additionalProperties": true,
-          "description": "Claude's own `permissions` settings, kept verbatim: CodeSense never parses a\nrule or a mode, the CLI enforces them. Every key Claude documents for that\nblock is accepted, under its snake_case name or Claude's own camelCase one\n(`defaultMode`), so a block pasted from a Claude settings file works as is.",
+          "description": "Claude's own `permissions` settings, kept verbatim: CodeSense never parses a\nrule or a mode, the CLI enforces them. One exception: a `Read`, `Edit`,\n`Write` or `NotebookEdit` rule whose path starts `//{{launch_parent}}/` gets\nthe launch folder's parent, as an absolute path, at a launch on this Mac. An\nallow it can't expand exactly is dropped and a deny or ask that can't take it\nis kept as written, with a launch warning; a remote launch is refused. Every\nkey Claude documents for that block is accepted, under its snake_case name or\nClaude's own camelCase one (`defaultMode`), so a block pasted from a Claude\nsettings file works as is.",
           "properties": {
             "additional_directories": {
               "items": {
@@ -2402,7 +2402,7 @@
     "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",
     "src-tauri/src/agents/adapter/opencode.rs": "a02d792f572e4a8c0aa7506713b85ae4749bd0258c0c9d4710ba03f239d358a1",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
-    "src-tauri/src/agents/model.rs": "6f0aa719802b51b6fb2d1279c96ea7ed125ef94c6600728094380320afb70efa",
+    "src-tauri/src/agents/model.rs": "fa3fd31ff96162514026603ce5d9058b6c43a9b3b7edfe629104d7416a30058f",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",

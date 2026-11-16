@@ -54,9 +54,14 @@ pub struct McpAccess {
 }
 
 /// Claude's own `permissions` settings, kept verbatim: CodeSense never parses a
-/// rule or a mode, the CLI enforces them. Every key Claude documents for that
-/// block is accepted, under its snake_case name or Claude's own camelCase one
-/// (`defaultMode`), so a block pasted from a Claude settings file works as is.
+/// rule or a mode, the CLI enforces them. One exception: a `Read`, `Edit`,
+/// `Write` or `NotebookEdit` rule whose path starts `//{{launch_parent}}/` gets
+/// the launch folder's parent, as an absolute path, at a launch on this Mac. An
+/// allow it can't expand exactly is dropped and a deny or ask that can't take it
+/// is kept as written, with a launch warning; a remote launch is refused. Every
+/// key Claude documents for that block is accepted, under its snake_case name or
+/// Claude's own camelCase one (`defaultMode`), so a block pasted from a Claude
+/// settings file works as is.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ClaudePermissions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
