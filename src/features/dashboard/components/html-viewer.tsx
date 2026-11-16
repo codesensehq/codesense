@@ -2358,7 +2358,7 @@ export function HtmlViewer({
     // The frame owns fragment positioning; host restoration must yield on every such load.
     if (hashRef.current || routeRef.current.hash) return;
     postRestoreScroll(scrollYRef.current);
-  }, [rejectCaptures, viewerUrl, endpoint, postRestoreScroll, requestReadyAgain, applyPendingHash]);
+  }, [rejectCaptures, viewerUrl, postRestoreScroll, requestReadyAgain, applyPendingHash]);
 
   // A tab switch hides the frame without reloading it, so `handleIframeLoad` never runs again:
   // put the position back when the frame is shown again. Unlike a load, the document is the same
