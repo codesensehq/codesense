@@ -2409,7 +2409,15 @@ const MAX_UNRESOLVED_PATHS: usize = 278;
 /// `emit_inbox_changed` (agent_inbox.rs), `.ok()` in `changed_count_teams`
 /// (live_hub/inbox.rs) and `committed.is_empty()` in `live_hub/mod.rs`. None calls a write
 /// primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_535;
+/// The live hub's field patches and held views add 10 more (CI's census). The new calls on
+/// ambiguous names are `projections.hold(..)` in `subscribe_held` (live_hub/mod.rs),
+/// `agent_definitions::prepare_held` and `configuration::prepare_held`; `.release(..)` in
+/// `live_hub_release` and `.deliver(..)` in `publish` (live_hub/mod.rs); `.as_str()` on the
+/// row id and changed fields in `WireDelta::from` (live_hub/projection.rs) and on the window
+/// label in `agent_definitions_prepare`; and `.is_empty()` and `.retain(..)` in
+/// `TopicRegistry::release` and `release_owner` (live_hub/projection.rs). Their targets are
+/// the in-memory `TopicRegistry` and std collections and strings; none calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_545;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
