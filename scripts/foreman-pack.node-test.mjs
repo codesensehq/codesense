@@ -490,6 +490,7 @@ test("sprint leads: look for a live one on any machine, then launch the team's s
     "Start sprint <n>",
     "`list_sessions`",
     "a live session in that team",
+    "(`launchedBy`: your `who_am_i` handle)",
     "Sprint <n>",
     "launched_by:<your handle>",
     'target:"team-workspace"',
