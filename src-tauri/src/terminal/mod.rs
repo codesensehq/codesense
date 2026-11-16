@@ -173,7 +173,9 @@ mod tests {
             concat!("fn ", "build_globset("),
             concat!("trait ", "FsGate "),
             concat!("trait ", "FsService"),
-            concat!("struct ", "FileEntry "),
+            // Includes the first field: the pack manifest has an unrelated
+            // `FileEntry` (path, digest) that is not a worktree listing.
+            concat!("struct ", "FileEntry {\n    pub name: String,"),
             concat!("struct ", "WorktreeFileChange "),
             concat!("struct ", "WorktreeWatchState "),
         ];
@@ -255,9 +257,12 @@ mod tests {
                 .unwrap_or(path)
                 .display()
                 .to_string();
+            // `report.sessions` is the session-usage report's own list of rows,
+            // not the terminal host's registry field.
+            let registry_scan = code.replace(concat!("report", ".sessions", "."), "");
             for needle in internals {
                 let found = if needle.starts_with('.') {
-                    code.contains(needle)
+                    registry_scan.contains(needle)
                 } else {
                     // Reject the old identifier, not valid names containing it.
                     contains_identifier(&code, needle)
