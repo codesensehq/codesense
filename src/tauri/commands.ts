@@ -10332,6 +10332,13 @@ export const liveHubWindow = (subscriptionId: string, window: [number, number]) 
   });
 export const liveHubUnsubscribe = (subscriptionId: string, paused?: boolean) =>
   invoke<void>("live_hub_unsubscribe", { subscriptionId, paused });
+/** This window no longer caches the view: the hub stops sending its deltas here. A release
+ *  older than the window's latest read of the view (its hold `generation`) keeps that hold. */
+export const liveHubRelease = (topic: string, viewKey: string, generation: number) =>
+  invoke<void>("live_hub_release", { topic, viewKey, generation });
+/** Drops the holds a previous page in this window left; resolves with the last hold
+ *  generation issued, so holds up to it are gone. */
+export const liveHubReleaseOwner = () => invoke<number>("live_hub_release_owner");
 
 export const liveHubViewKey = (origin: string, token: string) =>
   invoke<string>("live_hub_view_key", { origin, token });

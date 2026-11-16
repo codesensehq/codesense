@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Native configuration views. File ingress and managed writers share these sources.
-use super::projection::{Delta, Snapshot, TopicRegistry};
+use super::projection::{Delta, Held, Snapshot, TopicRegistry};
 use crate::domain::Principal;
 use serde_json::{json, Value};
 use std::{
@@ -339,9 +339,30 @@ pub(crate) fn prepare<R: tauri::Runtime>(
     topic: &str,
     org: Option<&str>,
 ) -> Result<Snapshot, String> {
+    prepare_held(app, home, principal, topic, org, None).map(|held| held.view)
+}
+/// [`prepare`], and the webview window `holder` that seeds the view holds it, taken under the
+/// lock that builds the snapshot.
+pub(crate) fn prepare_held<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &Path,
+    principal: &Principal,
+    topic: &str,
+    org: Option<&str>,
+    holder: Option<&str>,
+) -> Result<Held<Snapshot>, String> {
     let hub = app.state::<super::LiveHub>();
     let (snapshot, deltas) = with_reads(&hub, |configuration, projections| {
-        configuration.open(projections, home, principal, topic, org)
+        Ok(
+            match configuration.open(projections, home, principal, topic, org)? {
+                Step::Done((view, deltas)) => {
+                    let hold =
+                        holder.map(|window| projections.hold(&view.topic, &view.view_key, window));
+                    Step::Done((Held { view, hold }, deltas))
+                }
+                Step::Read(read) => Step::Read(read),
+            },
+        )
     })?;
     super::publish(app, deltas);
     Ok(snapshot)
@@ -424,30 +445,40 @@ fn with_reads<T>(
 #[tauri::command]
 pub async fn configuration_prepare(
     app: tauri::AppHandle,
+    owner_window: tauri::Window,
     topic: String,
     org: Option<String>,
     expected_principal: Option<String>,
     scope: Option<String>,
-) -> Result<Snapshot, String> {
+) -> Result<Held<Snapshot>, String> {
     let (home, user_id) = crate::commands::route_to_context::resolve_ambient(&app).await?;
     let principal = Principal::from(user_id);
     if expected_principal.as_deref() != Some(principal.as_str()) {
         return Err("unavailable: profile changed".into());
     }
+    let holder = owner_window.label().to_owned();
     crate::commands::await_blocking("configuration.prepare", move || {
         app.state::<crate::commands::local_profile::LocalProfileState>()
             .with_expected(expected_principal.as_deref(), || {
                 let result = if topic == "prefs" {
                     let path = crate::commands::system::app_state_path(&app)?;
-                    prepare(
+                    prepare_held(
                         &app,
                         path.parent().unwrap(),
                         &principal,
                         &topic,
                         scope.as_deref(),
+                        Some(holder.as_str()),
                     )
                 } else {
-                    prepare(&app, &home, &principal, &topic, org.as_deref())
+                    prepare_held(
+                        &app,
+                        &home,
+                        &principal,
+                        &topic,
+                        org.as_deref(),
+                        Some(holder.as_str()),
+                    )
                 };
                 watch_prefs(&app, false);
                 result

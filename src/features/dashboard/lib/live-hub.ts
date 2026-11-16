@@ -8,6 +8,8 @@ import {
   liveHubPage,
   liveHubWindow,
   liveHubUnsubscribe,
+  liveHubRelease,
+  liveHubReleaseOwner,
   liveHubViewKey,
   type FrameRecord,
   agentReadSessions,
@@ -59,6 +61,8 @@ export type HubSnapshot = {
   snapshot: HubRow[];
   total?: number;
   cursor?: string;
+  /** The generation of the hold the host took for this window when it handed over the view. */
+  hold?: number;
 };
 export type HubReply = Omit<HubSnapshot, "snapshot"> & { snapshot?: HubRow[]; deltas?: HubDelta[] };
 export type SubscriptionOptions = {
@@ -77,12 +81,16 @@ type ScopedSubscription = SubscriptionOptions & {
   read?: Promise<HubSnapshot>;
   paused?: Promise<void>;
 };
+/** One updated row as the host sends it: the fields it set and the ones it dropped. Only
+ *  {@link LiveHub.receive} sees patches; it rebuilds full rows before anything else does. */
+export type RowPatch = { id: string; set: Record<string, unknown>; unset: string[] };
 export type HubDelta = {
   topic: string;
   viewKey: string;
   rev: number;
   baseRev?: number;
   upserts: HubRow[];
+  patches?: RowPatch[];
   removes: string[];
   requestId?: string;
   actor?: unknown;
@@ -102,6 +110,11 @@ type Dependencies = {
   page?: (id: string, cursor: string) => Promise<HubSnapshot>;
   window?: (id: string, window: [number, number]) => Promise<HubDelta>;
   unsubscribe?: (id: string, paused?: boolean) => Promise<void>;
+  /** The view left the cache: the host stops sending its deltas (`live_hub_release`). */
+  release?: (topic: string, viewKey: string, generation: number) => Promise<void>;
+  /** Drop the holds an earlier page in this window left; resolves with the last hold
+   *  generation issued (`live_hub_release_owner`). */
+  releaseOwner?: () => Promise<number>;
   listen: (event: string, callback: (event: { payload: unknown }) => void) => Promise<UnlistenFn>;
   watchUi?: (changed: (topic: string, viewKey: string) => void) => Promise<UnlistenFn>;
   /** Calls `changed` whenever the answer to canPasteToTerminal() changes. */
@@ -144,13 +157,18 @@ const keyOf = (topic: string, viewKey: string) => JSON.stringify([topic, viewKey
 /** Inbox rows a committed projection pass changed, as `codesense:inbox-changed` carries them. */
 type InboxChange = { team: { org: string; team: string }; messageIds: number[] };
 const teamScope = (team: InboxChange["team"]) => `team:${team.org}/${team.team}`;
+/** Changes held for a hidden frame, merged per team. A change with no ids is team-wide, and
+ *  stays team-wide when named ids merge in. */
 function unionChanges(held: InboxChange[], more: InboxChange[]): InboxChange[] {
   const byTeam = new Map(held.map((c) => [teamScope(c.team), c]));
   for (const change of more) {
     const known = byTeam.get(teamScope(change.team));
+    const teamWide = known && (!known.messageIds.length || !change.messageIds.length);
     byTeam.set(teamScope(change.team), {
       team: change.team,
-      messageIds: [...new Set([...(known?.messageIds ?? []), ...change.messageIds])],
+      messageIds: teamWide
+        ? []
+        : [...new Set([...(known?.messageIds ?? []), ...change.messageIds])],
     });
   }
   return [...byTeam.values()];
@@ -309,6 +327,33 @@ function patchRows(
   return next;
 }
 
+/** The full row `patch` makes of `base`, as a new object. */
+export function patchedRow(base: HubRow, { set, unset }: RowPatch): HubRow {
+  const row: HubRow = { ...base, ...set };
+  for (const field of unset) delete row[field];
+  return row;
+}
+
+/**
+ * `delta` with each patch rebuilt into the full row it makes of `current`'s row, so every
+ * reader downstream gets full rows. `undefined` when `current` lacks a patched row: a patch is
+ * never applied to a guess. Neither `current` nor its rows change.
+ */
+function withFullRows(current: HubSnapshot, delta: HubDelta): HubDelta | undefined {
+  if (!delta.patches?.length) return delta;
+  const index = rowIndexes.get(current);
+  const byId = index ? undefined : new Map(current.snapshot.map((row) => [rowId(row), row]));
+  const upserts = [...delta.upserts];
+  for (const patch of delta.patches) {
+    const at = index?.get(patch.id);
+    const base = byId ? byId.get(patch.id) : at === undefined ? undefined : current.snapshot[at];
+    if (!base) return undefined;
+    upserts.push(patchedRow(base, patch));
+  }
+  const { patches: _patches, ...rest } = delta;
+  return { ...rest, upserts };
+}
+
 export async function paneViewKey(frame: Pick<FrameRecord, "origin" | "token">): Promise<string> {
   return liveHubViewKey(frame.origin, frame.token);
 }
@@ -357,6 +402,11 @@ export class LiveHub {
   private holders = new Map<string, number>();
   /** Cached views nobody holds, least recently used first ({@link MAX_UNHELD_VIEWS}). */
   private unheld = new Set<string>();
+  /** For each view the host sends deltas for, the generation of this window's latest hold on
+   *  it. Kept until the view leaves the cache, never on a resync or gap, so holds mirror `views`. */
+  private hostHolds = new Map<string, number>();
+  /** Every host hold up to this generation was dropped when the hub started. */
+  private releasedThrough = 0;
   /** Each attached frame by the handle `attach` returned, for `seed`'s holder. */
   private handles = new WeakMap<object, Frame>();
   /** Bumped by `dispose`: a read or write that settles later releases nothing it did not hold. */
@@ -401,6 +451,34 @@ export class LiveHub {
     this.views.delete(key);
     this.pendingReads.delete(key);
     this.uiWrites.delete(key);
+    const generation = this.hostHolds.get(key);
+    if (generation === undefined) return;
+    this.hostHolds.delete(key);
+    const [topic, viewKey] = JSON.parse(key) as [string, string];
+    // Unheld, the host stops sending sessions deltas, which are what drop the joined read.
+    if (topic === "sessions") this.joinedSessionsRead = undefined;
+    void this.deps.release?.(topic, viewKey, generation).catch((error) => {
+      logger.info("live-hub", `Cannot release ${topic}: ${String(error)}`);
+    });
+  }
+  /** Note the host's hold on a view handed to this window. A hold the start-up release
+   *  already dropped is not live, so its view is not cached. */
+  private noteHold(key: string, hold: number | undefined): boolean {
+    if (hold === undefined) return true;
+    if (hold <= this.releasedThrough) return false;
+    this.hostHolds.set(key, Math.max(this.hostHolds.get(key) ?? 0, hold));
+    return true;
+  }
+  /** The start-up release dropped every hold up to `through`: a view seeded under one of them
+   *  hears no more deltas, so it leaves the cache and its next read holds it again. */
+  private releasedHolds(through: number) {
+    this.releasedThrough = through;
+    for (const [key, generation] of this.hostHolds)
+      if (generation <= through) {
+        this.hostHolds.delete(key);
+        this.views.delete(key);
+        this.unheld.delete(key);
+      }
   }
   /** Hold exactly the views `frame` reads now: its default topics under its current view
    *  key and the views it seeded. A disposed frame holds none. */
@@ -536,7 +614,12 @@ export class LiveHub {
       const off = this.deps.watchPasteTarget(() => this.invalidate("paste-target-changed"));
       this.unlisteners.push(Promise.resolve(off));
     }
-    this.ready = Promise.all(this.unlisteners).then(() => {});
+    // A reloaded page's holds are dropped before this hub's first read takes its own.
+    const released = this.deps.releaseOwner?.().then(
+      (through) => this.releasedHolds(through),
+      (error) => logger.info("live-hub", `Cannot release earlier holds: ${String(error)}`),
+    );
+    this.ready = Promise.all([...this.unlisteners, released]).then(() => {});
     return this.ready;
   }
   /** Tells every page the setup (orgs, teams, source repos) changed, once the burst of
@@ -640,7 +723,10 @@ export class LiveHub {
    *  without one it is kept among the unheld views. */
   seed(snapshot: HubSnapshot, holder?: HubFrame) {
     const key = keyOf(snapshot.topic, snapshot.viewKey);
-    if ((this.views.get(key)?.rev ?? -1) <= snapshot.rev) this.views.set(key, snapshot);
+    // The hold generation is the hub's to keep; the cached view frames and pages read has none.
+    const { hold, ...view } = snapshot;
+    if (this.noteHold(key, hold) && (this.views.get(key)?.rev ?? -1) <= view.rev)
+      this.views.set(key, view);
     const frame = holder && this.handles.get(holder);
     if (frame && !frame.disposed) {
       frame.seeded.add(key);
@@ -699,6 +785,7 @@ export class LiveHub {
           if (result.topic !== topic || result.viewKey !== viewKey)
             throw new Error("Unexpected projection reply");
           if (!result.snapshot) {
+            this.noteHold(key, result.hold);
             this.reads.delete(key);
             return this.snapshot(topic, viewKey);
           }
@@ -1151,14 +1238,21 @@ export class LiveHub {
       return;
     }
     if (current && delta.rev <= current.rev) return;
-    const gap = !current || delta.rev !== current.rev + 1;
+    // Frames, the hidden fold and watch callbacks see only full rows.
+    const full =
+      current && delta.rev === current.rev + 1 ? withFullRows(current, delta) : undefined;
+    const gap = !full;
     if (gap) {
-      this.views.delete(key);
-      this.unheld.delete(key);
+      // A held view is read again by its holders; an unheld one leaves the cache, and so
+      // releases its host hold, since nothing would re-read it.
+      if (this.holders.has(key)) {
+        this.views.delete(key);
+        this.unheld.delete(key);
+      } else this.evict(key);
     } else
       this.views.set(
         key,
-        patchRows(current, delta, { topic: delta.topic, viewKey: delta.viewKey, rev: delta.rev }),
+        patchRows(current, full, { topic: delta.topic, viewKey: delta.viewKey, rev: delta.rev }),
       );
     for (const frame of this.frames.values()) {
       if (
@@ -1175,7 +1269,7 @@ export class LiveHub {
         frame.themeChanged();
         continue;
       }
-      this.queueDelta(frame, delta, gap);
+      this.queueDelta(frame, full ?? delta, gap);
     }
     this.schedule();
   }
@@ -1444,6 +1538,8 @@ export class LiveHub {
     this.uiWrites.clear();
     this.holders.clear();
     this.unheld.clear();
+    this.hostHolds.clear();
+    this.releasedThrough = 0;
     this.lifetime++;
     this.uiTimers.clear();
     this.timer = null;
@@ -1457,6 +1553,8 @@ export const liveHub = new LiveHub({
   unsubscribe: async (...args) => {
     await liveHubUnsubscribe(...args);
   },
+  release: async (...args) => liveHubRelease(...args),
+  releaseOwner: async () => liveHubReleaseOwner(),
   listen,
   readUi: readSharedUiState,
   writeUi: writeSharedUiState,
