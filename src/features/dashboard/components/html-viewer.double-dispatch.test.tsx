@@ -45,7 +45,7 @@ import { HtmlViewer, type FrameShortcutHandler } from "./html-viewer";
 
 globalThis.fetch = vi.fn().mockResolvedValue({ status: 200 }) as unknown as typeof fetch;
 
-/** The centre file tab hands the viewer a handler that only wants the view-toggle chord. */
+/** The centre file tab hands the viewer its own shortcut handler; this one claims no chord. */
 const fileTabHandler: FrameShortcutHandler = () => false;
 
 const SURFACES = [
@@ -153,11 +153,14 @@ describe.each(SURFACES)("Cmd-\\ with focus in the $name", ({ props }) => {
     await mountFrame();
     expect(cliShown()).toBe(false);
     const press = () => {
+      // The two halves land a few milliseconds apart in the app, not at once.
       if (frameFirst) {
         frameHalf(CMD_BACKSLASH);
+        vi.advanceTimersByTime(50);
         menuHalf(TOGGLE);
       } else {
         menuHalf(TOGGLE);
+        vi.advanceTimersByTime(50);
         frameHalf(CMD_BACKSLASH);
       }
     };
@@ -221,10 +224,10 @@ describe("Cmd-\\ press counting", () => {
     await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBeTruthy());
     frameHalf(CMD_BACKSLASH);
     menuHalf(TOGGLE);
+    expect(cliShown()).toBe(true);
     nextPress();
     frameHalf(CMD_BACKSLASH);
     menuHalf(TOGGLE);
-    nextPress();
     expect(cliShown()).toBe(false);
   });
 });
