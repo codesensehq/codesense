@@ -284,8 +284,9 @@ fn sibling_files_flow_through_ingress_into_versioned_selected_rows() {
     let restored = rx.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(restored[0].upserts[0]["entry"]["title"], "Returned");
     let mut locked = state.lock().unwrap();
+    // Nobody watched the view while it changed, so a reader resyncs by snapshot.
     let replay = locked.1.subscribe(TOPIC, &key, Some(before)).unwrap();
-    assert_eq!(replay.deltas.unwrap().len(), 5);
+    assert!(replay.deltas.is_none() && replay.snapshot.is_some());
     assert!(
         locked.1.snapshot(TOPIC, "all").unwrap().snapshot.is_empty(),
         "frame grants cannot inherit a native source view"

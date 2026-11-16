@@ -219,6 +219,36 @@ mod tests {
     }
 
     #[test]
+    fn latest_maps_are_bounded() {
+        let hub = DashboardStreamHub::new();
+        // The oldest session reported both progress and a finish.
+        hub.on_session_progress("s0", "dev", None, None, Some("old".into()));
+        hub.on_session_status("s0", "success", Some("old".into()));
+        for n in 1..5_000 {
+            hub.on_session_progress(&format!("s{n}"), "dev", None, None, Some("working".into()));
+        }
+        hub.on_session_status("s4999", "success", Some("finished".into()));
+        let (progress, done) = hub.tracked();
+        assert!(progress <= LATEST_SESSIONS && done <= LATEST_SESSIONS);
+        assert_eq!(
+            hub.latest_progress("s0"),
+            None,
+            "the oldest session leaves both maps"
+        );
+        assert_eq!(hub.latest_done("s0"), None);
+        assert_eq!(
+            hub.latest_done("s4999"),
+            Some(("success".into(), Some("finished".into()))),
+            "a finished run stays readable"
+        );
+        assert_eq!(
+            hub.progress_note_for_title("s4999"),
+            None,
+            "a retained finished session keeps its note out of the title"
+        );
+    }
+
+    #[test]
     fn session_signals_reach_subscribers_and_unknown_values_are_dropped() {
         let hub = DashboardStreamHub::new();
         let mut rx = hub.subscribe();

@@ -288,6 +288,28 @@ afterEach(() => {
   hub.dispose();
   vi.useRealTimers();
 });
+it("tags a scoped read with its frame's id", async () => {
+  hub.dispose();
+  const read = vi.fn(async (..._args: unknown[]) => ({
+    topic: "machineStats",
+    viewKey: "all",
+    rev: 1,
+    snapshot: [{ id: "local" }],
+  }));
+  hub = new LiveHub({
+    read,
+    unsubscribe: async () => {},
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_key, state) => state,
+  });
+  const frame = hub.attach("frame-7", "all", vi.fn(), true, true);
+  await frame.subscribe("machineStats");
+  expect(read.mock.calls[0][3]).toEqual(
+    expect.objectContaining({ subscriptionId: expect.any(String), frameId: "frame-7" }),
+  );
+  frame.dispose();
+});
 it("releases machineStats when hidden or disposed and catches up on show", async () => {
   hub.dispose();
   const unsubscribe = vi.fn(async () => {});
