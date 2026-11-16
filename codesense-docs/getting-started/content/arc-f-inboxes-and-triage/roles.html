@@ -298,31 +298,7 @@ startup:
   - CLAUDE.md
   - .claude/skills/manage-team/
 default_prompt: /manage-team
-# The bridge tools /manage-team and its routines call. A Claude agent with a list is denied the rest.
-mcp:
-  bridge_tools:
-    - who_am_i
-    - register_role
-    - release_role
-    - role_state
-    - claim_role_messages
-    - accept_role_message
-    - ack_role_message
-    - read_messages
-    - reply
-    - send_message
-    - send_to_session
-    - get_human_status
-    - inbox_list
-    - codesense_overview
-    - list_sessions
-    - list_machines
-    - agent_list
-    - open_workspace
-    - schedule_wakeup
-    - routine_done
-    - signal_done
-revision: 2</code></pre>
+revision: 1</code></pre>
         <p>
           The matching <code>manager-ensure</code> routine
           (<code>examples/agents/manager/routines/manager-ensure/routine.yml</code>) makes sure a

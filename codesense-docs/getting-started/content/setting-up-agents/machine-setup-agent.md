@@ -36,16 +36,7 @@ startup:
   - .claude/skills/setup-machine/
   - .claude/skills/add-machine-user/
 default_prompt: /setup-machine
-# The bridge tools /setup-machine and /add-machine-user call. A Claude agent with a list is denied the rest.
-mcp:
-  bridge_tools:
-    - list_machines
-    - save_machine
-    - test_machine_connection
-    - read_messages
-    - reply
-    - signal_done
-revision: 2
+revision: 1
 ```
 
 `launch: foreground` matters: the agent asks you questions as it goes, so it needs a visible
