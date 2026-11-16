@@ -435,6 +435,42 @@ it("passes inbox changes through and marks a sessions re-read as naming no inbox
   stop();
 });
 
+it("a sessions delta fires no onInboxChanged and onAgentsChanged reads no sessions()", async () => {
+  const s = shim();
+  s.show(true);
+  const agents = vi.fn(),
+    inbox = vi.fn();
+  const stopAgents = s.codesense.onAgentsChanged(agents);
+  const stopInbox = s.codesense.onInboxChanged(inbox);
+  await vi.waitFor(() => expect(agents).toHaveBeenCalled());
+  agents.mockClear();
+  inbox.mockClear();
+  const reads = () => s.invoke.mock.calls.filter(([verb]) => verb === "sessions").length;
+  const before = reads();
+  for (let rev = 5; rev < 65; rev++)
+    s.message({
+      type: "codesense:delta",
+      topic: "sessions",
+      viewKey: "team:a",
+      rev,
+      upserts: [{ id: "a", state: rev % 2 ? "needs-you" : "working" }],
+      removes: [],
+    });
+  // Agent changes still follow sessions, but nothing re-reads the 28 KB list for them.
+  await vi.waitFor(() => expect(agents).toHaveBeenCalled());
+  expect(inbox).not.toHaveBeenCalled();
+  expect(reads()).toBe(before);
+  // The legacy ping is the only thing that nudges the inbox.
+  const change = {
+    type: "codesense:inbox-changed",
+    changes: [{ team: { org: "acme", team: "web" }, messageIds: [5] }],
+  };
+  s.ping(change);
+  expect(inbox).toHaveBeenCalledExactlyOnceWith(change);
+  stopAgents();
+  stopInbox();
+});
+
 it("the actual injected SDK getter exposes the hub firstPaint snapshot", () => {
   const first = { topic: "sessions", viewKey: "team:a", rev: 4, snapshot: [{ id: "a" }] };
   const window: Record<string, any> = {
