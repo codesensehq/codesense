@@ -276,6 +276,25 @@ fn registration_has_module_and_parity_explanation() {
 }
 
 #[test]
+fn session_text_verbs_are_presentation_only_session_reads() {
+    let registry = Registry::default();
+    for name in ["sessions.watchText", "sessions.unwatchText"] {
+        let verb = registry.get(name).expect(name);
+        assert_eq!(verb.module, "sessions", "{name}");
+        assert_eq!(
+            (verb.class, verb.grant.as_str()),
+            (Class::Read, "sessions:read"),
+            "{name}"
+        );
+        assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+        assert_eq!(
+            verb.args_schema["required"],
+            serde_json::json!(["sessionId"])
+        );
+    }
+}
+
+#[test]
 fn send_prompt_uses_typed_send_policy_and_shared_budget() {
     let registry = Registry::default();
     let spec = registry.get("sendPrompt").unwrap();
@@ -1000,6 +1019,8 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         ("pins", Class::Read, "inbox:read:team", None),
         ("pin", Class::Metadata, "inbox:write", Some("pin")),
         ("unpin", Class::Metadata, "inbox:write", Some("pin")),
+        ("restorePin", Class::Metadata, "inbox:write", Some("pin")),
+        ("replacePin", Class::Metadata, "inbox:write", None),
         ("reorderPins", Class::Metadata, "inbox:write", None),
     ] {
         let verb = registry.get(name).expect(name);
@@ -1021,6 +1042,33 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
             &json!({"status":"invalid","message":"no message 9"})
         ));
     }
+    // Each is registered under the inbox namespace, and its flat name is the same verb: one
+    // entry in every per-name table, so the alias the kit and pages call cannot drift.
+    for name in PIN_VERBS {
+        let flat = registry.get(name).expect(name);
+        let spaced = registry
+            .get(&format!("inbox.{name}"))
+            .unwrap_or_else(|| panic!("inbox.{name}"));
+        assert_eq!(table_name(&spaced.name), name);
+        assert_eq!(
+            serde_json::to_value(spaced).unwrap(),
+            serde_json::to_value(VerbSpec {
+                name: spaced.name.clone(),
+                ..flat.clone()
+            })
+            .unwrap(),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        super::dispatcher::action_target(
+            &caller("team"),
+            "inbox.pin",
+            &json!({"messageId":4})
+        )
+        .as_deref(),
+        Some("message 4")
+    );
     let pin = &registry.get("pin").unwrap().args_schema;
     assert!(jsonschema::is_valid(
         pin,
@@ -1052,6 +1100,13 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         page.required_capability(&caller("team"), &json!({"topic":"pins"})),
         "inbox:read:team"
     );
+    // Delivery of the human's messages takes the inbox topic's read grant.
+    for (scope, grant) in [("team", "inbox:read:team"), ("private", "inbox:read:all-teams")] {
+        assert_eq!(
+            subscribe.required_capability(&caller(scope), &json!({"topic":"messageDelivery"})),
+            grant
+        );
+    }
     assert_eq!(
         super::dispatcher::action_target(
             &caller("team"),

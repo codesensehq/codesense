@@ -15,6 +15,7 @@ const chunkReporter = vi.hoisted(() => ({
   current: null as ((p: { index: number | null; count: number }) => void) | null,
 }));
 import { resetDetectedEditorsCache } from "@/shared/hooks/use-detected-editors";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import type { PublishFile } from "@/features/git-sync/lib/types";
 
 // The redline tail is exercised elsewhere; stub it to a marker so we assert it
@@ -113,6 +114,11 @@ vi.mock("../lib/use-source-diff", () => ({
 // SLW-WD-9: the ref-counted worktree watcher (a no-op here — its own suite covers
 // it) and the commit-graph rail (a marker — the component is tested separately).
 vi.mock("../lib/use-worktree-watch", () => ({ useWorktreeWatch: vi.fn() }));
+
+const imageSidesMock = vi.fn((..._a: unknown[]): unknown => ({}));
+vi.mock("../lib/use-source-image-sides", () => ({
+  useSourceImageSides: (...a: unknown[]) => imageSidesMock(...a),
+}));
 
 // SW-VE-12: the per-tab resolver that answers "is this cwd a git working tree?"
 // — threaded into the overlay to drive the "No git repo at this path." body
@@ -800,8 +806,13 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.getByTestId("source-diff-wrap-toggle-w1")).toBeInTheDocument();
   });
 
-  it("an HTML file is its source diff, with no rendered mode offered", () => {
+  function openHtml(width: number) {
+    const ro = stubResizeObserver(width);
+    onTestFinished(() => ro.restore());
     stubChangeset({ files: [...FILES, { path: "site/page.html", status: "modified" }] });
+    stubRedline({
+      redline: { status: "modified", binary: false, before: "<p>old</p>", after: "<p>new</p>" },
+    });
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "site/page.html" } });
     render(
       <SourceDiffOverlay
@@ -811,8 +822,41 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
         isFocused
       />,
     );
-    expect(screen.getByTestId("mock-code-diff-review")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Side by side" })).not.toBeInTheDocument();
+  }
+  const frameDocs = () =>
+    Array.from(document.querySelectorAll("iframe")).map((f) => [
+      f.title,
+      f.getAttribute("srcdoc")?.endsWith(f.title === "Before" ? "<p>old</p>" : "<p>new</p>"),
+    ]);
+
+  it("an HTML file renders Before and After live side by side at 900 px", () => {
+    openHtml(900);
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(frameDocs()).toEqual([
+      ["Before", true],
+      ["After", true],
+    ]);
+    expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
+    expect(screen.getByTestId("source-diff-rendered-alone")).toBeInTheDocument();
+    // A rendered page has no code-diff controls.
+    expect(screen.queryByTestId("source-diff-ignore-ws-toggle-w1")).not.toBeInTheDocument();
+  });
+
+  it("an HTML file shows one side at a time below 900 px, with the Before | After toggle", () => {
+    openHtml(899);
+    expect(frameDocs()).toEqual([["After", true]]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(frameDocs()).toEqual([["Before", true]]);
+  });
+
+  it("an HTML file's Source mode sits in the view options and is the code diff", () => {
+    openHtml(1200);
+    const modes = screen.getByTestId("source-diff-html-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(useViewerStore.getState().settings.defaultFileDiffMode?.html).toBe("source");
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("<p>old</p>→<p>new</p>");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.getByTestId("source-diff-ignore-ws-toggle-w1")).toBeInTheDocument();
   });
 
   it("an MDX file is a code diff, not the prose redline (its imports and JSX are code)", () => {
@@ -977,6 +1021,149 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("mock-code-diff-review")).not.toBeInTheDocument();
     // A binary file also has no dead view-mode toggle.
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
+  });
+
+  function openPng(sides: unknown, width = 1200) {
+    const ro = stubResizeObserver(width);
+    const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    URL.createObjectURL = vi.fn(() => "blob:side");
+    URL.revokeObjectURL = vi.fn();
+    onTestFinished(() => {
+      ro.restore();
+      URL.createObjectURL = blob.create;
+      URL.revokeObjectURL = blob.revoke;
+      imageSidesMock.mockReset();
+    });
+    imageSidesMock.mockReturnValue(sides);
+    stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
+    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+  }
+  const images = () => Array.from(document.querySelectorAll("img")).map((img) => img.alt);
+
+  it("a changed PNG draws its Before and After from their bytes, side by side at 900 px", () => {
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } });
+    expect(imageSidesMock.mock.calls.map((call) => call.slice(0, 4))).toContainEqual([
+      "/wt/story",
+      null,
+      "art/logo.png",
+      undefined,
+    ]);
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).not.toBeInTheDocument();
+    // Its Source mode is the one image line, chosen in the view options.
+    const modes = screen.getByTestId("source-diff-html-mode-w1");
+    fireEvent.click(within(modes).getByRole("button", { name: "Source" }));
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
+    expect(images()).toEqual([]);
+  });
+
+  it("a changed PNG shows one side at a time below 900 px", () => {
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } }, 899);
+    expect(images()).toEqual(["After"]);
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    expect(images()).toEqual(["Before"]);
+  });
+
+  it("a changed PNG that won't draw here (at a remote commit, past the cap) says why, with Side by side disabled", () => {
+    openPng({
+      imageState: {
+        kind: "unavailable",
+        reason: "Images at a commit in a remote worktree aren't drawn yet",
+      },
+    });
+    const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute(
+      "title",
+      "Images at a commit in a remote worktree aren't drawn yet",
+    );
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Images at a commit in a remote worktree aren't drawn yet.",
+    );
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
+    expect(images()).toEqual([]);
+  });
+
+  it("a changed PNG whose bytes are still being read says so, not Binary file", () => {
+    openPng({ imageState: { kind: "reading" } });
+    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
+  });
+
+  it("any other binary file keeps the binary placeholder", () => {
+    imageSidesMock.mockReturnValue({});
+    stubChangeset({ files: [...FILES, { path: "lib/blob.bin", status: "modified" }] });
+    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "lib/blob.bin" } });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(screen.getByTestId("source-diff-binary-placeholder")).toBeInTheDocument();
+  });
+
+  it("a PNG in a commit draws its sides from that commit", () => {
+    const ro = stubResizeObserver(1200);
+    const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    URL.createObjectURL = vi.fn(() => "blob:side");
+    URL.revokeObjectURL = vi.fn();
+    onTestFinished(() => {
+      ro.restore();
+      URL.createObjectURL = blob.create;
+      URL.revokeObjectURL = blob.revoke;
+      imageSidesMock.mockReset();
+    });
+    imageSidesMock.mockReturnValue({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } });
+    commitChangesetMock.mockReturnValue({
+      files: [{ path: "art/logo.png", status: "modified" }],
+      loading: false,
+      error: null,
+    });
+    commitRedlineMock.mockReturnValue({
+      redline: { status: "modified", binary: true, before: "", after: "" },
+      error: null,
+    } as never);
+    onTestFinished(() => {
+      commitRedlineMock.mockReturnValue({ redline: null, error: null });
+    });
+    useViewerStore.setState({
+      sourceDiffHistoryMode: { "sid-ws": true },
+      sourceDiffSelectedSha: { "sid-ws": "abc123" },
+    });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    expect(imageSidesMock.mock.calls.map((call) => call.slice(0, 4))).toContainEqual([
+      "/wt/story",
+      "abc123",
+      "art/logo.png",
+      undefined,
+    ]);
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.getByTestId("commit-diff-html-mode-w1")).toBeInTheDocument();
   });
 
   it("SLW-DV-2: the Hide control hides the whole overlay (no compact size to fall to)", () => {

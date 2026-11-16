@@ -141,3 +141,32 @@ it.each([false, true])(
     off();
   },
 );
+
+it.each(["agents", "subscribe"] as const)(
+  "the %s verb seeds the frame's agent catalog with the frame as its holder",
+  async (verb) => {
+    const viewKey = "team:acme/backend|frame:page";
+    source.current = { topic: "agentDefinitions", viewKey, rev: 1, snapshot: [] };
+    hub = new LiveHub({
+      read: async (topic, key) => ({ topic, viewKey: key, rev: 1, snapshot: [] }),
+      listen: async () => () => {},
+      readUi: async () => ({}),
+      writeUi: async (_, state) => state,
+    });
+    const seed = vi
+      .spyOn(liveHub, "seed")
+      .mockImplementation((view, holder) => hub!.seed(view, holder));
+    const frame = frameFixture({ documentPath: "/pane.html", contentRoot: "/", slot: "dock" });
+    const live = hub.attach(frame.frameId, "team:acme/backend", () => {}, true);
+    await runBridgeCommand(verb, verb === "agents" ? {} : { topic: "agentDefinitions" }, {
+      frame,
+      liveFrame: async () => live,
+    });
+    expect(seed).toHaveBeenCalledWith(source.current, live);
+    const views = (hub as unknown as { views: Map<string, unknown> }).views;
+    const key = JSON.stringify(["agentDefinitions", viewKey]);
+    expect(views.has(key)).toBe(true);
+    live.dispose();
+    expect(views.has(key)).toBe(false);
+  },
+);

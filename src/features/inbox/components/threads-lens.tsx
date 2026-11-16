@@ -26,7 +26,13 @@ import {
   type Thread,
 } from "../model";
 import { useArrivalNote, useUnseenBelow } from "../hooks/use-new-mail";
+import { useRovingThread } from "../hooks/use-roving-thread";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
+import type { DeliveryMark } from "../lib/delivery-marks";
+import type { PersonPins } from "../hooks/use-person-pins";
+import { useThreadPins } from "../hooks/use-thread-pins";
+import { pinTitleOf } from "../lib/person-pins";
+import { PinButton, PinFoot, PinLive } from "./person-pin";
 
 import { GroupRow, GroupChatPane, groupKey, type GroupRoom } from "./group-chat";
 /** The latest message `key` sent, which a Reply to them answers. */
@@ -460,6 +466,7 @@ function ThreadPane({
       ? "you, the human"
       : [stateLabel(p.state), p.agent, machineLabel(p)].filter(Boolean).join(" · ");
   const self = selfOf(view);
+  const pins = useThreadPins(k, thread.messages, view);
   return (
     <>
       <div className="ibx-th-head">
@@ -506,6 +513,7 @@ function ThreadPane({
         thread={thread}
         request={request}
         defaultTo={defaultRecipient(k, self, held, thread.messages)}
+        pins={pins}
       />
     </>
   );
@@ -524,6 +532,11 @@ export function Conversation({
   quick = false,
   newFrom = null,
   empty = null,
+  marks,
+  pins = null,
+  avatars = false,
+  threadHidden = false,
+  compact = false,
 }: {
   thread: PaneThread;
   request: ReplyRequest | null;
@@ -533,6 +546,18 @@ export function Conversation({
   newFrom?: string | null;
   /** Shown in place of the messages while there are none. */
   empty?: React.ReactNode;
+  /** Queued or Delivered for a message the person sent (null: no mark). */
+  marks?: (m: ConversationMessage) => DeliveryMark | null;
+  /** The person's pins of this conversation's agent thread: each message gets a Pin. */
+  pins?: PersonPins | null;
+  /** The quick chat on a pane with room for them: the sender's avatar starts each run of the
+   *  other side's messages. */
+  avatars?: boolean;
+  /** Something else takes the messages' place (a pin opened on a short pane): only the
+   *  composer is drawn, so the person can still write. */
+  threadHidden?: boolean;
+  /** The quick composer's one-row form, for a small or short pane. */
+  compact?: boolean;
 }) {
   const view = useInboxView();
   const { dir } = view;
@@ -554,24 +579,50 @@ export function Conversation({
     if (lastOwn !== null && lastOwn !== sentFrom.current) jump();
     sentFrom.current = lastOwn;
   }, [lastOwn, jump]);
+  // Shown again after something took its place (a hidden scroller can lose its place): back at
+  // the newest message when it was following, as it would have stayed.
+  const hiddenBefore = useRef(threadHidden);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    if (threadHidden && !hiddenBefore.current) following.current = !away;
+    if (!threadHidden && hiddenBefore.current && following.current) jump();
+    hiddenBefore.current = threadHidden;
+  }, [threadHidden, away, jump]);
+
+  // The chat's thread is one Tab stop: its active message (the newest, until the person moves),
+  // with Up, Down, Home and End between messages.
+  const keys = useMemo(() => thread.messages.map(msgKey), [thread.messages]);
+  const roving = useRovingThread(scroller, keys, quick);
+  const rovingOn = quick && keys.length > 0;
 
   const heads = dayHeads(thread.messages);
   return (
     <>
-      <div className="ibx-scrollwrap">
+      {/* Kept mounted while something takes its place, so the scroller keeps its wiring. */}
+      <div className="ibx-scrollwrap" hidden={threadHidden}>
         <div
           className="ibx-msgs"
           ref={scroller}
-          // Reachable by Tab to scroll with the keys, and where focus lands after a jump.
-          tabIndex={0}
+          // Reachable by Tab to scroll with the keys, and where focus lands after a jump; in the
+          // chat its active message is the Tab stop instead.
+          tabIndex={rovingOn ? -1 : 0}
           role="region"
           aria-label={`Conversation with ${labelOf(dir, thread.key)}`}
           data-testid="ibx-msgs"
+          onKeyDown={(e) => {
+            // Esc closes a pin note and ends an Undo. The arrows, Home and End are the thread's
+            // own (useRovingThread).
+            if (pins && e.key === "Escape" && pins.note) {
+              e.stopPropagation();
+              pins.dismiss();
+            }
+          }}
         >
           {thread.messages.length === 0 && empty}
           {thread.messages.map((m, i) => {
             const head = heads[i];
             const key = msgKey(m);
+            const grouped = quick && !head && key !== newFrom && follows(thread.messages[i - 1], m);
             return (
               <Fragment key={key}>
                 {head && <div className="ibx-day">{head}</div>}
@@ -583,7 +634,11 @@ export function Conversation({
                 <Bubble
                   m={m}
                   plain={quick}
-                  grouped={quick && !head && key !== newFrom && follows(thread.messages[i - 1], m)}
+                  grouped={grouped}
+                  avatar={avatars && quick}
+                  mark={marks?.(m) ?? null}
+                  pins={pins}
+                  roving={quick}
                 />
               </Fragment>
             );
@@ -593,13 +648,22 @@ export function Conversation({
           unseen={away ? unseen : 0}
           onJump={() => {
             jump();
-            // The pill goes away; focus lands on the conversation, not the page body.
-            scroller.current?.focus({ preventScroll: true });
+            // The pill goes away; focus lands on the conversation (in the chat, its newest
+            // message), not the page body.
+            if (rovingOn) roving.focusNewest();
+            else scroller.current?.focus({ preventScroll: true });
           }}
         />
       </div>
+      {pins && <PinLive pins={pins} />}
       <ArrivalsNote note={arrivals} />
-      <Composer defaultTo={defaultTo} scope={thread.key} request={request} quick={quick} />
+      <Composer
+        defaultTo={defaultTo}
+        scope={thread.key}
+        request={request}
+        quick={quick}
+        compact={compact}
+      />
     </>
   );
 }
@@ -618,8 +682,21 @@ export function Bubble({
   m,
   plain = false,
   grouped = false,
+  mark = null,
+  pins = null,
+  roving = false,
+  avatar = false,
 }: {
   m: ConversationMessage;
+  /** A stop in the chat's roving thread: focusable, and read as one message. */
+  roving?: boolean;
+  /** Draw the sender's avatar beside the other side's messages: at a run's start, and its
+   *  column under the rest of the run. */
+  avatar?: boolean;
+  /** The person's pins: a Pin in the message's action row, or an HTML message's title bar. */
+  pins?: PersonPins | null;
+  /** Queued or Delivered, for a message the person sent. */
+  mark?: DeliveryMark | null;
   /** Follows the sender's previous message closely: no sender and time of its own (how it came
    *  and where replies go are still said). */
   grouped?: boolean;
@@ -634,15 +711,40 @@ export function Bubble({
   const senderRole = heldRoles(sender)[0] ?? null;
   const queuedHere =
     !!m.toRole && held.includes(m.toRole) && (!m.delivery || m.delivery.state === "pending");
-  const cls = ["ibx-m", out ? "out" : "in", term ? "term" : "", grouped ? "grouped" : ""]
+  const pinned = pins ? pins.stateOf(m).pinnedBy !== null : false;
+  const html = m.contentType === "html";
+  const [tapped, setTapped] = useState(false);
+  const cls = [
+    "ibx-m",
+    out ? "out" : "in",
+    term ? "term" : "",
+    grouped ? "grouped" : "",
+    pinned ? "pinned" : "",
+    avatar && !out ? "av" : "",
+  ]
     .filter(Boolean)
     .join(" ");
   // A grouped message drops who and when, but keeps every mark its line would carry.
   const repliesTo = repliesViaKey(m);
   const claim = claimBadge(m, dir);
-  const meta = !grouped || term || repliesTo !== null || claim !== null;
+  const meta = !grouped || term || repliesTo !== null || claim !== null || mark !== null;
   return (
-    <div className={cls} data-mid={msgKey(m)}>
+    <div
+      className={cls}
+      data-mid={msgKey(m)}
+      role={roving ? "article" : undefined}
+      data-tapped={tapped || undefined}
+      // On touch the action row shows on a tap, as hover shows it for a pointer.
+      onPointerUp={pins ? (e) => e.pointerType === "touch" && setTapped(true) : undefined}
+    >
+      {grouped && roving && (
+        // A follow-on message drops who and when from its line; as an item of the chat's thread it
+        // is still read sender and time first, as the message it follows is.
+        <span className="ibx-sr">
+          {m.from === HUMAN ? "You" : labelOf(dir, m.from)} · {formatClock(m.createdAtMs)}
+        </span>
+      )}
+      {avatar && !out && !grouped && <Avatar k={m.from} dir={dir} team={m.team} sm />}
       {meta && (
         <div className="meta">
           {grouped ? null : plain ? (
@@ -670,13 +772,34 @@ export function Bubble({
             </>
           )}
           {term && <TypedVia />}
+          {mark && (
+            <span className="ibx-mark" data-mark={mark}>
+              {mark === "queued" ? "Queued" : "Delivered"}
+            </span>
+          )}
           <ClaimVia badge={claim} />
           <RepliesVia to={repliesTo} dir={dir} team={m.team} />
         </div>
       )}
+      {pins && html && (
+        // An HTML message is a framed card: its title bar is its action row, always shown.
+        <div className="ibx-dm-bar" data-testid="ibx-dm-bar">
+          <span className="ibx-dm-name">{pinTitleOf(m, labelOf(dir, m.from))}</span>
+          <span className="ibx-dm-kind">Dashboard</span>
+          <PinButton pins={pins} m={m} />
+        </div>
+      )}
       <div className="bub">
+        {pins && !html && (
+          <div className="ibx-acts" role="group" aria-label="Message actions">
+            {/* The row is hidden by opacity, so outside the chat's roving thread (which holds every
+                Pin but the stop's) its Pin is out of the Tab order, as it was hidden. */}
+            <PinButton pins={pins} m={m} tabStop={roving} />
+          </div>
+        )}
         <MessageBody m={m} liveDashboards={me === HUMAN && !view.self} />
       </div>
+      {pins && <PinFoot pins={pins} m={m} />}
       {plain ? null : queuedHere ? (
         <div className="ibx-rto">
           <span>Reading does not claim it. An agent holding #{m.toRole} claims it.</span>

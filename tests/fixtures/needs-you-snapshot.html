@@ -1,0 +1,355 @@
+<style>.ny{--ny-warn-wash:color-mix(in srgb,var(--cs-warning) 9%,var(--cs-bg));--ny-danger-wash:color-mix(in srgb,var(--cs-danger) 9%,var(--cs-bg));--ny-strong:color-mix(in srgb,var(--cs-border) 62%,var(--cs-border-control));
+container:ny/inline-size;background:var(--cs-bg);color:var(--cs-fg);font-size:var(--cs-text-sm);padding:10px 14px 12px}
+.ny :focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px;border-radius:var(--cs-radius-sm)}
+.ny-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 6px}
+.ny-h h3{font-size:var(--cs-text-base);font-weight:600;margin:0}
+.ny-asof{font-size:var(--cs-text-xs);color:var(--cs-muted-fg);margin-left:auto;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.ny-live{width:6px;height:6px;border-radius:50%;background:var(--cs-success);flex:none}
+.ny-asof[data-stale] .ny-live{background:transparent;box-shadow:inset 0 0 0 1.5px var(--cs-muted-fg)}
+.ny-list{list-style:none;margin:0;padding:0}
+.ny-row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:1px;align-items:center;padding:6px 0;border-top:1px solid var(--cs-border)}
+.ny-row:first-child{border-top:0}
+/* The question leads (STYLE.md §9: ids are for meta lines). Two lines at every width, full text in title. */
+.ny-q{grid-column:1;grid-row:1;font-weight:500;line-height:1.4;min-width:0;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ny-meta{grid-column:1;grid-row:2;display:flex;gap:6px;align-items:baseline;font-size:var(--cs-text-xs);color:var(--cs-muted-fg);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ny-id{font:inherit;font-weight:600;color:var(--cs-muted-fg);background:none;border:0;padding:2px 0;margin:-2px 0;cursor:pointer;text-align:left}
+.ny-id:hover{color:var(--cs-link);text-decoration:underline;text-underline-offset:2px}
+.ny-meta .ny-age::before{content:"·";margin-right:6px}
+.ny-kind{display:inline-flex;align-items:center;min-height:18px;padding:0 6px;margin-right:6px;border-radius:var(--cs-radius-sm);font-size:var(--cs-text-xs);font-weight:600;border:1px solid color-mix(in srgb,var(--cs-warning) 50%,var(--cs-border));background:var(--ny-warn-wash);vertical-align:1px}
+.ny-open{grid-column:2;grid-row:1/3;align-self:center;display:inline-flex;align-items:center;min-height:32px;padding:0 8px;margin-right:-8px;border:0;border-radius:var(--cs-radius);background:none;color:var(--cs-link);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.ny-open:hover{background:var(--cs-surface);text-decoration:underline;text-underline-offset:2px}
+.ny-older{margin-top:2px}
+.ny-older summary{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px;margin:4px -8px 0;border-radius:var(--cs-radius);background:var(--cs-surface);cursor:pointer;list-style:none;color:var(--cs-muted-fg)}
+.ny-older summary::-webkit-details-marker{display:none}
+.ny-older summary::before{content:"›" / "";display:inline-block;width:12px;text-align:center;transition:transform .12s ease-out;flex:none}
+.ny-older[open] summary::before{transform:rotate(90deg)}
+.ny-older summary b{color:var(--cs-fg);font-weight:600}
+.ny-older .ny-q{font-weight:400;color:var(--cs-muted-fg)}
+.ny-calm{margin:2px 0 0;line-height:1.5}
+.ny-part{margin:6px 0 0;color:var(--cs-muted-fg);font-size:var(--cs-text-xs)}
+.ny-ia{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border-radius:var(--cs-radius);border:1px solid color-mix(in srgb,var(--cs-danger) 35%,var(--cs-border));background:var(--ny-danger-wash);margin-bottom:6px}
+.ny-ia p{margin:0;flex:1 1 220px}
+.ny-ia .why{color:var(--cs-muted-fg);font-size:var(--cs-text-xs);display:block}
+.ny-btn{display:inline-flex;align-items:center;min-height:32px;padding:0 9px;border-radius:var(--cs-radius);border:1px solid var(--ny-strong);background:var(--cs-bg);color:var(--cs-fg);font:inherit;font-size:var(--cs-text-xs);font-weight:500;cursor:pointer}
+.ny-btn:hover{background:var(--cs-surface)}
+.ny-stalehd{font-size:var(--cs-text-xs);color:var(--cs-muted-fg);margin:2px 0 0}
+.ny-stalelist .ny-q{font-weight:400;color:var(--cs-muted-fg)}
+/* Narrow message (under 460 px, Inbox split or phone): tighter rows so two items sit above the 160 px opening height; touch-size targets. */
+@container ny (max-width:460px){
+.ny{padding:8px 12px 10px}
+.ny-h{margin-bottom:2px}
+.ny-row{padding:4px 0}
+.ny-meta{line-height:1.3}
+.ny-kind{min-height:16px}
+.ny-q{line-height:1.35}
+.ny-open,.ny-btn{min-height:44px}
+}
+@media (prefers-reduced-motion:reduce){.ny-older summary::before{transition:none}}
+.ny-note{margin:6px 0 0;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.ny-note:empty{display:none}
+</style>
+<div class="ny" id="ny" data-asof="1794524400000"><div class="ny-h"><h3>What needs you</h3><span class="ny-asof" data-stale=""><i class="ny-live" aria-hidden="true"></i>As of 15:00</span></div><ul class="ny-list" aria-label="Open items, newest first"><li class="ny-row" data-id="39701" data-story="DEMO-1" data-path="/path/to/content/stories/DEMO-1.html" data-kind="question" data-created="1794517300000" data-ask="39703"><span class="ny-q">DEMO-1 (card 39701): list archived agents, or hide them behind a filter? My pick: filter.</span><span class="ny-meta"><button type="button" class="ny-id" data-act="story" data-focus="story:39701" aria-label="Open story DEMO-1">DEMO-1</button><span class="ny-age">1h</span></span><button type="button" class="ny-open" data-act="open" data-focus="open:39701" aria-label="Open DEMO-1 question">Open</button></li><li class="ny-row" data-id="39688" data-story="DEMO-2" data-path="/path/to/content/stories/DEMO-2.html" data-kind="merge" data-created="1794506500000" data-ask="39690"><span class="ny-q"><span class="ny-kind">Merge</span>DEMO-2 merge, card 39688: reply "merge" (PR #312 green).</span><span class="ny-meta"><button type="button" class="ny-id" data-act="story" data-focus="story:39688" aria-label="Open story DEMO-2">DEMO-2</button><span class="ny-age">4h</span></span><button type="button" class="ny-open" data-act="open" data-focus="open:39688" aria-label="Open DEMO-2 merge approval">Open</button></li></ul></div>
+<script>(function(){
+'use strict';
+const STALE_MS=14*86400000;
+const STORY_ID=/(?:^|[^A-Za-z0-9-])([A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)+-\d+)(?![A-Za-z0-9])/g;
+const CARD_REF=/\bcard\s+#?(\d+)(?![0-9A-Za-z])/gi;
+const PR_LINK=/https:\/\/github\.com\/[^/\s)]+\/[^/\s)]+\/pull\/(\d+)|(?:^|[^\w./-])[\w.-]+\/[\w.-]+#(\d+)(?!\d)/;
+const MERGE_VERB=/`merge`|\breply\s+[*"“`]*merge\b|\bmerge[`*"”]*\s+(?:or|\/)\s+[`*"“]*send back/i,SEND_BACK=/\bsend back\b/i;
+const LEAD_ROLE=/^role:[^:]+:(.+)$/;
+const bodyOf=row=>typeof row.text==='string'?row.text:typeof row.textPreview==='string'?row.textPreview:'';
+const wordsOf=row=>`${row.summary||''}\n${bodyOf(row)}`;
+const sameId=(a,b)=>a!==null&&a!==undefined&&b!==null&&b!==undefined&&String(a)===String(b);
+const storyRoleOf=row=>{const hit=LEAD_ROLE.exec(typeof row.replyTo==='string'?row.replyTo:'');return hit?hit[1]:null;};
+function storyOfCard(card,known){
+const role=storyRoleOf(card);
+if(role)return role;
+for(const match of wordsOf(card).matchAll(STORY_ID))if(!known||known.has(match[1]))return match[1];
+return null;
+}
+const cardsNamed=row=>[...new Set([...wordsOf(row).matchAll(CARD_REF)].map(match=>Number(match[1])))];
+const queueOf=(card,story,storyQueue)=>{const hit=/^role:(.+)$/.exec(card&&typeof card.replyTo==='string'?card.replyTo:'');return hit?hit[1]:storyQueue?`${storyQueue}:${story}`:null;};
+const prOf=row=>{const m=row?PR_LINK.exec(wordsOf(row)):null;return m?Number(m[1]||m[2]):null;};
+const kindOf=card=>{const words=wordsOf(card);return prOf(card)!==null&&MERGE_VERB.test(words)&&SEND_BACK.test(words)?'merge':'question';};
+const newer=(a,b)=>(b.createdAtMs||0)-(a.createdAtMs||0)||b.messageId-a.messageId;
+function questionText(row){
+const raw=String(row.summary||'').trim()||bodyOf(row).split('\n').find(line=>line.trim())||'';
+const line=raw.replace(/\*\*|__/g,'').replace(/\s+/g,' ').trim();
+return line.length>200?`${line.slice(0,199)}…`:line;
+}
+function ageText(ms){
+const minutes=Math.floor(ms/60000);
+if(minutes<1)return 'now';
+if(minutes<60)return `${minutes}m`;
+const hours=Math.floor(minutes/60);
+return hours<24?`${hours}h`:`${Math.floor(hours/24)}d`;
+}
+function cardsAndAsks(world,opts){
+const cards=new Map(),asks=[],askRole=opts&&opts.cardsRole?`role:${opts.cardsRole}`:null;
+for(const row of Array.isArray(world.leadCards)?world.leadCards:[])if(row&&row.from!=='human'&&storyRoleOf(row))cards.set(row.messageId,{card:row,direct:false});
+for(const row of Array.isArray(world.cards)?world.cards:[]){
+if(!row||row.kind!=='needs-you'||row.from==='human')continue;
+if(askRole&&row.replyTo===askRole)asks.push(row);
+else if(row.inReplyTo===null||row.inReplyTo===undefined)cards.set(row.messageId,{card:row,direct:true});
+}
+const askOf=new Map();
+for(const ask of asks)for(const id of cardsNamed(ask)){const known=askOf.get(id);if(!known||newer(ask,known)<0)askOf.set(id,ask);}
+return [...cards.values()].map(({card,direct})=>{const named=askOf.get(card.messageId),own=direct?card:null;return {card,ask:named&&own?(newer(named,own)<0?named:own):named||own};});
+}
+const item=(card,ask,story,kind,now,row,opts)=>{
+const shown=ask||card,created=shown.createdAtMs||0;
+return {messageId:card.messageId,askId:ask?ask.messageId:null,queue:queueOf(card,story,opts&&opts.storyQueue),story,kind,cardAtMs:card.createdAtMs||0,createdAtMs:created,ageMs:Math.max(0,now-created),question:questionText(shown),pr:prOf(card),path:row.path||null};
+};
+const drop=(card,story,reason)=>({messageId:card.messageId,story,reason});
+function screen(world,opts={}){
+const stories=new Map((world.stories||[]).map(row=>[row.id,row])),known=new Set(stories.keys()),now=world.now;
+const dropped=[],pending=[];
+for(const {card,ask} of cardsAndAsks(world,opts)){
+const story=storyOfCard(card,known);
+if(!story){dropped.push(drop(card,null,'no story'));continue;}
+const row=stories.get(story);
+if(!row){dropped.push(drop(card,story,'story not returned by the read'));continue;}
+if(row.status==='done'){dropped.push(drop(card,story,'story is done'));continue;}
+const kind=kindOf(card);
+if(kind==='merge'){
+if(row.status!=='qa'){dropped.push(drop(card,story,`story is ${row.status||'unknown'}, not qa`));continue;}
+pending.push(item(card,ask,story,kind,now,row,opts));continue;
+}
+const waitingOn=row.waitingOn===undefined||row.waitingOn===null?'':String(row.waitingOn);
+if(String(card.messageId)===waitingOn)pending.push(item(card,ask,story,kind,now,row,opts));
+else dropped.push(drop(card,story,waitingOn?`cs:waiting-on names ${waitingOn}`:'cs:waiting-on is empty'));
+}
+return {pending,dropped};
+}
+const prMerged=(totals,story,number)=>{
+const entry=totals&&totals.stories&&totals.stories[story],prs=entry&&Array.isArray(entry.prs)?entry.prs:[];
+const hit=prs.find(pr=>pr&&Number(pr.number)===number);
+return Boolean(hit)&&Number.isFinite(hit.merged);
+};
+function openCards(world,opts={}){
+const {pending,dropped}=screen(world,opts),replies=world.replies||{},unread=new Set(Array.isArray(world.unread)?world.unread:[]),still=[];
+for(const entry of pending){
+const rows=entry.queue&&Array.isArray(replies[entry.queue])?replies[entry.queue]:[];
+const relay=rows.find(row=>row&&sameId(row.inReplyTo,entry.messageId));
+if(relay){dropped.push({messageId:entry.messageId,story:entry.story,reason:`reply ${relay.messageId} from ${relay.from||'unknown'}`});continue;}
+if(entry.kind==='merge'&&prMerged(world.totals,entry.story,entry.pr)){dropped.push({messageId:entry.messageId,story:entry.story,reason:`PR ${entry.pr} is merged`});continue;}
+still.push(entry);
+}
+const newestMerge=new Map();
+for(const entry of still)if(entry.kind==='merge'){const known=newestMerge.get(entry.story);if(!known||entry.cardAtMs>known.cardAtMs||(entry.cardAtMs===known.cardAtMs&&entry.messageId>known.messageId))newestMerge.set(entry.story,entry);}
+const open=[],older=[];
+for(const entry of still){
+if(entry.kind==='merge'&&newestMerge.get(entry.story)!==entry){dropped.push({messageId:entry.messageId,story:entry.story,reason:`a newer open merge card ${newestMerge.get(entry.story).messageId}`});continue;}
+(entry.ageMs>STALE_MS?older:open).push(entry);
+}
+const order=(a,b)=>(b.createdAtMs-a.createdAtMs)||(b.messageId-a.messageId);
+return {open:open.sort(order),older:older.sort(order),dropped,unread:[...unread].sort()};
+}
+function planReads(world,opts={}){
+const {pending}=screen(world,opts),queues=new Map();
+for(const entry of pending)if(entry.queue)queues.set(entry.queue,Math.min(queues.has(entry.queue)?queues.get(entry.queue):Infinity,entry.messageId));
+return {queues:[...queues].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0),totalsFor:[...new Set(pending.filter(entry=>entry.kind==='merge').map(entry=>entry.story))].sort()};
+}
+const messagesOf=answer=>Array.isArray(answer)?answer:answer&&Array.isArray(answer.messages)?answer.messages:[];
+function storiesOf(answer){
+const rows=Array.isArray(answer)?answer:answer&&Array.isArray(answer.rows)?answer.rows:[];
+return rows.filter(Boolean).map(row=>{const fields=row.fields||{};return {id:fields.story_id||row.id,status:fields.status,waitingOn:fields.waiting_on,path:row.path||null};}).filter(story=>story.id);
+}
+const worldOf=raw=>({now:raw.now,cards:messagesOf(raw.cards),leadCards:messagesOf(raw.leadCards),stories:storiesOf(raw.stories),replies:Object.fromEntries(Object.entries(raw.replies||{}).map(([key,answer])=>[key,messagesOf(answer)])),unread:[],totals:raw.totals||null});
+function incomplete(raw,opts={}){
+if(!raw||typeof raw!=='object')return 'the world is not an object';
+if(!Number.isFinite(raw.now))return 'now is missing';
+for(const key of ['cards','leadCards','stories'])if(raw[key]===undefined)return `${key} is missing`;
+for(const key of ['cards','leadCards'])if(raw[key]&&raw[key].hasMore)return `${key} has more pages (hasMore)`;
+if(raw.stories&&!Array.isArray(raw.stories)&&(raw.stories.nextCursor||raw.stories.truncated))return 'stories has more pages';
+const plan=planReads(worldOf(raw),opts),until=new Map(plan.queues);
+for(const [id,answer] of Object.entries(raw.replies||{}))if(answer&&answer.hasMore&&!(until.has(id)&&messagesOf(answer).some(row=>row&&row.messageId<=until.get(id))))return `the role queue ${id} has more pages (hasMore)`;
+for(const [queue] of plan.queues)if(!raw.replies||raw.replies[queue]===undefined)return `the role queue ${queue} was not read (replies)`;
+if(plan.totalsFor.length&&raw.totals===undefined)return `totals is missing for ${plan.totalsFor.join(', ')} (null when the storyTotals read failed)`;
+return null;
+}
+const PAGE=500,PAGES=40;
+async function pageAll(read,until){
+const rows=[];let before;
+for(let page=0;page<PAGES;page++){
+const answer=await read(before,PAGE),got=messagesOf(answer);
+rows.push(...got);
+if(!(answer&&!Array.isArray(answer)&&answer.hasMore)||!got.length)return rows;
+before=Math.min(...got.map(row=>row.messageId));
+if(until!==undefined&&before<=until)return rows;
+}
+throw new Error('more messages than one read can hold');
+}
+async function readCards(io,opts){
+const [cards,leadCards]=await Promise.all([pageAll((before,limit)=>io.asks(before,limit)),pageAll((before,limit)=>io.role(opts.cardsRole,before,limit))]);
+return {cards,leadCards};
+}
+async function readReplies(world,io,opts){
+const plan=planReads(world,opts),replies={},unread=[];
+await Promise.all(plan.queues.map(([queue,until])=>pageAll((before,limit)=>io.role(queue,before,limit),until).then(rows=>{replies[queue]=rows;},()=>{unread.push(queue);})));
+return {world:{...world,replies,unread:unread.sort()},totalsFor:plan.totalsFor};
+}
+const TEAM={storyQueue:'sv-story-lead',cardsRole:'sprint-lead'};
+const COPY={
+title:'What needs you',
+live:time=>`Live · ${time}`,
+asOf:time=>`As of ${time}`,
+notLive:'Not live',
+lastUpdated:time=>`Last updated ${time}`,
+zero:'Nothing waits on you.',
+zeroThen:time=>`Nothing waited on you at ${time}.`,
+zeroRecent:'Nothing new in the last 14 days.',
+zeroRecentThen:time=>`Nothing new in the 14 days before ${time}.`,
+listLabel:'Open items, newest first',
+olderListLabel:'Items over 14 days old',
+staleListLabel:time=>`Items as sent at ${time}`,
+asSent:time=>`As sent at ${time}`,
+olderTitle:'Older',
+olderTail:n=>` · ${n} ${n===1?'item':'items'} over 14 days old`,
+merge:'Merge',
+open:'Open',
+openLabel:(story,kind)=>`Open ${story} ${kind==='merge'?'merge approval':'question'}`,
+storyLabel:story=>`Open story ${story}`,
+failedFirst:time=>`Couldn’t read your Inbox. Below is what the lead sent at ${time}; some may be answered.`,
+failedFirstNoTime:'Couldn’t read your Inbox, so this may be out of date.',
+failedLater:'The last update failed, so this may be out of date.',
+inboxKeeps:'Your Inbox still has every question.',
+retry:'Try again',
+partial:'Some replies couldn’t be read, so an item here may already be answered.',
+openedStory:'Opened the story: this question is in your Inbox.',
+openFailed:'Couldn’t open that.',
+};
+const TITLE_OVER=90;
+const el=(t,a={},...c)=>({t,a,c:c.flat().filter(child=>child!==null&&child!==undefined&&child!==false)});
+const pad=n=>String(n).padStart(2,'0');
+const timeText=ms=>{const d=new Date(ms);return `${pad(d.getHours())}:${pad(d.getMinutes())}`;};
+function rowTree(item){
+const ask=item.kind==='merge'?el('span',{class:'ny-kind'},COPY.merge):null;
+return el('li',{class:'ny-row','data-id':String(item.messageId),'data-story':item.story,'data-path':item.path||'','data-kind':item.kind,'data-created':String(item.createdAtMs),'data-ask':item.askId===null||item.askId===undefined?'':String(item.askId)},
+el('span',{class:'ny-q',...(item.question.length>TITLE_OVER?{title:item.question}:{})},ask,item.question),
+el('span',{class:'ny-meta'},el('button',{type:'button',class:'ny-id','data-act':'story','data-focus':`story:${item.messageId}`,'aria-label':COPY.storyLabel(item.story)},item.story),el('span',{class:'ny-age'},ageText(item.ageMs))),
+el('button',{type:'button',class:'ny-open','data-act':'open','data-focus':`open:${item.messageId}`,'aria-label':COPY.openLabel(item.story,item.kind)},COPY.open));
+}
+function viewTree(state){
+const {open,older,mode,at,snapshotAt,olderOpen}=state,stale=mode==='stale-first'||mode==='stale-later';
+const stamp=mode==='live'?COPY.live(timeText(at)):mode==='snapshot'?COPY.asOf(timeText(at)):mode==='stale-first'?COPY.notLive:COPY.lastUpdated(timeText(at));
+const hollow=mode!=='live';
+const out=[el('div',{class:'ny-h'},el('h3',{},COPY.title),el('span',{class:'ny-asof',...(hollow?{'data-stale':''}:{})},el('i',{class:'ny-live','aria-hidden':'true'}),stamp))];
+if(stale){
+const text=mode==='stale-first'?(snapshotAt?COPY.failedFirst(timeText(snapshotAt)):COPY.failedFirstNoTime):COPY.failedLater;
+out.push(el('div',{class:'ny-ia',role:mode==='stale-first'?'alert':'status'},el('p',{},text,' ',el('span',{class:'why'},COPY.inboxKeeps)),el('button',{type:'button',class:'ny-btn','data-act':'retry','data-focus':'retry'},COPY.retry)));
+}
+if(open.length){
+if(mode==='stale-first'&&snapshotAt)out.push(el('p',{class:'ny-stalehd'},COPY.asSent(timeText(snapshotAt))));
+out.push(el('ul',{class:`ny-list${stale?' ny-stalelist':''}`,'aria-label':mode==='stale-first'&&snapshotAt?COPY.staleListLabel(timeText(snapshotAt)):COPY.listLabel},open.map(rowTree)));
+}else if(!(mode==='stale-first'&&!snapshotAt))out.push(el('p',{class:'ny-calm'},stale?(older.length?COPY.zeroRecentThen(timeText(at)):COPY.zeroThen(timeText(at))):older.length?COPY.zeroRecent:COPY.zero));
+if(state.partial)out.push(el('p',{class:'ny-part',role:'status'},COPY.partial));
+if(older.length)out.push(el('details',{class:'ny-older',...(olderOpen?{open:true}:{})},
+el('summary',{'data-focus':'older'},el('b',{},COPY.olderTitle),COPY.olderTail(older.length)),
+el('ul',{class:'ny-list','aria-label':COPY.olderListLabel},older.map(rowTree))));
+return out;
+}
+const STORY_QUERY={where:{kinds:['story','bug','spike']},select:['story_id','status','cs:waiting-on'],limit:2000};
+function toDom(node){
+if(typeof node==='string')return document.createTextNode(node);
+const out=document.createElement(node.t);
+for(const [key,value] of Object.entries(node.a))if(value!==false&&value!==null&&value!==undefined)out.setAttribute(key,value===true?'':String(value));
+for(const child of node.c)out.append(toDom(child));
+return out;
+}
+async function readStories(cs){
+const rows=[];let cursor;
+for(let page=0;page<PAGES;page++){
+const answer=await cs.queryContext(cursor?{...STORY_QUERY,cursor}:STORY_QUERY);
+rows.push(...storiesOf(answer));
+if(!(answer&&answer.nextCursor))return rows;
+cursor=answer.nextCursor;
+}
+throw new Error('more stories than one read can hold');
+}
+const page=before=>before?{before}:{};
+const readersOf=cs=>({
+asks:(before,limit)=>cs.inbox({scope:'to-human',kind:'needs-you',limit,...page(before)}),
+role:(role,before,limit)=>cs.inbox({role,limit,...page(before)}),
+});
+async function readWorld(cs){
+const io=readersOf(cs),now=Date.now(),[found,stories]=await Promise.all([readCards(io,TEAM),readStories(cs)]);
+const {world,totalsFor}=await readReplies({now,...found,stories,totals:null},io,TEAM);
+if(totalsFor.length)world.totals=await Promise.resolve().then(()=>cs.storyTotals({storyIds:totalsFor})).catch(()=>null);
+return world;
+}
+const sigOf=stories=>JSON.stringify(stories.map(story=>[story.id,story.status,story.waitingOn===undefined?null:String(story.waitingOn)]).sort());
+function itemOf(li,snapshotAt){
+const created=Number(li.dataset.created)||0,q=li.querySelector('.ny-q');
+return {messageId:Number(li.dataset.id),askId:li.dataset.ask?Number(li.dataset.ask):null,story:li.dataset.story,path:li.dataset.path||null,kind:li.dataset.kind,createdAtMs:created,ageMs:Math.max(0,snapshotAt-created),
+question:q.getAttribute('title')||[...q.childNodes].filter(node=>node.nodeType===3).map(node=>node.textContent).join('')};
+}
+function mount(root,cs){
+const snapshotAt=Number(root.dataset.asof)||null;
+const state={open:[],older:[],partial:false,mode:'snapshot',at:snapshotAt||Date.now(),snapshotAt,olderOpen:false,live:false,feedLost:false,sig:null};
+if(snapshotAt){
+const rows=list=>[...list.querySelectorAll(':scope > li.ny-row')].map(li=>itemOf(li,snapshotAt));
+const top=root.querySelector(':scope > ul.ny-list'),older=root.querySelector(':scope > details.ny-older > ul.ny-list');
+state.open=top?rows(top):[];state.older=older?rows(older):[];
+}
+const note=document.createElement('p');note.className='ny-note';note.setAttribute('role','status');
+root.append(note);
+root.tabIndex=-1;
+function paint(){
+const active=root.contains(document.activeElement)?document.activeElement.getAttribute('data-focus'):null;
+const details=root.querySelector(':scope > details.ny-older');if(details)state.olderOpen=details.open;
+root.replaceChildren(...viewTree(state).map(toDom),note);
+if(active){const next=root.querySelector(`[data-focus="${CSS.escape(active)}"]`);(next||root).focus();}
+}
+const say=text=>{note.textContent=text;};
+const failed=()=>{state.mode=state.live?'stale-later':'stale-first';state.at=state.live?state.at:(snapshotAt||Date.now());paint();};
+let running=false,dirty=false;
+async function once(){
+try{
+const world=await readWorld(cs),result=openCards(world,TEAM);
+Object.assign(state,{open:result.open,older:result.older,partial:result.unread.length>0,mode:state.feedLost?'stale-later':'live',at:world.now,live:true,sig:sigOf(world.stories)});
+paint();
+}catch(error){failed();}
+}
+async function refresh(){
+if(running){dirty=true;return;}
+running=true;
+try{do{dirty=false;await once();}while(dirty);}finally{running=false;}
+}
+const act=(verb,args)=>typeof cs.act==='function'?cs.act(verb,args):cs.invoke(verb,args);
+root.addEventListener('click',event=>{
+const button=event.target.closest&&event.target.closest('[data-act]');
+if(!button||!root.contains(button))return;
+const verb=button.dataset.act,row=button.closest('li');
+say('');
+if(verb==='retry'){if(state.feedLost)follow();refresh();return;}
+if(!row)return;
+const path=row.dataset.path,openStory=fallback=>path?Promise.resolve().then(()=>cs.openFile({path,newTab:true})).then(()=>{if(fallback)say(COPY.openedStory);}):Promise.reject(new Error('no path'));
+if(verb==='story')openStory(false).catch(()=>say(COPY.openFailed));
+else if(verb==='open')(row.dataset.ask?Promise.resolve().then(()=>act('openMessage',{messageId:Number(row.dataset.ask)})):Promise.reject(new Error('no ask'))).catch(()=>openStory(true)).catch(()=>say(COPY.openFailed));
+});
+let stops=[];
+const gone=()=>{state.feedLost=true;failed();};
+function follow(){
+for(const stop of stops)try{if(typeof stop==='function')stop();}catch(error){}
+stops=[];state.feedLost=false;
+try{stops.push(cs.onInboxChanged(()=>{refresh();}));}catch(error){gone();}
+try{
+stops.push(cs.subscribeContext(STORY_QUERY,(result,error)=>{
+if(error){gone();return;}
+if(state.sig!==null&&sigOf(storiesOf(result))===state.sig)return;
+refresh();
+}));
+}catch(error){gone();}
+}
+follow();
+refresh();
+return {refresh};
+}
+function boot(){
+const cs=typeof window!=='undefined'?window.codesense:null,root=typeof document!=='undefined'?document.getElementById('ny'):null;
+if(cs&&root)mount(root,cs);
+}
+boot();
+})();
+</script>

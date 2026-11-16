@@ -222,6 +222,35 @@ it("mirrors pending question text and model changes at the host seam", async () 
   }
 });
 
+it("a bySession change that moves no model does no stringify and no push", async () => {
+  const { useAgentStateStore } = await import("@/shared/stores/agent-state-store");
+  useAgentStateStore.setState({ bySession: { s1: { agent: "claude" } } } as never);
+  useViewerStore.setState({ stateLoaded: true });
+  const stop = watchAgentListInputs();
+  try {
+    await vi.waitFor(() => expect(transport.read).toHaveBeenCalled());
+    transport.mirror.mockClear();
+    const stringify = vi.spyOn(JSON, "stringify");
+    useAgentStateStore.setState({
+      bySession: { s1: { agent: "claude", state: "working" } },
+    } as never);
+    const calls = stringify.mock.calls.length;
+    stringify.mockRestore();
+    expect(calls).toBe(0);
+    expect(transport.mirror).not.toHaveBeenCalled();
+    useAgentStateStore.setState({
+      bySession: { s1: { agent: "claude" }, s2: { agent: "codex" } },
+    } as never);
+    expect(transport.mirror).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentSessionModels: expect.objectContaining({ s2: expect.any(String) }),
+      }),
+    );
+  } finally {
+    stop();
+  }
+});
+
 it("mirrors live taxonomy roles for pane stage rails", async () => {
   const { useStatusTaxonomyStore } = await import("@/shared/stores/status-taxonomy-store");
   useViewerStore.setState({ stateLoaded: true });

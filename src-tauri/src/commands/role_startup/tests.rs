@@ -202,5 +202,6 @@ pub(crate) fn session_row(
         expiring: false,
         session: Some(session.into()),
         failed: false,
+        crashed: false,
     }
 }

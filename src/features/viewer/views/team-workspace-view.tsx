@@ -2,6 +2,7 @@
 import { FileNavSlotMount } from "@/features/shell/slots/file-nav-slot-host";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useRetiringFrames } from "@/features/dashboard/components/use-retiring-frames";
+import { hasLiveFrames, type LiveFrame } from "@/features/dashboard/lib/frame-lifecycle";
 import { ScratchTreeBadge } from "@/features/viewer/components/scratch-file-badge";
 import { usePrivateNavFiles } from "@/features/scratch-space/lib/use-private-nav-files";
 import { Lock } from "lucide-react";
@@ -1389,6 +1390,16 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
   // store LRU hasn't caught up yet, so there's always a viewer for
   // the content we intend to display. Cap to prevent accidental
   // overflow.
+  // A live frame this view shows for `p`: the frame mounted inside `p`'s viewer. A story md tab
+  // shows its team's story page, a frame whose document is the page, not the md.
+  const frameOf = useCallback(
+    (f: LiveFrame, p: string) =>
+      f.slotId === "centre" &&
+      f.teamKey === teamKey &&
+      f.element?.closest("[data-viewer-path]")?.getAttribute("data-viewer-path") === p,
+    [teamKey],
+  );
+
   const renderList = useMemo(() => {
     // SW-VE-3: files being edited (+ the active file) are mounted FIRST so they
     // survive the keep-alive `slice` cap — a live edit buffer must never be
@@ -1397,18 +1408,22 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
     const priority: string[] = [];
     for (const p of editingPaths) if (!priority.includes(p)) priority.push(p);
     if (activeTabPath && !priority.includes(activeTabPath)) priority.push(activeTabPath);
+    // A closed tab's viewer is kept alive only when it runs no live page: an html tab, or an md
+    // tab showing a story page, retires with its tab.
     const rest = openedViewerPaths.filter(
       (p) =>
         !priority.includes(p) &&
-        (!/\.html?$/i.test(p) || openTabsForTeam?.some((tab) => tab.path === p)),
+        ((!/\.html?$/i.test(p) && !hasLiveFrames((f) => frameOf(f, p))) ||
+          openTabsForTeam?.some((tab) => tab.path === p)),
     );
     return [...priority, ...rest].slice(0, VIEWER_PERF.keepAliveMaxViewers);
-  }, [openedViewerPaths, activeTabPath, editingPaths, openTabsForTeam]);
+  }, [openedViewerPaths, activeTabPath, editingPaths, openTabsForTeam, frameOf]);
 
   const retiringRenderList = useRetiringFrames(
     renderList,
     (p) => p,
-    (f, p) => f.documentPath === p && f.slotId === "centre" && f.teamKey === teamKey,
+    (f, p) =>
+      (f.documentPath === p && f.slotId === "centre" && f.teamKey === teamKey) || frameOf(f, p),
   );
 
   // SV-ENG-120: a tab switch names what is mounted (render list plus frames kept for their
@@ -1734,6 +1749,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                   return (
                     <div
                       key={p}
+                      data-viewer-path={p}
                       ref={p === activeTabPath ? viewerContentRef : undefined}
                       className="h-full"
                       style={{ display: p === activeTabPath ? undefined : "none" }}

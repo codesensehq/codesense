@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
-import { renderFileDiff } from "@/shared/lib/render-file-diff";
+import {
+  IMAGE_UNAVAILABLE,
+  renderFileDiff,
+  type FileDiffSides,
+} from "@/shared/lib/render-file-diff";
+import { isRasterImage } from "@/shared/lib/side-frame";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { createIntentReader } from "../../../../src-tauri/assets/dashboards/story-trail/intent-reader.mjs";
-import { readOpenDiff } from "../lib/source-redline-source";
+import { readOpenDiff, readOpenDiffImages } from "../lib/source-redline-source";
 import { diffTabAddress, openDiffTab, type DiffTabAddress } from "../lib/open-diff-route";
 import type { OpenDiffRead } from "../lib/open-diff-types";
 
@@ -24,10 +29,13 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
   const [error, setError] = useState("");
   const readerRef = useRef<ReturnType<typeof createIntentReader> | null>(null);
   const { modes, setMode } = useFileDiffModes();
-  // A link to lines of a markdown file opens it as source, where the lines are
-  // highlighted, without changing anyone's default; choosing a mode ends that.
+  // A link to lines of a markdown or HTML file opens it as source, where the
+  // lines are highlighted, without changing anyone's default; choosing a mode
+  // ends that.
   const [rangeAsSource, setRangeAsSource] = useState(!!params.range);
-  const tabModes = rangeAsSource ? { ...modes, markdown: "source" as const } : modes;
+  const tabModes = rangeAsSource
+    ? { ...modes, markdown: "source" as const, html: "source" as const }
+    : modes;
   const onModeChange: typeof setMode = (kind, mode) => {
     setRangeAsSource(false);
     setMode(kind, mode);
@@ -51,6 +59,56 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
       readerRef.current = null;
     };
   }, [params]);
+  // A raster image's redline is binary: its rendered sides draw from its bytes, read
+  // at the same revision with the same revalidation, once per opened read.
+  const [images, setImages] = useState<{
+    of: OpenDiffRead;
+    sides: Pick<FileDiffSides, "imageBytes" | "imageState">;
+  } | null>(null);
+  const wantsImages =
+    result?.status === "opened" && result.redline.binary && isRasterImage(params.path);
+  useEffect(() => {
+    if (result?.status !== "opened" || !result.redline.binary || !isRasterImage(params.path))
+      return;
+    let cancelled = false;
+    const { range: _range, ...target } = params;
+    void _range;
+    readOpenDiffImages(target).then(
+      (read) => {
+        if (cancelled) return;
+        const unavailable = (reason: string) => ({
+          imageState: { kind: "unavailable" as const, reason },
+        });
+        const sides =
+          read.status !== "opened"
+            ? unavailable(IMAGE_UNAVAILABLE.failed)
+            : read.images.tooLarge
+              ? unavailable(IMAGE_UNAVAILABLE.tooLarge)
+              : {
+                  imageBytes: {
+                    ...(read.images.before != null ? { before: read.images.before } : {}),
+                    ...(read.images.after != null ? { after: read.images.after } : {}),
+                  },
+                };
+        setImages({ of: result, sides });
+      },
+      () =>
+        !cancelled &&
+        setImages({
+          of: result,
+          sides: { imageState: { kind: "unavailable", reason: IMAGE_UNAVAILABLE.failed } },
+        }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [result, params]);
+  // While the bytes are read the tab says so, never the final binary state.
+  const imageSides: Pick<FileDiffSides, "imageBytes" | "imageState"> = !wantsImages
+    ? {}
+    : images?.of === result
+      ? images.sides
+      : { imageState: { kind: "reading" } };
   const retry = () => readerRef.current?.intent({ read: true });
   const openWorkspace = async () => {
     try {
@@ -131,6 +189,7 @@ function DiffEntry({ address: { params, team } }: { address: DiffTabAddress }) {
               before: result.redline.before,
               after: result.redline.after,
               status: result.redline.status,
+              ...imageSides,
             },
             state: result.redline.binary ? { kind: "binary" } : { kind: "ready" },
             prefs: {

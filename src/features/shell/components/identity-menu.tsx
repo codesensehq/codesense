@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   Bot,
   ChevronsUpDown,
+  Compass,
   Keyboard,
   LayoutDashboard,
   MessageSquare,
@@ -52,6 +53,7 @@ import {
   useMissingContextRepos,
 } from "@/features/org/components/missing-context-repos";
 import { openAgents } from "@/features/agents/agents-virtual-tab";
+import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openForeman } from "@/features/foreman/open-foreman";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { openRoutines } from "@/features/routines/routines-virtual-tab";
@@ -481,6 +483,18 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
           <Bot size={15} strokeWidth={1.75} />
         </MenuLeadIcon>
         <span>Agent definitions</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-testid="identity-menu-setup"
+        onClick={go(() => openCodesenseSetup({ resume: true }))}
+        className={MENU_ITEM}
+      >
+        <MenuLeadIcon>
+          <Compass size={15} strokeWidth={1.75} />
+        </MenuLeadIcon>
+        <span>Set up CodeSense</span>
       </button>
       <button
         type="button"
