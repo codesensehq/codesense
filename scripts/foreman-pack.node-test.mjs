@@ -69,9 +69,10 @@ const FILE_TOOLS = ["Read", "Edit", "Write"];
 const BYTES_PER_TOKEN = 2.65;
 const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
 // 2k until the setup rules (offer, resume, hand-back) went in; flagged in that PR.
-const ROOT_CAP = 2200;
+// 2.25k when two trims to stay under 2.2k regressed the floor evals; flagged in that PR.
+const ROOT_CAP = 2250;
 
-test("the root prompt is the spec, under 2.2k tokens, passed as the agent's system prompt", () => {
+test("the root prompt is the spec, under 2.25k tokens, passed as the agent's system prompt", () => {
   const at = agent.args.indexOf("--append-system-prompt");
   assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(

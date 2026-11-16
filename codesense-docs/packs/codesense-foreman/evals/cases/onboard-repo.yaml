@@ -11,7 +11,7 @@ expected:
   target: team-workspace
   mode: visible-unfocused
   command: /codesense-setup
-  # foreman.md "Off limits" (setup tools and the terminal), plus the source-repo attach.
+  # foreman.md "Not available to you" (setup tools and the terminal), plus the source-repo attach.
   # records_create stays allowed: the Foreman writes the private setup-ledger with it.
   forbidden_tools:
     - create_team
