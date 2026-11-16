@@ -1325,6 +1325,32 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(await screen.findByTestId("chat-overlay-pin-4")).toBeInTheDocument();
   });
 
+  it("names a pin of a concurrent seat's message by what it says, in the strip and in the chooser at the cap", async () => {
+    // The other seat's mail isn't in this seat's thread; the pins read says what it is.
+    held.push({
+      messageId: 77,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: {
+        from: "BUG-142#dev6",
+        createdAtMs: NOW - 5 * 60_000,
+        text: "Tests pass. The rest is cleanup.",
+      },
+    });
+    await renderOverlay(420, 700);
+    const strip = await screen.findByTestId("chat-overlay-pin-77");
+    expect(strip).toHaveTextContent("Tests pass.");
+    expect(strip).toHaveTextContent("The rest is cleanup.");
+    expect(strip).not.toHaveTextContent("Pin 77");
+    fireEvent.click(pinOf(4));
+    const choice = within(row(4))
+      .getAllByTestId("ibx-pin-choice")
+      .find((c) => c.dataset.pinId === "77")!;
+    expect(choice).toHaveTextContent("Tests pass.");
+    expect(choice).not.toHaveTextContent("Pin 77");
+  });
+
   describe("at the cap: Pin… asks which pin to replace", () => {
     const full = async () => {
       held.push({ messageId: 2, position: 2, pinnedBy: "human", pinnedAtMs: NOW });

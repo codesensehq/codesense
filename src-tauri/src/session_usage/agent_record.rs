@@ -24,6 +24,17 @@ pub struct Params {
     pub handle: String,
 }
 
+/// The other sessions the registry lists on one session's thread, by the thread read's seat
+/// rule ([`crate::commands::agent_inbox::thread_peers`]), by launch handle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadPeers {
+    /// The listed ones its record sums: the ended ones, and every one once it has ended itself.
+    pub counted: Vec<String>,
+    /// The concurrent live seats, left out while it is a seat: each seat's record holds its own
+    /// and the ended ones, so nothing is counted twice.
+    pub seats: Vec<String>,
+}
+
 /// A commit as the record needs it: its sha, its files and the sessions that made it.
 pub(crate) type CommitFacts = (String, Vec<String>, Vec<String>);
 
@@ -217,7 +228,7 @@ pub(crate) fn usage_half(
     home: &Path,
     handle: &str,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<UsageHalf, String> {
     let handle = handle.trim();
@@ -234,7 +245,7 @@ pub(crate) fn usage_half(
         // A story's chain is its handoff chain; a no-story session's is its listed thread.
         let mut earlier = earlier_sessions(&store, record)?;
         if std::vec::Vec::is_empty(&earlier) {
-            earlier = listed_no_story(&store, record, peers)?;
+            earlier = listed_no_story(&store, record, &peers.counted)?;
         }
         for earlier in earlier {
             half.earlier.push(half_of(home, &store, earlier, &launch_stories, scope)?);
@@ -435,12 +446,12 @@ pub async fn read(
     home: &Path,
     params: &Params,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<Value, String> {
     crate::shared::invoke_stats::metric_count("session_record.read");
     let (owned_home, handle, owned_scope) = (home.to_owned(), params.handle.clone(), scope.clone());
-    let owned_peers = <[String]>::to_vec(peers);
+    let owned_peers = Clone::clone(peers);
     let half = crate::commands::await_blocking("session_record", move || {
         usage_half(
             &owned_home,
@@ -466,7 +477,7 @@ pub async fn read(
 pub async fn current(
     params: &Params,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<Value, String> {
     let home = crate::commands::paths::codesense_home_dir().ok_or("no CodeSense home directory")?;

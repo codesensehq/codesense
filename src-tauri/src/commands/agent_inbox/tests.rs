@@ -5980,21 +5980,23 @@ fn a_pin_thread_comes_from_the_registry_record_never_a_tab_tag() {
 }
 
 #[test]
-fn a_no_story_thread_is_the_listed_no_story_sessions_of_its_saved_agent() {
+fn a_thread_is_its_listed_sessions_less_the_concurrent_live_seats() {
     use crate::commands::dashboard_launch::DashboardLaunchState;
     let state = DashboardLaunchState::new(8);
-    for handle in ["dev-a", "dev-b", "dev-c", "dev-story", "qa-1", "bare"] {
+    for handle in [
+        "dev-a", "dev-b", "dev-c", "dev-story", "dev-story-2", "qa-1", "bare",
+    ] {
         state.register(handle, &format!("sess-{handle}"), Some("codesense"));
     }
     let mut rows = state.snapshot();
     for row in &mut rows {
         row.agent_revision = match row.handle.as_str() {
-            "dev-a" | "dev-story" => Some("acme/api/dev@3".into()),
+            "dev-a" | "dev-story" | "dev-story-2" => Some("acme/api/dev@3".into()),
             "dev-b" | "dev-c" => Some("acme/api/dev@4".into()),
             "qa-1" => Some("acme/api/qa@1".into()),
             _ => None,
         };
-        if row.handle == "dev-story" {
+        if row.handle.starts_with("dev-story") {
             row.meta.story = Some("DEMO-1".into());
         }
     }
@@ -6002,20 +6004,23 @@ fn a_no_story_thread_is_the_listed_no_story_sessions_of_its_saved_agent() {
     let ended = |handle: &str| handle == "dev-a";
     // A live seat's thread is its own and the ended ones: another live seat is left out, as the
     // thread read leaves its conversation out, so nothing is counted twice.
-    assert_eq!(
-        no_story_peers(&rows, ended, "dev-b"),
-        vec!["dev-a".to_string()]
-    );
+    let live = thread_peers(&rows, ended, "dev-b");
+    assert_eq!(live.counted, vec!["dev-a".to_string()]);
+    assert_eq!(live.seats, vec!["dev-c".to_string()]);
     // An ended session is no seat: every listed session of its thread is its thread.
-    let mut after = no_story_peers(&rows, ended, "dev-a");
+    let mut after = thread_peers(&rows, ended, "dev-a").counted;
     after.sort();
     assert_eq!(after, vec!["dev-b".to_string(), "dev-c".to_string()]);
-    // A session on a story, or with no saved agent, has no listed no-story thread.
+    // A story thread follows the same rule: a concurrent seat on the story is left out, and
+    // the no-story sessions are another thread.
+    let story = thread_peers(&rows, ended, "dev-story");
+    assert_eq!(story.counted, Vec::<String>::new());
+    assert_eq!(story.seats, vec!["dev-story-2".to_string()]);
+    // A session with no saved agent has no thread.
     assert_eq!(
-        no_story_peers(&rows, ended, "dev-story"),
-        Vec::<String>::new()
+        thread_peers(&rows, ended, "bare"),
+        crate::session_usage::agent_record::ThreadPeers::default()
     );
-    assert_eq!(no_story_peers(&rows, ended, "bare"), Vec::<String>::new());
 }
 
 /// What each `agent-inbox-changed` emit puts on the wire: a team-scoped change names its
