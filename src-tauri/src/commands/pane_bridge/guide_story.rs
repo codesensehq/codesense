@@ -8,7 +8,6 @@
 //! depends on nor widens what that scope admits. Every refusal is the same "File not found",
 //! so a refused path looks like a missing one.
 
-use std::ffi::OsStr;
 use std::path::{Component, Path};
 
 use crate::context_query::index::IndexRoot;
@@ -30,7 +29,7 @@ pub(crate) fn resolve(
     let file = Path::new(path.trim());
     if team.is_some()
         || !file.is_absolute()
-        || file.extension() != Some(OsStr::new("md"))
+        || !path.trim().ends_with(".md")
         || file
             .components()
             .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
@@ -46,16 +45,12 @@ pub(crate) fn resolve(
         return Err(refused());
     };
     // Under `stories/`, at least one name deep, through plain names only.
-    let inside: Vec<_> = file
-        .strip_prefix(&root.dir)
-        .map_err(|_| refused())?
-        .components()
-        .collect();
-    if inside.len() < 2
-        || inside[0] != Component::Normal(OsStr::new(STORIES))
-        || !inside
-            .iter()
-            .all(|part| matches!(part, Component::Normal(_)))
+    let inside = file.strip_prefix(&root.dir).map_err(|_| refused())?;
+    let below = inside.strip_prefix(STORIES).map_err(|_| refused())?;
+    if below.components().next().is_none()
+        || inside
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
         return Err(refused());
     }

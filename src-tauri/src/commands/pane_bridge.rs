@@ -291,18 +291,17 @@ async fn holds_guide_grant<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     frame_id: Option<&str>,
 ) -> bool {
+    use crate::dashboard_stream::frame::FrameStore;
     use tauri::Manager;
-    let Some(frame) = frame_id.and_then(|id| {
-        app.try_state::<std::sync::Arc<crate::dashboard_stream::frame::FrameStore>>()
-            .and_then(|frames| frames.by_id(id))
-    }) else {
+    let (Some(id), Some(frames)) = (frame_id, app.try_state::<std::sync::Arc<FrameStore>>()) else {
+        return false;
+    };
+    let Some(frame) = FrameStore::by_id(&frames, id) else {
         return false;
     };
     // The cheap check first, so the common page never resolves the docs checkout.
     if frame.parent_frame.is_some()
-        || !frame
-            .document_path
-            .replace('\\', "/")
+        || !path_str(Path::new(&frame.document_path))
             .ends_with(crate::verbs::foreman_launch::GUIDE_PAGE)
     {
         return false;

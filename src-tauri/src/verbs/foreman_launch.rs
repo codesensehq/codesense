@@ -61,10 +61,8 @@ pub fn is_guide_page(docs_root: &Path, document_path: &str) -> bool {
 pub fn is_guide_page_in(pages: &[Page], docs_root: &Path, document_path: &str) -> bool {
     pages
         .iter()
-        .find(|page| page.path == GUIDE_PAGE)
-        .is_some_and(|guide| {
-            grant_in(std::slice::from_ref(guide), docs_root, document_path).is_some()
-        })
+        .filter(|page| page.path == GUIDE_PAGE)
+        .any(|guide| grant_in(std::slice::from_ref(guide), docs_root, document_path).is_some())
 }
 
 /// The document must sit at a page's path under `docs_root`, reached through plain segments
