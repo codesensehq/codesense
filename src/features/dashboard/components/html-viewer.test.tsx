@@ -59,6 +59,8 @@ const {
 
 vi.mock("@/app/menu-action-dispatch", () => ({
   dispatchMenuAction: (...args: unknown[]) => mockDispatchMenuAction(...args),
+  // A forwarded frame key runs the same action; these cases watch which action it names.
+  dispatchFrameShortcut: (id: string) => mockDispatchMenuAction(id),
   getMenuActionGate: () => ({
     settingsPanelOpen: false,
     hasActiveWorkspace: shortcutWorkspace !== null,

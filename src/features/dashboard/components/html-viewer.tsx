@@ -26,7 +26,7 @@ import { buildTeamKey, parseTeamKey } from "@/shared/lib/team-key";
 import { useViewerStore, selectFocusedSession } from "@/shared/stores/viewer-store";
 import { messageFrameHeight } from "@/features/weft/lib/inbox-message-frame";
 import { matchShortcut } from "@/shared/hooks/use-shortcut-handler";
-import { dispatchMenuAction, getMenuActionGate } from "@/app/menu-action-dispatch";
+import { dispatchFrameShortcut, getMenuActionGate } from "@/app/menu-action-dispatch";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import {
   registerRenderedDocument,
@@ -264,7 +264,7 @@ function dispatchFrameKey(
     editorTarget,
     textFieldTarget,
   );
-  if (action) dispatchMenuAction(action.id);
+  if (action) dispatchFrameShortcut(action.id);
   return !!action;
 }
 
