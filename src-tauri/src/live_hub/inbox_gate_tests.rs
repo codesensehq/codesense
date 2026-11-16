@@ -256,7 +256,12 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
     let hub = app.state::<LiveHub>();
     // No inbox view is open: readers are told from the projection, not from view deltas.
-    hub.model.lock().unwrap().agent_views.insert("all".into());
+    {
+        let mut model = hub.model.lock().unwrap();
+        model.agent_views.insert("all".into());
+        // The webview holds the agent list it reads.
+        model.projections.hold("agentList", "all", "main");
+    }
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();

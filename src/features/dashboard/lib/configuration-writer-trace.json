@@ -115,6 +115,15 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "name",
+            "set": {
+              "value": "Newer name"
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 2,
         "topic": "profile",
@@ -124,11 +133,6 @@
             "id": "chrome:newer",
             "key": "newer",
             "value": true
-          },
-          {
-            "field": "name",
-            "id": "name",
-            "value": "Newer name"
           },
           {
             "field": "slots",
@@ -169,21 +173,23 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "slots:dock",
+            "set": {
+              "value": {
+                "id": "agents",
+                "org": "acme/repo",
+                "scope": "built-in"
+              }
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 3,
         "topic": "profile",
-        "upserts": [
-          {
-            "field": "slots",
-            "id": "slots:dock",
-            "key": "dock",
-            "value": {
-              "id": "agents",
-              "org": "acme/repo",
-              "scope": "built-in"
-            }
-          }
-        ],
+        "upserts": [],
         "viewKey": "profile:42:acme/repo"
       }
     },
@@ -257,6 +263,17 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "team:acme:dev",
+            "set": {
+              "value": {
+                "mainDoc": "Team.md"
+              }
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 2,
         "topic": "workspaceConfig",
@@ -265,12 +282,6 @@
             "id": "other",
             "value": {
               "mainDoc": "Newer.md"
-            }
-          },
-          {
-            "id": "team:acme:dev",
-            "value": {
-              "mainDoc": "Team.md"
             }
           }
         ],
@@ -302,17 +313,21 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "team:acme:dev",
+            "set": {
+              "value": {
+                "mainDoc": "Outside.md"
+              }
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 3,
         "topic": "workspaceConfig",
-        "upserts": [
-          {
-            "id": "team:acme:dev",
-            "value": {
-              "mainDoc": "Outside.md"
-            }
-          }
-        ],
+        "upserts": [],
         "viewKey": "workspaceConfig:42:native"
       }
     }

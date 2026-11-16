@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { LiveHub, type HubDelta, type HubSnapshot } from "./live-hub";
+import { LiveHub, patchedRow, type HubDelta, type HubSnapshot } from "./live-hub";
 const api = vi.hoisted(() => ({ prepare: vi.fn() }));
 vi.mock("@/tauri/commands", async (original) => ({
   ...(await original<typeof import("@/tauri/commands")>()),
@@ -77,6 +77,8 @@ function advance(events = trace.deltas, deliver = true) {
       const rows = new Map(before.snapshot.map((row) => [row.id, row]));
       for (const id of delta.removes) rows.delete(id);
       for (const row of delta.upserts) rows.set(row.id, row);
+      for (const patch of delta.patches ?? [])
+        rows.set(patch.id, patchedRow(rows.get(patch.id)!, patch));
       views.set(delta.viewKey, { ...before, rev: delta.rev, snapshot: [...rows.values()] });
     }
     if (deliver) deliverEvent(event);

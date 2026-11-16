@@ -33,7 +33,7 @@ use crate::mcp::{
     session_list::{self, SessionListRow},
     terminal_tabs::LiveTabs,
 };
-use projection::{FieldProviders, Snapshot, SubscriptionReply, TopicRegistry};
+use projection::{FieldProviders, Held, Snapshot, SubscriptionReply, TopicRegistry};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicU8, Ordering},
@@ -1569,7 +1569,7 @@ pub async fn live_hub_subscribe(
     since_rev: Option<u64>,
     subscription_id: Option<String>,
     window: Option<[usize; 2]>,
-) -> Result<SubscriptionReply, String> {
+) -> Result<Held<SubscriptionReply>, String> {
     if run_review::TOPICS.contains(&topic.as_str()) {
         run_review::prepare(
             &app,
@@ -1581,13 +1581,15 @@ pub async fn live_hub_subscribe(
         )
         .await?;
     }
-    let reply = subscribe(
+    // A default read caches the view in the window's LiveHub, so the window holds it.
+    let reply = subscribe_held(
         &app,
         &topic,
         &view_key,
         since_rev,
         subscription_id.as_deref(),
         window,
+        Some(owner_window.label()),
     )?;
     if let Some(id) = subscription_id {
         app.state::<LiveHub>()
@@ -1607,6 +1609,28 @@ pub(crate) fn subscribe<R: tauri::Runtime>(
     subscription_id: Option<&str>,
     window: Option<[usize; 2]>,
 ) -> Result<SubscriptionReply, String> {
+    subscribe_held(
+        app,
+        topic,
+        view_key,
+        since_rev,
+        subscription_id,
+        window,
+        None,
+    )
+    .map(|held| held.view)
+}
+/// [`subscribe`], and a default read (no `subscription_id`) by `holder` holds the view under
+/// the lock that reads it, so no delta can fall between the read and the hold.
+pub(crate) fn subscribe_held<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    topic: &str,
+    view_key: &str,
+    since_rev: Option<u64>,
+    subscription_id: Option<&str>,
+    window: Option<[usize; 2]>,
+    holder: Option<&str>,
+) -> Result<Held<SubscriptionReply>, String> {
     let hub = app.state::<LiveHub>();
     let mut fetched = None;
     let (mut model, configuration_deltas) = loop {
@@ -1635,8 +1659,15 @@ pub(crate) fn subscribe<R: tauri::Runtime>(
     let reply = match subscription_id {
         Some(id) => model
             .projections
-            .subscribe_window(&id, &topic, &view_key, since_rev, window),
-        None => model.projections.subscribe(&topic, &view_key, since_rev),
+            .subscribe_window(&id, &topic, &view_key, since_rev, window)
+            .map(|view| Held { view, hold: None }),
+        None => model
+            .projections
+            .subscribe(&topic, &view_key, since_rev)
+            .map(|view| Held {
+                view,
+                hold: holder.map(|owner| model.projections.hold(topic, view_key, owner)),
+            }),
     };
     drop(model);
     publish(app, configuration_deltas);
@@ -1644,6 +1675,35 @@ pub(crate) fn subscribe<R: tauri::Runtime>(
         hub.invalidate(MACHINE_STATS);
     }
     reply
+}
+/// The calling window's LiveHub dropped its cached copy of (topic, view key), so the hub
+/// stops sending it the view's deltas. A release older than the window's latest read of the
+/// view is late, and keeps that read's hold.
+#[tauri::command]
+pub fn live_hub_release(
+    app: tauri::AppHandle,
+    owner_window: tauri::Window,
+    topic: String,
+    view_key: String,
+    generation: u64,
+) {
+    app.state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .release(&topic, &view_key, owner_window.label(), generation);
+}
+/// A starting LiveHub holds nothing yet: drop the holds a previous page in the calling
+/// window left. Returns the last hold generation issued; holds up to it are gone.
+#[tauri::command]
+pub fn live_hub_release_owner(app: tauri::AppHandle, owner_window: tauri::Window) -> u64 {
+    app.state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .release_owner(owner_window.label())
 }
 #[tauri::command]
 pub fn live_hub_page(
@@ -1712,7 +1772,11 @@ fn drop_unwatched_pins<R: tauri::Runtime>(
 }
 pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &str) {
     if let Some(hub) = app.try_state::<LiveHub>() {
-        let gone = hub.model.lock().unwrap().projections.drop_owner(owner);
+        let gone = {
+            let mut model = hub.model.lock().unwrap();
+            model.projections.release_owner(owner);
+            model.projections.drop_owner(owner)
+        };
         drop_unwatched_pins(app, gone);
         hub.invalidate(MACHINE_STATS);
         record_projection_metrics(app);
@@ -1775,23 +1839,40 @@ pub(crate) fn replace_view<R: tauri::Runtime>(
 
 fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, deltas: Vec<projection::Delta>) {
     let hub = app.state::<LiveHub>();
-    let sent = TopicRegistry::deliver(&mut hub.model.lock().unwrap().projections, &deltas);
+    // Which views a webview holds is read under the lock that delivers, so a hold taken by a
+    // read either sees these deltas in its snapshot or here.
+    let (sent, held) = {
+        let mut model = hub.model.lock().unwrap();
+        let sent = model.projections.deliver(&deltas);
+        let held: Vec<bool> = deltas
+            .iter()
+            .map(|delta| model.projections.hold_count(&delta.topic, &delta.view_key) > 0)
+            .collect();
+        (sent, held)
+    };
     publish_subscriptions(app, sent);
-    for delta in deltas {
-        if delta.topic != "inbox" {
-            // One serialization serves the byte count and the emit. The count is the
-            // delta payload only: it leaves out Tauri's event envelope.
-            match serde_json::value::to_raw_value(&delta) {
-                Ok(raw) => {
-                    crate::shared::invoke_stats::metric_add(
-                        &format!("live_hub.delta.bytes.{}", metric_topic(&delta.topic)),
-                        raw.get().len(),
-                    );
-                    let _ = app.emit("codesense:delta", raw);
-                }
-                Err(_) => {
-                    let _ = app.emit("codesense:delta", delta);
-                }
+    for (delta, held) in deltas.iter().zip(held) {
+        if delta.topic == "inbox" {
+            continue;
+        }
+        // No webview caches the view, so nothing would read the delta.
+        if !held {
+            crate::shared::invoke_stats::metric_count("live_hub.delta.unheld");
+            continue;
+        }
+        // One serialization serves the byte count and the emit. The count is the
+        // delta payload only: it leaves out Tauri's event envelope.
+        let wire = projection::WireDelta::from(delta);
+        match serde_json::value::to_raw_value(&wire) {
+            Ok(raw) => {
+                crate::shared::invoke_stats::metric_add(
+                    &format!("live_hub.delta.bytes.{}", metric_topic(&delta.topic)),
+                    raw.get().len(),
+                );
+                let _ = app.emit("codesense:delta", raw);
+            }
+            Err(_) => {
+                let _ = app.emit("codesense:delta", wire);
             }
         }
     }
