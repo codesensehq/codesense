@@ -1680,6 +1680,45 @@ fn a_skill_allowlist_survives_a_mode_override() {
     assert_eq!(headless.manifest_hash, headless.manifest.compute_hash());
 }
 
+/// A Claude agent with both lists gets both: its written settings hold the per-tool
+/// bridge denies and the skill overrides, neither dropping the other.
+#[test]
+fn a_skill_allowlist_and_a_bridge_tool_list_both_reach_claude() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let mut agent = claude_with_skills("lean", &["bmad-code-review"]);
+    agent.mcp.bridge_tools = Some(vec!["notes_read".to_string()]);
+    let key = save(home, &alice(), agent);
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(
+        launch.launch.bridge_tools,
+        Some(vec!["notes_read".to_string()])
+    );
+
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-party-mode");
+    let applied = apply_generated(&launch, "sess-lean", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert_eq!(
+        written["skillOverrides"],
+        json!({ "bmad-build": "off", "bmad-party-mode": "off" })
+    );
+    let deny = written["permissions"]["deny"].as_array().unwrap();
+    let denies = crate::agents::permissions::claude_bridge_tool_denies(&["notes_read".to_string()]);
+    assert!(!denies.is_empty());
+    for rule in denies {
+        assert!(deny.contains(&json!(rule)), "{rule}");
+    }
+    for kept in ["notes_read", "signal_done", "read_messages", "reply"] {
+        assert!(
+            !deny.contains(&json!(format!("mcp__codesense__{kept}"))),
+            "{kept}"
+        );
+    }
+}
+
 #[test]
 fn without_a_skill_allowlist_a_launch_turns_no_skill_off() {
     let _home_env = crate::routines::test_support::TempHome::new();

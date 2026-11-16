@@ -40,7 +40,7 @@
       "args": [],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -376,7 +376,7 @@
       "args": [],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -653,7 +653,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -993,7 +993,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -2992,7 +2992,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -3335,7 +3335,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -3617,7 +3617,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],
@@ -3958,7 +3958,7 @@
       ],
       "binary": "claude",
       "bridge_tools": null,
-      "effective_bridge_tools": [],
+      "effective_bridge_tools": "<REGISTERED_BRIDGE_TOOLS>",
       "env_suppress": [
         "ANTHROPIC_API_KEY"
       ],

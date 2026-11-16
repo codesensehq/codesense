@@ -123,7 +123,7 @@
       "description": "Which MCP servers the agent can reach, by `.mcp.json` server key. The\nCodeSense bridge is always present and never listed.",
       "properties": {
         "bridge_tools": {
-          "description": "Codex bridge tool names, unqualified and exact. Omitted/null allows all;\nan empty list allows none. A by-name call through `codesense_call_tool`\nrequires both the wrapper and its target in this list.",
+          "description": "Bridge tool names, unqualified and exact. Omitted/null allows all;\nan empty list allows none. A by-name call through `codesense_call_tool`\nrequires both the wrapper and its target in this list.",
           "items": {
             "type": "string"
           },

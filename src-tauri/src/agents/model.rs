@@ -43,7 +43,7 @@ pub enum LaunchMode {
 pub struct McpAccess {
     #[serde(default)]
     pub servers: Vec<String>,
-    /// Codex bridge tool names, unqualified and exact. Omitted/null allows all;
+    /// Bridge tool names, unqualified and exact. Omitted/null allows all;
     /// an empty list allows none. A by-name call through `codesense_call_tool`
     /// requires both the wrapper and its target in this list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
