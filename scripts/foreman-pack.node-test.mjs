@@ -3,7 +3,7 @@
 // and the settings that keep the team's own skills and instructions out of its first call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
@@ -247,6 +247,86 @@ test("no foreman-* path inside an agent-config or agent tree is writable, in thr
       true,
       "a normal worktree file is still allowed",
     );
+  }
+});
+
+// Every root CodeSense or one of its runtimes loads agent config from, read from the source so a
+// new runtime or root fails here instead of waiting for a reviewer.
+function loaderRoots() {
+  const src = (rel) => readFileSync(new URL(`../src-tauri/${rel}`, import.meta.url), "utf8");
+  const constant = (text, name, file) => {
+    const m = new RegExp(`const ${name}: &str = "([^"]+)";`).exec(text);
+    assert.ok(m, `${file} defines ${name}`);
+    return m[1];
+  };
+  const layout = src("src/routines/layout.rs");
+  const config = constant(layout, "CONFIG_DIR", "layout.rs");
+  const roots = new Set([
+    `${config}/${constant(layout, "AGENTS_DIR", "layout.rs")}`,
+    // The legacy `config/routines/`, which discovery and migration still read.
+    `${config}/${constant(layout, "ROUTINES_DIR", "layout.rs")}`,
+    constant(src("src/install/agent_account_store.rs"), "HOMES_DIR", "agent_account_store.rs"),
+  ]);
+  const dir = "crates/codesense-pty-core/src/agent_cli/";
+  const runtimes = readdirSync(new URL(`../src-tauri/${dir}`, import.meta.url))
+    .filter((f) => f.endsWith(".rs"))
+    // orion.rs is a CLI that exists only in tests ("Adding an agent CLI" guide), never launched.
+    .filter((f) => f !== "orion.rs")
+    // A descriptor sets `skills_dir` to a literal; descriptor.rs only declares the field.
+    .filter((f) => /\bskills_dir: "/.test(src(dir + f)));
+  assert.deepEqual(
+    runtimes.map((f) => f.replace(/\.rs$/, "")).sort(),
+    ["claude", "codex", "hermes", "opencode"],
+    "each runtime descriptor is read",
+  );
+  for (const f of runtimes) {
+    const text = src(dir + f);
+    const field = (name) => new RegExp(`\\b${name}: (?:Some\\()?"([^"]+)"`).exec(text)?.[1];
+    const skills = field("skills_dir");
+    const homeEnv = field("home_env");
+    assert.ok(skills && homeEnv, `${f}: skills_dir and home_env`);
+    roots.add(skills.replace(/\/$/, ""));
+    const commands = field("commands_dir");
+    if (commands) roots.add(commands.replace(/\/$/, ""));
+    const home = field("home_default");
+    if (home) roots.add(home.replace(/^~\//, ""));
+    // An XDG runtime keeps its files in `<XDG_CONFIG_HOME>/<binary>`, by default `~/.config/…`.
+    else if (homeEnv === "XDG_CONFIG_HOME") roots.add(`.config/${field("binary")}`);
+    else assert.fail(`${f}: no home_default and no XDG home`);
+  }
+  return [...roots];
+}
+test("every loader root the source defines is denied, in three layouts", () => {
+  const roots = loaderRoots();
+  assert.ok(roots.length >= 10, roots.join(", "));
+  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+    for (const base of ["/home/someone", path.join(path.dirname(home), "repo")]) {
+      for (const root of roots) {
+        const target = path.join(base, root, "foreman-x/f");
+        assert.equal(writeDenied(home, target), true, `${home}: ${target}`);
+      }
+    }
+  }
+});
+
+test("routines, account homes and git internals are denied; team config in a worktree is not", () => {
+  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+    const root = path.dirname(home);
+    for (const target of [
+      path.join(root, "team/config/routines/foreman-x/routine.yml"),
+      "/home/someone/agent-account-homes/abc/skills/foreman-x/SKILL.md",
+      path.join(root, "repo/.git/worktrees/foreman-x/config.worktree"),
+    ]) {
+      assert.equal(writeDenied(home, target), true, `${home}: ${target}`);
+      for (const tool of ["Edit", "Write"])
+        assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+    }
+    for (const file of ["acme/config/sprints.yaml", "src/config/app.ts"])
+      assert.equal(
+        writeAllowed(home, path.join(root, "foreman-x", file)),
+        true,
+        `${home}: ${file} in a worktree stays allowed`,
+      );
   }
 });
 

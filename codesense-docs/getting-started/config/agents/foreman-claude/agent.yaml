@@ -173,11 +173,10 @@ permissions:
       - Bash(gh pr create --head foreman/* --title * --body *)
       # Claude never matches a `../` file rule, so these are absolute globs (`//` is the root,
       # live probe, 2026-11-16). They match a foreman-* directory anywhere, and Write creates
-      # missing parents, so Write can make a foreman-* dir anywhere: the agent-config trees and
-      # CodeSense's agent configs are denied below for that reason, and `Edit(./**)` keeps home
-      # read-only (a deny beats an allow). Those denies are defence in depth against a direct
-      # edit only. The Foreman can still run a script it writes through `sh stories/*.sh`, and
-      # that script can write anywhere; the guardrail for that is review and protected main.
+      # missing parents, so Write can make a foreman-* dir anywhere: the loader roots are denied
+      # below for that reason, and `Edit(./**)` keeps home read-only (a deny beats an allow).
+      # The Foreman can still run a script it writes through `sh stories/*.sh`, and that script
+      # can write anywhere; the guardrail for that is review and protected main.
       - Read(//**/foreman-*/**)
       - Edit(//**/foreman-*/**)
       - Write(//**/foreman-*/**)
@@ -188,12 +187,13 @@ permissions:
       # NotebookEdit; it ignores a `Write(path)` or `NotebookEdit(path)` deny and warns at startup.
       # The home worktree is read-only: it only fast-forwards.
       - Edit(./**)
-      # No git internals in a foreman-* worktree.
-      - Edit(//**/foreman-*/.git)
-      - Edit(//**/foreman-*/.git/**)
-      # No agent's skills, settings or instructions, in a worktree or anywhere else: another
-      # agent loads them on its own. That includes CodeSense's agent configs, the Foreman's own
-      # rules and routines among them.
+      # Every loader root of CodeSense and each runtime, plus git internals; nothing else. These
+      # are defence in depth against a direct edit only. The roots: CodeSense's agent configs and
+      # their legacy routines dir (the Foreman's own rules and routines among them), agent
+      # account homes, and each runtime's skills, commands and home. A pack test reads them from
+      # the source, so a new root fails CI.
+      - Edit(//**/.git)
+      - Edit(//**/.git/**)
       - Edit(//**/.claude/**)
       - Edit(//**/.agents/**)
       - Edit(//**/.codex/**)
@@ -201,6 +201,8 @@ permissions:
       - Edit(//**/.opencode/**)
       - Edit(//**/.config/opencode/**)
       - Edit(//**/config/agents/**)
+      - Edit(//**/config/routines/**)
+      - Edit(//**/agent-account-homes/**)
       # Nothing between the worktree and its one allowed subcommand, nothing after the
       # pushed branch or the removed worktree, nothing more on a new worktree. (A trailing
       # ` *` needs one more word (live probe, 2026-11-13), so these end in one extra ` *`.)
@@ -262,4 +264,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 6
+revision: 7
