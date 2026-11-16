@@ -101,13 +101,17 @@ export function summaryMarkdown(tests) {
   ].join("\n");
 }
 
-// Every *.xml under dir; the first path segment is the artifact name (rust-<os>-junit-<run>-<n>).
+// Every *.xml under dir; the first path segment is the artifact name (rust-<os>-junit-<run>-<n>,
+// or rust-<os>-shard-<i>-junit-<run>-<n> for one shard of a platform's tests).
 export function readReports(dir) {
   const byKey = new Map();
   if (!fs.existsSync(dir)) return [];
   for (const file of fs.readdirSync(dir, { recursive: true }).map(String).sort()) {
     if (!file.endsWith(".xml")) continue;
-    const platform = file.split(path.sep)[0].replace(/-junit-.*$/, "");
+    const platform = file
+      .split(path.sep)[0]
+      .replace(/-junit-.*$/, "")
+      .replace(/-shard-\d+$/, "");
     for (const test of flakyTests(fs.readFileSync(path.join(dir, file), "utf8"))) {
       const seen = byKey.get(test.key) ?? { ...test, platforms: [] };
       if (!seen.platforms.includes(platform)) seen.platforms.push(platform);
