@@ -20905,4 +20905,12 @@ mod agent_account_tool_tests {
         assert!(describe("set_active_agent_account").contains("For people only"));
         assert!(describe("list_agent_accounts").contains("includeDetached"));
     }
+
+    #[test]
+    fn the_pin_tool_description_lists_the_message_field() {
+        let router = CodesenseHandler::served_tool_router();
+        let describe = |name: &str| router.get(name).unwrap().description.clone().unwrap();
+        assert!(describe("pin").contains("message:{from,createdAtMs,text,contentType?,summary?}"));
+        assert!(describe("pin").contains("2,000"));
+    }
 }
