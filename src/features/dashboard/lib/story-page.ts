@@ -9,10 +9,12 @@ export type StoryType = (typeof STORY_TYPES)[number];
 /**
  * The story type an `.md` declares in its front matter (`type: story|bug|spike`), or `null` for
  * any other file: no front matter, another type, or a `type:` line that is not in the leading
- * `---` block. Exact lowercase, as the pipeline reads it.
+ * `---` block. The pipeline's rule (its front matter reader and `is_pipeline_story`): a leading BOM
+ * is skipped, a ` # comment` after the value is dropped (a `#` with no space before it is part of
+ * the value, as in YAML), and the value is trimmed and compared in any case.
  */
 export function storyTypeOfMarkdown(text: string): StoryType | null {
-  const lines = text.split(/\r?\n/);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   if (lines[0]?.trimEnd() !== "---") return null;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!;
@@ -21,13 +23,18 @@ export function storyTypeOfMarkdown(text: string): StoryType | null {
   return null;
 }
 
+/** One of the pipeline's story types, trimmed and in any case, as its canonical lowercase name. */
+function storyTypeOf(value: string): StoryType | null {
+  const type = value.trim().toLowerCase();
+  return (STORY_TYPES as readonly string[]).includes(type) ? (type as StoryType) : null;
+}
+
 // The `type:` value among the front matter's top-level lines `1..end-1`.
 function typeBefore(lines: string[], end: number): StoryType | null {
   for (let i = 1; i < end; i++) {
-    const match = /^type:\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))\s*(?:#.*)?$/.exec(lines[i]!);
+    const match = /^type:[ \t]*(?:"([^"]*)"|'([^']*)'|(.*?))(?:[ \t]+#.*)?[ \t]*$/.exec(lines[i]!);
     if (!match) continue;
-    const value = match[1] ?? match[2] ?? match[3] ?? "";
-    return (STORY_TYPES as readonly string[]).includes(value) ? (value as StoryType) : null;
+    return storyTypeOf(match[1] ?? match[2] ?? match[3] ?? "");
   }
   return null;
 }
@@ -36,8 +43,7 @@ function typeBefore(lines: string[], end: number): StoryType | null {
 export function storyTypeOfHtml(text: string): StoryType | null {
   for (const tag of text.match(/<meta\b[^>]*>/gi) ?? []) {
     if (!/\bname\s*=\s*["']cs:type["']/i.test(tag)) continue;
-    const value = /\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? "";
-    return (STORY_TYPES as readonly string[]).includes(value) ? (value as StoryType) : null;
+    return storyTypeOf(/\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? "");
   }
   return null;
 }

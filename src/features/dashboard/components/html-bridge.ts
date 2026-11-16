@@ -2628,6 +2628,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // UNfilled; the capability is injected server-side (`viewer.rs`) into every live
   // render, not via this map.
 };
+// The pin verbs are registered as `inbox.<verb>` too; each runs its flat verb's handler.
+for (const verb of VERB_REGISTRY) {
+  const flat = verb.name.startsWith("inbox.") ? verb.name.slice("inbox.".length) : null;
+  if (flat && Object.prototype.hasOwnProperty.call(HTML_BRIDGE_ALLOWLIST, flat)) {
+    HTML_BRIDGE_ALLOWLIST[verb.name] = HTML_BRIDGE_ALLOWLIST[flat];
+  }
+}
 
 // Contract views derived from the native registry. Admission is owned by Rust.
 export const READ_VERBS: readonly string[] = VERB_REGISTRY.filter((v) => !v.action).map(

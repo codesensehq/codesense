@@ -282,6 +282,10 @@ describe("the global CLI across team switches", () => {
       expect(await rebuildsOf(id)).toBe(rebuilds[id]);
     }
     expect(sessionIds()).toEqual(ids);
+    // A parked terminal holds its output until it is shown: show each one.
+    act(() => s().setActiveTerminalTab(A, "shell", "ws-a"));
+    await flush();
+    await switchTo("beta");
     for (const id of SESSIONS) {
       const steps = chunked(paneSteps(loadPtylog(FIXTURE[id])), 1)[0] ?? [];
       expect(await bufferOf(id)).toEqual(

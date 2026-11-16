@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// rovingThread(log): a chat thread as one Tab stop (the roving tabindex), the rule the app's agent chat overlay keeps (src/features/inbox/hooks/use-roving-thread.ts).
+// rovingThread(log): a chat thread as one Tab stop (the roving tabindex). The kit's chat and the app's agent chat overlay (src/features/inbox/hooks/use-roving-thread.ts wraps this module) share it.
 // The active message, by default the newest, and that message's own actions are in the Tab order; every other message and its controls are not. Up and Down move between messages,
 // Home and End go to the first and the newest, and focusing anything inside a message makes it the active one (so a Pin's note and Undo stay reachable where the person acted).
 // Messages are the log's [data-mid] rows; a log with none stays a Tab stop itself, so it still scrolls by keyboard.
 /** What a message can hold that Tab would stop on: its actions, links and framed dashboards, and the code blocks and tables Chromium makes keyboard-focusable when
- *  they scroll (with no tabindex), as the overlay's hook holds them. */
+ *  they scroll (with no tabindex). */
 const FOCUSABLE='button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll';
 /** The tabindex a control had before the thread took it out of the Tab order ("" for none). */
 const HELD='data-roving-tabindex';
@@ -58,6 +58,8 @@ export function rovingThread(log){
   picked=key;refresh();
   const row=log.querySelector(`[data-mid="${CSS.escape(key)}"]`);
   if(!row)return;
+  // The new stop takes the tabindex before it takes focus, so focus never sits on a -1 row.
+  row.tabIndex=0;
   row.focus({preventScroll:true});
   if(row.scrollIntoView)row.scrollIntoView({block:'nearest'});
  }
@@ -81,6 +83,8 @@ export function rovingThread(log){
  return {
   focused,
   refresh,
+  // Where focus goes when the thread is entered from outside it (Jump to latest): the newest message.
+  focusNewest(){moveTo(keys().at(-1));},
   release(){watch.disconnect();log.removeEventListener('keydown',onKeyDown);log.removeEventListener('focusin',onFocusIn);},
  };
 }

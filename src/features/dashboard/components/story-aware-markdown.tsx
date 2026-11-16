@@ -21,6 +21,11 @@ import { MarkdownViewer, type MarkdownExtras } from "./markdown-viewer";
 export const NO_STORY_PAGE_NOTE =
   "This is a story file, but its team has no story page (story_page in teams.yml), so it opens as markdown.";
 
+/** A story file whose team's story page can't be found (a page missing from this checkout, or a
+ *  mistyped story_page): it opens as markdown, and says which page it looked for. */
+export const missingStoryPageNote = (page: string) =>
+  `This is a story file, but its team's story page (${page}, the story_page in teams.yml) isn't there, so it opens as markdown.`;
+
 /**
  * The story type of the `.md` at `filePath`, read from its front matter: `undefined` until it is
  * first read, then the type or `null`. A current entry in the viewer's file cache answers on the first
@@ -72,23 +77,29 @@ function useStoryType(
 }
 
 /**
- * The page's fragment for `filePath`. A link's anchor (the host's pending hash) rides along; once the
- * host has consumed it, the page keeps the anchor it was opened at, so its route doesn't change.
+ * The page's fragment for `filePath`, and the link's anchor it carries (the host's pending hash).
+ * Once the host has consumed it, both keep what the page was opened at, so its route doesn't
+ * change, and an md shown in place of a missing page still opens at the anchor.
  */
 function useStoryPageHash(filePath: string, pendingHash: string | null | undefined) {
   const [route, setRoute] = useState(() => ({
     path: filePath,
     hash: storyPageHash(filePath, pendingHash),
+    anchor: pendingHash ?? null,
   }));
   if (
     route.path !== filePath ||
     (pendingHash && route.hash !== storyPageHash(filePath, pendingHash))
   ) {
-    const next = { path: filePath, hash: storyPageHash(filePath, pendingHash) };
+    const next = {
+      path: filePath,
+      hash: storyPageHash(filePath, pendingHash),
+      anchor: pendingHash ?? null,
+    };
     setRoute(next);
-    return next.hash;
+    return next;
   }
-  return route.hash;
+  return route;
 }
 
 /**
@@ -120,7 +131,7 @@ function TeamMarkdown({
 }: Props & { org: string; team: string }) {
   const page = useOrgStore((state) => teamStoryPage(state.orgs, org, team));
   const type = useStoryType(props.filePath, props.refreshKey, props.changedPaths);
-  const hash = useStoryPageHash(props.filePath, props.pendingHash);
+  const { hash, anchor } = useStoryPageHash(props.filePath, props.pendingHash);
   const opensPage = Boolean(page && type);
   const { pendingHash, onPendingHashConsumed } = props;
   useEffect(() => {
@@ -141,24 +152,39 @@ function TeamMarkdown({
         viewStateKey={props.viewStateKey}
         pendingHash={hash}
         onFrameShortcut={onFrameShortcut}
+        // The page isn't there: this tab is the md's, so it shows the md and says why, rather
+        // than a deleted-file placeholder for a page the tab never opened.
+        renderMissing={() => (
+          <NotedMarkdown
+            note={missingStoryPageNote(page)}
+            testId="story-page-missing"
+            {...props}
+            // The host's request was consumed for the page: the md opens at the anchor it kept.
+            pendingHash={anchor}
+            onPendingHashConsumed={undefined}
+          />
+        )}
       />
     );
   }
-  if (type) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <p
-          role="note"
-          data-testid="story-no-page"
-          className="border-b px-4 py-2 text-xs text-muted-foreground"
-        >
-          {NO_STORY_PAGE_NOTE}
-        </p>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <MarkdownViewer {...props} />
-        </div>
-      </div>
-    );
-  }
+  if (type) return <NotedMarkdown note={NO_STORY_PAGE_NOTE} testId="story-no-page" {...props} />;
   return <MarkdownViewer {...props} />;
+}
+
+/** The markdown viewer under a one-line note that says why the file opens as markdown. */
+function NotedMarkdown({ note, testId, ...props }: Props & { note: string; testId: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <p
+        role="note"
+        data-testid={testId}
+        className="border-b px-4 py-2 text-xs text-muted-foreground"
+      >
+        {note}
+      </p>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <MarkdownViewer {...props} />
+      </div>
+    </div>
+  );
 }

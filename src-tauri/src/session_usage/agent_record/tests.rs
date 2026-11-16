@@ -173,6 +173,16 @@ fn an_unknown_or_empty_handle_is_refused() {
     assert!(empty.err().unwrap().contains("handle must not be empty"));
 }
 
+#[tokio::test]
+async fn a_record_read_moves_its_counter_even_when_the_handle_is_refused() {
+    let (dir, _store) = store();
+    let before = crate::shared::invoke_stats::metric_total("session_record.read");
+    let params = Params { handle: "nobody".into() };
+    let refused = read(dir.path(), &params, HashMap::new(), &CallerScope::Human).await;
+    assert!(refused.err().unwrap().contains("unknown session"));
+    assert!(crate::shared::invoke_stats::metric_total("session_record.read") > before);
+}
+
 /// A session of the saved agent `agent` on `story`, recorded at `at` with one priced call of
 /// `input` tokens.
 fn chain_session(dir: &Path, handle: &str, agent: &str, story: &str, at: i64, input: u64) {

@@ -131,9 +131,10 @@ async function open(m: TerminalManager, sessionId: string) {
 /** The budget runs after the current task. */
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
-function bytesOf(m: TerminalManager, sessionId: string): number {
+/** A display's buffer estimate, plus the output it still holds while parked. */
+function bytesOf(m: TerminalManager, sessionId: string, parkedChars = 0): number {
   const term = m.terminal(sessionId)!;
-  return term.cols * term.buffer.normal.length * BUFFER_BYTES_PER_CELL;
+  return term.cols * term.buffer.normal.length * BUFFER_BYTES_PER_CELL + parkedChars * 2;
 }
 
 function prng(seed: number): () => number {
@@ -247,14 +248,20 @@ describe("which displays go", () => {
   it("estimated_bytes_drop_exactly", async () => {
     const m = newManager();
     const ids = ["s1", "s2", "s3", "s4"];
+    const parked: Record<string, number> = {};
     for (const [i, id] of ids.entries()) {
       await open(m, id);
-      for (let n = 0; n < 40 * (i + 1); n++) fake.server.produce(id, `line ${n}\r\n`);
-      await dumped(m, id);
+      parked[id] = 0;
+      for (let n = 0; n < 40 * (i + 1); n++) {
+        const line = `line ${n}\r\n`;
+        parked[id] += line.length;
+        fake.server.produce(id, line);
+      }
+      await vi.advanceTimersByTimeAsync(50);
     }
     const before = m.memory();
     const gone = ["s2", "s4"];
-    const sum = gone.reduce((total, id) => total + bytesOf(m, id), 0);
+    const sum = gone.reduce((total, id) => total + bytesOf(m, id, parked[id]), 0);
     expect(sum).toBeGreaterThan(0);
     for (const id of gone) expect(m.evict(id)).toBe(true);
     expect(m.memory()).toEqual({
