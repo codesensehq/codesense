@@ -129,6 +129,9 @@ pub(crate) struct SessionListRow {
     /// Its idle state is an ended turn that errored or crashed, not a clean finish.
     #[serde(skip)]
     pub(crate) failed: bool,
+    /// Its agent crashed (its last state): the session has ended though its tab may stay.
+    #[serde(skip)]
+    pub(crate) crashed: bool,
 }
 
 fn is_zero(count: &u32) -> bool {
@@ -383,6 +386,7 @@ pub(crate) fn session_list_rows_with_tabs(
                 .or_else(|| row.session_id.clone());
             let last = session.as_deref().and_then(&last_state);
             let failed_turn = matches!(last, Some(AgentState::Errored | AgentState::Crashed));
+            let crashed = matches!(last, Some(AgentState::Crashed));
             let mut failed = failed_turn;
             let state = match tab.as_ref().map(|tab| tab.alive) {
                 Some(None) => SessionState::Offline,
@@ -455,6 +459,7 @@ pub(crate) fn session_list_rows_with_tabs(
                 expiring: row.expiring,
                 session,
                 failed,
+                crashed,
             }
         })
         .collect();

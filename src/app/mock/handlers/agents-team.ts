@@ -970,6 +970,33 @@ export function agentTeamInboxHandlers(
           .map(toConversation),
       };
     },
+    // One saved agent + story thread's conversation: every listed session of the thread; a live
+    // seat leaves out the thread's other live seats, as the real read does.
+    list_thread_inbox: (args: Record<string, unknown>) => {
+      const agentId = String(args.agentId ?? "")
+        .split("@")[0]!
+        .trim();
+      const storyId = String(args.storyId ?? "").trim();
+      const members = sessions.filter(
+        (s) => (s.agentRevision ?? "").split("@")[0] === agentId && (s.story ?? "") === storyId,
+      );
+      const seat = members.find(
+        (s) => s.alive && (s.handle === args.session || s.sessionId === args.session),
+      );
+      const kept = members.filter((s) => !seat || s === seat || !s.alive).map((s) => s.handle);
+      return {
+        agentId,
+        storyId,
+        handle: seat?.handle ?? members.find((s) => s.alive)?.handle ?? kept.at(-1) ?? "",
+        sessions: kept,
+        addresses: kept,
+        roles: [],
+        messages: [...rows]
+          .filter((r) => kept.includes(r.from) || kept.includes(r.to))
+          .sort((a, b) => a.createdAtMs - b.createdAtMs)
+          .map(toConversation),
+      };
+    },
     list_inbox_rollup: () => ({
       messages: [...rows].sort((a, b) => a.createdAtMs - b.createdAtMs).map(toConversation),
       roles: [...ROLE_INBOXES].map((role) => {

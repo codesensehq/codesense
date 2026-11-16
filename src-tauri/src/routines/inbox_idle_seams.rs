@@ -387,6 +387,7 @@ fn row(handle: &str, state: SessionState, failed: bool) -> SessionListRow {
         expiring: false,
         session: None,
         failed,
+        crashed: false,
     }
 }
 
