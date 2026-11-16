@@ -3,7 +3,7 @@
 // and the settings that keep the team's own skills and instructions out of its first call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
@@ -267,18 +267,29 @@ function loaderRoots() {
     `${config}/${constant(layout, "ROUTINES_DIR", "layout.rs")}`,
     constant(src("src/install/agent_account_store.rs"), "HOMES_DIR", "agent_account_store.rs"),
   ]);
-  const dir = "crates/codesense-pty-core/src/agent_cli/";
-  const runtimes = readdirSync(new URL(`../src-tauri/${dir}`, import.meta.url))
-    .filter((f) => f.endsWith(".rs"))
-    // orion.rs is a CLI that exists only in tests ("Adding an agent CLI" guide), never launched.
-    .filter((f) => f !== "orion.rs")
-    // A descriptor sets `skills_dir` to a literal; descriptor.rs only declares the field.
-    .filter((f) => /\bskills_dir: "/.test(src(dir + f)));
-  assert.deepEqual(
-    runtimes.map((f) => f.replace(/\.rs$/, "")).sort(),
-    ["claude", "codex", "hermes", "opencode"],
-    "each runtime descriptor is read",
+  // The pack build's runtime roots, `.opencode/command/` among them.
+  const list = /RUNTIME_ROOTS: &\[&str\] = &\[([^\]]*)\];/.exec(src("src/packs/validate.rs"));
+  assert.ok(list, "validate.rs defines RUNTIME_ROOTS");
+  const runtimeRoots = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1].replace(/\/$/, ""));
+  assert.ok(runtimeRoots.length, "RUNTIME_ROOTS lists roots");
+  for (const root of runtimeRoots) roots.add(root);
+  // Every runtime in `AgentCli::ALL`, each with its descriptor in `agent_cli/<name>.rs`.
+  const all = /pub const ALL: \[AgentCli; \d+\] = \[([^\]]*)\];/.exec(
+    readFileSync(
+      new URL("../src-tauri/crates/codesense-host-proto/src/agent_cli.rs", import.meta.url),
+      "utf8",
+    ),
   );
+  assert.ok(all, "agent_cli.rs defines AgentCli::ALL");
+  const dir = "crates/codesense-pty-core/src/agent_cli/";
+  const runtimes = [...all[1].matchAll(/AgentCli::(\w+)/g)].map((m) => `${m[1].toLowerCase()}.rs`);
+  assert.ok(runtimes.length, "AgentCli::ALL lists runtimes");
+  for (const f of runtimes)
+    assert.ok(
+      existsSync(new URL(`../src-tauri/${dir}${f}`, import.meta.url)) &&
+        /\bskills_dir: "/.test(src(dir + f)),
+      `${f}: the descriptor of an AgentCli::ALL runtime sets skills_dir to a literal`,
+    );
   for (const f of runtimes) {
     const text = src(dir + f);
     const field = (name) => new RegExp(`\\b${name}: (?:Some\\()?"([^"]+)"`).exec(text)?.[1];
