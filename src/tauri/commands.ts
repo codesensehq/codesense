@@ -1198,6 +1198,9 @@ export const agentPins = (
   agentId: string,
   storyId: string | null,
   call: AgentPinsOp,
+  /** The sender of the HTML message calling, when one does: its writes stay in its
+   *  sender's own thread. Absent: the person's call. */
+  sender?: string,
 ) =>
   invoke<PinResult>("agent_pins", {
     team,
@@ -1210,6 +1213,7 @@ export const agentPins = (
     preview: "preview" in call ? (call.preview ?? null) : null,
     replaces: "replaces" in call ? call.replaces : null,
     replacing: "replacing" in call ? (call.replacing ?? null) : null,
+    ...(sender ? { sender } : {}),
   });
 
 /** Prepare the `pins` live view of an agent thread for a page's subscription. */

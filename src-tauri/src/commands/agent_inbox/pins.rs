@@ -288,6 +288,40 @@ pub(crate) async fn pins_from_human(
     pins_in(host, own, thread, op, HUMAN.to_string(), None).await
 }
 
+/// A pins call from an HTML message rendered live (a message frame), as its `sender`. It
+/// reads any thread of its team, as a page does, but a write lands only in its sender's own
+/// thread (the saved agent and story the sending session was launched with), so a message
+/// an agent posts can't change another agent's pins. A sender with no saved-agent thread
+/// writes none.
+pub(crate) async fn pins_from_frame(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+    agent_id: &str,
+    story_id: Option<&str>,
+    op: PinOp,
+    sender: &str,
+) -> Result<PinResult, String> {
+    if matches!(op, PinOp::Read) {
+        return pins_from_human(host, team, agent_id, story_id, op).await;
+    }
+    let Some((agent, story)) = host.launch_thread(sender).await else {
+        return Ok(PinResult::invalid(
+            "only a message from a session launched from a saved Agent can change pins",
+        ));
+    };
+    let asked = ThreadKey::new(agent_id, story_id);
+    let own = ThreadKey::new(&agent, story.as_deref());
+    match (asked, own) {
+        (Ok(asked), Ok(own)) if asked == own => {
+            pins_from_human(host, team, agent_id, story_id, op).await
+        }
+        (Err(error), _) => Ok(PinResult::invalid(error.to_string())),
+        _ => Ok(PinResult::invalid(
+            "a message changes pins only in its sender's thread",
+        )),
+    }
+}
+
 /// What an agent's pin call does to its message: pin it, unpin it, or bring its unpinned
 /// pin back as it was. `true` is an unpin, `false` a pin (the `remove` flag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +411,7 @@ pub async fn agent_pins(
     preview: Option<PinPreview>,
     replaces: Option<i64>,
     replacing: Option<i64>,
+    sender: Option<String>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
     let op = match &*op {
@@ -407,14 +442,18 @@ pub async fn agent_pins(
         },
         other => return Err(format!("unknown pins op {other}")),
     };
-    pins_from_human(
-        &super::AppInboxHost { app },
-        &team.into(),
-        &agent_id,
-        story_id.as_deref(),
-        op,
-    )
-    .await
+    let host = super::AppInboxHost { app };
+    // `sender`: the caller is a message frame, whose writes stay in its sender's thread.
+    match sender {
+        Some(sender) => {
+            let team: LaunchTeam = team.into();
+            pins_from_frame(&host, &team, &agent_id, story_id.as_deref(), op, &sender).await
+        }
+        None => {
+            let team: LaunchTeam = team.into();
+            pins_from_human(&host, &team, &agent_id, story_id.as_deref(), op).await
+        }
+    }
 }
 
 /// Prepare the `pins` live view of the thread `agent_id` + `story_id` in `team` for a
