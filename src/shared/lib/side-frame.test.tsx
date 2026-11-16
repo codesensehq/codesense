@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 // jsdom parses HTML to the spec, which is what the head-placement cases check.
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 
 import {
+  IMAGE_MIME,
   SIDE_FRAME_CSP,
   SIDE_LEFT_MESSAGE,
   SIDE_LEFT_NOTE,
@@ -200,5 +202,15 @@ describe("SideImage", () => {
     expect(getByRole("alert")).toHaveTextContent(
       "Couldn't draw this side: the bytes aren't a readable PNG.",
     );
+  });
+});
+
+describe("raster extensions", () => {
+  it("are the same set in the page and in the Rust read that serves them", () => {
+    const rust = readFileSync("src-tauri/src/commands/raster_bytes.rs", "utf8");
+    const list = /const RASTER_EXTENSIONS: \[&str; \d+\] = \[([^\]]*)\];/.exec(rust)?.[1];
+    expect(list, "RASTER_EXTENSIONS in raster_bytes.rs").toBeDefined();
+    const rustSet = [...list!.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    expect(rustSet).toEqual(Object.keys(IMAGE_MIME).sort());
   });
 });

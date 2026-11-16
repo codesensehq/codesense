@@ -231,11 +231,19 @@ function canDeliver(frame: Frame, message: Record<string, unknown>) {
 }
 /** The session ids an event names: a progress or done event's `sessionId`, a pty-exit's
  *  `session_id`, or a usage notice's `sessionIds`. */
-const sessionIdsOf = (payload: unknown): string[] => {
+export const sessionIdsOf = (payload: unknown): string[] => {
   const p = (payload ?? {}) as { sessionId?: unknown; session_id?: unknown; sessionIds?: unknown };
   const ids = Array.isArray(p.sessionIds) ? p.sessionIds : [p.sessionId ?? p.session_id];
   return ids.filter((id): id is string => typeof id === "string" && id !== "");
 };
+/** The events a session record moves with, each naming its session. The record's readers listen
+ *  over this one list: the hub (`session-record-changed`) and the inbox's `useSessionRecord`. */
+export const SESSION_RECORD_EVENTS = [
+  "mcp:agent-progress",
+  "mcp:agent-done",
+  "pty-exit",
+  "session-usage-changed",
+] as const;
 const rowId = (row: HubRow) => row.id ?? String(row.handle);
 
 /** When an inbox row was written: what the inbox lists newest first. */
@@ -594,15 +602,11 @@ export class LiveHub {
     // with usage stored for its session (the host debounces that to about 2 s). Each nudge names
     // its session, so a page reads again only its own agent's record. Commits have no event of
     // their own: a record's files refresh on progress, done and exit.
-    this.listen("mcp:agent-progress", ({ payload }) => {
-      this.invalidate("agent-activity-changed", payload);
-      this.sessionRecordChanged(sessionIdsOf(payload));
-    });
-    for (const event of ["mcp:agent-done", "pty-exit"])
-      this.listen(event, ({ payload }) => this.sessionRecordChanged(sessionIdsOf(payload)));
-    this.listen("session-usage-changed", ({ payload }) =>
-      this.sessionRecordChanged(sessionIdsOf(payload)),
-    );
+    for (const event of SESSION_RECORD_EVENTS)
+      this.listen(event, ({ payload }) => {
+        if (event === "mcp:agent-progress") this.invalidate("agent-activity-changed", payload);
+        this.sessionRecordChanged(sessionIdsOf(payload));
+      });
     // Any change to orgs, teams or source repos (creating or deleting a team, attaching a
     // context repo, adding a source repo) raises one or more of these; a burst folds into one
     // page event.

@@ -271,6 +271,8 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
       "An image has no text diff. Over the 8 MB limit for drawing here.",
     );
     expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+    // The one-line body spans the dialog: no two-column legend over it.
+    expect(screen.queryByTestId("team-edit-diff-sides")).toBeNull();
     // One line says it: no separate binary note for an image.
     expect(screen.queryByText("Not a text file: no line-by-line view.")).toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
@@ -313,6 +315,7 @@ describe("TeamEditDiffDialog through the shared file diff", () => {
     expect(await screen.findByTestId("team-edit-diff-code-error")).toHaveTextContent(
       "permission denied",
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Couldn\u2019t read the team\u2019s copy");
     expect(h.review).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ import {
   MAX_UNHELD_VIEWS,
   liveHub,
   orderedRows,
+  SESSION_RECORD_EVENTS,
   paneViewKey,
   type HubDelta,
   type HubRow,
@@ -2144,6 +2145,19 @@ it("nudges a session record with the session an agent's progress, end or exit na
   events.get("mcp:agent-progress")!({ payload: null });
   expect(recordNudges(post)).toEqual([{ type: "codesense:session-record-changed" }]);
   expect(post.mock.calls.map(([m]) => m.type)).toContain("codesense:agent-activity-changed");
+});
+
+it("nudges a session record on every event in the shared record event list", async () => {
+  const post = vi.fn();
+  hub.attach("record", "all", post, true);
+  await vi.advanceTimersByTimeAsync(0);
+  for (const event of SESSION_RECORD_EVENTS) {
+    post.mockClear();
+    events.get(event)!({ payload: { sessionId: "tab-1", sessionIds: ["tab-1"] } });
+    expect(recordNudges(post), event).toEqual([
+      { type: "codesense:session-record-changed", sessionId: "tab-1" },
+    ]);
+  }
 });
 
 it("nudges a session record on usage stored for its sessions, one nudge per session", async () => {

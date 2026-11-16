@@ -136,7 +136,7 @@ export function SideFrame({ html, title }: { html: string; title: string }) {
   );
 }
 
-const IMAGE_MIME: Record<string, string> = {
+export const IMAGE_MIME: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
