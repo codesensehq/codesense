@@ -2384,7 +2384,11 @@ fn the_retired_preview_has_no_writer_exception() {
 /// of something: run with `X1_PRINT_UNRESOLVED=1` and read the list. The ceiling
 /// is a growth tripwire; raise it only after reviewing every added site. 278: the
 /// shared-read handoff map in `commands/worktree_probe.rs` adds one `HashMap::new()`.
-const MAX_UNRESOLVED_PATHS: usize = 278;
+/// 279: the live hub's bounded memory, measured by CI. The new constructor calls are
+/// `HashMap::new()` and `AtomicU64::new(..)` in `DashboardStreamHub` (dashboard_stream/hub.rs)
+/// and the derived `DeltaLog::default()` in `subscribe_window` (live_hub/projection.rs), which
+/// replaced a `VecDeque::new()`. None has a body here, so none reaches a write primitive.
+const MAX_UNRESOLVED_PATHS: usize = 279;
 /// The most method calls that several crate types define and that resolve to
 /// none of them, because the caller names none of those types (`.name()`, `.id()`
 /// on a value whose type is inferred). This is the walk's main blind spot; the
@@ -2417,7 +2421,13 @@ const MAX_UNRESOLVED_PATHS: usize = 278;
 /// label in `agent_definitions_prepare`; and `.is_empty()` and `.retain(..)` in
 /// `TopicRegistry::release` and `release_owner` (live_hub/projection.rs). Their targets are
 /// the in-memory `TopicRegistry` and std collections and strings; none calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_545;
+/// The live hub's bounded memory: CI's census measured +6. The candidates, new calls on
+/// ambiguous names, are `.read(..)` in `LiveHub::snapshot` (live_hub/mod.rs); `.push(..)`,
+/// `.clear()` and `.since(..)` on the delta logs (live_hub/projection.rs); and `.write()` and
+/// `.bound()` in `DashboardStreamHub` (dashboard_stream/hub.rs). Their targets are the
+/// in-memory `TopicRegistry`, its delta logs, an atomic counter and two maps; none calls a
+/// write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_551;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
