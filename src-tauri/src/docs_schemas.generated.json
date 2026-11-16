@@ -163,7 +163,7 @@
           "description": "Which MCP servers the agent can reach, by `.mcp.json` server key. The\nCodeSense bridge is always present and never listed.",
           "properties": {
             "bridge_tools": {
-              "description": "Codex bridge tool names, unqualified and exact. Omitted/null allows all;\nan empty list allows none. A by-name call through `codesense_call_tool`\nrequires both the wrapper and its target in this list.",
+              "description": "Bridge tool names, unqualified and exact. Omitted/null allows all;\nan empty list allows none. A by-name call through `codesense_call_tool`\nrequires both the wrapper and its target in this list.",
               "items": {
                 "type": "string"
               },
@@ -2396,13 +2396,13 @@
   },
   "sources": {
     "src-tauri/crates/codesense-host-proto/src/agent_cli.rs": "347a6af97cd7ffa3206fc00c7972bbb89a04e954f679269182674f86a4c54ef5",
-    "src-tauri/src/agents/adapter.rs": "483884ec73f6ee8503865ff81573dd695b674c65b1eb93a5c96fde725b0d8311",
-    "src-tauri/src/agents/adapter/claude.rs": "59d0f15f0b3a5fd562f3cedc52898ba834f67e680ed745294e57d5bf29a81332",
+    "src-tauri/src/agents/adapter.rs": "2344a0478bd3f14ee0988ed3fc555658a2f3a3a583bb83cf5a134f746ca458ce",
+    "src-tauri/src/agents/adapter/claude.rs": "550bc505b43e05ebd5f0dbbbb95b2f0900320bc37c7885d0da40bd8d76ed8ade",
     "src-tauri/src/agents/adapter/codex.rs": "cd69dd05bb20827e1fcddfb0f43770560db24234bf0521d9a95bf6989ed36925",
     "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",
     "src-tauri/src/agents/adapter/opencode.rs": "a02d792f572e4a8c0aa7506713b85ae4749bd0258c0c9d4710ba03f239d358a1",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
-    "src-tauri/src/agents/model.rs": "52a191a23c0d9324db9c6e41bb8af42eeafa1581492b5eb9b66d8b5d7a0710d6",
+    "src-tauri/src/agents/model.rs": "6f0aa719802b51b6fb2d1279c96ea7ed125ef94c6600728094380320afb70efa",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",

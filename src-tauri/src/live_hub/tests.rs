@@ -976,7 +976,11 @@ impl crate::commands::agent_inbox::InboxHost for FootprintHost {
     fn display_name(&self, _: &str) -> Option<String> {
         None
     }
-    fn inbox_changed(&self) {}
+    fn inbox_changed(
+        &self,
+        _changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
+    ) {
+    }
     fn inbox_committed(
         &self,
         changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],

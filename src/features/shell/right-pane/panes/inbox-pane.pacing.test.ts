@@ -17,6 +17,12 @@ function boot(rows: Row[], scope: Scope) {
   const nudges = new Set<(change: unknown) => void>();
   const shows = new Set<(shown: boolean) => void>();
   const intents = new Set<(intent: unknown) => void>();
+  // The sessions and agent-definition views the pane watches, and the legacy agents callback.
+  const sessionWatchers = new Set<(s: unknown) => void>();
+  const definitionWatchers = new Set<(s: unknown) => void>();
+  const agentWatchers = new Set<() => void>();
+  let running: Record<string, unknown>[] = [{ handle: "Mia", state: "idle" }];
+  let roleRows: unknown[] = [];
   // When each list read started, on the pane's monotonic clock.
   const readAt: number[] = [];
   const view = () => {
@@ -70,12 +76,14 @@ function boot(rows: Row[], scope: Scope) {
         return { ...all, messages: all.messages.filter((m) => !m.toHuman) };
       return all;
     }),
-    roles: vi.fn(async () => ({ roles: [] })),
+    roles: vi.fn(async () => ({ roles: roleRows })),
     humanStatus: vi.fn(async () => ({ status: "online", note: "" })),
-    agents: vi.fn(async () => []),
+    agents: vi.fn(async (): Promise<unknown[]> => []),
     // Mia runs, so the composer can reply to her.
-    subscribe: vi.fn(async (_topic: string, { onChange }: { onChange: (s: unknown) => void }) => {
-      onChange({ snapshot: [{ handle: "Mia", state: "idle" }] });
+    subscribe: vi.fn(async (topic: string, { onChange }: { onChange: (s: unknown) => void }) => {
+      const watchers = topic === "sessions" ? sessionWatchers : definitionWatchers;
+      watchers.add(onChange);
+      onChange({ snapshot: topic === "sessions" ? running : [] });
       return {};
     }),
     unsubscribe: vi.fn(async () => {}),
@@ -90,7 +98,8 @@ function boot(rows: Row[], scope: Scope) {
     onMenuAction: () => {},
     onFocusIn: () => {},
     onTeardown: () => {},
-    onAgentsChanged: () => {},
+    // The page shim fires this on every sessions delta.
+    onAgentsChanged: (cb: () => void) => agentWatchers.add(cb),
     openFile: vi.fn(),
     ready: vi.fn(),
   };
@@ -110,9 +119,17 @@ function boot(rows: Row[], scope: Scope) {
     readAt,
     nudge: (ids?: number[], team = TEAM) =>
       nudges.forEach((cb) => cb(ids ? { changes: [{ team, messageIds: ids }] } : {})),
-    // What the host's live-hub shim passes after a sessions re-read.
-    sessionsNudge: () =>
-      nudges.forEach((cb) => cb({ type: "codesense:inbox-changed", changes: [] })),
+    // A sessions delta: the sessions view changes, and the shim's agents callback fires.
+    sessionsDelta: (rows: Record<string, unknown>[] = running) => {
+      running = rows;
+      sessionWatchers.forEach((cb) => cb({ snapshot: rows }));
+      agentWatchers.forEach((cb) => cb());
+    },
+    definitionsChanged: (delta?: unknown) =>
+      definitionWatchers.forEach((cb) =>
+        (cb as (s: unknown, d?: unknown) => void)({ snapshot: [] }, delta),
+      ),
+    setRoles: (rows: unknown[]) => (roleRows = rows),
     show: (shown: boolean) => shows.forEach((cb) => cb(shown)),
     intent: (intent: unknown) => intents.forEach((cb) => cb(intent)),
     listRows: () => document.querySelectorAll(".ib-row").length,
@@ -185,17 +202,165 @@ describe("inbox pane refresh pacing", () => {
     expect(p.reads()).toBe(2);
   });
 
-  it("ignores the empty change the host sends after a sessions re-read", async () => {
+  it.each<Scope>(["all-teams", "team"])(
+    "60 sessions deltas with no inbox nudge make 0 list reads and no agents read (%s)",
+    async (scope) => {
+      const p = await shown([MIA], scope);
+      for (let i = 0; i < 60; i++) {
+        p.sessionsDelta([{ handle: "Mia", state: "idle", spend: i }]);
+        await settle(1000);
+      }
+      // Rows churn on every delta; the pane's facts (handles, states, roles, names) don't.
+      expect(p.reads()).toBe(0);
+      expect(p.cs.roles).not.toHaveBeenCalled();
+      expect(p.cs.humanStatus).not.toHaveBeenCalled();
+      expect(p.cs.agents).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("redraws presence on a sessions change without a list read, and reads roles only", async () => {
     const p = await shown([MIA]);
-    p.sessionsNudge();
-    await settle(2000);
-    p.show(false);
-    await settle(2000);
-    vi.clearAllMocks();
-    p.sessionsNudge();
-    await settle(2000);
+    p.sessionsDelta([
+      { handle: "Mia", state: "idle" },
+      { handle: "Lee", state: "idle" },
+    ]);
+    await settle(30);
+    // The running handles changed: one roles read, nothing else.
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
     expect(p.reads()).toBe(0);
+    expect(p.cs.humanStatus).not.toHaveBeenCalled();
+    await settle(2000);
+    p.sessionsDelta([
+      { handle: "Mia", state: "idle" },
+      { handle: "Lee", state: "working" },
+    ]);
+    await settle(2000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+    p.sessionsDelta([
+      { handle: "Mia", state: "idle" },
+      { handle: "Lee", state: "exited" },
+    ]);
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    expect(p.reads()).toBe(0);
+  });
+
+  it("shows a role claimed after its session starts within the 5 s settle retry, then stops", async () => {
+    const p = await shown([MIA]);
+    // The session starts with a launcher role label, but its claim hasn't landed yet.
+    p.sessionsDelta([
+      { handle: "Mia", state: "idle" },
+      { handle: "Rev", state: "idle", role: "reviewer" },
+    ]);
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+    p.setRoles([
+      { role: "reviewer", registrations: [{ instanceId: "Rev", live: true, instanceName: "Rev" }] },
+    ]);
+    await settle(5000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    expect(p.reads()).toBe(0);
+    await settle(30_000);
+    // Registered now: no more reads, and no timer left.
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reloads faces on an agent-definitions change only", async () => {
+    const p = await shown([MIA]);
+    p.cs.agents.mockResolvedValueOnce([{ key: "a/b", name: "Mia", avatar: "#123456" }]);
+    p.definitionsChanged();
+    await settle(30);
+    expect(p.cs.agents).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) p.sessionsDelta([{ handle: "Mia", state: "idle", spend: i }]);
+    await settle(2000);
+    expect(p.cs.agents).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads roles alone on a compatibility delta, and faces only when a definition moved", async () => {
+    const p = await shown([MIA]);
+    const compat = { id: "compatibility", rowType: "compatibility", activityRevision: 2 };
+    p.definitionsChanged({ upserts: [compat], removes: [] });
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(0);
+    expect(p.cs.agents).not.toHaveBeenCalled();
+    expect(p.cs.humanStatus).not.toHaveBeenCalled();
+    p.definitionsChanged({
+      upserts: [{ id: "definition:a/b", rowType: "definition" }],
+      removes: [],
+    });
+    await settle(30);
+    expect(p.cs.agents).toHaveBeenCalledTimes(1);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+  });
+
+  // A registered holder needs no settle re-read: a roles result that wrongly lands over a newer
+  // one forgets the registration, and the 5 s settle then reads again.
+  const REVIEWER = [
+    { role: "reviewer", registrations: [{ instanceId: "Rev", live: true, instanceName: "Rev" }] },
+  ];
+  const WITH_REV = [
+    { handle: "Mia", state: "idle" },
+    { handle: "Rev", state: "idle", role: "reviewer" },
+  ];
+
+  it("keeps a newer refresh's roles when an older roles read lands after it", async () => {
+    const p = await shown([MIA]);
+    let release!: (v: unknown) => void;
+    p.cs.roles.mockImplementationOnce(() => new Promise((r) => (release = r)) as never);
+    p.sessionsDelta(WITH_REV);
+    await settle(30);
+    p.setRoles(REVIEWER);
+    p.nudge([100]);
+    await settle(1500);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    release({ roles: [] });
+    await settle(5000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a newer roles read when an older refresh lands after it", async () => {
+    const p = await shown([MIA]);
+    let release!: (v: unknown) => void;
+    p.cs.roles.mockImplementationOnce(() => new Promise((r) => (release = r)) as never);
+    p.nudge([100]);
+    await settle(30);
+    p.setRoles(REVIEWER);
+    p.sessionsDelta(WITH_REV);
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    release({ roles: [] });
+    await settle(5000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a team named by a team-wide nudge with no message ids", async () => {
+    const p = await shown([MIA], "team");
+    p.nudge([]);
+    await settle(30);
+    expect(p.reads()).toBe(1);
+  });
+
+  it("shows mail nudged inside a sessions burst within the 1,000 ms bar (1,250 ms in a burst)", async () => {
+    const p = await shown([MIA]);
+    p.rows.push({ id: 3, from: "Lee", to: "human", unread: true });
+    p.nudge([3]);
+    for (let i = 0; i < 5; i++) p.sessionsDelta([{ handle: "Mia", state: "idle", spend: i }]);
+    await settle(30);
+    expect(p.listRows()).toBe(2);
+    p.nudge([100]);
+    await settle(30);
+    p.rows.push({ id: 4, from: "Kai", to: "human", unread: true });
+    p.nudge([4]);
+    for (let i = 0; i < 40; i++) {
+      p.sessionsDelta([{ handle: "Mia", state: "idle", spend: 10 + i }]);
+      p.nudge([200 + i]);
+      await settle(25);
+    }
+    await settle(250);
+    expect(p.listRows()).toBe(3);
   });
 
   it("paces on the monotonic clock, so a wall clock stepped back doesn't stall it", async () => {
