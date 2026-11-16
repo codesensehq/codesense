@@ -1155,6 +1155,58 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_page_changed_after_mint_is_not_served_to_its_foreman_launch_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.html");
+        std::fs::copy(crate::verbs::foreman_launch::shipped_page(), &path).unwrap();
+        let frames = crate::dashboard_stream::frame::FrameStore::default();
+        let mut frame = frames.mint(
+            9321,
+            FrameGrant {
+                frame_id: String::new(),
+                principal: "human".into(),
+                dashboard: "foreman".into(),
+                slot: "viewer".into(),
+                team: None,
+                scope: "open".into(),
+            },
+            dir.path().to_string_lossy().into(),
+            path.to_string_lossy().into(),
+            dir.path().to_string_lossy().into(),
+            crate::dashboard_stream::frame::FramePolicy::default(),
+            None,
+        );
+        frame
+            .effective_grant
+            .push(crate::verbs::foreman_launch::CAPABILITY.into());
+        let serve = |frame: crate::dashboard_stream::frame::FrameRecord| {
+            let path = path.clone();
+            async move {
+                serve_frame_file(
+                    &path,
+                    &frame,
+                    &HeaderMap::new(),
+                    None,
+                    |_| String::new(),
+                    |_| Ok(()),
+                )
+                .await
+                .map(|_| ())
+            }
+        };
+        // The bytes the grant was minted for load...
+        assert_eq!(serve(frame.clone()).await, Ok(()));
+        // ...but a reload after a local edit must not run the edited page holding the grant.
+        let mut edited = std::fs::read(&path).unwrap();
+        edited.extend_from_slice(b"<script>/* edited */</script>");
+        std::fs::write(&path, edited).unwrap();
+        assert_eq!(serve(frame.clone()).await, Err(StatusCode::FORBIDDEN));
+        // A frame without the grant still serves the edited page.
+        frame.effective_grant.clear();
+        assert_eq!(serve(frame).await, Ok(()));
+    }
+
     #[test]
     fn a_context_only_frame_has_no_sessions_first_paint() {
         let frames = crate::dashboard_stream::frame::FrameStore::default();
