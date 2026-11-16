@@ -117,6 +117,25 @@ impl Default for Registry {
         registry
     }
 }
+/// The pin verbs: each is registered as `inbox.<verb>` and kept under its flat name as an
+/// alias the kit, the chat overlay and page bridges call.
+pub(crate) const PIN_VERBS: [&str; 6] = [
+    "pins",
+    "pin",
+    "unpin",
+    "restorePin",
+    "replacePin",
+    "reorderPins",
+];
+/// The name a verb's per-name tables (schemas, capability, inbox target, audit target,
+/// contract docs) are keyed by: a pin verb's `inbox.` name and its flat alias share one
+/// entry in each table.
+pub(crate) fn table_name(name: &str) -> &str {
+    match str::strip_prefix(name, "inbox.") {
+        Some(flat) if <[&str]>::contains(&PIN_VERBS, &flat) => flat,
+        _ => name,
+    }
+}
 fn spec(
     name: &str,
     class: Class,
@@ -126,14 +145,15 @@ fn spec(
     action: bool,
     audited: bool,
 ) -> VerbSpec {
+    let table = table_name(name);
     VerbSpec {
         name: name.into(),
         class,
-        args_schema: args_schema(name),
-        result_schema: result_schema(name),
-        grant: capability_for_verb(name).into(),
+        args_schema: args_schema(table),
+        result_schema: result_schema(table),
+        grant: capability_for_verb(table).into(),
         inbox_target: matches!(
-            name,
+            table,
             "inbox"
                 | "roles"
                 | "openMessage"
@@ -272,7 +292,8 @@ fn register_resources(registry: &mut Registry) {
         );
     }
     // An agent thread's pin list. An agent pins and unpins its own thread with the `pin`
-    // tool; reading another thread and reordering are the person's, from a page.
+    // tool; reading another thread and reordering are the person's, from a page. Each verb
+    // is `inbox.<verb>`, and its flat name stays as an alias for the callers that use it.
     for (verb, class, twin, reason) in [
         (
             "pins",
@@ -299,7 +320,10 @@ fn register_resources(registry: &mut Registry) {
         ),
     ] {
         let write = class != Class::Read;
-        registry.register("inbox", spec(verb, class, false, twin, reason, write, write));
+        let name = format!("inbox.{verb}");
+        assert_eq!(table_name(&name), verb, "a pin verb is listed in PIN_VERBS");
+        registry.register("inbox", spec(&name, class, false, twin, reason, write, write));
+        registry.register_existing("inbox", spec(verb, class, false, twin, reason, write, write));
     }
     registry.register(
         "commands",

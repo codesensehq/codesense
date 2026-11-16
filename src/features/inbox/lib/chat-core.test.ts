@@ -14,6 +14,13 @@ import {
   parseCard,
   parseCardLine,
   parseNext,
+  pinChooserArrive,
+  pinChooserChoose,
+  pinChooserOpen,
+  pinChooserRoom,
+  pinChooserStep,
+  pinChooserSync,
+  PIN_ROOM_NOW,
   type ChatLeadRow,
 } from "./chat-core";
 
@@ -462,5 +469,67 @@ describe("deliveryMark with the messageDelivery topic", () => {
     const told = lead({ mailNotice: "told", notifiedAt: new Date(SENT + 1000).toISOString() });
     expect(mark({ lead: told, delivery: null })).toBe("delivered");
     expect(mark({ delivery: undefined })).toBe("queued");
+  });
+});
+
+// The replace chooser's DOM-free rules, which the kit's chooser and the overlay's both run.
+describe("the replace chooser's rules", () => {
+  const pin = (messageId: number, pinnedBy = "human") => ({ messageId, pinnedBy });
+  const title = (p: { messageId: number }) => `pin ${p.messageId}`;
+  const three = [pin(1), pin(2), pin(3)];
+
+  it("opens on the first row, knowing the pins it opened on", () => {
+    const open = pinChooserOpen(three);
+    expect(open.current).toBe(1);
+    expect([...open.known]).toEqual([1, 2, 3]);
+    expect([open.change, open.error]).toEqual([null, null]);
+    expect(pinChooserOpen([]).current).toBeNull();
+  });
+
+  it("steps with the arrow keys, Home and End; from the change line down is the first row and up the last", () => {
+    expect(pinChooserStep("ArrowDown", 0, 3, false)).toBe(1);
+    expect(pinChooserStep("ArrowUp", 2, 3, false)).toBe(1);
+    expect(pinChooserStep("Home", 2, 3, false)).toBe(0);
+    expect(pinChooserStep("End", 0, 3, false)).toBe(2);
+    expect(pinChooserStep("ArrowDown", -1, 3, true)).toBe(0);
+    expect(pinChooserStep("ArrowUp", -1, 3, true)).toBe(2);
+    expect(pinChooserStep("Enter", 0, 3, false)).toBeNull();
+  });
+
+  it("replaces only a row the person has arrived on: a row new since it opened is arrived on first", () => {
+    const open = pinChooserOpen([pin(1), pin(2)]);
+    expect(pinChooserChoose(open, pin(2), title)).toEqual({ state: open, replace: true });
+    const first = pinChooserChoose(open, pin(9), title);
+    expect(first.replace).toBe(false);
+    expect(first.state.current).toBe(9);
+    expect(first.state.change).toBe("“pin 9” is new. Choose it again to replace it.");
+    expect(open.known.has(9)).toBe(false);
+    expect(pinChooserChoose(first.state, pin(9), title).replace).toBe(true);
+  });
+
+  it("arriving on a row makes it current and known, and clears a failed replace", () => {
+    const failed = { ...pinChooserOpen(three), error: "Couldn't replace. Nothing changed." };
+    const at = pinChooserArrive(failed, 7);
+    expect([at.current, at.known.has(7), at.error]).toEqual([7, true, null]);
+    expect(failed.known.has(7)).toBe(false);
+  });
+
+  it("follows the live list: what changed, the current row dropped if it left, closed if the agent pinned this message", () => {
+    const open = pinChooserOpen(three);
+    expect(pinChooserSync(open, three, 50, title)).toBeNull();
+    const moved = pinChooserSync({ ...open, current: 3 }, [pin(1), pin(2), pin(4)], 50, title);
+    expect(moved && "state" in moved && moved.state.current).toBeNull();
+    expect(moved && "state" in moved && moved.state.change).toBe(
+      "“pin 4” is new. “pin 3” left the list.",
+    );
+    const stays = pinChooserSync(open, [pin(1), pin(2)], 50, title);
+    expect(stays && "state" in stays && stays.state.current).toBe(1);
+    const pinned = pinChooserSync(open, [pin(1), pin(2), pin(50, "dev")], 50, title);
+    expect(pinned).toEqual({ pinned: pin(50, "dev") });
+  });
+
+  it("has room when a pin left: below the cap a plain Pin pins", () => {
+    expect(pinChooserRoom(3)).toBeNull();
+    expect(pinChooserRoom(2)).toBe(PIN_ROOM_NOW);
   });
 });

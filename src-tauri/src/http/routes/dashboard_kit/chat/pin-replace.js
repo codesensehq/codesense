@@ -4,9 +4,10 @@
 // Enter or a click on the current row replaces that pin in its place, with one Undo for both; a click on another row only arrives on it. A row the agent added since the chooser opened
 // must be arrived on first, so nothing the agent just added is replaced unseen. The rows follow the live list and a line says what changed; a pin leaving offers a plain Pin, and the agent
 // pinning this message closes the chooser. The page's pins are told which pin the current row would replace (onPin.mark). Esc and Cancel close it, back to Pin….
+// The step, arrive-first, list-change and room rules are chat-core's (pinChooser*), the ones the app's overlay runs too; this file draws them and owns focus.
 import {h} from './dom.js';
 import {timeLabel} from './copy.js';
-import {PIN_CAP,PIN_REPLACE_FAILED,PIN_ROOM_NOW,PIN_UNDO_FULL,PIN_UNDO_GONE,pinChooserHeading,pinListChangeText,pinLiveText,pinNewRowText,pinPinnedAtLine,pinPinnedMeanwhileText,pinReplacedText,pinWho} from './chat-core.js';
+import {PIN_CAP,PIN_REPLACE_FAILED,PIN_UNDO_FULL,PIN_UNDO_GONE,pinChooserArrive,pinChooserChoose,pinChooserHeading,pinChooserOpen,pinChooserRoom,pinChooserStep,pinChooserSync,pinLiveText,pinPinnedAtLine,pinPinnedMeanwhileText,pinReplacedText,pinWho} from './chat-core.js';
 const GLYPH_NS='http://www.w3.org/2000/svg';
 // Your own pin is drawn as the pins strip draws it: a quote, or a dashboard's name.
 const OWN_PATH={quote:'M3 6h4v4l-2 3M9 6h4v4l-2 3',name:'M2 3h12v10H2zM2 7h12M7 7v6'};
@@ -23,26 +24,22 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
  function openFor(item){
   const pins=list();
   state.note=null;
-  open={item,known:new Set(pins.map(p=>p.messageId)),last:pins,current:pins.length?pins[0].messageId:null,change:null,error:null,node:h('div',{class:'pin-chooser',id:idOf(item.id),role:'group','aria-labelledby':idOf(item.id)+'-h'})};
+  open={...pinChooserOpen(pins),item,node:h('div',{class:'pin-chooser',id:idOf(item.id),role:'group','aria-labelledby':idOf(item.id)+'-h'})};
   open.node.addEventListener('keydown',onKey);
   focusWant=true;
  }
  // The chooser follows the live list: it says what changed, and the row the person was on stops being current if it left. If the agent pinned this message, it closes.
  function sync(){
   if(!open)return;
-  const pins=list(),ids=new Set(pins.map(p=>p.messageId)),before=new Set(open.last.map(p=>p.messageId));
-  if(ids.has(open.item.id)&&!before.has(open.item.id)){
-   const pin=pins.find(p=>p.messageId===open.item.id),mid=open.item.id;
+  const next=pinChooserSync(open,list(),open.item.id,titleOf);
+  if(!next)return;
+  if(next.pinned){
+   const mid=open.item.id;
    close(false);
-   state.note={mid,kind:'info',text:pinPinnedMeanwhileText(pinWho(pin.pinnedBy,nameOf))};
+   state.note={mid,kind:'info',text:pinPinnedMeanwhileText(pinWho(next.pinned.pinnedBy,nameOf))};
    return;
   }
-  const added=pins.filter(p=>!before.has(p.messageId)),left=open.last.filter(p=>!ids.has(p.messageId));
-  if(!added.length&&!left.length)return;
-  open.last=pins;
-  if(open.current!==null&&!ids.has(open.current))open.current=null;
-  open.change=pinListChangeText(added.map(titleOf),left.map(titleOf));
-  open.error=null;
+  open=next.state;
   focusWant=true;
  }
  const rowEl=id=>el()&&el().querySelector(`.choice[data-pin-id="${CSS.escape(String(id))}"]`);
@@ -51,7 +48,7 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
  function goTo(index){
   const pins=list(),pin=pins[Math.max(0,Math.min(pins.length-1,index))];
   if(!pin||!open)return;
-  open.known.add(pin.messageId);open.current=pin.messageId;open.error=null;
+  open=pinChooserArrive(open,pin.messageId);
   focusWant=true;after();
  }
  async function replace(old){
@@ -74,17 +71,15 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   if(!open||state.busy!==null)return;
   const pin=list().find(p=>p.messageId===id);
   if(!pin)return;
-  if(!open.known.has(id)){
-   // A pin the agent added a moment ago is never replaced unseen: the person arrives first.
-   open.known.add(id);open.current=id;open.change=pinNewRowText(titleOf(pin));focusWant=true;after();
-   return;
-  }
+  const chosen=pinChooserChoose(open,pin,titleOf);
+  // A pin the agent added a moment ago is never replaced unseen: the person arrives first.
+  if(!chosen.replace){open=chosen.state;focusWant=true;after();return;}
   replace(pin);
  }
  function onKey(event){
   if(!open)return;
   const pins=list(),fromChange=event.target.classList&&event.target.classList.contains('chg'),at=pins.findIndex(p=>p.messageId===open.current);
-  const step=event.key==='ArrowDown'?(fromChange?0:at+1):event.key==='ArrowUp'?(fromChange?pins.length-1:at-1):event.key==='Home'?0:event.key==='End'?pins.length-1:null;
+  const step=pinChooserStep(event.key,at,pins.length,fromChange);
   if(step!==null&&!open.room){event.preventDefault();event.stopPropagation();goTo(step);return;}
   if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);render();return;}
   if(event.key==='Enter'&&event.target.classList&&event.target.classList.contains('choice')){event.preventDefault();event.stopPropagation();choose(Number(event.target.getAttribute('data-pin-id')));}
@@ -92,14 +87,14 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
  // The chooser's content, drawn in place: the bubble around it is rebuilt only when it opens or closes, so focus and the Pin survive a move.
  function paint(){
   if(!open)return;
-  const pins=list(),full=pins.length>=PIN_CAP,id=idOf(open.item.id),node=open.node;
+  const pins=list(),room=pinChooserRoom(pins.length),full=room===null,id=idOf(open.item.id),node=open.node;
   open.room=!full;
   node.setAttribute('aria-busy',state.busy===open.item.id?'true':'false');
   const head=h('div',{class:'hd',id:id+'-h'},pinChooserHeading(pins.length));
   const cancel=h('button',{type:'button',class:'btn sm quiet cancel',onclick:()=>{close(true);render();}},copy.cancel);
   if(!full){
    const pin=h('button',{type:'button',class:'btn sm room-pin',onclick:()=>{const item=open.item;close(false);pinNow(item);}},copy.pin);
-   node.replaceChildren(head,h('div',{class:'room'},h('span',{},PIN_ROOM_NOW),pin),cancel);
+   node.replaceChildren(head,h('div',{class:'room'},h('span',{},room),pin),cancel);
    mark(null);
    return;
   }

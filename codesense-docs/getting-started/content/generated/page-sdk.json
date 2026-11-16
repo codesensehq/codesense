@@ -14,9 +14,9 @@
     "virtualList"
   ],
   "counts": {
-    "bridgeMethods": 117,
-    "actionVerbs": 60,
-    "readVerbs": 57,
+    "bridgeMethods": 123,
+    "actionVerbs": 65,
+    "readVerbs": 58,
     "surfaceMembers": 54
   },
   "sdk": [
@@ -2029,6 +2029,1689 @@
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.pin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.pin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      position?: number;\n      preview?: {\n        chart?: {\n          kind: \"segments\";\n          label: string;\n          segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n          [key: string]: unknown;\n        } | {\n          kind: \"progress\";\n          label: string;\n          percent: number;\n          [key: string]: unknown;\n        } | {\n          kind: \"stack\";\n          label: string;\n          parts: Array<{\n            label: string;\n            value: number;\n            [key: string]: unknown;\n          }>;\n          [key: string]: unknown;\n        };\n        lines?: string[];\n        shortName?: string;\n        status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n        unit?: string;\n        value?: string;\n      };\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preview": {
+            "additionalProperties": false,
+            "properties": {
+              "chart": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "segments"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "segments": {
+                        "items": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "maxItems": 24,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segments",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "progress"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "stack"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "parts": {
+                        "items": {
+                          "properties": {
+                            "label": {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            "value": {
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "parts",
+                      "label"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "lines": {
+                "items": {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "shortName": {
+                "maxLength": 24,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "on-track",
+                  "running",
+                  "needs-you",
+                  "not-updating"
+                ]
+              },
+              "unit": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.pins",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.pins\"(args: {\n      agentId: string;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:read:team",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:read:team",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": false,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.reorderPins",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.reorderPins\"(args: {\n      agentId: string;\n      messageIds: number[];\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.replacePin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.replacePin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      replaces: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "replaces": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId",
+          "replaces"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.restorePin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.restorePin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      replacing?: number;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "replacing": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "inbox.unpin",
+      "owner": "VerbMethods",
+      "signature": "\"inbox.unpin\"(args: {\n      agentId: string;\n      messageId: number;\n      org?: string;\n      storyId?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      agentId: string;\n      org: string;\n      outcome?: \"pinned\" | \"updated\" | \"unpinned\" | \"restored\" | \"replaced\" | \"unchanged\";\n      pins: Array<{\n        messageId: number;\n        pinnedAtMs: number;\n        pinnedBy: string;\n        position: number;\n        preview?: {\n          chart?: {\n            kind: \"segments\";\n            label: string;\n            segments: Array<\"on-track\" | \"running\" | \"needs-you\" | \"not-updating\">;\n            [key: string]: unknown;\n          } | {\n            kind: \"progress\";\n            label: string;\n            percent: number;\n            [key: string]: unknown;\n          } | {\n            kind: \"stack\";\n            label: string;\n            parts: Array<{\n              label: string;\n              value: number;\n              [key: string]: unknown;\n            }>;\n            [key: string]: unknown;\n          };\n          lines?: string[];\n          shortName?: string;\n          status?: \"on-track\" | \"running\" | \"needs-you\" | \"not-updating\";\n          unit?: string;\n          value?: string;\n        };\n        previewAtMs?: number;\n        [key: string]: unknown;\n      }>;\n      status: \"pins\";\n      storyId: string;\n      team: string;\n      [key: string]: unknown;\n    } | {\n      message: string;\n      status: \"invalid\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
       "confirmable": false,
       "feature": null
     },
@@ -8867,6 +10550,1677 @@
       "module": "inbox"
     },
     {
+      "name": "inbox.pin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preview": {
+            "additionalProperties": false,
+            "properties": {
+              "chart": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "segments"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "segments": {
+                        "items": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "maxItems": 24,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segments",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "progress"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "stack"
+                      },
+                      "label": {
+                        "maxLength": 160,
+                        "type": "string"
+                      },
+                      "parts": {
+                        "items": {
+                          "properties": {
+                            "label": {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            "value": {
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "parts",
+                      "label"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "lines": {
+                "items": {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "shortName": {
+                "maxLength": 24,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "on-track",
+                  "running",
+                  "needs-you",
+                  "not-updating"
+                ]
+              },
+              "unit": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.pins",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:read:team",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+      "audited": false,
+      "action": false,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.reorderPins",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageIds": {
+            "items": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageIds"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person arranges a thread's pins; an agent places a pin with the pin tool's position",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.replacePin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "replaces": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId",
+          "replaces"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.restorePin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "replacing": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "inbox.unpin",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "messageId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": "pin",
+      "presentationOnlyReason": null,
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
       "name": "inboxRollup",
       "class": "read",
       "argsSchema": {
@@ -14757,6 +18111,250 @@
       "mcpTwin": "inbox_list"
     },
     {
+      "verb": "inbox.pins",
+      "tier": "read",
+      "description": "read · inbox:read:team",
+      "args": {
+        "additionalProperties": true,
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "storyId": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:read:team",
+      "mcpTwin": null
+    },
+    {
       "verb": "inboxRollup",
       "tier": "read",
       "description": "read · inbox:read:all-teams",
@@ -17206,6 +20804,1131 @@
       "mcpTwin": null
     },
     {
+      "verb": "inbox.pin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"position\":{\"minimum\":0,\"type\":\"integer\"},\"preview\":{\"additionalProperties\":false,\"properties\":{\"chart\":{\"oneOf\":[{\"properties\":{\"kind\":{\"const\":\"segments\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"segments\":{\"items\":{\"enum\":[\"on-track\",\"running\",\"needs-you\",\"not-updating\"]},\"maxItems\":24,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"kind\",\"segments\",\"label\"],\"type\":\"object\"},{\"properties\":{\"kind\":{\"const\":\"progress\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"number\"}},\"required\":[\"kind\",\"percent\",\"label\"],\"type\":\"object\"},{\"properties\":{\"kind\":{\"const\":\"stack\"},\"label\":{\"maxLength\":160,\"type\":\"string\"},\"parts\":{\"items\":{\"properties\":{\"label\":{\"maxLength\":32,\"type\":\"string\"},\"value\":{\"minimum\":0,\"type\":\"number\"}},\"required\":[\"label\",\"value\"],\"type\":\"object\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"kind\",\"parts\",\"label\"],\"type\":\"object\"}]},\"lines\":{\"items\":{\"maxLength\":160,\"type\":\"string\"},\"maxItems\":3,\"type\":\"array\"},\"shortName\":{\"maxLength\":24,\"type\":\"string\"},\"status\":{\"enum\":[\"on-track\",\"running\",\"needs-you\",\"not-updating\"]},\"unit\":{\"maxLength\":64,\"type\":\"string\"},\"value\":{\"maxLength\":32,\"type\":\"string\"}},\"type\":\"object\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": "pin"
+    },
+    {
+      "verb": "inbox.reorderPins",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageIds\":{\"items\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"type\":\"array\"},\"org\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageIds\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
+      "verb": "inbox.replacePin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"replaces\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\",\"replaces\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
+      "verb": "inbox.restorePin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"replacing\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": "pin"
+    },
+    {
+      "verb": "inbox.unpin",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"messageId\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"agentId\",\"messageId\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write · MCP twin pin",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "org": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "pinned",
+                  "updated",
+                  "unpinned",
+                  "restored",
+                  "replaced",
+                  "unchanged"
+                ]
+              },
+              "pins": {
+                "items": {
+                  "properties": {
+                    "messageId": {
+                      "type": "integer"
+                    },
+                    "pinnedAtMs": {
+                      "type": "integer"
+                    },
+                    "pinnedBy": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chart": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "segments"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "segments": {
+                                  "items": {
+                                    "enum": [
+                                      "on-track",
+                                      "running",
+                                      "needs-you",
+                                      "not-updating"
+                                    ]
+                                  },
+                                  "maxItems": 24,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "segments",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "progress"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "maximum": 100,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent",
+                                "label"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "kind": {
+                                  "const": "stack"
+                                },
+                                "label": {
+                                  "maxLength": 160,
+                                  "type": "string"
+                                },
+                                "parts": {
+                                  "items": {
+                                    "properties": {
+                                      "label": {
+                                        "maxLength": 32,
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "label",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "parts",
+                                "label"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "lines": {
+                          "items": {
+                            "maxLength": 160,
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "type": "array"
+                        },
+                        "shortName": {
+                          "maxLength": 24,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "on-track",
+                            "running",
+                            "needs-you",
+                            "not-updating"
+                          ]
+                        },
+                        "unit": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "value": {
+                          "maxLength": 32,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "previewAtMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "position",
+                    "pinnedBy",
+                    "pinnedAtMs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "pins"
+              },
+              "storyId": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "org",
+              "team",
+              "agentId",
+              "storyId",
+              "pins"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "invalid"
+              }
+            },
+            "required": [
+              "status",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": "pin"
+    },
+    {
       "verb": "launchUnder",
       "tier": "spawn",
       "args": "{\"additionalProperties\":true,\"properties\":{\"handle\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"}},\"required\":[\"handle\"],\"type\":\"object\"}",
@@ -18999,7 +23722,7 @@
   "tiers": [
     {
       "tier": "metadata",
-      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, loadMedia, markRead, markUnread, pin, react, records.create, records.delete, records.restore, records.setFields, records.write, reorderPins, replacePin, restorePin, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive, unpin",
+      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, inbox.pin, inbox.reorderPins, inbox.replacePin, inbox.restorePin, inbox.unpin, loadMedia, markRead, markUnread, pin, react, records.create, records.delete, records.restore, records.setFields, records.write, reorderPins, replacePin, restorePin, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive, unpin",
       "note": "metadata class; Rust checks the effective grant on every call."
     },
     {
@@ -19029,9 +23752,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "2e670c509b9e44760dfa058818bcd6728e347a6776a98545d074ad71d1fab87b",
-    "src-tauri/src/verbs/registry.generated.json": "271d7884186ce3673068d876757b581ffde291ef749a52ad7cd14eb44c78ae41",
-    "src-tauri/src/verbs/registry.rs": "d2ffa628840cefb158709b3b676a87facdf7e8c2a6232753c353b3b1671b4b5d",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "037130ef850f4007989d62bb2485d1c13008f1e8c487df1170ade3f6174f8b25",
+    "src-tauri/src/verbs/registry.generated.json": "a4de52e76f2fce54873590259400858757fa6f1c608c8722af3643dba06bbea8",
+    "src-tauri/src/verbs/registry.rs": "f599ccbb17d3f3b23bb5e557cb4d12199480e3a536b109a13ad4496309fb3770",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "731a5c291fc4e43f5a328119912aff18e29656fa7c9abf4a2cde25f0dff54fc2",

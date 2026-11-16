@@ -55,6 +55,11 @@ jobs:
         # beforeBuildCommand runs both sidecar scripts again; with their release builds in place
         # cargo has nothing left to compile. signingIdentity "-" signs ad hoc, which Apple
         # silicon needs to launch the app; no Apple identity or updater key is involved.
+        env:
+          # tsc in beforeBuildCommand needs more than the ~2 GB default heap Node picks on this
+          # runner's 7 GB (it peaks near 2.8 GB); ubuntu-latest's larger default is why CI's
+          # typecheck never hits it. A ceiling with room to grow: tsc and vite run one at a time.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: >-
           pnpm tauri build
           --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
