@@ -111,12 +111,16 @@ const menuHalf = (id: string) => act(() => dispatchMenuAction(id));
 const TOGGLE = "viewer.toggle-terminal";
 const cliShown = () => isTerminalColumnShown(useViewerStore.getState());
 
+let testClock = 0;
+
 /** A real press is well apart from the last one. */
 const nextPress = () => vi.advanceTimersByTime(1000);
 
 beforeEach(() => {
   // Only the clock: waitFor and promises keep running on real timers.
-  vi.useFakeTimers({ toFake: ["Date", "performance"] });
+  // Each test starts a long way after the last, so no earlier press can pair with this one.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime((testClock += 1_000_000));
   // App start: the CLI hidden, no workspace focused.
   useViewerStore.setState({
     layoutMode: "viewer",
@@ -187,6 +191,15 @@ describe("Cmd-\\ press counting", () => {
     frameHalf(CMD_BACKSLASH);
     vi.advanceTimersByTime(20);
     frameHalf(CMD_BACKSLASH);
+    expect(cliShown()).toBe(false);
+  });
+
+  it("a menu arrival well after a frame one is a new press, not its twin", async () => {
+    render(<HtmlViewer {...SURFACES[1].props} />);
+    await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBeTruthy());
+    frameHalf(CMD_BACKSLASH);
+    vi.advanceTimersByTime(300);
+    menuHalf(TOGGLE);
     expect(cliShown()).toBe(false);
   });
 
