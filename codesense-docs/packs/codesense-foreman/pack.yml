@@ -16,5 +16,5 @@ spec_hash:
   foreman-claude: null
 kit:
   file: vendor/story-view.js
-  kit_rev: 1
-  sha256: a0311bed8ce007b675c4c0abd2b46094f63b20cea1c0206619eef65cbb6d4f15
+  kit_rev: 2
+  sha256: 471e596be38f2a7bf6860fcba5667dfc01a380d4b3fcdaf194656ae0e4165170
