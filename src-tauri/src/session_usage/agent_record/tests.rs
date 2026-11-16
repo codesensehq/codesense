@@ -178,7 +178,14 @@ async fn a_record_read_moves_its_counter_even_when_the_handle_is_refused() {
     let (dir, _store) = store();
     let before = crate::shared::invoke_stats::metric_total("session_record.read");
     let params = Params { handle: "nobody".into() };
-    let refused = read(dir.path(), &params, HashMap::new(), &CallerScope::Human).await;
+    let refused = read(
+        dir.path(),
+        &params,
+        HashMap::new(),
+        &[],
+        &CallerScope::Human,
+    )
+    .await;
     assert!(refused.err().unwrap().contains("unknown session"));
     assert!(crate::shared::invoke_stats::metric_total("session_record.read") > before);
 }
@@ -317,7 +324,7 @@ fn a_no_story_session_sums_the_listed_no_story_sessions_of_its_saved_agent() {
         "qa-1".to_owned(),
         "dev-story".to_owned(),
     ];
-    let half = usage_half(
+    let listed = usage_half(
         dir.path(),
         "dev-b",
         HashMap::new(),
@@ -325,7 +332,7 @@ fn a_no_story_session_sums_the_listed_no_story_sessions_of_its_saved_agent() {
         &CallerScope::Human,
     )
     .unwrap();
-    let record = assemble("dev-b", &half, None, None);
+    let record = assemble("dev-b", &listed, None, None);
     // The listed ones of its thread, oldest first, then the session asked about.
     assert_eq!(record["chain"], json!(["tab-dev-a", "tab-dev-c", "tab-dev-b"]));
     assert_eq!(record["tokens"]["input"], 700);

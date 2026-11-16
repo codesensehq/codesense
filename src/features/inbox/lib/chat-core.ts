@@ -19,7 +19,6 @@ export {
   pinFirstWords,
   pinLiveText,
   pinTitleOf,
-  threadOf,
   pinWho,
   pinReplaceLabel,
   pinChooserHeading,
@@ -47,3 +46,5 @@ export {
   type ChatLeadRow,
   type ChatThreadRow,
 } from "../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
+// A thread's key, as the engine keys it: the kit's one rule for the agent and for no story.
+export { threadOf } from "../../../../src-tauri/src/http/routes/dashboard_kit/chat/thread-key.js";
