@@ -158,12 +158,20 @@ test("fixture: git refuses -C, --git-dir and --work-tree outside the sandbox and
       assert.match(r.stderr, /outside the eval sandbox|not allowed in the eval sandbox/);
       assert.ok(!existsSync(made), `${pre.join(" ")} ran nothing`);
     }
-    for (const pre of [["--namespace", "x"], ["--paginate"], ["--exec-path=/x"]]) {
+    // A `-c` can redirect git (core.worktree, core.hooksPath, include.path), and the pack's rules
+    // refuse `git -c` anyway, so the fixture refuses every one.
+    for (const pre of [
+      ["--namespace", "x"],
+      ["--paginate"],
+      ["--exec-path=/x"],
+      ["-c", `core.worktree=${outside}`],
+      ["-c", "core.pager=cat"],
+    ]) {
       const r = fx.git([...pre, "status"]);
       assert.equal(r.status, 128, pre.join(" "));
       assert.match(r.stderr, /not allowed in the eval sandbox/);
     }
-    assert.equal(fx.git(["--no-pager", "-c", "core.pager=cat", "status"]).status, 0);
+    assert.equal(fx.git(["--no-pager", "status"]).status, 0);
     // Inside the sandbox, the same options still run, and a subcommand's own -C is not a path.
     fx.git(["worktree", "add", "-q", "-b", "foreman/x-ab12", "../foreman-x-ab12", "origin/main"]);
     assert.equal(fx.git(["-C", "../foreman-x-ab12", "status"]).status, 0);

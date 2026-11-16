@@ -224,7 +224,7 @@ export const removeLiveFixtures = () => {
 // The directories git's own options name before the subcommand: each `-C` resolves against the
 // one before it, and `--git-dir`/`--work-tree` against the last. Any other option there is
 // `refused`: one this doesn't know may take a value that would read as the subcommand and hide a
-// later path.
+// later path, and a `-c` can redirect git (core.worktree, core.hooksPath, include.path).
 function gitPaths(args, cwd) {
   const dirs = [];
   let dir = cwd;
@@ -233,7 +233,6 @@ function gitPaths(args, cwd) {
     if (a === "-C") dirs.push((dir = path.resolve(dir, args[++i] ?? "")));
     else if (a === "--git-dir" || a === "--work-tree") dirs.push(path.resolve(dir, args[++i] ?? ""));
     else if (/^--(git-dir|work-tree)=/.test(a)) dirs.push(path.resolve(dir, a.slice(a.indexOf("=") + 1)));
-    else if (a === "-c") i++;
     else if (a === "--no-pager") continue;
     else if (a.startsWith("-")) return { dirs, refused: a };
     else break;
