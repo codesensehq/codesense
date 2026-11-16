@@ -1197,14 +1197,6 @@ mod tests {
         ))
         .unwrap();
         helper.validate().unwrap();
-        // Its own bridge list, not the setup guide's: the always-on tools are added on top.
-        assert_eq!(
-            helper.mcp.bridge_tools,
-            Some(vec![
-                "codesense_overview".to_string(),
-                "update_codesense_docs".to_string()
-            ])
-        );
         let settings = crate::agents::permissions::generate(
             &helper,
             AgentCli::Claude,

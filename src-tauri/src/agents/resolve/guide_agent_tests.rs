@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`,
+/// Phase 1: DESIGN §3.3's 23 tools plus the product step's two epic-repo verbs, `set_active_team`,
 /// the Foreman hand-back's `send_role_message` (with `list_sessions` to find its team) and the
 /// git-access and clone steps' three (a tab, its output, the clone verb). The same list as
 /// `scripts/guide-pack.node-test.mjs`; a later phase edits both.
@@ -198,16 +198,15 @@ fn the_claude_guide_allows_phase_1_and_the_always_on_tools_and_refuses_the_rest(
         .map(|rule| rule.as_str().unwrap().to_string())
         .collect();
     let rule = |name: &str| format!("mcp__codesense__{name}");
-    // A served tool outside phase 1 and the always-on set is denied: `open_workspace`, which the
-    // page does for the guide.
+    // The deny set is every served tool outside phase 1 and the always-on set, by name: the agent
+    // declares no denies of its own.
+    let expected: BTreeSet<String> = served.difference(&kept).map(|name| rule(name)).collect();
+    assert_eq!(deny, expected);
+    // `open_workspace`, which the page does for the guide, is one of them.
     let outside = "open_workspace";
     assert!(served.contains(outside), "{outside} is served");
     assert!(!kept.contains(outside), "{outside} is outside phase 1");
     assert!(deny.contains(&rule(outside)), "{outside} is denied");
-    // No phase 1 or always-on tool is.
-    for name in &kept {
-        assert!(!deny.contains(&rule(name)), "{name} is not denied");
-    }
 }
 
 #[test]

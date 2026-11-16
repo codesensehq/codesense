@@ -11,8 +11,4 @@ permissions:
       - Skill(update-codesense-docs)
       - mcp__codesense__codesense_overview
       - mcp__codesense__update_codesense_docs
-mcp:
-  bridge_tools:
-    - codesense_overview
-    - update_codesense_docs
-revision: 3
+revision: 2
