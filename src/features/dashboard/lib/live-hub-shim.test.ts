@@ -463,6 +463,8 @@ it("a sessions delta fires no onInboxChanged and onAgentsChanged reads no sessio
   s.ping(change);
   expect(inbox).toHaveBeenCalledExactlyOnceWith(change);
   // An inbox ping is not an agent change either: pages that render both register both.
+  // `onSessions` answered a ping asynchronously (a sessions re-read), so let that settle.
+  await new Promise((resolve) => setTimeout(resolve, 20));
   expect(agents).not.toHaveBeenCalled();
   stopAgents();
   stopInbox();

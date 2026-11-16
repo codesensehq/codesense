@@ -6591,6 +6591,9 @@
           dirty = false;
           refreshing = true;
           startRead();
+          // A roles read that starts after this refresh wins over its roles, so an older
+          // refresh can't overwrite a newer one.
+          const rolesAt = ++rolesGen;
           const opened = selected;
           const reactionMark = reactionSaves;
           const changedIds = changedRows;
@@ -6642,15 +6645,15 @@
                 toHuman: m.to === human,
                 delivery: m.delivery ? { ...m.delivery, instance: m.delivery.claimedBy } : null,
               }));
-              teamRoles = new Map(roleView);
+              if (rolesAt === rolesGen) teamRoles = new Map(roleView);
             } else {
               refreshRows = [...inbox.messages, ...sent.messages]
                 .sort((a, b) => b.createdAtMs - a.createdAtMs || b.messageId - a.messageId)
                 .slice(0, 500);
-              roles = roleView.roles;
+              if (rolesAt === rolesGen) roles = roleView.roles;
             }
-            rolesGen++;
-            noteRegistered(crossTeam ? [...teamRoles.values()].flat() : roles);
+            if (rolesAt === rolesGen)
+              noteRegistered(crossTeam ? [...teamRoles.values()].flat() : roles);
             // Attachment and reaction changes need not change a conversation's count or last
             // preview. Re-read loaded media, rows the engine says changed and rows with my
             // unconfirmed toggles outside the rollup window on this existing inbox refresh.
@@ -6935,8 +6938,8 @@
           registeredHandles.clear();
           for (const r of list) for (const h of r.registrations) registeredHandles.add(h.instanceId);
         };
-        // Roles alone: no inbox, sent or humanStatus read. A refresh bumps `rolesGen` too, so a
-        // read that started before a newer one lands can't overwrite it.
+        // Roles alone: no inbox, sent or humanStatus read. A refresh takes a `rolesGen` too, and
+        // only the latest taker writes, so an older read can't overwrite a newer one.
         async function readRoles() {
           if (!visible || !loaded) return;
           const gen = ++rolesGen;

@@ -2401,8 +2401,8 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
 /// of which calls a write primitive. The inbox-changed helper and its team list add two more:
 /// `changes.is_empty()` in `emit_inbox_changed` (agent_inbox.rs) and `.ok()` in
-/// `changed_count_teams` (live_hub/inbox.rs), plus one more in the same inbox code that CI's
-/// census counted. None calls a write primitive.
+/// `changed_count_teams` (live_hub/inbox.rs), plus `committed.is_empty()` in `live_hub/mod.rs`.
+/// None calls a write primitive.
 const MAX_UNRESOLVED_METHODS: usize = 6_504;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is

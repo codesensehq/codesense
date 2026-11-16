@@ -296,21 +296,44 @@ describe("inbox pane refresh pacing", () => {
     expect(p.cs.roles).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the last roles read when an older one lands after a refresh", async () => {
+  // A registered holder needs no settle re-read: a roles result that wrongly lands over a newer
+  // one forgets the registration, and the 5 s settle then reads again.
+  const REVIEWER = [
+    { role: "reviewer", registrations: [{ instanceId: "Rev", live: true, instanceName: "Rev" }] },
+  ];
+  const WITH_REV = [
+    { handle: "Mia", state: "idle" },
+    { handle: "Rev", state: "idle", role: "reviewer" },
+  ];
+
+  it("keeps a newer refresh's roles when an older roles read lands after it", async () => {
     const p = await shown([MIA]);
     let release!: (v: unknown) => void;
     p.cs.roles.mockImplementationOnce(() => new Promise((r) => (release = r)) as never);
-    p.sessionsDelta([
-      { handle: "Mia", state: "idle" },
-      { handle: "Lee", state: "idle" },
-    ]);
+    p.sessionsDelta(WITH_REV);
     await settle(30);
+    p.setRoles(REVIEWER);
     p.nudge([100]);
     await settle(1500);
     expect(p.cs.roles).toHaveBeenCalledTimes(2);
     release({ roles: [] });
+    await settle(5000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a newer roles read when an older refresh lands after it", async () => {
+    const p = await shown([MIA]);
+    let release!: (v: unknown) => void;
+    p.cs.roles.mockImplementationOnce(() => new Promise((r) => (release = r)) as never);
+    p.nudge([100]);
     await settle(30);
-    expect(p.reads()).toBe(1);
+    p.setRoles(REVIEWER);
+    p.sessionsDelta(WITH_REV);
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    release({ roles: [] });
+    await settle(5000);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes a team named by a team-wide nudge with no message ids", async () => {
