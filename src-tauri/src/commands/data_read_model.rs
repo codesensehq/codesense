@@ -203,7 +203,7 @@ pub async fn session_record(
     page: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let scope = crate::context_repo::caller_scope::for_management_view(&app, page.as_deref(), frame_id.as_deref())?;
-    let peers = session_usage::no_story_peers(&app, &params.handle).await;
+    let peers = session_usage::thread_peers(&app, &params.handle).await;
     session_usage::agent_record::current(
         &params,
         session_usage::launch_stories(&app),

@@ -1164,6 +1164,19 @@ export interface AgentPin {
   preview?: AgentPinPreview;
   /** When the preview was last sent, so a pin that stops updating can say since when. */
   previewAtMs?: number;
+  /** What its message says, so every seat of the thread names the pin, its own mail or not. */
+  message: AgentPinMessage;
+}
+
+/** A pinned message as its pin names it: its sender (a handle) and time, how it renders, its
+ *  one-line summary and the start of its text (at most 2,000 characters). Mirror of Rust
+ *  `PinnedMessage`. */
+export interface AgentPinMessage {
+  from: string;
+  createdAtMs: number;
+  text: string;
+  contentType?: MessageContentType | null;
+  summary?: string | null;
 }
 
 /** An agent thread's pins in one team's store after a read or write; `outcome` is set for

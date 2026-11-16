@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 
 import type { SessionListRow } from "@/tauri/commands";
 
@@ -75,5 +75,64 @@ describe("Inbox pins: only where the conversation maps to one agent thread", () 
       expect(result.current, key).toBeNull();
     }
     expect(h.agentPins).not.toHaveBeenCalled();
+  });
+});
+
+describe("Inbox pins: a pin is named by what the pins read says its message is", () => {
+  it("names a pin of a message outside this conversation (a concurrent seat's) by its text, at the cap too", async () => {
+    h.sessions = [
+      { handle: "BUG-1#lead", agent: "acme/backend/dev", story: "BUG-1" } as SessionListRow,
+    ];
+    const pin = (messageId: number, from: string, text: string) => ({
+      messageId,
+      position: 0,
+      pinnedBy: from,
+      pinnedAtMs: 1,
+      message: { from, createdAtMs: 1, text },
+    });
+    h.agentPins.mockResolvedValue({
+      status: "pins",
+      ...TEAM,
+      agentId: "acme/backend/dev",
+      storyId: "BUG-1",
+      pins: [
+        pin(1, "BUG-1#lead", "m1"),
+        pin(2, "BUG-1#lead", "m2"),
+        pin(77, "BUG-1#lead-2", "Tests pass. The rest is cleanup."),
+      ],
+    });
+    const mine = [said(1, "BUG-1#lead"), said(2, "BUG-1#lead"), said(3, "BUG-1#lead")];
+    const { result } = renderHook(() => useThreadPins("BUG-1#lead", mine, view(HUMAN)));
+    await waitFor(() => expect(result.current?.stateOf(mine[2]!).atCap).toBe(true));
+    act(() => result.current!.toggle(mine[2]!));
+    const rows = result.current!.chooser!.rows;
+    expect(rows.find((r) => r.pin.messageId === 77)!.title).toBe("Tests pass.");
+    expect(rows.find((r) => r.pin.messageId === 77)!.own).toBe("quote");
+  });
+});
+
+describe("Inbox pins: a message this conversation holds is named from its own row", () => {
+  it("prefers the conversation's message to the pins read's copy", async () => {
+    h.sessions = [
+      { handle: "BUG-1#lead", agent: "acme/backend/dev", story: "BUG-1" } as SessionListRow,
+    ];
+    h.agentPins.mockResolvedValue({
+      status: "pins",
+      ...TEAM,
+      agentId: "acme/backend/dev",
+      storyId: "BUG-1",
+      pins: [1, 2, 3].map((messageId) => ({
+        messageId,
+        position: messageId - 1,
+        pinnedBy: "BUG-1#lead",
+        pinnedAtMs: 1,
+        message: { from: "BUG-1#lead", createdAtMs: 1, text: "A shortened copy." },
+      })),
+    });
+    const mine = [1, 2, 3, 4].map((id) => said(id, "BUG-1#lead"));
+    const { result } = renderHook(() => useThreadPins("BUG-1#lead", mine, view(HUMAN)));
+    await waitFor(() => expect(result.current?.stateOf(mine[3]!).atCap).toBe(true));
+    act(() => result.current!.toggle(mine[3]!));
+    expect(result.current!.chooser!.rows.map((r) => r.title)).toEqual(["m1", "m2", "m3"]);
   });
 });

@@ -24,6 +24,19 @@ pub struct Params {
     pub handle: String,
 }
 
+/// The other sessions the registry lists on one session's thread, by the thread read's seat
+/// rule ([`crate::commands::agent_inbox::thread_peers`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadPeers {
+    /// The listed ones its record sums, by launch handle: the ended ones, and every one once it
+    /// has ended itself.
+    pub counted: Vec<String>,
+    /// The concurrent live seats, by tab session id (a relaunch can reuse an ended
+    /// predecessor's handle), left out while it is a seat: each seat's record holds its own and
+    /// the ended ones, so nothing is counted twice.
+    pub seats: Vec<String>,
+}
+
 /// A commit as the record needs it: its sha, its files and the sessions that made it.
 pub(crate) type CommitFacts = (String, Vec<String>, Vec<String>);
 
@@ -36,10 +49,10 @@ pub(crate) struct UsageHalf {
     pub report: UsageReport,
     /// What the session's rows that have a price add up to.
     pub priced_usd: f64,
-    /// The rest of its thread, oldest first: on a story, the handoff chain before this session
-    /// (the earlier sessions of the same saved agent and story); with no story, the other listed
-    /// no-story sessions of its saved agent, by the thread read's seat rule. Their usage and
-    /// commits count toward the record.
+    /// The rest of its thread, oldest first, by the thread read's seat rule: on a story, the
+    /// handoff chain before this session (the earlier sessions of the same saved agent and story)
+    /// less any concurrent live seat; with no story, the other listed no-story sessions of its
+    /// saved agent. Their usage and commits count toward the record.
     pub earlier: Vec<UsageHalf>,
 }
 
@@ -119,9 +132,14 @@ pub(crate) fn thread_sessions_in(
     thread_sessions(&UsageStore::open(&path)?, agent, story)
 }
 
-/// The earlier sessions of the same saved agent and story as `record`, oldest first. A session
-/// with no agent or no story (none, or blank) has no handoff chain.
-fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<String>, String> {
+/// The earlier sessions of the same saved agent and story as `record`, oldest first, less the
+/// concurrent live `seats` (by tab session id). A session with no agent or no story (none, or
+/// blank) has no handoff chain.
+fn earlier_sessions(
+    store: &UsageStore,
+    record: &SessionRecord,
+    seats: &[String],
+) -> Result<Vec<String>, String> {
     let (Some(agent), Some(story)) = (record.agent.as_ref(), record.story_id.as_deref()) else {
         return Ok(vec![]);
     };
@@ -145,11 +163,18 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
             |row| row.get::<_, String>(0),
         )
         .map_err(super::db_err)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(super::db_err)
+    let mut earlier = vec![];
+    for row in rows {
+        let session_id: String = row.map_err(super::db_err)?;
+        if !Iterator::any(&mut seats.iter(), |s| *s == session_id) {
+            Vec::push(&mut earlier, session_id);
+        }
+    }
+    Ok(earlier)
 }
 
 /// A no-story session's thread, by the thread read's rule: the other sessions of its saved agent
-/// with no story that the roster lists (`peers`, by handle), oldest first. Nothing else bounds a
+/// with no story that the roster lists and that count (`peers`, by handle), oldest first. Nothing else bounds a
 /// saved agent's no-story sessions (every one it ever launched), so only the listed ones count.
 fn listed_no_story(
     store: &UsageStore,
@@ -182,6 +207,21 @@ fn listed_no_story(
         }
     }
     Ok(Iterator::collect(Iterator::map(IntoIterator::into_iter(found), |(_, id)| id)))
+}
+
+/// The rest of `record`'s thread whose usage its record sums, oldest first, by the thread
+/// read's seat rule: on a story, its handoff chain less the concurrent live seats; with no
+/// story, the listed sessions that count.
+fn thread_members(
+    store: &UsageStore,
+    record: &SessionRecord,
+    peers: &ThreadPeers,
+) -> Result<Vec<String>, String> {
+    let earlier = earlier_sessions(store, record, &peers.seats)?;
+    if !std::vec::Vec::is_empty(&earlier) {
+        return Ok(earlier);
+    }
+    listed_no_story(store, record, &peers.counted)
 }
 
 /// One session's usage half, without its chain.
@@ -217,7 +257,7 @@ pub(crate) fn usage_half(
     home: &Path,
     handle: &str,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<UsageHalf, String> {
     let handle = handle.trim();
@@ -231,12 +271,7 @@ pub(crate) fn usage_half(
     let session_id = session_read::resolve_session(&store, None, &input)?.session_id;
     let mut half = half_of(home, &store, session_id, &launch_stories, scope)?;
     if let Some(record) = half.record.as_ref() {
-        // A story's chain is its handoff chain; a no-story session's is its listed thread.
-        let mut earlier = earlier_sessions(&store, record)?;
-        if std::vec::Vec::is_empty(&earlier) {
-            earlier = listed_no_story(&store, record, peers)?;
-        }
-        for earlier in earlier {
+        for earlier in thread_members(&store, record, peers)? {
             half.earlier.push(half_of(home, &store, earlier, &launch_stories, scope)?);
         }
     }
@@ -435,12 +470,12 @@ pub async fn read(
     home: &Path,
     params: &Params,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<Value, String> {
     crate::shared::invoke_stats::metric_count("session_record.read");
     let (owned_home, handle, owned_scope) = (home.to_owned(), params.handle.clone(), scope.clone());
-    let owned_peers = <[String]>::to_vec(peers);
+    let owned_peers = Clone::clone(peers);
     let half = crate::commands::await_blocking("session_record", move || {
         usage_half(
             &owned_home,
@@ -466,7 +501,7 @@ pub async fn read(
 pub async fn current(
     params: &Params,
     launch_stories: HashMap<String, String>,
-    peers: &[String],
+    peers: &ThreadPeers,
     scope: &CallerScope,
 ) -> Result<Value, String> {
     let home = crate::commands::paths::codesense_home_dir().ok_or("no CodeSense home directory")?;

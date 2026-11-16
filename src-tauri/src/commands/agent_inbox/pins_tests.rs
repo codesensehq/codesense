@@ -237,6 +237,34 @@ async fn a_successor_pins_its_predecessors_mail_and_a_concurrent_seat_pins_only_
 }
 
 #[tokio::test]
+async fn every_seat_reads_what_each_pin_of_its_thread_says_its_own_mail_or_not() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    let first = mail(&fake, "S1", "human", "Tests pass. The rest is cleanup.").await;
+    let second = mail(&fake, "S2", "human", "from the second seat").await;
+    pin_request(&*fake, Some("S1"), first, None, None, false)
+        .await
+        .unwrap();
+    // Two seats run at once: the second's mail leaves the first's out, but its pins read
+    // names the first's pin by its message.
+    let read = pin_request(&*fake, Some("S2"), second, None, None, false)
+        .await
+        .unwrap();
+    let person = human(&fake, Some("DEMO-1"), PinOp::Read).await;
+    for result in [&read, &person] {
+        let json = serde_json::to_value(result).unwrap();
+        let pins = json["pins"].as_array().unwrap();
+        assert_eq!(pins[0]["messageId"], first);
+        let message = &pins[0]["message"];
+        assert_eq!(message["from"], "H1", "{json}");
+        assert_eq!(message["text"], "Tests pass. The rest is cleanup.");
+        assert!(message["createdAtMs"].as_i64().unwrap() > 0);
+        assert_eq!(pins[1]["message"]["from"], "H2");
+    }
+}
+
+#[tokio::test]
 async fn a_successor_restores_and_updates_the_preview_of_its_predecessors_pin() {
     let fake = FakeHost::new();
     fake.launched_from("H1", AGENT, Some("DEMO-1"));

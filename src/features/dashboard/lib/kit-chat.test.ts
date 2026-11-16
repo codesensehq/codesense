@@ -2294,6 +2294,7 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     pinnedBy: string;
     pinnedAtMs?: number;
     preview?: { shortName?: string; value?: string; status?: string };
+    message?: { from: string; createdAtMs: number; text: string };
   };
   const at = (h: number, m: number) => new Date(2026, 10, 12, h, m).getTime();
   const clock = (ms: number) =>
@@ -2370,6 +2371,19 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
       el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
+
+  it("names a pin of a message outside the thread (a concurrent seat's) by what the pins read says", async () => {
+    const theirs: Pin = {
+      messageId: 77,
+      pinnedBy: "lead-2",
+      pinnedAtMs: at(14, 2),
+      message: { from: "lead-2", createdAtMs: at(14, 1), text: "Tests pass. The rest is cleanup." },
+    };
+    const { pinOf, choice } = await mountReplace([QA, TESTS, theirs]);
+    pinOf(5).click();
+    await flush();
+    expect(choice(77).querySelector(".t")!.textContent).toBe("Tests pass.");
+  });
 
   it('a chooser with no change line and no error draws neither: no "null" text', async () => {
     const { pinOf, chooser } = await mountReplace();

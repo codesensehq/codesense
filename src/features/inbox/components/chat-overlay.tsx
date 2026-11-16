@@ -22,6 +22,7 @@ import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
@@ -232,24 +233,27 @@ export function ChatOverlay({
     retry: retryPins,
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
-  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
-  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too),
-  // else the rest of its mail (a lead's or a role's), in the Foreman's pin team.
+  // A pin's message as the thread holds it: for the Foreman, its merged thread (earlier
+  // sessions' mail too), else the rest of its mail, in the pin team.
   const pinnedMessage = (id: number) =>
     foreman
       ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
         messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
         null)
       : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
-  const pinTitle = (id: number) => {
-    const m = pinnedMessage(id);
-    return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
+  // What a pin's message says: the thread's own row, else what the pins read says it is (a
+  // concurrent seat's mail, which this seat's thread leaves out).
+  const saidOf = (p: AgentPin) => pinnedMessage(p.messageId) ?? p.message;
+  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
+  const pinTitle = (p: AgentPin) => {
+    const m = saidOf(p);
+    return pinTitleOf(m, labelOf(dir, m.from));
   };
   // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
   const ownCard = (p: AgentPin): OwnPinCard | null => {
-    const m = pinnedMessage(p.messageId);
-    if (p.preview || !m) return null;
-    const who = senderOf(m);
+    if (p.preview) return null;
+    const m = saidOf(p);
+    const who = labelOf(dir, m.from);
     const at = formatClock(m.createdAtMs);
     if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
     const pinnedBy = whoPinned(p.pinnedBy, (from) => labelOf(dir, from));
@@ -271,7 +275,7 @@ export function ChatOverlay({
     apply,
     sender: senderOf,
     labelOf: (from) => labelOf(dir, from),
-    titleOf: (p) => p.preview?.shortName || pinTitle(p.messageId),
+    titleOf: (p) => p.preview?.shortName || pinTitle(p),
     ownOf: (p) => ownCard(p)?.kind ?? null,
     onShowPins: () => {
       const first = pins[0];
@@ -478,7 +482,7 @@ export function ChatOverlay({
                 }}
                 pin={p}
                 shape={pinShape}
-                title={pinTitle(p.messageId)}
+                title={pinTitle(p)}
                 own={ownCard(p)}
                 fresh={personPins?.fresh === p.messageId}
                 replacing={personPins?.replacing === p.messageId}
@@ -493,15 +497,15 @@ export function ChatOverlay({
           <section
             className="ibx-ov-sheet"
             data-in-place={sheetInPlace ? "true" : "false"}
-            aria-label={opened.preview?.shortName || pinTitle(opened.messageId)}
+            aria-label={opened.preview?.shortName || pinTitle(opened)}
           >
             <div className="ibx-ov-sheet-h">
-              <b>{opened.preview?.shortName || pinTitle(opened.messageId)}</b>
+              <b>{opened.preview?.shortName || pinTitle(opened)}</b>
               <span className="ibx-ov-sp" />
               <button
                 type="button"
                 className="ibx-ov-btn"
-                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened.messageId)}`}
+                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened)}`}
                 onClick={closePin}
               >
                 <Ico icon={X} sm />
@@ -510,6 +514,17 @@ export function ChatOverlay({
             <div className="ibx-ov-sheet-b">
               {openedMessage ? (
                 <MessageBody m={openedMessage} liveDashboards />
+              ) : opened.message && pinTeam ? (
+                // A concurrent seat's message: what the pins read says, an HTML one live.
+                <InboxMessageContent
+                  text={opened.message.text}
+                  contentType={opened.message.contentType}
+                  live={
+                    opened.message.contentType === "html"
+                      ? { team: pinTeam, messageId: opened.messageId, sender: opened.message.from }
+                      : null
+                  }
+                />
               ) : (
                 <span className="ibx-ov-gone">This view is no longer in the thread.</span>
               )}

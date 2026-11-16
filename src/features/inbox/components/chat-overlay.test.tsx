@@ -17,7 +17,12 @@ import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-pr
 import { isRunningAgent } from "@/features/viewer/lib/hand-agents";
 import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
 import { AGENT_INBOX_CHANGED_EVENT, AGENT_PINS_CHANGED_EVENT } from "@/tauri/events";
-import type { AgentPin, AgentSessionRow, ConversationMessage } from "@/tauri/commands";
+import type {
+  AgentPin,
+  AgentPinMessage,
+  AgentSessionRow,
+  ConversationMessage,
+} from "@/tauri/commands";
 
 import { runBridgeCommand } from "@/features/dashboard/components/html-bridge";
 import { liveHub } from "@/features/dashboard/lib/live-hub";
@@ -122,12 +127,29 @@ const MESSAGES = [
   msg(4, LEAD, "human", "Review is clean; merge card is next."),
 ];
 
+/** The messages the store holds beyond the first four (those that arrived), by id. */
+const arrived = new Map<number, ConversationMessage>();
+/** What the pins read says a pinned message is, as the engine reads it from its store. */
+const pinnedOf = (id: number): AgentPinMessage => {
+  const m = arrived.get(id) ?? MESSAGES.find((x) => x.id === id);
+  return m
+    ? {
+        from: m.from,
+        createdAtMs: m.createdAtMs,
+        text: m.text,
+        contentType: m.contentType,
+        summary: m.summary,
+      }
+    : { from: LEAD, createdAtMs: NOW, text: `Message ${id}.` };
+};
+
 const PINS: AgentPin[] = [
   {
     messageId: 3,
     position: 0,
     pinnedBy: LEAD,
     pinnedAtMs: NOW,
+    message: pinnedOf(3),
     preview: {
       shortName: "QA",
       value: "5 of 5",
@@ -142,6 +164,7 @@ const PINS: AgentPin[] = [
     position: 1,
     pinnedBy: LEAD,
     pinnedAtMs: NOW,
+    message: pinnedOf(1),
     preview: { shortName: "Tests", value: "48", status: "not-updating" },
     previewAtMs: new Date(2026, 10, 12, 14, 5).getTime(),
   },
@@ -305,6 +328,7 @@ beforeEach(() => {
 });
 
 const arrive = (...extra: ConversationMessage[]) => {
+  for (const m of extra) arrived.set(m.id, m);
   api.loadSessionInbox.mockResolvedValue({
     dto: { handle: LEAD, roles: [], messages: [...MESSAGES, ...extra] },
     source: "live",
@@ -415,6 +439,7 @@ describe("ChatOverlay", () => {
         position: 2,
         pinnedBy: LEAD,
         pinnedAtMs: NOW,
+        message: pinnedOf(2),
         preview: { shortName: "Review rounds", value: "2", status: "running" as const },
         previewAtMs: NOW,
       },
@@ -872,7 +897,13 @@ describe("ChatOverlay", () => {
             storyId: "BUG-142",
             pins: [
               ...PINS,
-              { ...PINS[0], messageId: 4, position: 2, preview: { shortName: "New" } },
+              {
+                ...PINS[0],
+                messageId: 4,
+                message: pinnedOf(4),
+                position: 2,
+                preview: { shortName: "New" },
+              },
             ],
           }
         : undefined,
@@ -1227,11 +1258,14 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
 });
 
 describe("ChatOverlay: the person pins a message", () => {
-  // A one-thread engine double: pin, unpin and restore change the list the next read returns.
-  let held: AgentPin[];
-  let removed: AgentPin[];
+  // A one-thread engine double: pin, unpin and restore change the list the next read returns,
+  // and the read says what each pinned message is.
+  type Held = Omit<AgentPin, "message"> & { message?: AgentPinMessage };
+  let held: Held[];
+  let removed: Held[];
   let failNext = false;
   beforeEach(() => {
+    arrived.clear();
     held = PINS.map((p) => ({ ...p }));
     removed = [];
     failNext = false;
@@ -1286,7 +1320,11 @@ describe("ChatOverlay: the person pins a message", () => {
         held.splice(back.position, 0, back);
         outcome = "restored";
       }
-      const pins = held.map((p, position) => ({ ...p, position }));
+      const pins = held.map((p, position) => ({
+        ...p,
+        message: p.message ?? pinnedOf(p.messageId),
+        position,
+      }));
       return {
         status: "pins",
         ...TEAM,
@@ -1323,6 +1361,81 @@ describe("ChatOverlay: the person pins a message", () => {
     );
     // The new pin is in the strip, named by its message.
     expect(await screen.findByTestId("chat-overlay-pin-4")).toBeInTheDocument();
+  });
+
+  it("names a pin of a concurrent seat's message by what it says, in the strip and in the chooser at the cap", async () => {
+    // The other seat's mail isn't in this seat's thread; the pins read says what it is.
+    held.push({
+      messageId: 77,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: {
+        from: "BUG-142#dev6",
+        createdAtMs: NOW - 5 * 60_000,
+        text: "Tests pass. The rest is cleanup.",
+      },
+    });
+    await renderOverlay(420, 700);
+    const strip = await screen.findByTestId("chat-overlay-pin-77");
+    expect(strip).toHaveTextContent("Tests pass.");
+    expect(strip).toHaveTextContent("The rest is cleanup.");
+    expect(strip).not.toHaveTextContent("Pin 77");
+    fireEvent.click(pinOf(4));
+    const choice = within(row(4))
+      .getAllByTestId("ibx-pin-choice")
+      .find((c) => c.dataset.pinId === "77")!;
+    expect(choice).toHaveTextContent("Tests pass.");
+    expect(choice).not.toHaveTextContent("Pin 77");
+  });
+
+  it("opens a pin of a concurrent seat's message as what it says, never as gone from the thread", async () => {
+    held.push({
+      messageId: 77,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: { from: "BUG-142#dev6", createdAtMs: NOW, text: "Tests pass. The rest is cleanup." },
+    });
+    await renderOverlay(300, 700);
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-77"));
+    const sheet = screen.getByRole("region", { name: "Tests pass." });
+    expect(within(sheet).getByText("Tests pass. The rest is cleanup.")).toBeInTheDocument();
+    expect(within(sheet).queryByText("This view is no longer in the thread.")).toBeNull();
+  });
+
+  it("opens a concurrent seat's HTML pin as its live view, by its message", async () => {
+    held.push({
+      messageId: 78,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: {
+        from: "BUG-142#dev6",
+        createdAtMs: NOW,
+        text: "<title>Merge board</title><p>x</p>",
+        contentType: "html",
+      },
+    });
+    await renderOverlay(300, 700);
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-78"));
+    const sheet = screen.getByRole("region", { name: "Merge board" });
+    expect(within(sheet).getByTestId("inbox-message-frame")).toBeInTheDocument();
+    expect(within(sheet).queryByText("This view is no longer in the thread.")).toBeNull();
+  });
+
+  it("names a pin of a message the thread holds from the thread's own row, not the pins read's copy", async () => {
+    held.push({
+      messageId: 2,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: { from: "human", createdAtMs: NOW, text: "A shortened copy." },
+    });
+    await renderOverlay(420, 700);
+    const strip = await screen.findByTestId("chat-overlay-pin-2");
+    expect(strip).toHaveTextContent("Thanks, keep me posted.");
+    expect(strip).not.toHaveTextContent("A shortened copy.");
   });
 
   describe("at the cap: Pin… asks which pin to replace", () => {
@@ -1993,7 +2106,18 @@ describe("ChatOverlay for the Foreman", () => {
             agentId: FOREMAN_AGENT_ID,
             storyId: null,
             pins: [
-              { messageId: 1, position: 0, pinnedBy: "human", pinnedAtMs: NOW, preview: null },
+              {
+                messageId: 1,
+                position: 0,
+                pinnedBy: "human",
+                pinnedAtMs: NOW,
+                preview: null,
+                message: {
+                  from: EARLIER,
+                  createdAtMs: NOW,
+                  text: "Hello from the earlier Foreman.",
+                },
+              },
             ],
           }
         : undefined,
@@ -2035,7 +2159,18 @@ describe("ChatOverlay for the Foreman", () => {
             agentId: FOREMAN_AGENT_ID,
             storyId: null,
             pins: [
-              { messageId: 7, position: 0, pinnedBy: "human", pinnedAtMs: NOW, preview: null },
+              {
+                messageId: 7,
+                position: 0,
+                pinnedBy: "human",
+                pinnedAtMs: NOW,
+                preview: null,
+                message: {
+                  from: "acme-lead",
+                  createdAtMs: NOW - 30_000,
+                  text: "Lead note for the Foreman.",
+                },
+              },
             ],
           }
         : undefined,
