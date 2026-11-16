@@ -113,28 +113,75 @@ pub(crate) enum PinOp {
     Unpin {
         message_id: i64,
     },
+    /// Bring an unpinned pin back as it was: the Undo of an unpin.
+    Restore {
+        message_id: i64,
+    },
+    /// Pin `message_id` in place of the shown pin `replaces`, in one step: the person
+    /// pins at the cap by choosing which pin to replace.
+    Replace {
+        message_id: i64,
+        replaces: i64,
+    },
+    /// The Undo of a replace, in one step: `replacing` goes and `message_id` comes back as
+    /// it was, in its place.
+    RestoreReplacing {
+        message_id: i64,
+        replacing: i64,
+    },
     Reorder {
         message_ids: Vec<i64>,
     },
 }
 
-/// Run `op` on `thread`'s list in the store at `own`, as `by`. A session (`party`) pins
-/// only mail it sent, received or is the reply target of, or a role message, as it
-/// reacts; the person pins anything the team's inbox shows.
+/// A refusal that names the thread's pins now, so whoever asked can see what changed.
+fn refused_with_list(
+    store: &crate::weft::store::WeftStore,
+    thread: &ThreadKey,
+    reason: &str,
+) -> Result<String, WvWriteError> {
+    let held = pins::pins_list(store, thread)?
+        .iter()
+        .map(pin_label)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!("{reason}. Pinned now: {held}"))
+}
+
+impl PinOp {
+    /// The message a write puts into the list, which a session may name only if it is party
+    /// to it: what a pin, restore or replace pins (or brings back).
+    fn pinned_message(&self) -> Option<i64> {
+        match self {
+            PinOp::Pin { message_id, .. }
+            | PinOp::Restore { message_id }
+            | PinOp::Replace { message_id, .. }
+            | PinOp::RestoreReplacing { message_id, .. } => Some(*message_id),
+            PinOp::Read | PinOp::Unpin { .. } | PinOp::Reorder { .. } => None,
+        }
+    }
+}
+
+/// Run `op` on `thread`'s list in the store at `own`, as `by`. A session pins only mail
+/// its thread holds: mail one of `parties` (the addresses of the thread it is a seat of,
+/// its predecessors' included) sent, received or is the reply target of, or a role
+/// message, as it reacts. The person (no `parties`) pins anything the team's inbox shows.
 async fn pins_in(
     host: &dyn InboxHost,
     own: InboxLocation,
     thread: ThreadKey,
     op: PinOp,
     by: String,
-    party: bool,
+    parties: Option<Vec<String>>,
 ) -> Result<PinResult, String> {
     let InboxLocation { team, path } = own;
     let stored = {
         let thread = thread.clone();
         with_store("pins", path, move |store| {
-            if let (true, PinOp::Pin { message_id, .. }) = (party, &op) {
-                if !inbox::inbox_get(store, *message_id)?.is_some_and(|m| is_party(&m, &by)) {
+            if let (Some(parties), Some(message_id)) = (parties, op.pinned_message()) {
+                let held = inbox::inbox_get(store, message_id)?
+                    .is_some_and(|m| parties.iter().any(|who| is_party(&m, who)));
+                if !held {
                     return Ok(Err(format!("no message {message_id}")));
                 }
             }
@@ -167,6 +214,35 @@ async fn pins_in(
                     let done = pins::pin_remove(store, &thread, message_id)?;
                     (Some(done), done != PinOutcome::Unchanged)
                 }
+                PinOp::Restore { message_id } => {
+                    match pins::pin_restore(store, &thread, message_id) {
+                        Ok(done) => (Some(done), done != PinOutcome::Unchanged),
+                        Err(WvWriteError::Invalid(reason)) => {
+                            return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
+                        }
+                        Err(other) => return Err(other),
+                    }
+                }
+                PinOp::Replace {
+                    message_id,
+                    replaces,
+                } => match pins::pin_replace(store, &thread, message_id, replaces, &by) {
+                    Ok(done) => (Some(done), true),
+                    Err(WvWriteError::Invalid(reason)) => {
+                        return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
+                    }
+                    Err(other) => return Err(other),
+                },
+                PinOp::RestoreReplacing {
+                    message_id,
+                    replacing,
+                } => match pins::pin_restore_replacing(store, &thread, message_id, replacing) {
+                    Ok(done) => (Some(done), done != PinOutcome::Unchanged),
+                    Err(WvWriteError::Invalid(reason)) => {
+                        return Ok(Err(refused_with_list(store, &thread, &reason.0)?));
+                    }
+                    Err(other) => return Err(other),
+                },
                 PinOp::Reorder { message_ids } => {
                     pins::pins_reorder(store, &thread, &message_ids)?;
                     (None, true)
@@ -209,10 +285,63 @@ pub(crate) async fn pins_from_human(
         Err(error) => return Ok(PinResult::invalid(error.to_string())),
     };
     let own = team_inbox(host, team.clone()).await?;
-    pins_in(host, own, thread, op, HUMAN.to_string(), false).await
+    pins_in(host, own, thread, op, HUMAN.to_string(), None).await
 }
 
-/// An agent pins (or, `remove`, unpins) message `message_id` in its own thread: the saved
+/// A pins call from an HTML message rendered live (a message frame), as its `sender`. It
+/// reads any thread of its team, as a page does, but a write lands only in its sender's own
+/// thread (the saved agent and story the sending session was launched with), so a message
+/// an agent posts can't change another agent's pins. A sender with no saved-agent thread
+/// writes none.
+pub(crate) async fn pins_from_frame(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+    agent_id: &str,
+    story_id: Option<&str>,
+    op: PinOp,
+    sender: &str,
+) -> Result<PinResult, String> {
+    if matches!(op, PinOp::Read) {
+        return pins_from_human(host, team, agent_id, story_id, op).await;
+    }
+    let Some((agent, story)) = host.launch_thread(sender).await else {
+        return Ok(PinResult::invalid(
+            "only a message from a session launched from a saved Agent can change pins",
+        ));
+    };
+    let asked = ThreadKey::new(agent_id, story_id);
+    let own = ThreadKey::new(&agent, story.as_deref());
+    match (asked, own) {
+        (Ok(asked), Ok(own)) if asked == own => {
+            pins_from_human(host, team, agent_id, story_id, op).await
+        }
+        (Err(error), _) => Ok(PinResult::invalid(error.to_string())),
+        _ => Ok(PinResult::invalid(
+            "a message changes pins only in its sender's thread",
+        )),
+    }
+}
+
+/// What an agent's pin call does to its message: pin it, unpin it, or bring its unpinned
+/// pin back as it was. `true` is an unpin, `false` a pin (the `remove` flag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinChange {
+    Pin,
+    Unpin,
+    Restore,
+}
+
+impl From<bool> for PinChange {
+    fn from(remove: bool) -> Self {
+        if remove {
+            PinChange::Unpin
+        } else {
+            PinChange::Pin
+        }
+    }
+}
+
+/// An agent pins (or unpins, or restores) message `message_id` in its own thread: the saved
 /// agent and story its session was launched with, in the store of the team it was
 /// launched in. There is no thread argument, so it can name no other thread. A `preview`
 /// on a message already pinned replaces that pin's preview.
@@ -222,7 +351,7 @@ pub(crate) async fn pin_request<'a>(
     message_id: i64,
     position: Option<u32>,
     preview: Option<PinPreview>,
-    remove: bool,
+    change: impl Into<PinChange>,
 ) -> Result<PinResult, String> {
     let sessions = InboxHost::sessions(host).await?;
     let handle = match caller_handle(&sessions, session_id) {
@@ -240,20 +369,34 @@ pub(crate) async fn pin_request<'a>(
         Err(error) => return Ok(PinResult::invalid(error.to_string())),
     };
     let own = session_store(host, &handle).await?;
-    let op = if remove {
-        PinOp::Unpin { message_id }
-    } else {
-        PinOp::Pin {
+    let op = match change.into() {
+        PinChange::Unpin => PinOp::Unpin { message_id },
+        PinChange::Restore => PinOp::Restore { message_id },
+        PinChange::Pin => PinOp::Pin {
             message_id,
             position,
             preview,
-        }
+        },
     };
-    pins_in(host, own, thread, op, handle, true).await
+    // The thread's mail, as its read shows it to this seat: its own and its predecessors'
+    // (by handle or tab session id), never a concurrent seat's.
+    let mut parties = crate::commands::agent_read_model::thread_addresses(
+        host,
+        &sessions,
+        &thread,
+        Some(&handle),
+    )
+    .await?
+    .addresses;
+    if !parties.contains(&handle) {
+        parties.push(handle.clone());
+    }
+    pins_in(host, own, thread, op, handle, Some(parties)).await
 }
 
-/// The person's pins verbs, one Tauri command: `op` is `read`, `pin`, `unpin` or
-/// `reorder`.
+/// The person's pins verbs, one Tauri command: `op` is `read`, `pin`, `unpin`,
+/// `restore` (the Undo of an unpin, or of a replace with `replacing`), `replace` (pin in
+/// place of `replaces`) or `reorder`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_pins(
@@ -266,6 +409,9 @@ pub async fn agent_pins(
     position: Option<u32>,
     message_ids: Option<Vec<i64>>,
     preview: Option<PinPreview>,
+    replaces: Option<i64>,
+    replacing: Option<i64>,
+    sender: Option<String>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
     let op = match &*op {
@@ -278,19 +424,36 @@ pub async fn agent_pins(
         "unpin" => PinOp::Unpin {
             message_id: need_id()?,
         },
+        "restore" => match replacing {
+            Some(replacing) => PinOp::RestoreReplacing {
+                message_id: need_id()?,
+                replacing,
+            },
+            None => PinOp::Restore {
+                message_id: need_id()?,
+            },
+        },
+        "replace" => PinOp::Replace {
+            message_id: need_id()?,
+            replaces: replaces.ok_or("replace needs replaces")?,
+        },
         "reorder" => PinOp::Reorder {
             message_ids: message_ids.ok_or("reorder needs messageIds")?,
         },
         other => return Err(format!("unknown pins op {other}")),
     };
-    pins_from_human(
-        &super::AppInboxHost { app },
-        &team.into(),
-        &agent_id,
-        story_id.as_deref(),
-        op,
-    )
-    .await
+    let host = super::AppInboxHost { app };
+    // `sender`: the caller is a message frame, whose writes stay in its sender's thread.
+    match sender {
+        Some(sender) => {
+            let team: LaunchTeam = team.into();
+            pins_from_frame(&host, &team, &agent_id, story_id.as_deref(), op, &sender).await
+        }
+        None => {
+            let team: LaunchTeam = team.into();
+            pins_from_human(&host, &team, &agent_id, story_id.as_deref(), op).await
+        }
+    }
 }
 
 /// Prepare the `pins` live view of the thread `agent_id` + `story_id` in `team` for a

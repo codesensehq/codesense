@@ -4,7 +4,7 @@
  * transport and roster. The marks rule and the card parser have their own cases in
  * src/features/inbox/lib/chat-core.test.ts; the browser-level layout cases run where the pages are built.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,7 +78,8 @@ function setup(roster: Row[], thread: Row[] = []) {
   };
   const el = document.createElement("div");
   document.body.append(el);
-  return { transport, reads, el, send, reply, emit };
+  const listenerCount = (event: string) => listeners.get(event)?.size ?? 0;
+  return { transport, reads, el, send, reply, emit, listenerCount };
 }
 
 const kitOf = () => (window as unknown as { codesense: { kit: Kit } }).codesense.kit;
@@ -91,9 +92,10 @@ const mountOn = (s: ReturnType<typeof setup>, extra: Record<string, unknown> = {
     ...extra,
   });
 const typeAndSend = async (el: HTMLElement, text: string) => {
-  const input = el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!;
+  // By place, not id: a second chat on the page has its own ids.
+  const input = el.querySelector<HTMLTextAreaElement>(".composer textarea")!;
   input.value = text;
-  el.querySelector<HTMLButtonElement>("#sv-send")!.click();
+  el.querySelector<HTMLButtonElement>(".composer .box button")!.click();
   await flush();
 };
 
@@ -103,15 +105,182 @@ beforeEach(() => {
 });
 afterEach(() => {
   document.body.replaceChildren();
+  document.head.querySelector("link[data-codesense-chat]")?.remove();
+});
+
+describe("kit.chat stylesheet", () => {
+  const css = readFileSync(join(KIT_DIR, "chat.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // Every rule's selectors, comma by comma, inside @media and @container too; @keyframes steps are not selectors.
+  function selectors(text: string): string[] {
+    const out: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+      const open = text.indexOf("{", i);
+      if (open < 0) break;
+      const head = text.slice(i, open).trim();
+      let depth = 1;
+      let j = open + 1;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "{") depth++;
+        else if (text[j] === "}") depth--;
+        j++;
+      }
+      const body = text.slice(open + 1, j - 1);
+      if (head.startsWith("@keyframes")) {
+        // steps, not selectors
+      } else if (head.startsWith("@")) out.push(...selectors(body));
+      else out.push(...head.split(",").map((s) => s.trim()));
+      i = j;
+    }
+    return out;
+  }
+
+  it("keeps every selector inside the chat's own root, so a page's .log and .msg are not touched", () => {
+    const all = selectors(css);
+    expect(all.length).toBeGreaterThan(80);
+    for (const selector of all) expect(selector, selector).toMatch(/^\.cs-chat\b/);
+  });
+
+  it("styles every class the chat's modules emit, and the page variant", () => {
+    const emitted = new Set<string>();
+    for (const file of readdirSync(join(KIT_DIR, "chat")).filter((f) => f.endsWith(".js"))) {
+      const text = readFileSync(join(KIT_DIR, "chat", file), "utf8");
+      // Every way the modules set a class: a quoted literal, a template literal (its ${...} parts
+      // are values, named below), a ternary of two literals, and setAttribute('class', ...).
+      const found = [
+        ...text.matchAll(/class:'([^'$]*)'/g),
+        ...text.matchAll(/class:`([^`]*)`/g),
+        ...text.matchAll(/class:\([^?]*\)[^?]*\?'([^']*)':'([^']*)'/g),
+        ...text.matchAll(/class:[^,]*\?`([^`]*)`:'([^']*)'/g),
+        ...text.matchAll(/setAttribute\('class','([^']*)'/g),
+      ];
+      for (const match of found)
+        for (const part of match.slice(1))
+          for (const name of part
+            .replace(/\$\{[^}]*\}/g, " ")
+            .split(/\s+/)
+            .filter(Boolean))
+            emitted.add(name);
+    }
+    // The values a message's side takes (the page variant is styled as [data-variant=page]).
+    for (const name of ["lead", "you", "other"]) emitted.add(name);
+    // cs-avatar is the kit stylesheet's own; the rest are the chat's.
+    emitted.delete("cs-avatar");
+    // The root is styled as .cs-chat itself (it carries both classes).
+    emitted.delete("chatcol");
+    emitted.delete("page");
+    expect(emitted.size).toBeGreaterThan(25);
+    const styled = selectors(css).join(" ");
+    for (const name of emitted) expect(styled, `.${name}`).toContain(`.${name}`);
+    expect(styled).toContain("[data-variant=page]");
+  });
+
+  // The declarations of `selector`'s own rule.
+  const ruleOf = (selector: string) => {
+    const at = css.indexOf(`${selector}{`);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf("}", at));
+  };
+  it("keeps a message's actions in the layout while hidden, so Pin… or Unpin can take focus back after a redraw", () => {
+    // display:none would make focus() a no-op on the rebuilt button: focus dropped to the page after a
+    // replace, its Undo, Esc in the chooser, or a pin. Hidden by opacity, the row shows on focus-within.
+    const hidden = ruleOf(".cs-chat .msg .pin-acts");
+    expect(hidden).not.toContain("display:none");
+    expect(hidden).toContain("opacity:0");
+    expect(hidden).toContain("pointer-events:none");
+    const shown = ruleOf(".cs-chat .msg:hover .pin-acts,.cs-chat .msg:focus-within .pin-acts");
+    expect(shown).toContain("opacity:1");
+    expect(shown).toContain("pointer-events:auto");
+  });
+});
+
+describe("kit.chat mounts on one page", () => {
+  const idsIn = (root: ParentNode) => Array.from(root.querySelectorAll("[id]")).map((n) => n.id);
+
+  it("gives two mounts no id in common, and the first keeps the ids pages and tests already use", async () => {
+    const one = setup([lead("idle")]);
+    const two = setup([lead("idle")]);
+    mountOn(one);
+    mountOn(two);
+    await flush();
+    expect(one.el.querySelector("#sv-composer-input")).not.toBeNull();
+    expect(idsIn(two.el).length).toBeGreaterThan(0);
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+    // Each composer describes itself by its own hint.
+    for (const s of [one, two]) {
+      const input = s.el.querySelector("textarea")!;
+      const hint = input.getAttribute("aria-describedby")!;
+      expect(s.el.querySelector(`#${hint}`)).not.toBeNull();
+    }
+  });
+
+  it("frees a mount's ids when it unmounts", async () => {
+    const one = setup([lead("idle")]);
+    const two = setup([lead("idle")]);
+    const first = mountOn(one);
+    mountOn(two);
+    first.unmount();
+    const third = setup([lead("idle")]);
+    mountOn(third);
+    await flush();
+    expect(third.el.querySelector("#sv-composer-input")).not.toBeNull();
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("gives two chats mounted into elements that are not in the page yet their own ids", async () => {
+    const make = () => ({ ...setup([lead("idle")]), el: document.createElement("div") });
+    const one = make();
+    const two = make();
+    mountOn(one);
+    mountOn(two);
+    document.body.append(one.el, two.el);
+    await flush();
+    const all = idsIn(document.body);
+    expect(new Set(all).size).toBe(all.length);
+    for (const s of [one, two]) {
+      const hint = s.el.querySelector("textarea")!.getAttribute("aria-describedby")!;
+      expect(s.el.querySelector(`#${hint}`)).not.toBeNull();
+    }
+  });
+
+  it("links the chat stylesheet once per page, and not when the page opts out", () => {
+    const links = () => document.head.querySelectorAll("link[data-codesense-chat]");
+    mountOn(setup([lead("idle")]), { styles: false });
+    expect(links()).toHaveLength(0);
+    mountOn(setup([lead("idle")]));
+    mountOn(setup([lead("idle")]));
+    expect(links()).toHaveLength(1);
+    expect(links()[0]!.getAttribute("href")).toBe("/kit/v1/chat.css");
+  });
+
+  it("marks its root so the stylesheet's rules stay inside the chat", () => {
+    const s = setup([lead("idle")]);
+    mountOn(s);
+    expect(s.el.querySelector(".chatcol.cs-chat")).not.toBeNull();
+  });
 });
 
 describe("kit.chat", () => {
   it("is the committed bundle of its modules, and a plain script", () => {
     expect(bundleChat()).toBe(CHAT_JS);
     expect(CHAT_JS).not.toMatch(/^\s*(import|export)\b/m);
-    expect(Object.keys(kitOf().chat).sort()).toEqual(["core", "mount", "pinToBottom", "thread"]);
+    expect(Object.keys(kitOf().chat).sort()).toEqual([
+      "core",
+      "createSendState",
+      "mount",
+      "pinToBottom",
+      "targetOf",
+      "thread",
+    ]);
     expect(Object.keys(kitOf().chat.core).sort()).toEqual([
       "CONSENT_CLASSES",
+      "PIN_CAP",
+      "PIN_REPLACE_FAILED",
+      "PIN_ROOM_NOW",
+      "PIN_UNDO_FULL",
+      "PIN_UNDO_GONE",
       "cardAnswer",
       "createMarkLatch",
       "deliveryMark",
@@ -120,6 +289,20 @@ describe("kit.chat", () => {
       "parseCard",
       "parseCardLine",
       "parseNext",
+      "pinCapLabel",
+      "pinCapNote",
+      "pinChooserHeading",
+      "pinFirstSentence",
+      "pinFirstWords",
+      "pinListChangeText",
+      "pinLiveText",
+      "pinNewRowText",
+      "pinPinnedAtLine",
+      "pinPinnedMeanwhileText",
+      "pinReplaceLabel",
+      "pinReplacedText",
+      "pinTitleOf",
+      "pinWho",
     ]);
     expect(Object.keys(kitOf().chat.thread).sort()).toEqual([
       "mergeThread",
@@ -127,6 +310,28 @@ describe("kit.chat", () => {
       "rowsOf",
       "sideOf",
     ]);
+  });
+
+  // Some hosts concatenate the chat modules into one script scope, so a top-level name may be declared only once.
+  it("declares each top-level name in one module only", () => {
+    const modules = readdirSync(join(KIT_DIR, "chat"))
+      .filter((f) => f.endsWith(".js") && f !== "index.js")
+      .map((file) => ({ file, text: readFileSync(join(KIT_DIR, "chat", file), "utf8") }));
+    // Joined into one script, a second const, let or class of a name is a parse error, wherever it sits in a declaration.
+    const joined = modules
+      .map(({ text }) => text.replace(/^import\b.*$/gm, "").replace(/^export\s+/gm, ""))
+      .join("\n");
+    expect(() => new Function(joined)).not.toThrow();
+    // A second function of a name parses, so those are counted line by line.
+    const owners = new Map<string, string[]>();
+    for (const { file, text } of modules) {
+      for (const [, name] of text.matchAll(
+        /^(?:export\s+)?(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm,
+      )) {
+        owners.set(name, [...new Set([...(owners.get(name) ?? []), file])]);
+      }
+    }
+    expect([...owners].filter(([, files]) => files.length > 1)).toEqual([]);
   });
 
   it("does not replace a chat that is already there", () => {
@@ -163,6 +368,30 @@ describe("kit.chat", () => {
     expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
   });
 
+  it("with the messageDelivery topic, the message's own row decides Queued and Delivered", async () => {
+    const roster = [lead("running")];
+    const s = setup(roster);
+    const rows = new Map<number, { state: "queued" | "delivered" }>();
+    const reads = { ...s.reads, delivery: (id: number) => rows.get(id) ?? null };
+    mountOn({ ...s, reads });
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    rows.set(41, { state: "queued" });
+    // The roster alone would say Delivered now; the topic says this message is still queued.
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
+    rows.set(41, { state: "delivered" });
+    s.emit("delivery");
+    await flush();
+    expect(s.el.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
   it("a needs-you message is a card; a pick answers it once through the transport", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
     const s = setup(
@@ -182,6 +411,58 @@ describe("kit.chat", () => {
     expect(s.el.querySelector('[data-card="9"]')!.getAttribute("data-state")).toBe("answered");
   });
 
+  it("a card shows the lead's reason for its pick under the question, and none when it gave no reason", async () => {
+    const text = "Ship it?\n\nOptions: `Ship`, `Hold`. My pick: Ship, because green.";
+    const plain = "Ship it?\n\nOptions: `Ship`, `Hold`.";
+    const s = setup(
+      [lead("idle")],
+      [
+        { messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 },
+        { messageId: 10, from: "lead-1", kind: "needs-you", text: plain, createdAtMs: 2000 },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const card = s.el.querySelector('[data-card="9"]')!;
+    const why = card.querySelector(".why")!;
+    expect(why.textContent).toBe("Story lead recommends Ship because green.");
+    // it reads after the question and before the answers
+    expect(card.querySelector(".body")!.compareDocumentPosition(why)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(why.compareDocumentPosition(card.querySelector(".opts")!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(s.el.querySelector('[data-card="10"] .why')).toBeNull();
+  });
+
+  it.each([
+    [
+      "a backticked pick is its label",
+      "My pick: `Ship`, because green.",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason's own end punctuation folds into one full stop",
+      "My pick: Ship, because green!!",
+      "Story lead recommends Ship because green.",
+    ],
+    [
+      "a reason that starts with because gets no second one",
+      "My pick: Ship, because because the tests are green.",
+      "Story lead recommends Ship because the tests are green.",
+    ],
+  ])("the reason line: %s", async (_why, pick, line) => {
+    const text = `Ship it?\n\nOptions: \`Ship\`, \`Hold\`. ${pick}`;
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 9, from: "lead-1", kind: "needs-you", text, createdAtMs: 1000 }],
+    );
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector('[data-card="9"] .why')!.textContent).toBe(line);
+  });
+
   it("cards: false shows a needs-you message as a message", async () => {
     const text = "Ship it?\n\nOptions: `Ship`, `Hold`.";
     const s = setup(
@@ -191,7 +472,10 @@ describe("kit.chat", () => {
     mountOn(s, { cards: false });
     await flush();
     expect(s.el.querySelector("[data-card]")).toBeNull();
-    expect(s.el.querySelector('[data-mid="9"] .body')!.textContent).toBe(text);
+    // as a message, its backticked options are drawn as code (the inline subset)
+    const body = s.el.querySelector('[data-mid="9"] .body')!;
+    expect(body.textContent).toBe(text.replace(/`/g, ""));
+    expect([...body.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["Ship", "Hold"]);
   });
 
   it("with no lead running, the first send launches once, a second is held, and it flushes when the lead joins", async () => {
@@ -313,7 +597,68 @@ describe("kit.chat", () => {
       ...extra,
     });
     const placeholder = (el: HTMLElement) =>
-      el.querySelector<HTMLTextAreaElement>("#sv-composer-input")!.placeholder;
+      el.querySelector<HTMLTextAreaElement>(".composer textarea")!.placeholder;
+
+    it("says the empty copy only once the thread has read empty: a held read says it is loading, a failed one its failure with Retry", async () => {
+      let release!: (lists: Row[][]) => void;
+      const held = setup([lead("idle")]);
+      mountOn(held, {
+        target: target({ read: () => new Promise<Row[][]>((resolve) => (release = resolve)) }),
+        layout: { empty: "No messages yet" },
+      });
+      await flush();
+      expect(held.el.textContent).not.toContain("No messages yet");
+      expect(held.el.querySelector('[data-row="loading"]')?.textContent).toBe(
+        "Loading the conversation…",
+      );
+      release([[]]);
+      await flush();
+      expect(held.el.textContent).toContain("No messages yet");
+      expect(held.el.querySelector('[data-row="loading"]')).toBeNull();
+
+      let fail = true;
+      const failed = setup([lead("idle")]);
+      mountOn(failed, {
+        target: target({
+          read: async (peers: Row[], transport: any) => {
+            if (fail) throw new Error("denied: grant");
+            return Promise.all(peers.map((row) => transport.threadOf(row.sessionId)));
+          },
+        }),
+        layout: { empty: "No messages yet" },
+      });
+      await flush();
+      expect(failed.el.textContent).not.toContain("No messages yet");
+      expect(failed.el.querySelector('[data-row="loading"]')).toBeNull();
+      const alert = failed.el.querySelector<HTMLElement>('[data-fail="thread"]')!;
+      expect(alert).toHaveTextContent("denied: grant");
+      fail = false;
+      alert.querySelector<HTMLButtonElement>("[data-thread-retry]")!.click();
+      await flush();
+      expect(failed.el.querySelector('[data-fail="thread"]')).toBeNull();
+      expect(failed.el.textContent).toContain("No messages yet");
+    });
+
+    it("a roster read that fails says so with Retry, not loading for good; Retry reads it again", async () => {
+      const s = setup([lead("idle")]);
+      let fail = true;
+      const sessions = s.reads.sessions.bind(s.reads);
+      s.reads.sessions = async () => {
+        if (fail) throw new Error("denied: grant");
+        return sessions();
+      };
+      mountOn(s, { target: target(), layout: { empty: "No messages yet" } });
+      await flush();
+      expect(s.el.querySelector('[data-row="loading"]')).toBeNull();
+      const alert = s.el.querySelector<HTMLElement>('[data-fail="roster"]')!;
+      expect(alert).toHaveTextContent("Couldn't load the conversation.");
+      expect(alert).toHaveTextContent("denied: grant");
+      fail = false;
+      alert.querySelector<HTMLButtonElement>("[data-thread-retry]")!.click();
+      await flush();
+      expect(s.el.querySelector('[data-fail="roster"]')).toBeNull();
+      expect(s.el.textContent).toContain("No messages yet");
+    });
 
     it("copy overrides the words it names and keeps the rest", async () => {
       const s = setup([lead("idle")]);
@@ -517,6 +862,7 @@ describe("kit.chat", () => {
 
   it("pinToBottom follows the newest message until the reader scrolls up, and reset follows again", () => {
     const log = document.createElement("div");
+    log.append(document.createElement("div"));
     Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
     Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
     const pin = kitOf().chat.pinToBottom(log, { settle: false });
@@ -528,6 +874,31 @@ describe("kit.chat", () => {
     expect(log.scrollTop).toBe(200);
     pin.reset();
     expect(log.scrollTop).toBe(1000);
+  });
+});
+
+describe("kit.pinToBottom on an empty log", () => {
+  it("does not read the log's layout until it has a message, then follows as before", () => {
+    const log = document.createElement("div");
+    const reads = { height: 0, top: [] as number[] };
+    Object.defineProperty(log, "scrollHeight", {
+      get: () => (reads.height++, 1000),
+      configurable: true,
+    });
+    Object.defineProperty(log, "clientHeight", { value: 100, configurable: true });
+    Object.defineProperty(log, "scrollTop", {
+      get: () => reads.top.at(-1) ?? 0,
+      set: (value: number) => reads.top.push(value),
+      configurable: true,
+    });
+    const pin = kitOf().chat.pinToBottom(log, { settle: false });
+    pin.onContentChanged();
+    pin.reset();
+    // An empty log has nothing to follow: no forced reflow, no scroll write.
+    expect(reads).toEqual({ height: 0, top: [] });
+    log.append(document.createElement("div"));
+    pin.onContentChanged();
+    expect(reads.top).toEqual([1000]);
   });
 });
 
@@ -543,7 +914,7 @@ describe("kit.chat page layout and activity", () => {
     mountOn(s);
     await flush();
     const col = s.el.querySelector(".chatcol")!;
-    expect(col.className).toBe("chatcol");
+    expect(col.className).toBe("chatcol cs-chat");
     expect(col.hasAttribute("data-variant")).toBe(false);
     expect(activityRow(s.el)).toBeNull();
   });
@@ -558,7 +929,7 @@ describe("kit.chat page layout and activity", () => {
     const other = setup([lead("idle")]);
     mountOn(other, { layout: { variant: "wide" } });
     await flush();
-    expect(other.el.querySelector(".chatcol")!.className).toBe("chatcol");
+    expect(other.el.querySelector(".chatcol")!.className).toBe("chatcol cs-chat");
     expect(other.el.querySelector(".chatcol")!.hasAttribute("data-variant")).toBe(false);
   });
 
@@ -624,6 +995,201 @@ describe("kit.chat page layout and activity", () => {
   });
 });
 
+describe("kit.chat message text: an inline markdown subset", () => {
+  const bodyOf = async (text: string, extra: Row = {}) => {
+    const s = setup(
+      [lead("idle")],
+      [{ messageId: 1, from: "lead-1", text, createdAtMs: 1, ...extra }],
+    );
+    mountOn(s);
+    await flush();
+    return s.el.querySelector<HTMLElement>('.log [data-mid="1"] .body')!;
+  };
+  const tags = (body: HTMLElement) =>
+    [...body.querySelectorAll("*")].map((el) => [el.tagName.toLowerCase(), el.textContent]);
+
+  it("draws **strong**, *em* or _em_, and `code`, and shows no markers", async () => {
+    const body = await bodyOf("**Merged** with `main`; see *the notes* and _this one_.");
+    expect(tags(body)).toEqual([
+      ["strong", "Merged"],
+      ["code", "main"],
+      ["em", "the notes"],
+      ["em", "this one"],
+    ]);
+    expect(body.textContent).toBe("Merged with main; see the notes and this one.");
+  });
+
+  it("leaves what isn't markup as it is: snake_case, arithmetic, lone and unclosed markers", async () => {
+    const text = "snake_case_name, 2*3*4, a ** lone pair **, **open and `open too";
+    const body = await bodyOf(text);
+    expect(tags(body)).toEqual([]);
+    expect(body.textContent).toBe(text);
+  });
+
+  it("reads nothing inside code, and never markup: tags stay text", async () => {
+    const body = await bodyOf("`**not bold**` and <b>tag</b> **bold**\nnext line");
+    expect(tags(body)).toEqual([
+      ["code", "**not bold**"],
+      ["strong", "bold"],
+    ]);
+    expect(body.textContent).toBe("**not bold** and <b>tag</b> bold\nnext line");
+    expect(body.querySelector("b")).toBeNull();
+  });
+});
+
+describe("kit.chat activity: the live lead's prose from onSessionText", () => {
+  type Prose = { kind: "prose" | "final"; turn: string; key: string; text: string } | null;
+  const running = (sessionId = "s1"): Row => ({ ...lead("running"), sessionId });
+  const activityRow = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-row="activity"]');
+  // The host's onSessionText: one subscriber per session; say(sessionId, text) pushes to it.
+  function host() {
+    const subs = new Map<string, (text: Prose, error?: unknown) => void>();
+    const offs: string[] = [];
+    const onSessionText = vi.fn((sessionId: string, cb: (text: Prose, error?: unknown) => void) => {
+      subs.set(sessionId, cb);
+      return () => {
+        offs.push(sessionId);
+        subs.delete(sessionId);
+      };
+    });
+    (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText =
+      onSessionText;
+    const say = async (sessionId: string, text: Prose, error?: unknown) => {
+      subs.get(sessionId)?.(text, error);
+      await flush();
+    };
+    return { onSessionText, say, offs, subs };
+  }
+  const prose = (text: string, kind: "prose" | "final" = "prose"): Prose => ({
+    kind,
+    turn: "t1",
+    key: "k1",
+    text,
+  });
+
+  it("shows the latest prose's last sentence in the working row, one line with the whole text in its title, and announces only Working…", async () => {
+    const { onSessionText, say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    expect(onSessionText).toHaveBeenCalledWith("s1", expect.any(Function));
+    await say("s1", prose("Reading the diff.\nNow the tests pass. Writing the summary."));
+    const row = activityRow(s.el)!;
+    const line = row.querySelector<HTMLElement>(".prose")!;
+    expect(line.textContent).toBe("Writing the summary.");
+    expect(line.getAttribute("title")).toBe(
+      "Reading the diff.\nNow the tests pass. Writing the summary.",
+    );
+    // each chunk is not announced: the row sits outside the log's live region, at the thread's foot, and its status says Working… once
+    expect(line.closest("[aria-live]")).toBeNull();
+    expect(row.closest(".log")).toBeNull();
+    expect(s.el.querySelector(".log")!.nextElementSibling!.contains(row)).toBe(true);
+    expect(row.querySelector('[role="status"]')!.textContent).toBe("Working…");
+    await say("s1", prose("Opening the PR."));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe("Opening the PR.");
+  });
+
+  it.each([
+    ["a file name", "Now editing src/chat/prose.js", "Now editing src/chat/prose.js"],
+    ["a version", "Read the notes. Bumping to 0.159.3", "Bumping to 0.159.3"],
+    [
+      "a URL",
+      "See https://example.com/docs/a.html for it",
+      "See https://example.com/docs/a.html for it",
+    ],
+    ["a mid-token ?", "Checked the ?raw=1 path", "Checked the ?raw=1 path"],
+    ["a list item", "Done so far:\n- Updated the `docs` page", "Updated the docs page"],
+    ["a heading", "## Next step", "Next step"],
+    ["a quote", "> Ship it when green.", "Ship it when green."],
+    ["a closing fence", "Here it is:\n```", "Here it is:"],
+    ["a fenced block's code", "Running it:\n```sh\nnpm test\n```", "Running it:"],
+    ["a block still open", "Writing it:\n```\nconst a = 1;", "Writing it:"],
+    ["a table", "The results:\n| a | b |\n|---|---|\n| 1 | 2 |", "The results:"],
+  ])("the line reads as a sentence: %s", async (_kind, text, line) => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose(text));
+    expect(activityRow(s.el)!.querySelector(".prose")!.textContent).toBe(line);
+  });
+
+  it("clears on the turn's final message and on the lead's next message in the thread", async () => {
+    const { say } = host();
+    const thread: Row[] = [];
+    const s = setup([running()], thread);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("Thinking it through."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    await say("s1", prose("Done.", "final"));
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    await say("s1", prose("Next step."));
+    expect(activityRow(s.el)!.querySelector(".prose")).not.toBeNull();
+    thread.push({
+      messageId: 9,
+      from: "lead-1",
+      text: "Here's the plan.",
+      createdAtMs: Date.now() + 1000,
+    });
+    s.emit("inbox");
+    await flush();
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+
+  it("follows the live lead's session, and lets it go on a peer change and on unmount", async () => {
+    const { onSessionText, say, offs } = host();
+    const roster = [running("s1")];
+    const s = setup(roster);
+    const chat = mountOn(s, { activity: true });
+    await flush();
+    await say("s1", prose("On the first session."));
+    roster[0] = running("s2");
+    await s.reads.sessions();
+    await flush();
+    expect(offs).toEqual(["s1"]);
+    expect(onSessionText).toHaveBeenLastCalledWith("s2", expect.any(Function));
+    // the old session's prose doesn't carry over
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+    chat.unmount();
+    expect(offs).toEqual(["s1", "s2"]);
+  });
+
+  it("works without it: a refusal, a host without onSessionText, or no activity row shows today's row", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: true });
+    await flush();
+    await say("s1", null, new Error("refused: a remote session"));
+    const row = activityRow(s.el)!;
+    expect(row.querySelector(".prose")).toBeNull();
+    expect(row.querySelector('[role="alert"]')).toBeNull();
+    expect(row.textContent).toContain("Working…");
+
+    const off = setup([running()]);
+    const { onSessionText } = host();
+    mountOn(off);
+    await flush();
+    expect(onSessionText).not.toHaveBeenCalled();
+
+    delete (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText;
+    const bare = setup([running()]);
+    mountOn(bare, { activity: true });
+    await flush();
+    expect(activityRow(bare.el)!.textContent).toContain("Working…");
+  });
+
+  it("the page's own activity line still wins over the prose", async () => {
+    const { say } = host();
+    const s = setup([running()]);
+    mountOn(s, { activity: { text: () => "Cloning acme/api · 62%" } });
+    await flush();
+    await say("s1", prose("Reading files."));
+    expect(activityRow(s.el)!.textContent).toContain("Cloning acme/api · 62%");
+    expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
+  });
+});
+
 describe("kit.chat suggestion chips from the Next line", () => {
   const reply = (id: number, text: string, from = "lead-1", at = id * 1000): Row => ({
     messageId: id,
@@ -642,7 +1208,8 @@ describe("kit.chat suggestion chips from the Next line", () => {
     mountOn(s);
     await flush();
     expect(s.el.querySelector(".chips")).toBeNull();
-    expect(bodies(s.el)).toEqual([NEXT]);
+    // the line stays in the message, its backticked chips drawn as code (the inline subset)
+    expect(bodies(s.el)).toEqual([NEXT.replace(/`/g, "")]);
   });
 
   it("next: true turns the lead's newest Next line into chips and hides the line from the message", async () => {
@@ -871,6 +1438,20 @@ describe("kit.chat consent cards (the card line)", () => {
     expect(s.el.querySelector(".card")!.hasAttribute("data-step")).toBe(false);
   });
 
+  it("a lead message that is not a needs-you card shows its card line raw, with no buttons and no consent", async () => {
+    for (const kind of ["update", undefined]) {
+      const row: Row = { ...card(`Creating it now.\n${LINE}`), kind };
+      const s = setup([lead("idle")], [row]);
+      mountOn(s, { cards: { consent: true } });
+      await flush();
+      expect(s.el.textContent).toContain(LINE);
+      expect(s.el.querySelector(".card")).toBeNull();
+      expect(s.el.querySelector("[data-ans]")).toBeNull();
+      expect(s.el.querySelector("[data-consent]")).toBeNull();
+      expect(s.el.querySelector("[data-step]")).toBeNull();
+    }
+  });
+
   it("a line that is not well formed stays in the text and the card falls back to the page's parser", async () => {
     const bad = "Go?\ncard: clone · write · x=Go";
     const s = setup([lead("idle")], [card(bad)]);
@@ -948,6 +1529,7 @@ describe("kit.chat faces", () => {
   };
 
   it("with faces unset the thread is exactly what it was: one meta line and one body per message, no run marks", async () => {
+    // (role and tabindex are the thread's Tab stop, which every message carries; see "the thread is one Tab stop")
     const calls = withAvatar();
     const s = setup([lead("idle")], THREAD);
     mountOn(s);
@@ -955,35 +1537,35 @@ describe("kit.chat faces", () => {
     expect(shape(s.el)).toEqual([
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "first",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "second",
       },
       {
         cls: "msg other",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Dev two",
         body: "from another agent",
       },
       {
         cls: "msg you",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "You",
         body: "my reply",
       },
       {
         cls: "msg lead",
-        attrs: ["class", "data-mid"],
+        attrs: ["class", "data-mid", "role", "tabindex"],
         kids: ["meta", "body"],
         meta: "Story lead",
         body: "back again",
@@ -1000,12 +1582,13 @@ describe("kit.chat faces", () => {
     await flush();
     const rows = shape(s.el);
     // lead run (1, 2), another agent (3), the person (4), the lead again (5)
+    // a run's first message leads with the face beside its meta line; the person's own has no face
     expect(rows.map((r) => r.kids)).toEqual([
-      ["meta", "body"],
+      ["who", "body"],
       ["body"],
+      ["who", "body"],
       ["meta", "body"],
-      ["meta", "body"],
-      ["meta", "body"],
+      ["who", "body"],
     ]);
     const msgs = [...s.el.querySelectorAll<HTMLElement>(".log .msg")];
     expect(msgs.map((m) => m.getAttribute("data-run"))).toEqual([
@@ -1050,7 +1633,8 @@ describe("kit.chat faces", () => {
     await flush();
     const img = s.el.querySelector<HTMLImageElement>(".log .msg.other .cs-avatar img")!;
     expect(img.getAttribute("src")).toBe("/img/dev.png");
-    expect(img.getAttribute("alt")).toBe("Dev two");
+    // the name is on the meta line beside it, so the image says nothing of its own
+    expect(img.getAttribute("alt")).toBe("");
     expect(calls).toEqual([
       expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Lead one" }),
     ]);
@@ -1066,9 +1650,7 @@ describe("kit.chat faces", () => {
     const img = s.el.querySelector<HTMLImageElement>(".log .msg .cs-avatar img")!;
     img.dispatchEvent(new Event("error"));
     expect(s.el.querySelector(".log .msg img")).toBeNull();
-    expect(s.el.querySelector(".log .msg .meta .cs-avatar")!.getAttribute("data-name")).toBe(
-      "Dev two",
-    );
+    expect(s.el.querySelector(".log .msg .cs-avatar")!.getAttribute("data-name")).toBe("Dev two");
     expect(calls.at(-1)).toEqual(
       expect.objectContaining({ face: "builtin-funny:coffee-bot", name: "Dev two" }),
     );
@@ -1080,7 +1662,7 @@ describe("kit.chat faces", () => {
     await flush();
     bare.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
     expect(bare.el.querySelector(".log .msg img")).toBeNull();
-    expect(bare.el.querySelector(".log .msg .meta .cs-avatar")!.textContent).toBe("DT");
+    expect(bare.el.querySelector(".log .msg .cs-avatar")!.textContent).toBe("DT");
   });
 
   it("a streamed reply joins the lead's run and keeps no meta line the final message would drop", async () => {
@@ -1140,6 +1722,96 @@ describe("kit.chat faces", () => {
     expect(msgs.filter((m) => m.querySelector(".cs-avatar")).length).toBe(2);
   });
 
+  // What a screen reader reads from a node: its text, skipping what is aria-hidden, with an image read as its alt.
+  const spoken = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (!(node instanceof Element) || node.getAttribute("aria-hidden") === "true") return "";
+    if (node instanceof HTMLImageElement) return node.getAttribute("alt") ?? "";
+    return [...node.childNodes].map(spoken).join("");
+  };
+  // The run starters' meta lines with faces unset: each reads exactly "<name> · <time>".
+  const plainMetas = async (thread: Row[]) => {
+    const plain = setup([lead("idle")], thread);
+    mountOn(plain);
+    await flush();
+    const metas = [...plain.el.querySelectorAll<HTMLElement>(".log .msg .meta")].map(
+      (m) => m.textContent,
+    );
+    plain.el.remove();
+    return metas;
+  };
+
+  it.each([
+    ["initials (no kit.avatar)", false, () => ({ name: "Story lead" })],
+    ["initials through kit.avatar", true, () => ({ name: "Story lead" })],
+    [
+      "a face ref through kit.avatar",
+      true,
+      () => ({ face: "builtin-funny:coffee-bot", name: "Story lead" }),
+    ],
+    ["an image", false, () => ({ src: "/img/lead.png", name: "Story lead" })],
+    // the face name holds the line's name, so nothing is said before the line
+    ["an emoji name", false, () => ({ name: "🦊 Story lead" })],
+  ])(
+    "with faces on (%s) the meta line reads only the name and the time, and the face is read by no one",
+    async (_kind, kitAvatar, faces, said = "") => {
+      if (kitAvatar) withAvatar();
+      const thread = THREAD.slice(0, 1);
+      const [expected] = await plainMetas(thread);
+      expect(expected).toMatch(/^Story lead · \S/);
+      const s = setup([lead("idle")], thread);
+      mountOn(s, { faces });
+      await flush();
+      const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+      expect(msg.querySelector(".cs-avatar")).not.toBeNull();
+      // the face sits beside the meta line, not inside it
+      expect(msg.querySelector(".meta .cs-avatar")).toBeNull();
+      expect(msg.querySelector(".meta")!.textContent).toBe(expected);
+      // no initials, alt or title is read; a face name the line doesn't show is said once, before it
+      expect(spoken(msg)).toBe(`${said}${expected}first`);
+      const img = msg.querySelector("img");
+      if (img) expect(img.getAttribute("alt")).toBe("");
+    },
+  );
+
+  it("a face name the meta line doesn't show is said before the line, and one it shows is not said twice", async () => {
+    const thread = THREAD.slice(0, 1);
+    const [line] = await plainMetas(thread);
+    const s = setup([lead("idle")], thread);
+    mountOn(s, { faces: () => ({ name: "Ada", label: "Story lead" }) });
+    await flush();
+    const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+    // the visible line is unchanged; only a screen reader hears the name
+    expect(msg.querySelector(".meta")!.textContent).toBe(line);
+    expect(msg.querySelector(".who .sr")!.textContent).toBe("Ada, ");
+    expect(spoken(msg)).toBe(`Ada, ${line}first`);
+
+    const same = setup([lead("idle")], thread);
+    mountOn(same, { faces: () => ({ name: "Story lead", label: "Story lead" }) });
+    await flush();
+    const once = same.el.querySelector<HTMLElement>(".log .msg")!;
+    expect(once.querySelector(".sr")).toBeNull();
+    expect(spoken(once)).toBe(`${line}first`);
+
+    // nor when it holds the line's name in another case or with more around it
+    const holds = setup([lead("idle")], thread);
+    mountOn(holds, { faces: () => ({ name: " story LEAD (codex) ", label: "Story lead" }) });
+    await flush();
+    expect(holds.el.querySelector(".log .msg .sr")).toBeNull();
+  });
+
+  it("a face swapped in for an image that fails to load is hidden as well", async () => {
+    const [expected] = await plainMetas(THREAD.slice(0, 1));
+    const s = setup([lead("idle")], THREAD.slice(0, 1));
+    mountOn(s, { faces: () => ({ src: "/img/gone.png", name: "Story lead" }) });
+    await flush();
+    s.el.querySelector(".log .msg img")!.dispatchEvent(new Event("error"));
+    const msg = s.el.querySelector<HTMLElement>(".log .msg")!;
+    expect(msg.querySelector(".cs-avatar")!.textContent).toBe("SL");
+    expect(msg.querySelector(".meta")!.textContent).toBe(expected);
+    expect(spoken(msg)).toBe(`${expected}first`);
+  });
+
   it("a sender run keeps its nodes when a later message joins it", async () => {
     withAvatar();
     const thread = [said(1, "lead-1", "first")];
@@ -1155,5 +1827,1611 @@ describe("kit.chat faces", () => {
       "start",
       "cont",
     ]);
+  });
+});
+
+describe("kit.chat onPin: the person pins a message", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  const THREAD = [
+    said(5, "Merge plan: squash onto main. Then tag it."),
+    said(6, "Review is clean."),
+  ];
+  type Pin = { messageId: number; pinnedBy: string };
+
+  async function mountPins(start: Pin[], change?: (action: string, id: number) => Promise<Pin[]>) {
+    let pins = start;
+    const subs = new Set<() => void>();
+    const onPin = {
+      pins: () => pins,
+      // The page owns the list: what a change resolves is what the next read returns.
+      change: vi.fn(async (action: string, id: number) => {
+        const next = change
+          ? await change(action, id)
+          : action === "unpin"
+            ? pins.filter((p) => p.messageId !== id)
+            : [...pins, { messageId: id, pinnedBy: "human" }];
+        pins = next;
+        return next;
+      }),
+      subscribe: (fn: () => void) => (subs.add(fn), () => subs.delete(fn)),
+      showPins: vi.fn(),
+      name: (by: string) => (by === "lead-1" ? "Story lead" : by),
+    };
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s, { onPin });
+    await flush();
+    const row = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"]`)!;
+    const pinOf = (id: number) => row(id).querySelector<HTMLButtonElement>(".pin-b")!;
+    const live = () => s.el.querySelector(".pin-live")!.textContent;
+    return { s, onPin, row, pinOf, live };
+  }
+
+  it("draws a Pin on each message; a click pins it, keeps focus, tags it and says so", async () => {
+    const { onPin, row, pinOf, live } = await mountPins([]);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin");
+    pinOf(5).focus();
+    pinOf(5).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("pin", 5);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(row(5).querySelector(".pin-tag")!.textContent).toBe("Pinned by you");
+    expect(row(5).classList.contains("pinned")).toBe(true);
+    expect(live()).toBe('Pinned "Merge plan: squash onto…". 1 of 3 pinned.');
+  });
+
+  it("at the cap every Pin is dimmed ahead of time; a click names whose pins fill it, and nothing is replaced", async () => {
+    const full = [1, 2, 3].map((messageId) => ({ messageId, pinnedBy: "lead-1" }));
+    const { s, onPin, row, pinOf } = await mountPins(full);
+    expect(pinOf(5).getAttribute("aria-disabled")).toBe("true");
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin (3 of 3 pinned)");
+    pinOf(5).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    const note = row(5).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("3 of 3 pinned (3 by Story lead). Unpin one to pin this.");
+    (note.querySelector("button") as HTMLButtonElement).click();
+    expect(onPin.showPins).toHaveBeenCalled();
+    pinOf(5).click();
+    await flush();
+    s.el
+      .querySelector(".log")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flush();
+    expect(row(5).querySelector(".pin-note")).toBeNull();
+  });
+
+  it("an unpin offers Undo, which restores the pin as it was", async () => {
+    const { onPin, row, pinOf } = await mountPins([{ messageId: 6, pinnedBy: "lead-1" }]);
+    expect(row(6).querySelector(".pin-tag")!.textContent).toBe("Pinned by Story lead");
+    pinOf(6).click();
+    await flush();
+    const undo = row(6).querySelector<HTMLButtonElement>(".pin-note button")!;
+    expect(undo.textContent).toBe("Undo");
+    undo.click();
+    await flush();
+    expect(onPin.change.mock.calls).toEqual([
+      ["unpin", 6],
+      ["restore", 6],
+    ]);
+    expect(row(6).querySelector(".pin-note")).toBeNull();
+  });
+
+  it("an Undo refused because the list filled since shows the cap note, not Try again", async () => {
+    const { onPin, row, pinOf } = await mountPins([{ messageId: 6, pinnedBy: "lead-1" }]);
+    pinOf(6).click();
+    await flush();
+    // The agent pins three meanwhile; the page's list is at the cap.
+    const full = [1, 2, 3].map((messageId) => ({ messageId, pinnedBy: "lead-1" }));
+    onPin.pins = () => full;
+    row(6).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+    await flush();
+    const note = row(6).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("3 of 3 pinned (3 by Story lead). Unpin one to pin this.");
+    expect(note.querySelector("button")!.textContent).toBe("Show pins");
+    expect(row(6).querySelector('[role="alert"]')).toBeNull();
+    expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
+  });
+
+  it("draws an HTML message as its name and sender, never its markup", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<!doctype html><title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0 + 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const body = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"] .body`)!;
+    expect(body(9).textContent).not.toContain("<");
+    expect(body(9).dataset.html).toBe("1");
+    expect(body(9).querySelector(".html-t")!.textContent).toBe("Merge board");
+    expect(body(9).querySelector(".html-from")!.textContent).toBe("Dashboard from Story lead");
+    // No title or heading: the sender line is its name, said once.
+    expect(body(10).textContent).toBe("Dashboard from Story lead");
+  });
+
+  it("says an untitled HTML message's sender once in a page's own words too", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    mountOn(s, { copy: { row: { htmlFrom: (who: string) => `A page from ${who}` } } });
+    await flush();
+    expect(s.el.querySelector('.msg[data-mid="10"] .body')!.textContent).toBe(
+      "A page from Story lead",
+    );
+  });
+
+  describe("an HTML message's Open (the page's html.open)", () => {
+    const html = {
+      messageId: 9,
+      from: "lead-1",
+      to: "human",
+      contentType: "html",
+      text: "<title>Merge board</title><p>x</p>",
+      createdAtMs: T0,
+    };
+    const toggleOf = (el: HTMLElement) =>
+      el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .html-open');
+
+    it("has no Open where the page gives no html.open", async () => {
+      const s = setup([lead("idle")], [html]);
+      mountOn(s);
+      await flush();
+      expect(toggleOf(s.el)).toBeNull();
+    });
+
+    it("opens the message into its bubble, keeps it through a repaint, and releases it on Close", async () => {
+      const release = vi.fn();
+      const open = vi.fn((_message: Row, slot: HTMLElement) => {
+        slot.append(document.createElement("iframe"));
+        return release;
+      });
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, { html: { open } });
+      await flush();
+      const toggle = toggleOf(s.el)!;
+      expect(toggle.textContent).toBe("Open");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      toggle.click();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0]![0]).toMatchObject({ messageId: 9, title: "Merge board" });
+      const slot = open.mock.calls[0]![1];
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.contains(slot)).toBe(true);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("true");
+      expect(toggleOf(s.el)!.textContent).toBe("Close");
+      expect(toggleOf(s.el)!.getAttribute("aria-controls")).toBe(slot.id);
+      const frame = slot.querySelector("iframe");
+      // A repaint that changes nothing keeps the open frame where it is: no second open, no reload.
+      await s.reads.sessions();
+      await flush();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(s.el.querySelector('.msg[data-mid="9"] iframe')).toBe(frame);
+      toggleOf(s.el)!.click();
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(s.el.contains(slot)).toBe(false);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("keeps an open frame in the page when pinning rebuilds the bubble, and releases it when the message leaves", async () => {
+      // An iframe that leaves the page reloads: this stand-in counts every time it leaves.
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const release = vi.fn();
+      const thread: Row[] = [html];
+      const s = setup([lead("idle")], thread);
+      let pins: Pin[] = [];
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return release;
+          },
+        },
+        onPin: {
+          pins: () => pins,
+          change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.classList.contains("pinned")).toBe(true);
+      expect(s.el.querySelector('.msg[data-mid="9"] .pin-b')!.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+      expect(left).toBe(0);
+      expect(release).not.toHaveBeenCalled();
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases an open that answers later, once it does, and survives an open that throws", async () => {
+      const release = vi.fn();
+      let answer: (fn: () => void) => void = () => {};
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, {
+        html: {
+          open: () => new Promise<() => void>((resolve) => (answer = resolve)),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      // Closed before the page answered: its release runs as soon as it does.
+      toggleOf(s.el)!.click();
+      answer(release);
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+      const t = setup([lead("idle")], [html]);
+      mountOn(t, {
+        html: {
+          open: () => {
+            throw new Error("no frame");
+          },
+        },
+      });
+      await flush();
+      toggleOf(t.el)!.click();
+      expect(t.el.querySelector('.msg[data-mid="9"] .html-slot')).toBeNull();
+      expect(toggleOf(t.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("releases an open message when the chat unmounts", async () => {
+      const release = vi.fn();
+      const s = setup([lead("idle")], [html]);
+      const chat = mountOn(s, { html: { open: () => release } });
+      await flush();
+      toggleOf(s.el)!.click();
+      chat.unmount();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("names an HTML message by its title, not its markup, in the live region", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    let pins: Pin[] = [];
+    mountOn(s, {
+      onPin: {
+        pins: () => pins,
+        change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+      },
+    });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+    await flush();
+    expect(s.el.querySelector(".pin-live")!.textContent).toBe(
+      'Pinned "Merge board". 1 of 3 pinned.',
+    );
+  });
+
+  it("a pin that fails keeps its state and offers Try again", async () => {
+    let fail = true;
+    const { onPin, row, pinOf } = await mountPins([], async (_a, id) => {
+      if (fail) {
+        fail = false;
+        throw new Error("offline");
+      }
+      return [{ messageId: id, pinnedBy: "human" }];
+    });
+    pinOf(5).click();
+    await flush();
+    const alert = row(5).querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain(
+      "Couldn't pin. Try again. If it keeps failing, reload the page.",
+    );
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin");
+    (alert.querySelector("button") as HTMLButtonElement).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledTimes(2);
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+  });
+
+  it("without onPin a message has no Pin", async () => {
+    const s = setup([lead("idle")], THREAD);
+    mountOn(s);
+    await flush();
+    expect(s.el.querySelector(".pin-b")).toBeNull();
+  });
+});
+
+describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to replace", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  type Pin = {
+    messageId: number;
+    pinnedBy: string;
+    pinnedAtMs?: number;
+    preview?: { shortName?: string; value?: string; status?: string };
+  };
+  const at = (h: number, m: number) => new Date(2026, 10, 12, h, m).getTime();
+  const clock = (ms: number) =>
+    new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const QA: Pin = {
+    messageId: 1,
+    pinnedBy: "lead-1",
+    pinnedAtMs: at(13, 48),
+    preview: { shortName: "QA", value: "5 of 5", status: "on-track" },
+  };
+  const TESTS: Pin = {
+    messageId: 2,
+    pinnedBy: "lead-1",
+    pinnedAtMs: at(13, 31),
+    preview: { shortName: "Tests", value: "48", status: "not-updating" },
+  };
+  const MINE: Pin = { messageId: 3, pinnedBy: "human", pinnedAtMs: at(14, 11) };
+  const FULL = [QA, TESTS, MINE];
+  const THREAD = [
+    said(1, "QA: 5 of 5 ACs traced."),
+    said(2, "Tests are green."),
+    said(3, "Merge plan: squash onto main."),
+    said(5, "Review is clean."),
+  ];
+
+  async function mountReplace(
+    start: Pin[] = FULL,
+    change?: (action: string, id: number, opts?: Record<string, number>) => Promise<Pin[]>,
+  ) {
+    let pins = start;
+    const subs = new Set<() => void>();
+    const onPin = {
+      replace: true,
+      pins: () => pins,
+      change: vi.fn(async (action: string, id: number, opts?: Record<string, number>) => {
+        const next = change
+          ? await change(action, id, opts)
+          : action === "replace"
+            ? pins.map((p) =>
+                p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+              )
+            : action === "restore" && opts?.replacing !== undefined
+              ? pins.map((p) =>
+                  p.messageId === opts.replacing ? FULL.find((f) => f.messageId === id)! : p,
+                )
+              : action === "unpin"
+                ? pins.filter((p) => p.messageId !== id)
+                : [...pins, { messageId: id, pinnedBy: "human" }];
+        pins = next;
+        return next;
+      }),
+      subscribe: (fn: () => void) => (subs.add(fn), () => subs.delete(fn)),
+      showPins: vi.fn(),
+      mark: vi.fn(),
+      name: (by: string) => (by === "lead-1" ? "Story lead" : by),
+    };
+    // The agent changes the list: the page's subscribers repaint.
+    const agentSets = async (next: Pin[]) => {
+      pins = next;
+      subs.forEach((fn) => fn());
+      await flush();
+    };
+    const s = setup([lead("idle")], THREAD);
+    const chat = mountOn(s, { onPin });
+    await flush();
+    const row = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"]`)!;
+    const pinOf = (id: number) => row(id).querySelector<HTMLButtonElement>(".pin-b")!;
+    const chooser = () => s.el.querySelector<HTMLElement>(".pin-chooser");
+    const choices = () => [...(chooser()?.querySelectorAll<HTMLButtonElement>(".choice") ?? [])];
+    const choice = (id: number) =>
+      chooser()!.querySelector<HTMLButtonElement>(`.choice[data-pin-id="${id}"]`)!;
+    const live = () => s.el.querySelector(".pin-live")!.textContent;
+    const key = (el: HTMLElement, k: string) =>
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
+  }
+
+  it('a chooser with no change line and no error draws neither: no "null" text', async () => {
+    const { pinOf, chooser } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(chooser()!.textContent).not.toMatch(/\bnull\b/);
+    for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
+  });
+
+  it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
+    const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();
+    const pin = pinOf(5);
+    expect(pin.getAttribute("aria-disabled")).toBeNull();
+    expect(pin.getAttribute("aria-label")).toBe("Pin, replacing one (3 of 3 pinned)");
+    expect(pin.textContent).toContain("Pin…");
+    expect(pin.querySelector(".pin-cap")!.textContent).toBe("3");
+    expect(pin.getAttribute("aria-expanded")).toBe("false");
+    pin.click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    const group = chooser()!;
+    expect(row(5).contains(group)).toBe(true);
+    expect(pinOf(5).getAttribute("aria-expanded")).toBe("true");
+    expect(pinOf(5).getAttribute("aria-controls")).toBe(group.id);
+    expect(group.getAttribute("role")).toBe("group");
+    const head = document.getElementById(group.getAttribute("aria-labelledby")!)!;
+    expect(head.textContent).toBe("Replace a pin with this message · 3 of 3 pinned");
+    expect(choices().map((c) => c.getAttribute("data-pin-id"))).toEqual(["1", "2", "3"]);
+    expect(choice(1).textContent).toContain("QA");
+    expect(choice(1).textContent).toContain("5 of 5");
+    expect(choice(1).textContent).toContain(`Pinned by Story lead at ${clock(at(13, 48))}`);
+    // your own pin is named as its message, with your glyph
+    expect(choice(3).getAttribute("data-own")).toBe("quote");
+    expect(choice(3).textContent).toContain("Merge plan: squash onto main.");
+    expect(choice(3).textContent).toContain(`Pinned by you at ${clock(at(14, 11))}`);
+    // focus on the first row, the one Tab stop, and the page's pins mark it
+    expect(document.activeElement).toBe(choice(1));
+    expect(choices().map((c) => c.tabIndex)).toEqual([0, -1, -1]);
+    expect(onPin.mark).toHaveBeenLastCalledWith(1);
+    expect(group.querySelector("button.cancel")!.textContent).toBe("Cancel");
+  });
+
+  it("the arrow keys, Home and End move the current row and stop there; Esc and Cancel close it back to Pin…", async () => {
+    const { s, onPin, pinOf, chooser, choice, choices, key } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    const heard = vi.fn();
+    s.el.querySelector(".log")!.addEventListener("keydown", heard);
+    expect(key(choice(1), "ArrowDown")).toBe(false);
+    expect(document.activeElement).toBe(choice(2));
+    expect(choices().map((c) => c.tabIndex)).toEqual([-1, 0, -1]);
+    expect(onPin.mark).toHaveBeenLastCalledWith(2);
+    key(choice(2), "End");
+    expect(document.activeElement).toBe(choice(3));
+    key(choice(3), "ArrowDown");
+    expect(document.activeElement).toBe(choice(3));
+    key(choice(3), "Home");
+    expect(document.activeElement).toBe(choice(1));
+    key(choice(1), "ArrowUp");
+    expect(document.activeElement).toBe(choice(1));
+    expect(heard).not.toHaveBeenCalled();
+    key(choice(1), "Escape");
+    await flush();
+    expect(chooser()).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(pinOf(5).getAttribute("aria-expanded")).toBe("false");
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    pinOf(5).click();
+    await flush();
+    chooser()!.querySelector<HTMLButtonElement>("button.cancel")!.click();
+    await flush();
+    expect(chooser()).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+  });
+
+  it("a click on a row that isn't current only arrives on it; the next one replaces", async () => {
+    const { onPin, pinOf, choice } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    choice(2).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(choice(2));
+    choice(2).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 2 });
+  });
+
+  it("Enter replaces in place: the note says whose pin, Undo is offered, and focus goes to Unpin; one Undo restores both", async () => {
+    const { onPin, row, pinOf, chooser, choice, key, live } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "ArrowDown");
+    key(choice(2), "Enter");
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 2 });
+    expect(onPin.pins().map((p) => p.messageId)).toEqual([1, 5, 3]);
+    expect(chooser()).toBeNull();
+    const note = row(5).querySelector(".pin-note")!;
+    expect(note.textContent).toContain("Replaced Story lead's pin “Tests”.");
+    expect(live()).toBe("Replaced Story lead's pin “Tests”.");
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    const undo = note.querySelector<HTMLButtonElement>("button")!;
+    expect(undo.textContent).toBe("Undo");
+    undo.click();
+    await flush();
+    expect(onPin.change).toHaveBeenLastCalledWith("restore", 2, { replacing: 5 });
+    expect(onPin.pins().map((p) => p.messageId)).toEqual([1, 2, 3]);
+    expect(row(5).querySelector(".pin-note")).toBeNull();
+    expect(document.activeElement).toBe(pinOf(5));
+    expect(pinOf(5).getAttribute("aria-label")).toBe("Pin, replacing one (3 of 3 pinned)");
+  });
+
+  it("while a replace is on its way, focus stays on the row that was chosen", async () => {
+    let settle!: (pins: Pin[]) => void;
+    const { pinOf, chooser, choice, key } = await mountReplace(
+      FULL,
+      () => new Promise<Pin[]>((resolve) => (settle = resolve)),
+    );
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    // the busy render redraws the message; the chooser and its current row keep focus
+    expect(chooser()!.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(choice(1));
+    settle(FULL.map((p) => (p.messageId === 1 ? { messageId: 5, pinnedBy: "human" } : p)));
+    await flush();
+    expect(chooser()).toBeNull();
+  });
+
+  it("with the thread one Tab stop, only the stop's Pin… and one chooser row are Tab stops, not every message's", async () => {
+    // The action row is hidden by opacity (so a redrawn Pin… can take focus back), which leaves every
+    // message's Pin focusable; the roving thread keeps all but the stop's out of the Tab order.
+    const { s, row, pinOf, choices } = await mountReplace();
+    const log = s.el.querySelector<HTMLElement>(".log")!;
+    const stops = () =>
+      [log, ...log.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tabIndex >= 0 && (el.matches("button, a[href], input") || el.hasAttribute("tabindex")),
+      );
+    const only = (owner: HTMLElement) => stops().every((el) => el === owner || owner.contains(el));
+    expect(only(row(5))).toBe(true);
+    for (const id of [1, 2, 3]) expect(pinOf(id).tabIndex).toBe(-1);
+    pinOf(5).click();
+    await flush();
+    expect(only(row(5))).toBe(true);
+    expect(choices().filter((c) => c.tabIndex >= 0)).toHaveLength(1);
+  });
+
+  it("unmounting with the chooser open takes the page's mark off its pin", async () => {
+    const { chat, onPin, pinOf } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(onPin.mark).toHaveBeenLastCalledWith(1);
+    chat.unmount();
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a pin the agent swaps in while it's open is New: the change line takes focus, and it must be chosen twice", async () => {
+    const { onPin, pinOf, chooser, choice, key, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    const LOG: Pin = {
+      messageId: 4,
+      pinnedBy: "lead-1",
+      pinnedAtMs: at(14, 12),
+      preview: { shortName: "QA trace", value: "ok" },
+    };
+    // The agent swaps QA (the current row) for QA trace.
+    await agentSets([LOG, TESTS, MINE]);
+    const change = chooser()!.querySelector<HTMLElement>(".chg")!;
+    expect(change.textContent).toBe("“QA trace” is new. “QA” left the list.");
+    expect(document.activeElement).toBe(change);
+    expect(choice(4).getAttribute("data-new")).toBe("true");
+    expect(onPin.mark).toHaveBeenLastCalledWith(null);
+    // From the change line, ↓ goes to the first row.
+    key(change, "ArrowDown");
+    expect(document.activeElement).toBe(choice(4));
+    // Arriving by the keys arms it; a click on a new row before that only says it's new.
+    await agentSets([LOG, TESTS, MINE]);
+    const fresh: Pin = { ...TESTS, messageId: 6, preview: { shortName: "Build" } };
+    await agentSets([LOG, fresh, MINE]);
+    choice(6).click();
+    await flush();
+    expect(onPin.change).not.toHaveBeenCalled();
+    expect(chooser()!.querySelector(".chg")!.textContent).toBe(
+      "“Build” is new. Choose it again to replace it.",
+    );
+    choice(6).click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("replace", 5, { replaces: 6 });
+  });
+
+  it("a pin leaving makes room: the chooser offers a plain Pin, and nothing is replaced on its own", async () => {
+    const { onPin, pinOf, chooser, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    await agentSets([QA, MINE]);
+    expect(chooser()!.textContent).toContain("There's room now.");
+    expect(chooser()!.querySelector(".choice")).toBeNull();
+    expect(onPin.change).not.toHaveBeenCalled();
+    chooser()!.querySelector<HTMLButtonElement>("button.room-pin")!.click();
+    await flush();
+    expect(onPin.change).toHaveBeenCalledWith("pin", 5);
+    expect(chooser()).toBeNull();
+  });
+
+  it("the agent pinning this message closes the chooser and says nothing was replaced", async () => {
+    const { row, pinOf, chooser, agentSets } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    await agentSets([QA, TESTS, { messageId: 5, pinnedBy: "lead-1" }]);
+    expect(chooser()).toBeNull();
+    expect(row(5).querySelector(".pin-note")!.textContent).toContain(
+      "Story lead pinned this message. Nothing was replaced.",
+    );
+  });
+
+  it("a replace that fails keeps the chooser and its row, with an alert", async () => {
+    const { pinOf, chooser, choice, key } = await mountReplace(FULL, async () => {
+      throw new Error("offline");
+    });
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    expect(chooser()).not.toBeNull();
+    expect(chooser()!.querySelector('[role="alert"]')!.textContent).toContain(
+      "Couldn't replace. Nothing changed.",
+    );
+    expect(choice(1).tabIndex).toBe(0);
+  });
+
+  it.each([
+    ["the list is full again", "refused", 3, "Can't undo: the list is full again."],
+    ["its message is gone", "refused", 2, "Can't undo: that message was archived or withdrawn."],
+  ] as const)(
+    "an Undo the engine refuses because %s goes away and says why",
+    async (_why, _how, count, text) => {
+      const { row, pinOf, choice, key, agentSets, onPin } = await mountReplace(
+        FULL,
+        async (action, id, opts) => {
+          if (action === "replace")
+            return FULL.map((p) =>
+              p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+            );
+          throw Object.assign(new Error("refused"), { refused: true });
+        },
+      );
+      pinOf(5).click();
+      await flush();
+      key(choice(1), "Enter");
+      await flush();
+      // The list as it stands when Undo is refused says which: full, or the old message gone.
+      await agentSets(onPin.pins().slice(0, count));
+      row(5).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+      await flush();
+      const note = row(5).querySelector(".pin-note")!;
+      expect(note.textContent).toContain(text);
+      expect(note.querySelector("button")).toBeNull();
+      expect(row(5).querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it("an Undo that didn't reach the engine offers Try again", async () => {
+    let offline = true;
+    const { onPin, row, pinOf, choice, key } = await mountReplace(
+      FULL,
+      async (action, id, opts) => {
+        if (action === "replace")
+          return FULL.map((p) =>
+            p.messageId === opts!.replaces ? { messageId: id, pinnedBy: "human" } : p,
+          );
+        if (offline) throw new Error("offline");
+        return FULL;
+      },
+    );
+    pinOf(5).click();
+    await flush();
+    key(choice(1), "Enter");
+    await flush();
+    row(5).querySelector<HTMLButtonElement>(".pin-note button")!.click();
+    await flush();
+    const alert = row(5).querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("Couldn't undo the replace.");
+    const again = alert.querySelector("button")!;
+    expect(again.textContent).toBe("Try again");
+    offline = false;
+    again.click();
+    await flush();
+    expect(onPin.change).toHaveBeenLastCalledWith("restore", 1, { replacing: 5 });
+    expect(row(5).querySelector(".pin-note")).toBeNull();
+  });
+});
+
+describe("kit.chat: the thread is one Tab stop", () => {
+  const T0 = Date.UTC(2026, 10, 12, 14, 0);
+  const said = (messageId: number, text: string): Row => ({
+    messageId,
+    from: "lead-1",
+    fromName: "Story lead",
+    to: "human",
+    text,
+    createdAtMs: T0 + messageId * 60_000,
+  });
+  const THREAD = [said(1, "Starting."), said(2, "Tests are green."), said(3, "Review is clean.")];
+
+  async function mountThread(thread: Row[] = [...THREAD]) {
+    let pins: Array<{ messageId: number; pinnedBy: string }> = [];
+    const onPin = {
+      pins: () => pins,
+      change: vi.fn(async (action: string, id: number) => {
+        pins =
+          action === "unpin"
+            ? pins.filter((p) => p.messageId !== id)
+            : [...pins, { messageId: id, pinnedBy: "human" }];
+        return pins;
+      }),
+    };
+    const s = setup([lead("idle")], thread);
+    mountOn(s, { onPin });
+    await flush();
+    const log = s.el.querySelector<HTMLElement>(".log")!;
+    const rows = () => [...log.querySelectorAll<HTMLElement>("[data-mid]")];
+    const row = (id: number) => log.querySelector<HTMLElement>(`[data-mid="${id}"]`)!;
+    /** What Tab stops on in the thread: anything focusable with a tabindex of 0 or more. */
+    const stops = () =>
+      [log, ...log.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tabIndex >= 0 &&
+          (el.matches("button, a[href], iframe, input") || el.hasAttribute("tabindex")) &&
+          !el.closest("[hidden]"),
+      );
+    const only = (owner: HTMLElement) => stops().every((el) => el === owner || owner.contains(el));
+    const key = (el: HTMLElement, k: string) =>
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    return { s, log, rows, row, stops, only, key, thread };
+  }
+
+  it("stops on the newest message and its own actions, and on nothing in older messages", async () => {
+    const { log, rows, stops, only } = await mountThread();
+    const newest = rows().at(-1)!;
+    expect(newest.getAttribute("data-mid")).toBe("3");
+    expect(newest.tabIndex).toBe(0);
+    expect(log.tabIndex).toBe(-1);
+    // each message reads as one item
+    expect(rows().every((r) => r.getAttribute("role") === "article")).toBe(true);
+    expect(stops().length).toBeGreaterThan(1);
+    expect(only(newest)).toBe(true);
+  });
+
+  it("moves between messages with the arrow keys, Home and End, and takes each message's actions along", async () => {
+    const { rows, only, key } = await mountThread();
+    const [first, middle, newest] = rows() as [HTMLElement, HTMLElement, HTMLElement];
+    newest.focus();
+    expect(key(newest, "ArrowUp")).toBe(false);
+    expect(document.activeElement).toBe(middle);
+    expect(middle.tabIndex).toBe(0);
+    expect(newest.tabIndex).toBe(-1);
+    expect(only(middle)).toBe(true);
+    key(middle, "Home");
+    expect(document.activeElement).toBe(first);
+    key(first, "ArrowUp");
+    expect(document.activeElement).toBe(first);
+    key(first, "End");
+    expect(document.activeElement).toBe(newest);
+    key(newest, "ArrowDown");
+    expect(document.activeElement).toBe(newest);
+    // A key with a modifier, or one inside a message's own control, is left alone.
+    const pin = newest.querySelector<HTMLButtonElement>(".pin-b")!;
+    pin.focus();
+    expect(key(pin, "ArrowUp")).toBe(true);
+    expect(document.activeElement).toBe(pin);
+    newest.focus();
+    newest.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Home",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(document.activeElement).toBe(newest);
+  });
+
+  it("an action focused in an older message makes that message the thread's stop, and keeps it there when the action redraws it", async () => {
+    const { row, only, rows } = await mountThread();
+    const pin = row(1).querySelector<HTMLButtonElement>(".pin-b")!;
+    pin.focus();
+    expect(row(1).tabIndex).toBe(0);
+    expect(rows().at(-1)!.tabIndex).toBe(-1);
+    expect(only(row(1))).toBe(true);
+    // Pinning rebuilds the message's node; the stop and focus stay on it.
+    pin.click();
+    await flush();
+    const unpin = row(1).querySelector<HTMLButtonElement>(".pin-b")!;
+    expect(unpin.getAttribute("aria-label")).toBe("Unpin");
+    expect(document.activeElement).toBe(unpin);
+    expect(row(1).tabIndex).toBe(0);
+    expect(only(row(1))).toBe(true);
+  });
+
+  it("holds an older message's scrolling code block or table out of the Tab order, as its controls are", async () => {
+    // Chromium makes an overflowing pre or table scroller keyboard-focusable with no tabindex, so one a
+    // message draws would leak out of the thread's one stop.
+    const { row, only } = await mountThread();
+    const pre = document.createElement("pre");
+    const table = document.createElement("div");
+    table.className = "inbox-table-scroll";
+    row(1).append(pre, table);
+    await flush();
+    expect(pre.getAttribute("tabindex")).toBe("-1");
+    expect(table.getAttribute("tabindex")).toBe("-1");
+    expect(only(row(3))).toBe(true);
+    // its message becomes the stop: they are as the browser made them again
+    row(1).focus();
+    expect(pre.hasAttribute("tabindex")).toBe(false);
+    expect(table.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("a message that lands while you read an older one leaves the stop where you are", async () => {
+    const { s, row, rows, thread } = await mountThread();
+    row(1).focus();
+    thread.push(said(4, "Merged."));
+    s.emit("inbox");
+    await flush();
+    expect(rows().at(-1)!.getAttribute("data-mid")).toBe("4");
+    expect(document.activeElement).toBe(row(1));
+    expect(row(1).tabIndex).toBe(0);
+    expect(row(4).tabIndex).toBe(-1);
+    expect(row(4).querySelector<HTMLButtonElement>(".pin-b")!.tabIndex).toBe(-1);
+  });
+
+  it("a focused message that a render redraws keeps focus: its Delivered mark arriving doesn't drop you to the page", async () => {
+    const roster = [lead("running")];
+    const thread = [...THREAD];
+    const s = setup(roster, thread);
+    mountOn(s);
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    // The inbox has your message now: it is a row of the thread, marked Queued.
+    thread.push({ ...said(41, "when you can"), from: "human", to: "lead-1", fromName: "You" });
+    s.emit("inbox");
+    await flush();
+    const row = () => s.el.querySelector<HTMLElement>('.log [data-mid="41"]')!;
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("queued");
+    const before = row();
+    before.focus();
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(row().querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+    // the mark rebuilt the row's node; focus and the stop moved to the new one
+    expect(row()).not.toBe(before);
+    expect(document.activeElement).toBe(row());
+    expect(row().tabIndex).toBe(0);
+  });
+
+  it("a focused message that leaves the thread hands focus to the newest", async () => {
+    const { s, row, rows, thread } = await mountThread();
+    row(2).focus();
+    thread.splice(1, 1);
+    s.emit("inbox");
+    await flush();
+    expect(rows().map((r) => r.getAttribute("data-mid"))).toEqual(["1", "3"]);
+    expect(document.activeElement).toBe(row(3));
+    expect(row(3).tabIndex).toBe(0);
+  });
+
+  it("a render that doesn't move the stop doesn't walk the whole thread again", async () => {
+    const { s, log, thread } = await mountThread();
+    const walks = vi.spyOn(log, "querySelectorAll");
+    thread.push(said(4, "Merged."));
+    s.emit("inbox");
+    await flush();
+    // the newest moved, so the thread is walked once
+    const moved = walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]")).length;
+    expect(moved).toBe(1);
+    walks.mockClear();
+    s.emit("activity");
+    await flush();
+    expect(walks.mock.calls.filter(([sel]) => String(sel).includes("[tabindex]"))).toEqual([]);
+  });
+
+  it("follows the newest message while you haven't moved, and keeps the log a Tab stop while it has none", async () => {
+    const { s, log, row, thread } = await mountThread([]);
+    expect(log.tabIndex).toBe(0);
+    thread.push(said(1, "Starting."));
+    s.emit("inbox");
+    await flush();
+    expect(log.tabIndex).toBe(-1);
+    expect(row(1).tabIndex).toBe(0);
+    thread.push(said(2, "Tests are green."));
+    s.emit("inbox");
+    await flush();
+    expect(row(2).tabIndex).toBe(0);
+    expect(row(1).tabIndex).toBe(-1);
+  });
+});
+
+describe("kit.chat send state", () => {
+  type Clock = ReturnType<typeof manualClock>;
+  const manualClock = () => {
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    return {
+      timers,
+      now: () => 5000,
+      setTimeout: (fn: () => void) => {
+        timers.set(++next, fn);
+        return next;
+      },
+      clearTimeout: (id: number) => timers.delete(id),
+    };
+  };
+  const makeSend = (s: ReturnType<typeof setup>, clock: Clock) =>
+    (kitOf().chat as any).createSendState({
+      transport: s.transport,
+      reads: s.reads,
+      clock,
+      target: (kitOf().chat as any).targetOf({ storyId: "demo-story", leadRole: "lead" }),
+      storyId: "demo-story",
+      leadRole: "lead",
+    });
+  const marks = (el: HTMLElement) =>
+    [...el.querySelectorAll(".msg.you .mark")].map((m) => m.getAttribute("data-mark"));
+
+  describe("launch.unsettled()", () => {
+    it("is false when idle and once the lead has joined, and true while a launch starts", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      let started!: (row: Row) => void;
+      s.transport.launch.mockImplementation(
+        () => new Promise<Row>((resolve) => (started = resolve)),
+      );
+      const clock = manualClock();
+      const chat = mountOn(s, { clock });
+      await flush();
+      expect(chat.launch.unsettled()).toBe(false);
+      await typeAndSend(s.el, "hello");
+      expect(chat.launch.state).toBe("starting");
+      expect(chat.launch.unsettled()).toBe(true);
+      started({ sessionId: "s1" });
+      await flush();
+      roster.push(lead("idle"));
+      await s.reads.sessions();
+      await flush();
+      expect(chat.launch.state).toBe("joined");
+      expect(chat.launch.unsettled()).toBe(false);
+    });
+
+    it("stays true when the launch is slow and when it has failed", async () => {
+      const s = setup([]);
+      const clock = manualClock();
+      const chat = mountOn(s, { clock, timers: { slowMs: 10, failMs: 20 } });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      const [slow, fail] = [...clock.timers.values()];
+      slow();
+      expect(chat.launch.state).toBe("slow");
+      expect(chat.launch.unsettled()).toBe(true);
+      fail();
+      expect(chat.launch.state).toBe("failed");
+      expect(chat.launch.unsettled()).toBe(true);
+    });
+
+    it("counts a held message, a send in flight and a kept message, and settles when each is done", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      let finish!: (value: Row) => void;
+      let refuse!: (error: Error) => void;
+      const chat = mountOn(s);
+      await flush();
+      s.send.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await typeAndSend(s.el, "one");
+      expect(chat.launch.unsettled(), "in flight").toBe(true);
+      finish({ status: "sent", messageId: 1 });
+      await flush();
+      expect(chat.launch.unsettled(), "delivered").toBe(false);
+      s.send.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      await typeAndSend(s.el, "two");
+      refuse(new Error("busy"));
+      await flush();
+      expect(marks(s.el)).toEqual(["delivered", "kept"]);
+      expect(chat.launch.unsettled(), "kept").toBe(true);
+    });
+
+    it("counts a message held while the launch starts", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      expect(chat.launch.held).toBe(1);
+      expect(chat.launch.unsettled()).toBe(true);
+    });
+  });
+
+  describe("launch.attach()", () => {
+    it("takes the changes in place of the first listener, and a detached listener hears nothing", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      const send = makeSend(s, manualClock());
+      const heard: string[] = [];
+      const detach = send.launch.attach(() => heard.push("attached"));
+      send.launch.rows(roster);
+      expect(heard.length).toBeGreaterThan(0);
+      heard.length = 0;
+      detach();
+      send.launch.rows([lead("running")]);
+      send.launch.send("quiet");
+      await flush();
+      expect(heard, "no emit while detached").toEqual([]);
+      expect(send.launch.messages).toHaveLength(1);
+      send.dispose();
+    });
+
+    it("detaching a listener that was already replaced leaves the newer one", () => {
+      const send = makeSend(setup([]), manualClock());
+      const first: string[] = [];
+      const second: string[] = [];
+      const detachFirst = send.launch.attach(() => first.push("a"));
+      send.launch.attach(() => second.push("b"));
+      detachFirst();
+      send.launch.rows([lead("idle")]);
+      expect(first).toEqual([]);
+      expect(second.length).toBeGreaterThan(0);
+      send.dispose();
+    });
+  });
+
+  describe("launch.sessionId()", () => {
+    it("is null until the launch result names a session, then that session", async () => {
+      const s = setup([]);
+      let started!: (row: Row) => void;
+      s.transport.launch.mockImplementation(
+        () => new Promise<Row>((resolve) => (started = resolve)),
+      );
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "hello");
+      expect(chat.launch.sessionId()).toBeNull();
+      started({ sessionId: "s-new" });
+      await flush();
+      expect(chat.launch.sessionId()).toBe("s-new");
+    });
+  });
+
+  describe("the send option", () => {
+    it("keeps the messages and their marks across an unmount and a new mount", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const first = mountOn(s, { clock, send });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      expect(marks(s.el)).toEqual(["starting", "held"]);
+      first.unmount();
+      expect(s.el.childNodes.length).toBe(0);
+      expect(clock.timers.size, "the launch's timers outlive the mount").toBe(2);
+      const again = mountOn(s, { clock, send });
+      await flush();
+      expect(marks(s.el)).toEqual(["starting", "held"]);
+      expect(again.launch).toBe(send.launch);
+      again.unmount();
+      send.dispose();
+    });
+
+    it("sends the held message when the lead joins while no chat is mounted, and the next mount shows it delivered", async () => {
+      const roster: Row[] = [];
+      const s = setup(roster);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const chat = mountOn(s, { clock, send });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      chat.unmount();
+      roster.push(lead("idle"));
+      await s.reads.sessions();
+      await flush();
+      expect(s.send).toHaveBeenCalledWith("lead-1", "second");
+      expect(send.launch.unsettled()).toBe(false);
+      const again = mountOn(s, { clock, send });
+      await flush();
+      expect(marks(s.el)).toEqual(["delivered", "delivered"]);
+      again.unmount();
+      send.dispose();
+    });
+
+    it("listens to the roster only while it has work, and stops once the work settles", async () => {
+      const roster: Row[] = [lead("idle")];
+      const s = setup(roster);
+      const send = makeSend(s, manualClock());
+      const chat = mountOn(s, { send });
+      await flush();
+      const mounted = s.listenerCount("sessions");
+      let finish!: (value: Row) => void;
+      s.send.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await typeAndSend(s.el, "one");
+      chat.unmount();
+      expect(
+        s.listenerCount("sessions"),
+        "the chat's own listener is gone, the state's is in",
+      ).toBe(mounted);
+      finish({ status: "sent", messageId: 2 });
+      await flush();
+      expect(send.unsettled()).toBe(false);
+      expect(s.listenerCount("sessions"), "settled: no listener left").toBe(mounted - 1);
+      send.dispose();
+    });
+
+    it("never paints a hidden chat: a change while hidden leaves the old element as it was", async () => {
+      const s = setup([lead("idle")]);
+      const send = makeSend(s, manualClock());
+      const chat = mountOn(s, { send });
+      await flush();
+      let refuse!: (error: Error) => void;
+      s.send.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      await typeAndSend(s.el, "one");
+      const log = s.el.querySelector(".log") as HTMLElement;
+      const before = log.innerHTML;
+      expect(marks(s.el)).toEqual(["delivered"]);
+      chat.unmount();
+      refuse(new Error("busy"));
+      await flush();
+      expect(send.launch.messages[0].mark, "the state moved").toBe("kept");
+      expect(log.innerHTML, "the held log was not painted").toBe(before);
+      expect(s.el.childNodes.length).toBe(0);
+      send.dispose();
+    });
+
+    it("keeps the unload guard for the page's life, and dispose removes it", async () => {
+      const added = vi.spyOn(window, "addEventListener");
+      const removed = vi.spyOn(window, "removeEventListener");
+      const s = setup([]);
+      const clock = manualClock();
+      const send = makeSend(s, clock);
+      const unloads = () =>
+        added.mock.calls.filter(([name]) => String(name) === "beforeunload").length;
+      const unloadsRemoved = () =>
+        removed.mock.calls.filter(([name]) => String(name) === "beforeunload").length;
+      expect(unloads()).toBe(1);
+      const chat = mountOn(s, { clock, send });
+      expect(unloads(), "the mount adds none of its own").toBe(1);
+      chat.unmount();
+      expect(unloadsRemoved(), "a hide does not end the guard").toBe(0);
+      send.dispose();
+      expect(unloadsRemoved()).toBe(1);
+      expect(clock.timers.size).toBe(0);
+      added.mockRestore();
+      removed.mockRestore();
+    });
+  });
+
+  describe("with no send option", () => {
+    it("makes its own send state and ends it on unmount: timers cleared and the unload guard removed", async () => {
+      const added = vi.spyOn(window, "addEventListener");
+      const removed = vi.spyOn(window, "removeEventListener");
+      const s = setup([]);
+      const clock = manualClock();
+      const chat = mountOn(s, { clock });
+      await flush();
+      await typeAndSend(s.el, "first");
+      expect(clock.timers.size).toBe(2);
+      expect(added.mock.calls.filter(([name]) => String(name) === "beforeunload")).toHaveLength(1);
+      chat.unmount();
+      expect(clock.timers.size, "disposed").toBe(0);
+      expect(removed.mock.calls.filter(([name]) => String(name) === "beforeunload")).toHaveLength(
+        1,
+      );
+      expect(s.el.childNodes.length).toBe(0);
+      added.mockRestore();
+      removed.mockRestore();
+    });
+
+    it("ends the state without it ever listening to the roster again: no read after unmount and no listener left", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      expect(chat.launch.unsettled()).toBe(true);
+      const on = vi.spyOn(s.reads, "on");
+      chat.unmount();
+      expect(on, "no listener added while it ends").not.toHaveBeenCalled();
+      expect(s.listenerCount("sessions")).toBe(0);
+    });
+
+    it("keeps the unload warning while a message is held", async () => {
+      const s = setup([]);
+      const chat = mountOn(s, { clock: manualClock() });
+      await flush();
+      await typeAndSend(s.el, "first");
+      await typeAndSend(s.el, "second");
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      chat.unmount();
+    });
+  });
+});
+
+describe("kit.chat recipient, composer slot and row label", () => {
+  const helper: Row = { ...lead("idle"), sessionId: "s9", handle: "helper-1", role: "helper" };
+  const to = { handle: "helper-1", name: "Helper" };
+  // The story's own peer, with the page's recipient seam.
+  const storyWith = (recipient: () => unknown) => ({
+    ...(kitOf().chat as unknown as { targetOf(o: Row): Row }).targetOf({
+      storyId: "demo-story",
+      leadRole: "lead",
+    }),
+    recipient,
+  });
+  const input = (el: HTMLElement) => el.querySelector<HTMLTextAreaElement>(".composer textarea")!;
+  const key = (el: HTMLElement, init: KeyboardEventInit) =>
+    input(el).dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+    );
+
+  it("with a recipient, a send goes to its handle once and never launches", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    await typeAndSend(s.el, "hello helper");
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.send).toHaveBeenCalledWith("helper-1", "hello helper");
+    expect(s.transport.launch).not.toHaveBeenCalled();
+    expect(input(s.el).value).toBe("");
+    const bubble = s.el.querySelector(".log .msg.you")!;
+    expect(bubble.querySelector(".body")!.textContent).toBe("hello helper");
+    expect(bubble.querySelector(".mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
+  it("a recipient of null keeps today's path: with no lead running the send launches", async () => {
+    const s = setup([]);
+    mountOn(s, {
+      target: storyWith(() => null),
+    });
+    await flush();
+    await typeAndSend(s.el, "start please");
+    expect(s.transport.launch).toHaveBeenCalledTimes(1);
+    expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it("a failed send to a recipient keeps the text in the box and shows the failure", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    s.send.mockRejectedValueOnce(new Error("unavailable: offline"));
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("hello helper");
+    expect(s.el.querySelector(".log .msg.you")).toBeNull();
+    const row = s.el.querySelector('[role="alert"][data-fail="send"]')!;
+    expect(row.textContent).toContain("offline");
+    s.send.mockResolvedValueOnce({ status: "invalid", message: "no such agent" });
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("hello helper");
+    expect(s.el.querySelector('[data-fail="send"]')!.textContent).toContain("no such agent");
+    await typeAndSend(s.el, "hello helper");
+    expect(input(s.el).value).toBe("");
+    expect(s.el.querySelector('[data-fail="send"]')).toBeNull();
+    expect(s.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("Enter sends to the recipient; Shift+Enter and an IME composition do not", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    input(s.el).value = "line";
+    key(s.el, { code: "Enter", shiftKey: true });
+    key(s.el, { code: "Enter", isComposing: true });
+    await flush();
+    expect(s.send).not.toHaveBeenCalled();
+    key(s.el, { code: "NumpadEnter" });
+    await flush();
+    expect(s.send).toHaveBeenCalledWith("helper-1", "line");
+  });
+
+  it("the composer is a two-row box: the textarea, then the hint and Send on one row under it", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    const box = s.el.querySelector<HTMLElement>(".composer .box")!;
+    expect(box.firstElementChild).toBe(input(s.el));
+    const foot = box.querySelector<HTMLElement>(".box-foot")!;
+    expect(foot).not.toBeNull();
+    const hint = foot.querySelector<HTMLElement>(".hint")!;
+    expect(input(s.el).getAttribute("aria-describedby")).toBe(hint.id);
+    // One send key is named, in words: Enter. ⌘↵ (Ctrl↵) still sends but is never shown beside it.
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line");
+    expect(foot.querySelector(".keys")).toBeNull();
+    expect(foot.textContent).not.toMatch(/⌘|Ctrl/);
+    expect(foot.querySelector("button")!.textContent).toBeTruthy();
+    expect(s.el.querySelectorAll(".composer .hint").length).toBe(1);
+  });
+
+  it("⌘↵ and Ctrl↵ send, with Shift held too; Shift+Enter alone is a newline", async () => {
+    const s = setup([helper]);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    input(s.el).value = "one";
+    key(s.el, { code: "Enter", metaKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "one");
+    input(s.el).value = "two";
+    key(s.el, { code: "Enter", ctrlKey: true, shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "two");
+    input(s.el).value = "three";
+    key(s.el, { code: "Enter", shiftKey: true });
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("the Enter that commits an IME candidate (keyCode 229, isComposing false in WebKit) sends nothing, in the composer and a card's reply", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          kind: "needs-you",
+          text: "What should I do next?",
+          createdAtMs: 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    input(s.el).value = "half";
+    key(s.el, { code: "Enter", keyCode: 229 });
+    const reply = s.el.querySelector<HTMLTextAreaElement>('[data-card="9"] .reply textarea')!;
+    reply.value = "half";
+    reply.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Enter",
+        keyCode: 229,
+      }),
+    );
+    await flush();
+    expect(s.send).not.toHaveBeenCalled();
+    expect(s.reply).not.toHaveBeenCalled();
+    expect(input(s.el).value).toBe("half");
+  });
+
+  it("the composer is one line on a short or narrow pane (WF-62: under 600 tall or 320 wide)", () => {
+    const css = readFileSync(
+      join(__dirname, "../../../../src-tauri/src/http/routes/dashboard_kit/chat.css"),
+      "utf8",
+    );
+    const rule = css.match(
+      /@media \(max-height:600px\),\(max-width:320px\)\{([^@]*?)\}\s*(?:\n|$)/,
+    );
+    expect(rule, "a short-or-narrow rule for the composer").not.toBeNull();
+    expect(rule![1]).toContain(".cs-chat .composer .box{grid-template-columns:minmax(0,1fr) auto");
+    expect(rule![1]).toContain(".cs-chat .composer .box-foot .hint{display:none}");
+  });
+
+  it("a second Enter while the send is in flight sends nothing more", async () => {
+    const s = setup([helper]);
+    mountOn(s, {
+      target: storyWith(() => to),
+    });
+    await flush();
+    let answer: (value: Record<string, unknown>) => void = () => {};
+    s.send.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    input(s.el).value = "once";
+    key(s.el, { code: "Enter" });
+    key(s.el, { code: "Enter" });
+    await flush();
+    expect(s.send).toHaveBeenCalledTimes(1);
+    const sendButton = s.el.querySelector<HTMLButtonElement>(".composer .box button")!;
+    expect(sendButton.disabled).toBe(true);
+    expect(input(s.el).getAttribute("aria-busy")).toBe("true");
+    sendButton.click();
+    answer({ status: "sent", messageId: 77 });
+    await flush();
+    // Once answered, nothing queued behind the first send goes out.
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.el.querySelectorAll(".log .msg.you").length).toBe(1);
+    expect(input(s.el).value).toBe("");
+    expect(sendButton.disabled).toBe(false);
+    expect(input(s.el).hasAttribute("aria-busy")).toBe(false);
+  });
+
+  it("a busy recipient's message reads Queued until its own notice says it was told, whatever the peer does", async () => {
+    const roster = [lead("idle"), { ...helper, state: "running" }];
+    const s = setup(roster);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    await typeAndSend(s.el, "when you can");
+    const mark = () => s.el.querySelector(".log .msg.you .mark")!.getAttribute("data-mark");
+    expect(mark()).toBe("queued");
+    // The peer's notice is not the recipient's.
+    roster[0] = {
+      ...roster[0],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(mark()).toBe("queued");
+    roster[1] = {
+      ...roster[1],
+      mailNotice: "told",
+      notifiedAt: new Date(Date.now() + 1000).toISOString(),
+    };
+    await s.reads.sessions();
+    await flush();
+    expect(mark()).toBe("delivered");
+  });
+
+  it("busy is read when the message goes, not when the send answers", async () => {
+    const roster = [lead("idle"), helper];
+    const s = setup(roster);
+    mountOn(s, { target: storyWith(() => to) });
+    await flush();
+    let answer: (value: Record<string, unknown>) => void = () => {};
+    s.send.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    input(s.el).value = "wake up";
+    key(s.el, { code: "Enter" });
+    await flush();
+    // The message woke the idle recipient before the answer came back.
+    roster[1] = { ...roster[1], state: "running" };
+    await s.reads.sessions();
+    answer({ status: "sent", messageId: 77 });
+    await flush();
+    expect(s.el.querySelector(".log .msg.you .mark")!.getAttribute("data-mark")).toBe("delivered");
+  });
+
+  it("under faces, a message to the recipient after one to the peer starts its own run with a meta line", async () => {
+    const s = setup([lead("idle"), helper]);
+    let recipient: typeof to | null = null;
+    mountOn(s, { target: storyWith(() => recipient), faces: true });
+    await flush();
+    await typeAndSend(s.el, "for the lead");
+    recipient = to;
+    await typeAndSend(s.el, "for the helper");
+    const [first, second] = [...s.el.querySelectorAll(".log .msg.you")];
+    expect(first.querySelector(".meta")).not.toBeNull();
+    expect(second.querySelector(".meta")!.textContent).toContain("To Helper");
+  });
+
+  it("a Next-line chip answers the peer even with a recipient picked; a page chip goes to the recipient", async () => {
+    const reply = {
+      messageId: 1,
+      from: "lead-1",
+      text: "Done.\n\nNext: `Ship it`",
+      createdAtMs: 1000,
+    };
+    const s = setup([lead("idle"), helper], [reply]);
+    mountOn(s, {
+      target: storyWith(() => to),
+      next: true,
+      chips: [{ label: "Ping", text: "ping" }],
+    });
+    await flush();
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Ship it"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("lead-1", "Ship it");
+    s.el.querySelector<HTMLButtonElement>('[data-chip="Ping"]')!.click();
+    await flush();
+    expect(s.send).toHaveBeenLastCalledWith("helper-1", "ping");
+  });
+
+  it("a null label or composerLabel falls back to the default name, never the word null", async () => {
+    const s = setup([lead("idle")]);
+    mountOn(s, { layout: { composerLabel: null, composer: () => ({ label: null }) } });
+    await flush();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to the story lead");
+  });
+
+  it("layout.composerSlot mounts once above the box, survives a repaint and is released on unmount", async () => {
+    const s = setup([lead("idle")]);
+    const release = vi.fn();
+    const composerSlot = vi.fn((el: HTMLElement) => {
+      el.append(
+        Object.assign(document.createElement("span"), {
+          className: "to-chip",
+          textContent: "To: Helper",
+        }),
+      );
+      return release;
+    });
+    const chat = mountOn(s, { layout: { composerSlot } });
+    await flush();
+    await typeAndSend(s.el, "hello");
+    chat.setDone(false);
+    expect(composerSlot).toHaveBeenCalledTimes(1);
+    const region = s.el.querySelector(".composer")!;
+    const chip = region.querySelector(".to-chip")!;
+    expect(chip.textContent).toBe("To: Helper");
+    expect(
+      chip.compareDocumentPosition(region.querySelector(".box")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(release).not.toHaveBeenCalled();
+    chat.unmount();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("layout.composer's label names the input, and the mount's label comes back without it", async () => {
+    const s = setup([lead("idle")]);
+    let name: string | null = "Helper";
+    const chat = mountOn(s, {
+      layout: { composer: () => (name ? { label: `Message to ${name}` } : {}) },
+    });
+    await flush();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to Helper");
+    name = null;
+    chat.repaint();
+    expect(input(s.el).getAttribute("aria-label")).toBe("Message to the story lead");
+  });
+
+  it("a message sent to a recipient shows its label in the meta line, and the text is unchanged", async () => {
+    const s = setup([lead("idle"), helper]);
+    let recipient: typeof to | null = to;
+    mountOn(s, {
+      target: storyWith(() => recipient),
+    });
+    await flush();
+    await typeAndSend(s.el, "for the helper");
+    recipient = null;
+    await typeAndSend(s.el, "for the lead");
+    const [first, second] = [...s.el.querySelectorAll(".log .msg.you")];
+    expect(first.querySelector(".body")!.textContent).toBe("for the helper");
+    expect(first.querySelector(".meta")!.textContent).toContain("To Helper");
+    expect(second.querySelector(".body")!.textContent).toBe("for the lead");
+    expect(second.querySelector(".meta")!.textContent).not.toContain("To ");
   });
 });

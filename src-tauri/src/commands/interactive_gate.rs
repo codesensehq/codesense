@@ -49,6 +49,7 @@ pub const INTERACTIVE_VERBS: &[&str] = &[
     "rename_workspace",
     "add_source_repo",
     "attach_source_repo_path",
+    "clone_repo",
     "remove_source_repo",
     "create_local_organization",
     "commit_registry_edit_local",

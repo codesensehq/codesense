@@ -130,6 +130,16 @@ impl FakeHost {
         }
     }
 
+    /// `handle`'s session ended: it exited (an ended session is no seat of its thread).
+    pub(crate) fn end(&self, handle: &str) {
+        for s in self.sessions.lock().unwrap().iter_mut() {
+            if s.handle == handle {
+                s.running = false;
+                s.ended = true;
+            }
+        }
+    }
+
     /// `handle`'s tab ended, or its machine went offline.
     fn stop(&self, handle: &str) {
         for s in self.sessions.lock().unwrap().iter_mut() {
@@ -382,6 +392,7 @@ fn known(handle: &str, session: &str, name: &str, running: bool) -> KnownSession
         session: Some(session.into()),
         name: name.into(),
         running,
+        ended: !running,
     }
 }
 
@@ -2026,6 +2037,31 @@ async fn a_notice_is_told_only_once_its_host_confirms_it() {
         check_for_mail(&*host, "S2", false).await,
         Ok(Check::Nothing)
     ));
+}
+
+#[tokio::test]
+async fn a_confirmed_notice_reports_every_told_message_in_its_event() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    send_hello(&host).await;
+    send_hello(&host).await;
+    let Ok(Check::Offer { token, .. }) = check_for_mail(&*host, "S2", false).await else {
+        panic!("no notice offered");
+    };
+    assert!(confirm_notice(&*host, "S2", &token).await.unwrap());
+    let mut sent: Vec<i64> = fake.rows().iter().map(|m| m.id).collect();
+    sent.sort_unstable();
+    assert_eq!(sent.len(), 2);
+    assert!(fake.rows().iter().all(|m| m.told_at_ms.is_some()));
+    let confirmed: Vec<Vec<i64>> = fake
+        .inbox_events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| matches!(event.kind, InboxChange::NoticeConfirmed))
+        .map(|event| event.message_ids.clone())
+        .collect();
+    assert_eq!(confirmed, vec![sent]);
 }
 
 #[tokio::test]

@@ -128,6 +128,7 @@ pub(crate) fn draft(id: &str, runtime: AgentCli) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skill_allowlist: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,
@@ -1230,5 +1231,95 @@ fn a_parent_without_sharing_warns_once_and_the_launch_goes_ahead() {
     assert!(!root.join("parent/config/sharing.yml").exists());
 }
 
+#[test]
+fn a_skill_allowlist_narrows_provides_and_turns_the_rest_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        Agent {
+            skill_allowlist: Some(Vec::new()),
+            ..draft("lean", AgentCli::Claude)
+        },
+    );
+    let r = resolve(home, &alice(), &key);
+    assert_eq!(r.launch.skill_allowlist, Some(Vec::new()));
+    assert_eq!(r.provides.skills, Vec::<String>::new());
+    assert_eq!(r.provides.commands, vec!["bmad-help"]);
+    assert_eq!(
+        r.manifest.generated[0].content["skillOverrides"],
+        json!({ "bmad-build": "off" })
+    );
+    assert_eq!(r.manifest.manifest_hash, r.manifest.compute_hash());
+
+    let listed = save(
+        home,
+        &alice(),
+        Agent {
+            skill_allowlist: Some(vec!["bmad-build".into()]),
+            ..draft("listed", AgentCli::Claude)
+        },
+    );
+    let r = resolve(home, &alice(), &listed);
+    assert_eq!(r.provides.skills, vec!["bmad-build"]);
+    assert!(r.manifest.generated[0]
+        .content
+        .get("skillOverrides")
+        .is_none());
+}
+
+#[test]
+fn a_skill_allowlist_on_a_runtime_that_cannot_enforce_it_warns_and_offers_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        Agent {
+            skill_allowlist: Some(Vec::new()),
+            startup: vec![".agents/skills/review/".into()],
+            mcp: McpAccess::default(),
+            ..draft("reviewer", AgentCli::Codex)
+        },
+    );
+    let r = resolve(home, &alice(), &key);
+    assert_eq!(r.launch.skill_allowlist, None);
+    assert_eq!(r.provides.skills, vec!["review"]);
+    assert!(r
+        .warnings
+        .iter()
+        .any(|w| w.code == LaunchWarningCode::SkillsNotEnforced));
+}
+
+#[test]
+fn a_skills_key_turns_nothing_off_and_warns_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let mut persona = draft("persona", AgentCli::Claude);
+    persona.extra.insert(
+        "skills".into(),
+        serde_yaml::from_str("[triage, quick-fix]").unwrap(),
+    );
+    let key = save(home, &alice(), persona);
+    let r = resolve(home, &alice(), &key);
+    assert_eq!(r.launch.skill_allowlist, None);
+    assert_eq!(r.provides.skills, vec!["bmad-build"]);
+    assert!(r.manifest.generated[0]
+        .content
+        .get("skillOverrides")
+        .is_none());
+    assert!(!r.warnings.iter().any(|w| matches!(
+        w.code,
+        LaunchWarningCode::SkillsNotInManifest | LaunchWarningCode::SkillsNotEnforced
+    )));
+}
+
 #[path = "launch_cwd_tests.rs"]
 mod launch_cwd_tests;
+
+#[path = "guide_agent_tests.rs"]
+mod guide_agent_tests;

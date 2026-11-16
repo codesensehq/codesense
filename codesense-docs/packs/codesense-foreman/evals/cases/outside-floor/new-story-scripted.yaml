@@ -6,6 +6,7 @@ id: new-story-scripted
 kind: new-story
 fixture:
   story_team: scripted
+  git_access: gh
 input:
   turns:
     - "make a story for dark mode in the settings page"

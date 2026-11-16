@@ -98,6 +98,10 @@ pub enum LaunchWarningCode {
     UnknownBridgeTools,
     BridgeToolDispatch,
     BridgeToolsLocalOnly,
+    /// The agent lists skills its startup does not place.
+    SkillsNotInManifest,
+    /// The agent lists skills on a runtime that cannot turn the others off.
+    SkillsNotEnforced,
     /// The agent does not resolve on this Mac, so a launch of it fails.
     AgentUnavailable,
     /// SW-XS-13: the agent's `context` is not valid. Shown, never enforced,
@@ -238,6 +242,7 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
             message,
         }),
     );
+    out.extend(skills_warning(resolved));
     out.extend(size_warnings(&resolved.manifest));
     out.extend(permission_warning(&resolved.manifest));
     if let Some(tools) = &resolved.launch.bridge_tools {
@@ -278,6 +283,40 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
         }
     }
     out
+}
+
+/// The warning for an agent whose `skill_allowlist` names skills its startup does not place:
+/// a launch offers one only where the workspace already has it (a context worktree).
+fn skills_warning(resolved: &ResolvedAgent) -> Option<LaunchWarning> {
+    let missing: Vec<&str> = resolved
+        .launch
+        .skill_allowlist
+        .iter()
+        .flatten()
+        .filter(|name| !resolved.provides.skills.contains(name))
+        .map(String::as_str)
+        .collect();
+    (!missing.is_empty()).then(|| LaunchWarning {
+        code: LaunchWarningCode::SkillsNotInManifest,
+        message: format!(
+            "skill_allowlist lists {} that its startup does not place; a launch offers them only where the workspace already has them",
+            missing.join(", ")
+        ),
+    })
+}
+
+/// The warning for an agent with a `skill_allowlist` on a runtime that cannot turn the
+/// other skills off.
+pub fn skills_not_enforced_warning(agent: &super::model::Agent) -> Option<LaunchWarning> {
+    (agent.skill_allowlist.is_some()
+        && !super::adapter::desktop(agent.runtime).enforces_skill_allowlist)
+        .then(|| LaunchWarning {
+            code: LaunchWarningCode::SkillsNotEnforced,
+            message: format!(
+                "skill_allowlist is not enforced by {}; a launch offers every skill",
+                agent.runtime
+            ),
+        })
 }
 
 /// The warning for generated launch settings whose `deny` or `ask` rules
@@ -697,6 +736,7 @@ mod tests {
             avatar: None,
             allow_wake: false,
             resume_after_restart: false,
+            skill_allowlist: None,
             budget_usd: None,
             revision: 1,
             archived_at: None,

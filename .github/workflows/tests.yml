@@ -53,6 +53,51 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  mock-layout:
+    name: Mock layout specs
+    # Playwright's browsers support Ubuntu 24.04, not the newer image ubuntu-latest names.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      # Real-browser layout of the agent chat in the mock backend's agents world: its boot, the
+      # chat's fit at the design's pane sizes, long logs and reduced motion; and the file diff's
+      # focus ring with the app's real styles. One worker: the chat's open-time budget is
+      # measured, and parallel boots would skew it.
+      - name: Run the mock layout specs
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts --project=chromium --workers=1
+          tests/e2e-mock/agents-world-boot.spec.ts
+          tests/e2e-mock/agent-inbox-pane-alignment.spec.ts
+          tests/e2e-mock/inbox-long-log.spec.ts
+          tests/e2e-mock/inbox-reduced-motion.spec.ts
+          tests/e2e-mock/rendered-diff-focus.spec.ts
+          tests/e2e-mock/needs-you-pin.spec.ts
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mock-layout-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
   node-scripts:
     name: Node scripts
     runs-on: ubuntu-latest

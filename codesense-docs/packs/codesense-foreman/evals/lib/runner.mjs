@@ -4,7 +4,8 @@
 //
 // Driver contract: `driver({ caseDef, fx })` plays `caseDef.input.turns` through `fx.human`, logs
 // every Foreman tool call through `fx.tool("foreman", name, args)` with the real MCP argument
-// names, runs the agent's shell through the fixture so graders see it (`fx.git(argv, cwd)` for
+// names (a CodeSense tool by its bare name, any other MCP tool by its full `mcp__<server>__<tool>`
+// name, as GITHUB_PR), runs the agent's shell through the fixture so graders see it (`fx.git(argv, cwd)` for
 // git, logged as a `git` record without the leading "git"; `fx.run(file, argv, cwd)` for a
 // team script; `fx.gh(argv, cwd)` for gh; `fx.write(file, text)` for a file write, logged as
 // `write_file`), and returns `{ cost_usd, tokens }`. It throws InfraError

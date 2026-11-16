@@ -11,6 +11,7 @@
 //! otherwise the rate table. A rate applies from its effective day, so a price change adds a row and
 //! leaves earlier usage at the price it was billed at.
 
+pub mod agent_record;
 pub(crate) mod contribution;
 pub mod conversation;
 pub(crate) mod cost_rollup;
@@ -28,6 +29,7 @@ pub mod task_outcome;
 pub mod timing;
 pub mod telemetry;
 pub(crate) mod spend_caps;
+pub(crate) mod ingest_notice;
 pub(crate) mod session_log_usage;
 #[cfg(test)]
 mod spend_scan_tests;
@@ -1682,6 +1684,11 @@ pub fn pull_machine(
 /// Writes usage events into `tx`, from `machine` (`""` for this Mac). A later read's cost replaces an
 /// earlier one, and a rate-table cost is repriced by a later rate, as the store's upsert rules say.
 fn ingest_rows(tx: &rusqlite::Transaction<'_>, machine: &str, events: &[UsageEvent]) -> Result<(), String> {
+    // The notice is debounced, so it goes out after this transaction commits.
+    ingest_notice::ingested(events.iter().map(|e| {
+        let id: &str = &e.session_id;
+        id
+    }));
     for e in events {
         let day = match checked_day(e.at_ms) {
             Ok(day) => day,

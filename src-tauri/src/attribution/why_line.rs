@@ -32,9 +32,10 @@ pub(crate) fn notes_stay_local(home: &Path, repo_key: &str) -> bool {
 }
 
 /// Whether `commit` has a git-ai note in this copy, in any of the refs readers use.
-fn has_note(repo: &Path, commit: &str) -> Result<Option<std::process::Output>, String> {
+fn has_note(repo: &Path, commit: &str) -> Result<bool, String> {
     GitAiSource::default()
         .raw_note(repo, commit)
+        .map(|note| Option::is_some(&note))
         .map_err(|error| error.to_string())
 }
 
@@ -105,10 +106,13 @@ pub(crate) async fn resolve_holding(
         launch_stories,
         hold,
         None,
+        true,
     )
     .await
 }
 
+/// [`resolve`] for a story page's ranges: it reads the notes there are and never waits for
+/// git-ai to write more (a note written later is read once the commit's note changes).
 pub(crate) async fn resolve_at(
     home: &Path,
     principal: &Principal,
@@ -128,6 +132,7 @@ pub(crate) async fn resolve_at(
         launch_stories,
         None,
         None,
+        false,
     )
     .await
 }
@@ -153,6 +158,7 @@ pub(crate) async fn resolve_at_observed(
         stories,
         None,
         Some(Box::new(observer)),
+        false,
     )
     .await
 }
@@ -167,6 +173,7 @@ async fn resolve_at_holding(
     launch_stories: HashMap<String, String>,
     hold: ReadHold,
     observer: Option<Box<dyn FnOnce(super::checkpoints::Stats) + Send>>,
+    drain: bool,
 ) -> Result<WhyLine, String> {
     let (read_home, read_principal, read_store, read_params, read_scope) = (
         home.to_owned(),
@@ -185,16 +192,20 @@ async fn resolve_at_holding(
             &read_scope,
             &read_store,
             launch_stories,
-            |repo, rev, path| GitAiSource::for_home(&read_home).ranges(repo, rev, path),
+            |repo, rev, path| {
+                let source =
+                    if drain { GitAiSource::for_home(&read_home) } else { GitAiSource::default() };
+                AttributionSource::ranges(&source, repo, rev, path)
+            },
         ))?;
         let commits = result["ranges"]
             .as_array()
             .into_iter()
             .flatten()
             .filter(|range| super::turns::exact_agent_range(range))
-            .filter_map(|range| range["commit"].as_str().map(str::to_owned))
+            .filter_map(|range| Value::as_str(&range["commit"]).map(str::to_owned))
             .collect::<BTreeSet<_>>();
-        let stats = if commits.is_empty() {
+        let stats = if BTreeSet::is_empty(&commits) {
             std::default::Default::default()
         } else if let Some(repo) = configured_repo(&read_home, &read_principal, &read_params.repo)?
             .filter(|r| {
@@ -215,7 +226,7 @@ async fn resolve_at_holding(
                     .filter(|range| super::turns::exact_agent_range(range))
                 {
                     if let (Some(cli), Some(id)) =
-                        (range["tool"].as_str(), range["nativeSessionId"].as_str())
+                        (Value::as_str(&range["tool"]), Value::as_str(&range["nativeSessionId"]))
                     {
                         range["nativeSessionId"] = json!(
                             crate::session_usage::session_read::resolve_session(
@@ -240,7 +251,7 @@ async fn resolve_at_holding(
         .into_iter()
         .flatten()
         .filter(|range| range["basis"] == "exact" && range["tool"] != HUMAN_TOOL)
-        .filter_map(|range| range["nativeSessionId"].as_str().map(str::to_owned))
+        .filter_map(|range| Value::as_str(&range["nativeSessionId"]).map(str::to_owned))
         .collect();
     let mut native_to_session = HashMap::new();
     let mut sessions = serde_json::Map::new();
@@ -378,14 +389,18 @@ const READ_ATTEMPTS: usize = 3;
 /// snapshot is refreshed and only that file is read again (a compare of the revisions, never a
 /// timing retry), at most [`READ_ATTEMPTS`] reads, then `NOTES_CHANGED`.
 pub(crate) struct RawReader {
-    home: PathBuf,
     remote_key: String,
     checkout: PathBuf,
+    /// The checkout, opened once for every note this reader looks up.
+    repo: git2::Repository,
     notes_ref: Option<String>,
     cache: Option<super::why_line_cache::Cache>,
     /// The note on each commit counted so far, read once however many files it touched; cleared
     /// whenever the notes revisions move.
     own_notes: HashMap<String, Option<Authorship>>,
+    /// The note key each commit's `own_notes` entry was read under: a commit whose note changed
+    /// since is read again, so a note written between two of its files is not missed.
+    own_note_keys: HashMap<String, Option<String>>,
     #[cfg(test)]
     snapshots: usize,
 }
@@ -396,38 +411,35 @@ impl RawReader {
             .filter(|r| r.attachment == crate::mcp::setup_tools::AttachmentStatus::Attached)
             .ok_or(NO_LOCAL_COPY)?;
         let checkout = PathBuf::from(local.local_path.ok_or(NO_LOCAL_COPY)?);
+        let cache = open_cache(home, &checkout)?;
+        let notes_ref = notes_revisions(&checkout)?;
+        let repo = git2::Repository::open(&checkout).map_err(|error| error.to_string())?;
         Ok(Self {
-            home: home.to_owned(),
             remote_key: local.remote_key,
-            cache: open_cache(home, &checkout)?,
-            notes_ref: notes_revisions(&checkout)?,
+            cache,
+            notes_ref,
             checkout,
+            repo,
             own_notes: HashMap::new(),
+            own_note_keys: HashMap::new(),
             #[cfg(test)]
             snapshots: 1,
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn raw_ranges_of(&mut self, commit: &str, path: &str) -> Result<Vec<LineRange>, String> {
-        let home = self.home.clone();
-        self.ranges_with(commit, path, |repo, rev, path| {
-            GitAiSource::for_home(&home).ranges(repo, rev, path)
-        })
-    }
-
-    /// The ranges `raw_ranges_of` returns for the lines `commit` itself added, reading only
+    /// The ranges a whole-file read returns for the lines `commit` itself added, reading only
     /// `commit`'s own note (once per commit). Every other range is unknown, so only the ranges
-    /// whose `commit` is `commit` may be used. Cached apart from `raw_ranges_of`'s whole-file ranges.
+    /// whose `commit` is `commit` may be used. Cached apart from the whole-file ranges. A read
+    /// never waits for git-ai (`git-ai await`): a note it writes later changes the commit's note
+    /// key, so the next read of that commit's files reads it.
     pub(crate) fn own_ranges_of(&mut self, commit: &str, path: &str) -> Result<Vec<LineRange>, String> {
-        let source = GitAiSource::for_home(&self.home);
-        self.own_ranges_with(&source, commit, path)
+        self.own_ranges_with(&GitAiSource::default(), commit, path)
     }
 
     fn own_ranges_with(&mut self, source: &GitAiSource, commit: &str, path: &str) -> Result<Vec<LineRange>, String> {
-        self.ranges_keyed(OWN_KEY, commit, path, |repo, rev, path, notes| {
+        self.ranges_keyed(OWN_KEY, commit, path, |repo, opened, rev, path, notes| {
             if !notes.contains_key(rev) {
-                notes.insert(rev.to_owned(), source.note(repo, rev)?);
+                notes.insert(rev.to_owned(), super::git_ai::note_in(opened, rev)?);
             }
             source.own_ranges(repo, rev, path, &notes[rev])
         })
@@ -439,7 +451,7 @@ impl RawReader {
         path: &str,
         mut read: impl FnMut(&Path, &str, &str) -> Result<Vec<LineRange>, AttributionError>,
     ) -> Result<Vec<LineRange>, String> {
-        self.ranges_keyed("", commit, path, |repo, rev, path, _| read(repo, rev, path))
+        self.ranges_keyed("", commit, path, |repo, _, rev, path, _| read(repo, rev, path))
     }
 
     fn ranges_keyed(
@@ -449,6 +461,7 @@ impl RawReader {
         path: &str,
         mut read: impl FnMut(
             &Path,
+            &git2::Repository,
             &str,
             &str,
             &mut HashMap<String, Option<Authorship>>,
@@ -456,13 +469,28 @@ impl RawReader {
     ) -> Result<Vec<LineRange>, String> {
         let remote_key = format!("{}{key_suffix}", self.remote_key);
         for _ in 0..READ_ATTEMPTS {
-            let notes = self.notes_ref.clone();
+            let own_note = key_suffix == OWN_KEY;
+            let notes = if own_note {
+                own_note_key(&self.repo, commit)?
+            } else {
+                self.notes_ref.clone()
+            };
+            if own_note && self.own_note_keys.get(commit) != Some(&notes) {
+                self.own_notes.remove(commit);
+                self.own_note_keys.insert(commit.to_owned(), notes.clone());
+            }
             let key = raw_key(&remote_key, commit, path, notes.as_deref());
             let (raw, hit) = cached_raw(self.cache.as_ref(), &key, || {
-                read(&self.checkout, commit, path, &mut self.own_notes)
+                read(&self.checkout, &self.repo, commit, path, &mut self.own_notes)
             })?;
             // A cold read is only valid if the notes it saw are still the snapshot.
-            let now = if hit { notes.clone() } else { notes_revisions(&self.checkout)? };
+            let now = if hit {
+                notes.clone()
+            } else if own_note {
+                own_note_key(&self.repo, commit)?
+            } else {
+                notes_revisions(&self.checkout)?
+            };
             #[cfg(test)]
             if !hit {
                 self.snapshots += 1;
@@ -471,11 +499,30 @@ impl RawReader {
                 save_raw(self.cache.as_mut(), &key, hit, &raw);
                 return Ok(raw);
             }
-            self.notes_ref = now;
+            if !own_note {
+                self.notes_ref = now;
+            }
             self.own_notes.clear();
+            self.own_note_keys.clear();
         }
         Err(NOTES_CHANGED.into())
     }
+}
+
+/// The note blob that owns this commit's lines; unrelated notes do not invalidate that row.
+fn own_note_key(repo: &git2::Repository, commit: &str) -> Result<Option<String>, String> {
+    let oid = git2::Oid::from_str(commit).map_err(|error| error.to_string())?;
+    for name in super::git_ai::NOTES_REFS {
+        match git2::Repository::find_note(repo, Some(&format!("refs/notes/{name}")), oid) {
+            Ok(note) => return Ok(Some(format!("{name}={}", git2::Note::id(&note)))),
+            Err(error) if super::git_ai::is_missing_object(&error) => {
+                return Err(AttributionError::ObjectsNotLocal.to_string())
+            }
+            Err(error) if git2::Error::code(&error) == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(None)
 }
 
 /// Appended to a repository's cache key for the ranges of a commit's own lines.
@@ -618,7 +665,7 @@ fn resolve_with_read(
                 let commit_noted = Option::is_some_and(Option::as_deref(&range.commit), |commit| {
                     *std::collections::hash_map::Entry::or_insert_with(
                         HashMap::entry(&mut noted, commit.to_owned()),
-                        || Result::map_or(has_note(repo, commit), true, |note| Option::is_some(&note)),
+                        || Result::map_or(has_note(repo, commit), true, |note| note),
                     )
                 });
                 let past_boundary = range.commit.as_ref().is_some_and(|c| boundary.contains(c));
@@ -822,7 +869,7 @@ fn associate(
         return Ok(());
     };
     // An existing but unreadable note (or an uncovered line) is never a story association.
-    if Option::is_some(&has_note(repo, commit)?) {
+    if has_note(repo, commit)? {
         return Ok(());
     }
     let Some(subject) = git_text(repo, &["show", "-s", "--format=%s", commit])? else {
@@ -2001,16 +2048,13 @@ pub(crate) mod tests {
         (first, notes_calls(&log))
     }
 
-    /// The count path reads the commit's own note and no other, one `git notes show` per notes ref
-    /// it tries, in `NOTES_REFS` order until one has the note: a constant (at most two), whatever
-    /// the note's ref and however many commits the file's blame names or files the commit touched.
+    /// The count path reads notes through libgit2, without a child process, and reuses a commit's
+    /// note when another file from that commit is counted.
     #[test]
-    fn the_count_path_reads_one_note_per_ref_tried_however_many_the_blame_names() {
+    fn the_count_path_reads_notes_without_git_children() {
         let home = tempfile::tempdir().unwrap();
         let repo = rebuild();
         attach(home.path(), repo.path());
-        let [managed, ai] = crate::attribution::git_ai::NOTES_REFS;
-        let show = |sha: &str, notes_ref: &str| format!("notes --ref={notes_ref} show {sha}");
         let sha_of = |rev: &str| git(repo.path(), &["rev-parse", rev]).trim().to_owned();
         let (head, c1, c0) = (sha_of("HEAD"), sha_of("HEAD~1"), sha_of("HEAD~2"));
         let blamed = |sha: &str, file: &str| {
@@ -2019,26 +2063,95 @@ pub(crate) mod tests {
         };
         assert!(blamed(&head, "d.txt") > blamed(&c0, "d.txt"), "the fixture's blame must widen with history");
 
-        // The note is on the `ai` ref only (the fixture): the managed ref is tried first and misses.
+        // The fixture has notes on its history.
         let (first, both) = counted_notes_calls(home.path(), &head, ["d.txt", "a.txt"]);
-        assert_eq!(first, vec![show(&head, managed), show(&head, ai)], "ai-only note: one call per ref");
-        assert_eq!(both, first, "a second file of the same commit reads no note");
+        assert!(first.is_empty(), "notes were read in a child: {first:?}");
+        assert_eq!(both, first, "a second file of the same commit read a note in a child");
 
         // The same count on a commit whose blame names fewer commits: it does not grow with the blame.
         let (narrow, _) = counted_notes_calls(home.path(), &c1, ["a.txt", "a.txt"]);
-        assert_eq!(narrow, vec![show(&c1, managed), show(&c1, ai)]);
+        assert!(narrow.is_empty());
 
         // No note on either ref: both are tried, once each.
         let (none, none_both) = counted_notes_calls(home.path(), &c0, ["base.txt", "d.txt"]);
-        assert_eq!(none, vec![show(&c0, managed), show(&c0, ai)], "no note: one call per ref");
+        assert!(none.is_empty(), "no-note lookup spawned git: {none:?}");
         assert_eq!(none_both, none);
 
         // A note on the managed ref wins with the first lookup.
-        let blob = git(repo.path(), &["notes", &format!("--ref={ai}"), "list", &head]);
-        git(repo.path(), &["notes", &format!("--ref={managed}"), "add", "-C", blob.trim(), &head]);
+        let blob = git(repo.path(), &["notes", "--ref=ai", "list", &head]);
+        git(repo.path(), &["notes", "--ref=sense", "add", "-C", blob.trim(), &head]);
         let (won, won_both) = counted_notes_calls(home.path(), &head, ["d.txt", "a.txt"]);
-        assert_eq!(won, vec![show(&head, managed)], "managed-ref note: one call");
+        assert!(won.is_empty());
         assert_eq!(won_both, won);
+    }
+
+    #[test]
+    fn own_note_key_ignores_unrelated_notes_and_changes_with_its_blob() {
+        let repo = rebuild();
+        let target = git(repo.path(), &["rev-parse", "HEAD~1"]).trim().to_owned();
+        let unrelated = git(repo.path(), &["rev-parse", "HEAD"]).trim().to_owned();
+        let opened = git2::Repository::open(repo.path()).unwrap();
+        let before = own_note_key(&opened, &target).unwrap();
+        git(repo.path(), &["notes", "--ref=sense", "add", "-m", "unrelated", &unrelated]);
+        assert_eq!(own_note_key(&opened, &target).unwrap(), before);
+        replace_note(repo.path(), "updated");
+        assert_ne!(own_note_key(&opened, &target).unwrap(), before, "one open repository sees a new note");
+    }
+
+    /// A note written between two files of one commit is read for the second: the reader's note
+    /// memo is keyed by the note it read, so the note-less first read does not answer for it.
+    #[test]
+    fn a_note_written_between_two_files_of_one_commit_counts_for_the_second() {
+        let repo = rebuild();
+        let sha = git(repo.path(), &["rev-parse", "HEAD~1"]).trim().to_owned();
+        let fresh = tempfile::tempdir().unwrap();
+        attach(fresh.path(), repo.path());
+        let expected = RawReader::start_reads(fresh.path(), &Principal::from(1), KEY)
+            .unwrap()
+            .own_ranges_of(&sha, "b.txt")
+            .unwrap();
+        assert!(expected.iter().any(|r| r.tool.is_some()), "the fixture note attributes b.txt: {expected:?}");
+
+        let home = tempfile::tempdir().unwrap();
+        org(home.path());
+        bind(home.path(), repo.path());
+        let blob = git(repo.path(), &["notes", "--ref=ai", "list", &sha]).trim().to_owned();
+        git(repo.path(), &["notes", "--ref=ai", "remove", &sha]);
+        let mut reader = RawReader::start_reads(home.path(), &Principal::from(1), KEY).unwrap();
+        reader.own_ranges_of(&sha, "a.txt").unwrap();
+        git(repo.path(), &["notes", "--ref=ai", "add", "-C", &blob, &sha]);
+        assert_eq!(reader.own_ranges_of(&sha, "b.txt").unwrap(), expected);
+    }
+
+    /// Story reads never wait for git-ai: with the managed binary installed, counting a commit's
+    /// own lines and resolving a story page's ranges run no `git-ai await`.
+    #[tokio::test]
+    async fn story_reads_run_no_git_ai_await() {
+        use super::super::git_ai::tests::{awaits, stub_git_ai};
+        let home = tempfile::tempdir().unwrap();
+        let repo = rebuild();
+        attach(home.path(), repo.path());
+        let log = stub_git_ai(home.path());
+        let sha = git(repo.path(), &["rev-parse", "HEAD~1"]).trim().to_owned();
+        let mut reader = RawReader::start_reads(home.path(), &Principal::from(1), KEY).unwrap();
+        for path in ["a.txt", "b.txt"] {
+            reader.own_ranges_of(&sha, path).unwrap();
+        }
+        let params = Params { repo: KEY.into(), rev: Some(sha.clone()), story: None, path: "a.txt".into(), start: 1, end: 2 };
+        let answer = resolve_at(
+            home.path(),
+            &Principal::from(1),
+            &home.path().join("usage.sqlite"),
+            &home.path().join("session-conversations"),
+            &params,
+            &CallerScope::Human,
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(answer["ranges"].as_array().is_some_and(|ranges| !ranges.is_empty()), "{answer}");
+        assert_eq!(awaits(&log), 0, "a story read awaited git-ai");
+        assert_eq!(super::super::git_ai::drains(repo.path()), 0);
     }
 
     /// Counts are identical by construction: the ranges of the commit's own lines are the same

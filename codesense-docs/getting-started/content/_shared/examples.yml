@@ -66,6 +66,14 @@
       "calls": [{"tool": "read_messages", "arguments": {}}]
     },
     {
+      "id": "inbox-pins",
+      "title": "Pinning messages in your thread",
+      "tools": ["pin"],
+      "docs": "arc-f-inboxes-and-triage/messages.html#tool-pin",
+      "searchTerms": ["pin", "pins", "unpin", "preview"],
+      "calls": [{"tool": "pin", "arguments": {"message_id": 42, "preview": {"shortName": "QA", "value": "5 of 5", "unit": "ACs traced", "status": "on-track"}}}]
+    },
+    {
       "id": "machines",
       "title": "Remote machines",
       "tools": ["list_machines"],
@@ -276,7 +284,7 @@
     {
       "id": "arc-l",
       "title": "Notes and team management",
-      "tools": ["notes_list", "notes_read", "notes_create", "notes_write", "notes_search", "notes_history", "notes_read_at", "notes_restore", "get_publish_set", "set_private_items_use", "create_team", "rename_team", "archive_team", "delete_team", "set_team_parent", "set_team_starter_page", "add_source_repo", "attach_source_repo_path"],
+      "tools": ["notes_list", "notes_read", "notes_create", "notes_write", "notes_search", "notes_history", "notes_read_at", "notes_restore", "get_publish_set", "set_private_items_use", "create_team", "rename_team", "archive_team", "delete_team", "set_team_parent", "set_team_starter_page", "add_source_repo", "attach_source_repo_path", "clone_repo"],
       "docs": "arc-l-factory/team-and-notes-tools.html",
       "searchTerms": ["notes", "and", "team", "management"],
       "calls": [{"tool": "notes_list", "arguments": {}}]

@@ -29,6 +29,7 @@ use crate::shared::secret_scan::redact_secrets;
 
 use super::agent_tools;
 use super::avatar_tools;
+use super::clone_repo;
 use super::machine_tools::*;
 use super::notes_tools;
 use super::pane_tools;
@@ -5306,7 +5307,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
+        description = "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
     )]
     async fn agent_preview(
         &self,
@@ -5342,7 +5343,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused."
+        description = "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused."
     )]
     async fn agent_create(
         &self,
@@ -5375,7 +5376,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
+        description = "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist` (`null` lifts the list), `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself."
     )]
     async fn agent_update(
         &self,
@@ -6764,7 +6765,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}."
+        description = "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {restore} (optional boolean: true brings back an unpinned pin as it was, keeping who pinned it, when, its preview and its place; refused at 3 pins), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"restored\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}."
     )]
     async fn pin(
         &self,
@@ -7180,7 +7181,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "List inbox messages WITHOUT marking anything read (read_messages is the one that drains your own unread mail). Every agent session, every role (any role name, usually a saved Agent's id) and the human (`human`) has an inbox in each team. Args, all optional: {scope} `to-human` (messages to the human), `to-agents` (to sessions and roles) or `all` — default `to-human` with no filter, `all` with one; {agentId} (a saved Agent id from agent_list: its role inbox, the inboxes of the sessions running it, and every reply under them); {sessionId} (a list_sessions handle or a session id: what that session sent and received, and the replies; pass your own $CODESENSE_TAB_SESSION_ID for your own history); {role} (messages to and from that role queue); {limit} (newest N; default 50, at most 500); {before} (a messageId: only older ones; to page, pass the last listed messageId while hasMore); {include} [\"text\"] for every body in full (else a body over 2 KB comes as textPreview, its first 512 bytes, with truncated:true) and [\"conversations\"] for the human's conversation summaries; {kind} `needs-you` | `update` (only messages of that kind, applied before {limit}; kind marks whether mail waits on the human for agent views and dashboards); {team} `{org, team}` (default: the {sessionId}'s team, else the team active in the app). Returns {messages, humanUnread, hasMore, total (messages that matched, older than before when given, ahead of limit)}; an answer stays under 64 KB, so older messages past that wait for the next page; conversations are opt-in: include:[\"conversations\"]. `messages` is newest first: [{messageId, from, fromName, to, toName, text (or textPreview and truncated), createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, kind}]. `kind`: `needs-you` (waits on the human) or `update` (informational); the human Inbox shows both in conversations and counts all unread human mail, so on a message to a session or role (scope `to-agents`/`all`) it is just what the sender set — text typed into a terminal is always `update`; else the kind its sender set; else `needs-you` when it carries a `replyTo` naming someone other than the human, its sender or a role its sender holds; else `update`. `via`: `terminal` for text typed into the recipient's terminal with send_to_session (it already has it: stored read, never returned by read_messages); absent for mail. `summary`: the sender's one-line plain-text preview (show it instead of `text` in a list; absent when the sender gave none). `replyTo`: where replies to it go instead of its sender (a session handle, `human`, or `role:<id>`); `replyToName` its display name. `replyTargetEnded`: a reply would go to a session that is no longer running (it waits unread in that inbox; send to a role instead). `from`/`to` are session handles, role ids or `human`; `fromName`/`toName` their display names. `createdAtMs`/`archivedAtMs` are epoch milliseconds. `unread`: the recipient has not read it yet. `inReplyTo`: the messageId it answers (thread link). `primaryFile`: an attached team-content path. `onClick`: `{type: goto-agent|open-file|show-message}`. `contentType`: plain | markdown (default) | html. `delivery` (role messages and withdrawn ones; else null): {state, pickedUpAtMs, instance, acceptedAtMs, disposition (work|no_work), note, withdrawnAtMs} where state is `queued` (no instance holds it), `reading` (claimed), `accepted`, `done` (acknowledged) or `withdrawn`. `humanUnread` counts unread messages to the human in the whole team inbox, of both kinds. Next: answer one with reply {message_id}; see a role's queue and who holds it with role_state; see who runs with list_sessions."
+        description = "List inbox messages WITHOUT marking anything read (read_messages drains your own unread mail). Every session, role (usually a saved Agent's id) and the human (`human`) has an inbox in each team. Args, all optional: {scope} `to-human` (messages to the human), `to-agents` (to sessions and roles) or `all` — default `to-human` with no filter, `all` with one; {agentId} (a saved Agent id from agent_list: its role inbox, the inboxes of the sessions running it, and every reply under them); {storyId} (with {agentId}: that saved agent's thread on this story, as its pins are keyed: every listed session of it and every recorded one, ended ones included, so a successor finds its predecessor's mail; \"\" is its no-story thread, its listed sessions only; {sessionId} then names a seat, and the thread's other seats that have not ended are left out); {sessionId} (a list_sessions handle or a session id: what that session sent and received, and the replies; pass your own $CODESENSE_TAB_SESSION_ID for your own history); {role} (messages to and from that role queue); {limit} (newest N; default 50, at most 500); {before} (a messageId: only older ones; to page, pass the last listed messageId while hasMore); {include} [\"text\"] for every body in full (else a body over 2 KB comes as textPreview, its first 512 bytes, with truncated:true) and [\"conversations\"] for the human's conversation summaries; {kind} `needs-you` | `update` (only that kind, applied before {limit}); {team} `{org, team}` (default: the {sessionId}'s team, else the team active in the app). Returns {messages, humanUnread, hasMore, total (messages that matched, older than before when given, ahead of limit), threadSessions (with {storyId} only: every address of the thread's sessions read, handles and tab session ids)}; an answer stays under 64 KB, older messages waiting for the next page. `messages` is newest first: [{messageId, from, fromName, to, toName, text (or textPreview and truncated), createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, kind}]. `kind`: `needs-you` (waits on the human) or `update` (informational): text typed into a terminal is `update`; else the kind its sender set; else `needs-you` when its `replyTo` names someone other than the human, its sender or a role its sender holds; else `update`. `via`: `terminal` for text typed into the recipient's terminal with send_to_session (it already has it: stored read, never returned by read_messages); absent for mail. `summary`: the sender's one-line preview, when given (show it instead of `text` in a list). `replyTo`: where replies to it go instead of its sender (a session handle, `human`, or `role:<id>`); `replyToName` its display name. `replyTargetEnded`: a reply would go to a session that is no longer running (it waits unread in that inbox; send to a role instead). `from`/`to` are session handles, role ids or `human`; `fromName`/`toName` their display names. `createdAtMs`/`archivedAtMs` are epoch milliseconds. `unread`: the recipient has not read it yet. `inReplyTo`: the messageId it answers (thread link). `primaryFile`: an attached team-content path. `onClick`: `{type: goto-agent|open-file|show-message}`. `contentType`: plain | markdown (default) | html. `delivery` (role messages and withdrawn ones; else null): {state, pickedUpAtMs, instance, acceptedAtMs, disposition (work|no_work), note, withdrawnAtMs} where state is `queued` (no instance holds it), `reading` (claimed), `accepted`, `done` (acknowledged) or `withdrawn`. `humanUnread` counts unread messages to the human in the whole team inbox, of both kinds. Next: answer one with reply {message_id}; see a role's queue and who holds it with role_state; see who runs with list_sessions."
     )]
     async fn inbox_list(
         &self,
@@ -7236,7 +7237,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message."
+        description = "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, inReplyTo, text, textTruncated, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. `inReplyTo` is the messageId the message answers (the card a reply is for), null for none. `text` is the message, up to 4000 characters (`textTruncated` when cut), for an open delivery; null once acknowledged. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message."
     )]
     async fn role_state(
         &self,
@@ -8037,19 +8038,31 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<OpenTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        // The trusted-side gate runs BEFORE any work — a refusal never has a side
+        // effect. A headed open is a first-class visible tab (focused).
+        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
+        ok_json(self.open_tab_in_workspace(params, None).await?)
+    }
+
+    /// Open a tab in an open workspace and return `{handle, headed, kind}`. A shell
+    /// by default; with `argv`, a tab whose first process is that argument vector,
+    /// run directly with no shell in front of it. The caller has admitted the tool.
+    async fn open_tab_in_workspace(
+        &self,
+        params: OpenTerminalTabParams,
+        argv: Option<Vec<String>>,
+    ) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
-        use crate::commands::pty::{AttachWarmArgs, SpawnPtySize};
+        use crate::commands::pty::{AttachWarmArgs, SpawnPtyArgs, SpawnPtySize};
         use crate::commands::pty_layout::{
             app_viewer, open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
         };
         use codesense_pty_core::domain::PtySessionId;
         use codesense_pty_core::layout::{OpenTab, Placement, Tags, WorkspaceDescriptor};
 
-        // The trusted-side gate runs BEFORE any work — a refusal never has a side
-        // effect. A headed open is a first-class visible tab (focused).
-        InteractiveGate::admit("open_terminal_tab").map_err(gate_err)?;
         let headed = params.headed.unwrap_or(true);
 
         // Only an OPEN workspace is addressable — resolved against the app's
@@ -8140,19 +8153,39 @@ impl CodesenseHandler {
             index: None,
             activate: headed,
         };
-        let spawn = TabSpawn::Warm(AttachWarmArgs {
-            target_cwd: ws.cwd.clone(),
-            size: SpawnPtySize {
-                cols: AGENT_COLS,
-                rows: AGENT_ROWS,
-            },
-            story_id: ws.story_id.clone(),
-            workspace_id: Some(ws.id.clone()),
-            epic_id: None,
-            scrollback: None,
-            starship_preset: None,
-            shell_integration: None,
-        });
+        let size = SpawnPtySize {
+            cols: AGENT_COLS,
+            rows: AGENT_ROWS,
+        };
+        let spawn = match argv {
+            None => TabSpawn::Warm(AttachWarmArgs {
+                target_cwd: ws.cwd.clone(),
+                size,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                starship_preset: None,
+                shell_integration: None,
+            }),
+            Some(command_argv) => TabSpawn::Cold(Box::new(SpawnPtyArgs {
+                command: Default::default(),
+                command_argv: Some(command_argv),
+                cwd: ws.cwd.clone(),
+                size,
+                interactive: Some(false),
+                starship_preset: None,
+                story_id: ws.story_id.clone(),
+                workspace_id: Some(ws.id.clone()),
+                epic_id: None,
+                scrollback: None,
+                shell_integration: None,
+                env_remove: None,
+                account: None,
+                environment_binding: None,
+                native_launch: None,
+            })),
+        };
         open_layout_tab(
             self.app_handle.clone(),
             crate::commands::machines::LOCAL_MACHINE_ID.into(),
@@ -8171,7 +8204,7 @@ impl CodesenseHandler {
         // restores it, and mail addressed to it still reaches the tab. Best-effort.
         crate::commands::dashboard_launch::tag_bound_launch(&self.app_handle, &session_id).await;
 
-        ok_json(serde_json::json!({
+        Ok(serde_json::json!({
             "handle": handle,
             "headed": headed,
             "kind": ws.kind,
@@ -8387,15 +8420,20 @@ impl CodesenseHandler {
         &self,
         Parameters(params): Parameters<CloseTerminalTabParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::interactive_gate::InteractiveGate;
+
+        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
+        ok_json(self.close_tab_by_handle(params.handle.trim()).await?)
+    }
+
+    /// Close the tab a handle names, killing what runs in it, and return
+    /// `close_terminal_tab`'s reply. The caller has admitted the tool.
+    async fn close_tab_by_handle(&self, handle: &str) -> Result<serde_json::Value, ErrorData> {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::machines::{RuntimeSessionReference, LOCAL_MACHINE_ID};
         use crate::commands::pty_layout::terminal_close_tab;
         use codesense_pty_core::layout::{CloseMode, CloseOutcome};
 
-        InteractiveGate::admit("close_terminal_tab").map_err(gate_err)?;
-
-        let handle = params.handle.trim();
         if handle.is_empty() {
             return Err(invalid_err(
                 "close_terminal_tab",
@@ -8422,13 +8460,13 @@ impl CodesenseHandler {
             // NEVER-KNOWN (the handle is forged or belongs to another install).
             // Both close cleanly but a caller should be able to tell them apart.
             if resolved_session.is_some() || known_remote {
-                return ok_json(serde_json::json!({
+                return Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": known_remote,
                 }));
             }
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "unknownHandle",
                 "message": format!("no live terminal tab for handle '{handle}'"),
@@ -8441,7 +8479,7 @@ impl CodesenseHandler {
         // killed before the reply could travel back. Refuse before any work.
         let caller = self.connection_session();
         if is_self_closing_tab(caller.as_deref(), std::iter::once(tab.session.as_str())) {
-            return ok_json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "closed": false,
                 "reason": "selfClose",
                 "message": "a tab cannot close itself mid-call",
@@ -8462,7 +8500,7 @@ impl CodesenseHandler {
                     CloseOutcome::Killed | CloseOutcome::Backgrounded => true,
                     CloseOutcome::Removed => false,
                 };
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "hadCliRunning": had_cli_running,
                     "remote": is_remote,
@@ -8471,7 +8509,7 @@ impl CodesenseHandler {
             Err(error) if is_already_closed_error(&error) => {
                 // An already-gone session reads as a benign idempotent
                 // close (we HAD it, it's now gone).
-                ok_json(serde_json::json!({
+                Ok(serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
                     "remote": is_remote,
@@ -9692,7 +9730,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors?, teams:[...]}`; each team has `{name, archived, parent?, starterPage?, synced, sourceRepos:[{repo, status, localPath}]}` (`starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html) where `status` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create."
+        description = "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs, repo}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors, teams:[...]}` (`teams` is empty when `loadErrors` is not); each team has `{name, archived, parentTeam, starterPage?, synced, sourceRepos:[{slug, remoteKey, attachment, localPath}]}` (`parentTeam`: null for a top-level team; `starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html; `slug` is owner/repo; `localPath` is the bound checkout or null) where `attachment` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create."
     )]
     async fn describe_setup(&self) -> Result<CallToolResult, ErrorData> {
         let state = setup_tools::describe_setup(&self.app_handle).await?;
@@ -9866,10 +9904,207 @@ impl CodesenseHandler {
             home: &home,
             user_id,
         };
+        let path = params.path.clone();
         let reply = setup_tools::attach_source_repo_path(&env, params)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
+        // A bound clone is no longer an unfinished one that `clone_repo`'s Stop may remove.
+        if let tool_envelope::ToolEnvelope::Ok(_) = &reply {
+            clone_repo::records().forget(std::path::Path::new(&path));
+        }
         envelope_json(&reply)
+    }
+
+    #[tool(
+        description = "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. git never prompts for a credential (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`): with none it can use, the clone ends at once with `gitExited` and the tab says why. A second clone into a folder whose clone is still on record is refused (rule `busy`). The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, starting (the clone's tab hasn't opened yet; still recorded, so call Stop again), not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }."
+    )]
+    async fn clone_repo(
+        &self,
+        Parameters(params): Parameters<clone_repo::CloneRepoParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.admit_local_setup_mutation("clone_repo")?;
+        let refuse = |message: String| {
+            envelope_json(&tool_envelope::ToolEnvelope::<serde_json::Value>::Validation { message })
+        };
+        let Some(user_home) = clone_repo::home_dir() else {
+            return refuse("clone_repo needs a home folder, and none was found".to_string());
+        };
+        // Validation comes first: nothing below runs for a refused input.
+        let (valid, org, team, workspace_id) = match clone_repo::plan(&params, &user_home) {
+            Err(message) => return refuse(message),
+            Ok(clone_repo::Plan::Stop(path)) => {
+                // Stop the clone before removing its folder, so git isn't still writing.
+                if let Some(tab) = clone_repo::records().tab_of(&path) {
+                    self.close_tab_by_handle(&tab).await?;
+                }
+                let mut stopped = clone_repo::records().stop(&path);
+                // A killed git may still be letting go of the folder; a failed removal
+                // stays on record, so try it again briefly.
+                for _ in 0..4 {
+                    if stopped.reason != Some("remove_failed") {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    stopped = clone_repo::records().stop(&path);
+                }
+                return envelope_json(&tool_envelope::ToolEnvelope::Ok(stopped));
+            }
+            Ok(clone_repo::Plan::Clone {
+                valid,
+                org,
+                team,
+                workspace_id,
+            }) => (valid, org, team, workspace_id),
+        };
+        let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
+            .await
+            .map_err(|m| ErrorData::invalid_params(m, None))?;
+        let (coord, active_team) = self.attachment_state()?;
+        let env = commands::source_repo_add::AttachmentEnv {
+            app: &self.app_handle,
+            coord: &coord,
+            active_team: active_team.inner(),
+            home: &home,
+            user_id,
+        };
+        // The repo must be one the team tracks, so a clone is never made that
+        // can't be bound.
+        if let Err(error) =
+            setup_tools::tracked_repo(&home, user_id, &org, &team, &params.repo).await
+        {
+            return match setup_tools::refusal::<serde_json::Value>(error) {
+                Ok(envelope) => envelope_json(&envelope),
+                Err(message) => Err(ErrorData::internal_error(message, None)),
+            };
+        }
+        // The git CodeSense already resolves for everything else; no `gh`.
+        let git = self
+            .app_handle
+            .try_state::<DependencyManager>()
+            .and_then(|deps| DependencyManager::status(&deps).git.path);
+        let Some(git) = git else {
+            return refuse("git is not installed or was not found; install it first".to_string());
+        };
+        let Some(argv) = clone_repo::clone_argv(&git, &valid) else {
+            return refuse("git's path contains `=`, which can't be run here".to_string());
+        };
+        // A record whose git has exited and left no folder is stale: forget it, but
+        // only while it still names that tab.
+        if let Some(stale) = clone_repo::records().tab_of(&valid.path) {
+            if self.tab_has_exited(&stale).await && std::fs::symlink_metadata(&valid.path).is_err()
+            {
+                clone_repo::records().forget_tab(&valid.path, &stale);
+            }
+        }
+        // Claim the folder before the tab opens: a second clone into it is refused
+        // while this one is on record. Only a folder this call creates is recorded,
+        // so only it is Stop's to remove, and Stop closes this tab first.
+        if !clone_repo::records().reserve(&valid.path, valid.creates) {
+            return refuse(clone_repo::CloneRefusal::Busy.to_string());
+        }
+        let tab = match self
+            .open_tab_in_workspace(
+                OpenTerminalTabParams {
+                    workspace_id,
+                    headed: Some(true),
+                    name: Some(format!("clone {}", params.repo)),
+                },
+                Some(argv),
+            )
+            .await
+        {
+            Ok(tab) => tab,
+            Err(error) => {
+                if valid.creates {
+                    clone_repo::records().forget(&valid.path);
+                }
+                return Err(error);
+            }
+        };
+        let handle = tab
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if valid.creates {
+            clone_repo::records().set_tab(&valid.path, handle.as_deref());
+        }
+        // Wait for the checkout, but not past git exiting, and well inside the
+        // shortest tool timeout a runtime applies.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(clone_repo::CLONE_WAIT_SECS);
+        let mut git_exited = false;
+        while !clone_repo::finished(&valid.path) && std::time::Instant::now() < deadline {
+            if let Some(handle) = &handle {
+                if self.tab_has_exited(handle).await {
+                    git_exited = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let done = clone_repo::finished(&valid.path);
+        let mut started = clone_repo::CloneStarted {
+            repo: params.repo.clone(),
+            path: params.path.clone(),
+            created: valid.creates,
+            tab,
+            git_exited: git_exited && !done,
+            attached: false,
+            source: None,
+            note: None,
+        };
+        if !done {
+            if started.git_exited {
+                // git removes the folder it made when a clone fails; with nothing left,
+                // there is nothing for Stop to remove.
+                if std::fs::symlink_metadata(&valid.path).is_err() {
+                    clone_repo::records().forget_exited(&valid.path, Option::as_deref(&handle));
+                }
+                started.note =
+                    Some("git exited before the clone finished; read the tab for why".to_string());
+            } else {
+                started.note = Some(format!(
+                    "the clone has not finished after {} seconds; read the tab, then call attach_source_repo_path",
+                    clone_repo::CLONE_WAIT_SECS
+                ));
+            }
+            return envelope_json(&tool_envelope::ToolEnvelope::Ok(started));
+        }
+        let attached = setup_tools::attach_source_repo_path(
+            &env,
+            setup_tools::AttachSourceRepoPathParams {
+                org,
+                team,
+                repo: params.repo.clone(),
+                path: params.path.clone(),
+            },
+        )
+        .await
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        match attached {
+            tool_envelope::ToolEnvelope::Ok(source) => {
+                // Bound: the folder is the team's clone now, never Stop's to remove.
+                clone_repo::records().forget(&valid.path);
+                started.attached = true;
+                started.source = Some(source);
+            }
+            tool_envelope::ToolEnvelope::Validation { message } => started.note = Some(message),
+            _ => started.note = Some("the clone could not be bound".to_string()),
+        }
+        envelope_json(&tool_envelope::ToolEnvelope::Ok(started))
+    }
+
+    /// Whether the local tab a handle names has exited. A tab that can't be read
+    /// counts as still running, so the wait falls back to its deadline.
+    async fn tab_has_exited(&self, handle: &str) -> bool {
+        use crate::commands::dashboard_launch::DashboardLaunchState;
+        let live = super::terminal_tabs::LiveTabs::read_local(&self.app_handle).await;
+        let session = self
+            .app_handle
+            .try_state::<DashboardLaunchState>()
+            .and_then(|state| state.resolve(handle));
+        super::terminal_tabs::by_handle(&live.tabs, handle, session.as_deref())
+            .is_some_and(|tab| tab.exited)
     }
 
     #[tool(
@@ -12551,6 +12786,10 @@ pub struct PinParams {
     /// `true` unpins it.
     #[serde(default)]
     pub remove: Option<bool>,
+    /// `true` brings back its unpinned pin as it was (who pinned it, when, its preview and
+    /// place): the Undo of an unpin.
+    #[serde(default)]
+    pub restore: Option<bool>,
     /// What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.
     /// On a message already pinned it replaces that pin's preview.
     #[serde(default)]
@@ -17548,6 +17787,7 @@ pub(crate) mod tests {
         "rename_workspace",
         "add_source_repo",
         "attach_source_repo_path",
+        "clone_repo",
         "remove_source_repo",
         // Tool-discovery meta tools (find a tool by keyword; dispatch any tool by name).
         "codesense_search_tools",
@@ -18795,18 +19035,26 @@ pub(crate) mod tests {
     /// The self-close refusal of `close_terminal_tab` is decided
     /// before it touches its tab. (`close_workspace` has its own outcome tests
     /// over `plan_close`, which refuses a self-close before any teardown.)
+    /// The tool's body is `close_tab_by_handle`, so the order is checked there.
     #[test]
     fn close_terminal_tab_refuses_self_close_before_any_teardown() {
         let source = include_str!("handler.rs");
-        let verb = "close_terminal_tab";
-        let at = source
-            .find(&format!("    async fn {verb}(\n"))
-            .unwrap_or_else(|| panic!("{verb} is a tool"));
-        let next_fn = source[at + 1..]
-            .find("\n    async fn ")
-            .map(|i| at + 1 + i)
-            .unwrap_or(source.len());
-        let body = &source[at..next_fn];
+        let body_of = |name: &str| {
+            let at = source
+                .find(&format!("    async fn {name}("))
+                .unwrap_or_else(|| panic!("{name} is a method"));
+            let next_fn = source[at + 1..]
+                .find("\n    async fn ")
+                .map(|i| at + 1 + i)
+                .unwrap_or(source.len());
+            &source[at..next_fn]
+        };
+        assert!(
+            body_of("close_terminal_tab").contains("self.close_tab_by_handle("),
+            "close_terminal_tab closes through close_tab_by_handle"
+        );
+        let verb = "close_tab_by_handle";
+        let body = body_of(verb);
         let self_close = body
             .find("is_self_closing_tab(")
             .unwrap_or_else(|| panic!("{verb} must call is_self_closing_tab"));

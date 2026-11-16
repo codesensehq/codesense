@@ -19,7 +19,8 @@ import {
 import { useContainerWidth } from "@/shared/hooks/use-container-width";
 
 import type { FileDiffKind, FileDiffModes } from "./file-diff-mode";
-import type { ViewerFileType } from "./viewer-file-type";
+import { SideFrame, SideImage } from "./side-frame";
+import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-file-type";
 
 /**
  * The one file-diff dispatch. Every surface that shows a changed
@@ -28,8 +29,9 @@ import type { ViewerFileType } from "./viewer-file-type";
  * here; this decides how the type reads:
  *
  * - markdown: the block redline, rendered side by side, or the source diff;
- * - HTML, image, Excalidraw: rendered side by side where the surface can serve
- *   both sides (`sides.rendered`, Files only today), else the source diff;
+ * - HTML, image, Excalidraw: rendered side by side, or the source diff. Files
+ *   serves both sides (`sides.rendered`); every other surface draws them from
+ *   the text or bytes it already holds (see `./side-frame`);
  * - code: `CodeDiffReview` in the shared code mode, never a markdown redline.
  *
  * Side by side needs a diff body at least {@link SIDE_BY_SIDE_MIN_WIDTH} px
@@ -37,6 +39,16 @@ import type { ViewerFileType } from "./viewer-file-type";
  * its fetch `state` in and this renders the matching state (loading, error,
  * binary, one-sided, and the large-diff gate). It fetches nothing.
  */
+
+/** Why a raster image's sides aren't drawn here: the switch's tooltip and the Source line. */
+export const IMAGE_UNAVAILABLE = {
+  tooLarge: "Over the 8 MB limit for drawing here",
+  failed: "Couldn’t read the image",
+  remote: "Images at a commit in a remote worktree aren’t drawn yet",
+} as const;
+/** Why an image the surface read nothing of won't draw: its diff's read failed, and says how. */
+export const diffFailed = (message: string) =>
+  message ? `Couldn’t read the diff (${message})` : "Couldn’t read the diff";
 
 /** Diff bodies narrower than this show one side at a time. */
 export const SIDE_BY_SIDE_MIN_WIDTH = 900;
@@ -73,6 +85,10 @@ export interface FileDiffSides {
   afterLabel?: string;
   /** Files only: URL sources for the rendered HTML/image/Excalidraw viewers. */
   rendered?: RenderedSides;
+  /** Off Files: a raster image side's bytes (base64), where the surface holds them. */
+  imageBytes?: { before?: string; after?: string };
+  /** Off Files: a raster image's bytes still being read, or why they won't draw here. */
+  imageState?: { kind: "reading" } | { kind: "unavailable"; reason: string };
 }
 
 export interface FileDiffPrefs {
@@ -126,6 +142,32 @@ export function renderFileDiff(args: FileDiffArgs): ReactElement {
   }
 }
 
+/** HTML, SVG and Excalidraw: drawn from their text where no route serves them. */
+export function rendersFromText(filePath: string): boolean {
+  const fileType = getViewerFileType(filePath);
+  return fileType === "html" || fileType === "excalidraw" || isSvg(filePath);
+}
+
+/** An SVG can carry script, so it renders as a page, never in an `<img>`. */
+function isSvg(filePath: string) {
+  return extensionOf(filePath) === "svg";
+}
+
+/**
+ * Whether a surface without `sides.rendered` can draw this file's rendered
+ * sides: a text type unless a side read as binary, a raster image only when
+ * the surface holds every present side's bytes.
+ */
+export function rendersInline(filePath: string, sides: FileDiffSides, state: FileDiffState) {
+  if (rendersFromText(filePath)) return state.kind !== "binary";
+  if (getViewerFileType(filePath) !== "image") return false;
+  const { hasBefore, hasAfter } = sideAvailability(sides);
+  return (
+    (!hasBefore || sides.imageBytes?.before != null) &&
+    (!hasAfter || sides.imageBytes?.after != null)
+  );
+}
+
 const MODE_LABELS: { [K in FileDiffKind]: [FileDiffModes[K], string][] } = {
   markdown: [
     ["redline", "Redline"],
@@ -159,6 +201,12 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
   unavailable?: Partial<Record<FileDiffModes[K], string>>;
 }) {
   const options = MODE_LABELS[kind] as [FileDiffModes[K], string][];
+  // A mode that can't apply here isn't what the body shows: the first one that can is pressed
+  // (an image that can't draw shows Source, whatever the preference says).
+  const shown =
+    unavailable?.[mode] != null
+      ? (options.find(([value]) => unavailable?.[value] == null)?.[0] ?? mode)
+      : mode;
   return (
     <div
       role="group"
@@ -170,13 +218,17 @@ export function FileDiffModeSwitch<K extends FileDiffKind>({
         <button
           key={value}
           type="button"
-          aria-pressed={mode === value}
+          aria-pressed={shown === value}
           disabled={unavailable?.[value] != null}
           title={unavailable?.[value]}
           onClick={() => onChange(value)}
           className={cn(
-            "px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-50",
-            mode === value ? "bg-accent font-medium" : "enabled:hover:bg-accent/60",
+            // The ring is drawn inside the button: the group's overflow-hidden would clip it. Important,
+            // because the global :focus-visible rule (unlayered) sets a 2 px offset that beats utilities.
+            "px-2 py-0.5 focus-visible:!outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
+            shown === value
+              ? "bg-primary font-medium text-primary-foreground"
+              : "enabled:hover:bg-accent/60",
           )}
         >
           {label}
@@ -247,8 +299,10 @@ function SideToggle({
           aria-pressed={picked === side}
           onClick={() => onPick(side)}
           className={cn(
-            "px-2 py-0.5",
-            picked === side ? "bg-accent font-medium" : "hover:bg-accent/60",
+            "px-2 py-0.5 focus-visible:!outline-offset-[-2px]",
+            picked === side
+              ? "bg-primary font-medium text-primary-foreground"
+              : "hover:bg-accent/60",
           )}
         >
           {sideLabel(sides, side)}
@@ -270,6 +324,7 @@ function DiffStrip<K extends FileDiffKind>({
   showSwitch,
   sideToggle,
   filePath,
+  unavailableModes,
 }: {
   sides: FileDiffSides;
   kind: K;
@@ -279,14 +334,17 @@ function DiffStrip<K extends FileDiffKind>({
   showSwitch: boolean;
   sideToggle?: ReactNode;
   filePath: string;
+  /** Modes that can't apply here, each with its reason (the switch shows it as a tooltip). */
+  unavailableModes?: Partial<Record<FileDiffModes[K], string>>;
 }) {
   const onModeChange = showSwitch ? prefs.onModeChange : undefined;
   const unavailable =
-    kind === "code" && !isStructuralLanguage(detectLanguageId(filePath))
+    unavailableModes ??
+    (kind === "code" && !isStructuralLanguage(detectLanguageId(filePath))
       ? ({ structural: "No structural diff for this language" } as Partial<
           Record<FileDiffModes[K], string>
         >)
-      : undefined;
+      : undefined);
   if (!onModeChange && !sideToggle) return null;
   const prefix = prefs.testIdPrefix ?? "file-diff";
   return (
@@ -314,18 +372,20 @@ function DiffStrip<K extends FileDiffKind>({
 }
 
 /** The frame every type shares: strip and the surface's header on top, measured
- *  body below. */
+ *  body below, then an optional footer line. */
 function DiffFrame({
   strip,
   header,
   bodyRef,
   children,
+  footer,
   testId,
 }: {
   strip: ReactNode;
   header?: ReactNode;
   bodyRef: (node: HTMLDivElement | null) => void;
   children: ReactNode;
+  footer?: ReactNode;
   testId: string;
 }) {
   return (
@@ -339,6 +399,7 @@ function DiffFrame({
       <div ref={bodyRef} className="min-h-0 flex-1">
         {children}
       </div>
+      {footer}
     </div>
   );
 }
@@ -443,13 +504,38 @@ function SideBySide({
   );
 }
 
-function CodeSkeleton({ prefix }: { prefix: string }) {
+/** The body while a side is read: it pulses only where motion is welcome, and says so to a
+ *  screen reader (or to everyone, `shown`). */
+function CodeSkeleton({
+  prefix,
+  label = "Loading the diff",
+  shown = false,
+  announce = true,
+}: {
+  prefix: string;
+  label?: string;
+  shown?: boolean;
+  /** Off where another node announces the state (a raster image's status). */
+  announce?: boolean;
+}) {
   return (
     <div
-      aria-hidden
       data-testid={`${prefix}-code-skeleton`}
-      className="h-full w-full animate-pulse rounded bg-muted/40"
-    />
+      className="relative flex h-full w-full items-center justify-center"
+    >
+      {/* Only the placeholder pulses: a label that fades with it drops under AA. */}
+      <div
+        aria-hidden="true"
+        data-skeleton-pulse=""
+        className="absolute inset-0 rounded bg-muted/40 motion-safe:animate-pulse"
+      />
+      <span
+        role={announce ? "status" : undefined}
+        className={shown ? "relative text-xs text-muted-foreground" : "sr-only"}
+      >
+        {label}
+      </span>
+    </div>
   );
 }
 
@@ -643,12 +729,40 @@ function RenderedFileDiff({
   const frame = useFrameState(filePath);
   const prefix = prefs.testIdPrefix ?? "file-diff";
   const rendered = sides.rendered;
-  // Off Files there is no serving for both sides yet: Source is the only mode.
-  const mode = rendered ? prefs.modes.html : "source";
+  // Off Files a raster image draws from the bytes the surface reads: while they are read it
+  // says so, and when they won't draw here Side by side stays in the switch with the reason.
+  const raster = !rendered && fileType === "image" && !rendersFromText(filePath);
+  // Before the surface knows anything of the image (its diff still loading), it is being read too.
+  const reading =
+    raster &&
+    (sides.imageState?.kind === "reading" || (!sides.imageState && state.kind === "loading"));
+  // A side that failed to read can't draw either: Side by side says so, rather than the code modes.
+  const cannotDraw = !raster
+    ? null
+    : sides.imageState?.kind === "unavailable"
+      ? sides.imageState.reason
+      : state.kind === "error"
+        ? // Nothing of the image was read here: the reason is the diff's own error, not the image.
+          diffFailed(state.message)
+        : null;
+  // Off Files the sides are drawn from what the surface holds; a type it can't
+  // draw that way (a raster image it has no bytes for) has Source only.
+  const renderable = !!rendered || reading || rendersInline(filePath, sides, state);
+  const mode = renderable ? prefs.modes.html : "source";
   const layout = sideLayout(sides, frame.width);
 
   let body: ReactNode;
-  if (mode === "source" || !rendered) {
+  if (mode === "source" && raster) {
+    // One line for an image's Source mode, whichever surface shows it.
+    body = (
+      <OverlayCenteredState testId={`${prefix}-image-source`}>
+        An image has no text diff. {cannotDraw ? `${cannotDraw}.` : "Side by side compares it."}
+      </OverlayCenteredState>
+    );
+  } else if (reading) {
+    // Shown here; said by the image's one status node, below.
+    body = <CodeSkeleton prefix={prefix} label="Reading the image…" shown announce={false} />;
+  } else if (mode === "source") {
     body = (
       <SourceBody
         filePath={filePath}
@@ -663,7 +777,7 @@ function RenderedFileDiff({
     body = <ErrorRow prefix={prefix} message={state.message} />;
   } else if (state.kind === "loading") {
     body = <CodeSkeleton prefix={prefix} />;
-  } else {
+  } else if (rendered) {
     body = (
       <SideBySide
         sides={sides}
@@ -673,27 +787,57 @@ function RenderedFileDiff({
         renderSide={(side) => renderRenderedSide(fileType, side, sides, rendered)}
       />
     );
+  } else if (sides.before == null || sides.after == null) {
+    body = <CodeSkeleton prefix={prefix} />;
+  } else {
+    body = (
+      <LargeDiffGate sides={sides} gate={frame.gate} prefix={prefix}>
+        <SideBySide
+          sides={sides}
+          layout={layout}
+          picked={frame.picked}
+          prefix={prefix}
+          renderSide={(side) => (
+            <InlineRenderedSide filePath={filePath} side={side} sides={sides} />
+          )}
+        />
+      </LargeDiffGate>
+    );
   }
 
   const showToggle =
-    !!rendered &&
+    renderable &&
     mode === "side-by-side" &&
     state.kind !== "loading" &&
     state.kind !== "error" &&
     layout === "toggle";
+  // A page drawn from its text has no URL to resolve its linked files against.
+  const alone =
+    !rendered && mode === "side-by-side" && fileType !== "excalidraw" && rendersFromText(filePath);
   return (
     <DiffFrame
       testId={`${prefix}-rendered`}
       bodyRef={frame.bodyRef}
       header={prefs.header}
+      footer={
+        alone && (
+          <p
+            className="flex-none border-t border-border px-3 py-1 text-xs text-muted-foreground"
+            data-testid={`${prefix}-rendered-alone`}
+          >
+            Rendered on its own: linked files such as stylesheets and images aren’t loaded here.
+          </p>
+        )
+      }
       strip={
-        rendered ? (
+        renderable || cannotDraw ? (
           <DiffStrip
             sides={sides}
             kind="html"
             mode={mode}
             prefs={prefs}
             filePath={filePath}
+            unavailableModes={cannotDraw ? { "side-by-side": cannotDraw } : undefined}
             showSwitch
             sideToggle={
               showToggle && (
@@ -702,7 +846,7 @@ function RenderedFileDiff({
             }
           />
         ) : (
-          // Off Files the body is a code diff, so it takes the code modes.
+          // With Source only the body is a code diff, so it takes the code modes.
           <DiffStrip
             sides={sides}
             kind="code"
@@ -714,8 +858,61 @@ function RenderedFileDiff({
         )
       }
     >
+      {raster && (
+        // One status node from Reading the image… to the reason it won't draw: a screen reader hears the change, which a node mounted with its text does not say.
+        <span role="status" className="sr-only" data-testid={`${prefix}-image-status`}>
+          {reading ? "Reading the image…" : cannotDraw ? `${cannotDraw}.` : ""}
+        </span>
+      )}
       {body}
     </DiffFrame>
+  );
+}
+
+/** Whether `text` is an Excalidraw scene's JSON: an object, not just any text. */
+function isScene(text: string): boolean {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+/** A side off Files, from the surface's own text or bytes: nothing it can load
+ *  reaches past that side's content. */
+function InlineRenderedSide({
+  filePath,
+  side,
+  sides,
+}: {
+  filePath: string;
+  side: Side;
+  sides: FileDiffSides;
+}) {
+  const text = (side === "before" ? sides.before : sides.after) ?? "";
+  const label = sideLabel(sides, side);
+  if (getViewerFileType(filePath) === "excalidraw") {
+    // A scene that won't parse would draw as a blank canvas next to a good side: say so.
+    if (!isScene(text))
+      return (
+        <OverlayCenteredState testId="excalidraw-unreadable">
+          <span role="alert">Couldn’t read this side’s drawing: it isn’t valid JSON.</span>
+        </OverlayCenteredState>
+      );
+    return (
+      <ExcalidrawViewer
+        key={side}
+        filePath={filePath}
+        teamContentPath=""
+        sceneText={text}
+        readOnly
+      />
+    );
+  }
+  if (rendersFromText(filePath)) return <SideFrame key={side} html={text} title={label} />;
+  return (
+    <SideImage key={side} base64={sides.imageBytes?.[side] ?? ""} filePath={filePath} alt={label} />
   );
 }
 

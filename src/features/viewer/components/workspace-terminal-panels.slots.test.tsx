@@ -84,7 +84,11 @@ import { headlessFrom } from "@/shared/terminal/__test-utils__/headless-from";
 import { chunked, paneSteps, type PaneStep } from "@/shared/terminal/__test-utils__/pane-feed";
 import { loadPtylog, type PtylogFixture } from "@/shared/terminal/__fixtures__/ptylog";
 import type { ReferenceBuffer } from "@/shared/terminal/buffer-dump";
-import { terminalManager, type DisplayOpts } from "@/shared/terminal/terminal-manager";
+import {
+  terminalManager,
+  TERMINAL_QUERY,
+  type DisplayOpts,
+} from "@/shared/terminal/terminal-manager";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { writePty } from "@/tauri/commands";
@@ -421,13 +425,28 @@ describe("every surface change is a slot move", () => {
     act(() => s().setActiveTerminalTab(TEAM, "shell", A));
     await flush();
     // Codex and Claude are both hidden while the rest of their output streams.
+    const spies = ["codex", "claude"].map((id) => ({
+      id,
+      writes: vi.spyOn(terminalManager.terminal(id)!, "write"),
+    }));
     for (let i = 1; i < CHUNKS; i++) feed(i);
     await act(async () => new Promise((r) => setTimeout(r, 900)));
-    const writes = vi.spyOn(terminalManager.terminal("codex")!, "write");
-    act(() => s().setActiveTerminalTab(TEAM, "codex", A));
-    await flush();
-    // Showing it wrote nothing: it was already current.
-    expect(writes).not.toHaveBeenCalled();
+    // A parked terminal parses nothing, except a chunk that asks the terminal a
+    // question (the program waits on the answer): that one is written at once.
+    for (const { id, writes } of spies) {
+      const steps = feeds[id].slice(1).flat();
+      const queries = steps.filter(
+        (step) => step.kind === "output" && TERMINAL_QUERY.test(step.data),
+      ).length;
+      const resizes = steps.filter((step) => step.kind === "resize").length;
+      // Every question drains what is held: one write, and one more before each resize.
+      expect(writes.mock.calls.length, id).toBeLessThanOrEqual(queries * (1 + resizes));
+    }
+    // Each tab replays its parked output when it is shown.
+    for (const tab of ["codex", "claude"]) {
+      act(() => s().setActiveTerminalTab(TEAM, tab, A));
+      await flush();
+    }
     for (const id of SESSIONS) await expectParity(id);
   }, 20_000);
 

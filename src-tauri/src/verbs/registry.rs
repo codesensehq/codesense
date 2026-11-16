@@ -117,6 +117,25 @@ impl Default for Registry {
         registry
     }
 }
+/// The pin verbs: each is registered as `inbox.<verb>` and kept under its flat name as an
+/// alias the kit, the chat overlay and page bridges call.
+pub(crate) const PIN_VERBS: [&str; 6] = [
+    "pins",
+    "pin",
+    "unpin",
+    "restorePin",
+    "replacePin",
+    "reorderPins",
+];
+/// The name a verb's per-name tables (schemas, capability, inbox target, audit target,
+/// contract docs) are keyed by: a pin verb's `inbox.` name and its flat alias share one
+/// entry in each table.
+pub(crate) fn table_name(name: &str) -> &str {
+    match str::strip_prefix(name, "inbox.") {
+        Some(flat) if <[&str]>::contains(&PIN_VERBS, &flat) => flat,
+        _ => name,
+    }
+}
 fn spec(
     name: &str,
     class: Class,
@@ -126,14 +145,15 @@ fn spec(
     action: bool,
     audited: bool,
 ) -> VerbSpec {
+    let table = table_name(name);
     VerbSpec {
         name: name.into(),
         class,
-        args_schema: args_schema(name),
-        result_schema: result_schema(name),
-        grant: capability_for_verb(name).into(),
+        args_schema: args_schema(table),
+        result_schema: result_schema(table),
+        grant: capability_for_verb(table).into(),
         inbox_target: matches!(
-            name,
+            table,
             "inbox"
                 | "roles"
                 | "openMessage"
@@ -151,6 +171,8 @@ fn spec(
                 | "pins"
                 | "pin"
                 | "unpin"
+                | "restorePin"
+                | "replacePin"
                 | "reorderPins"
         ),
         confirmable,
@@ -170,7 +192,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         );
     }
     match name {
-        "agent" | "agents" | "gotoAgent" | "sessions" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "modelRates" | "canPasteToTerminal" | "prefs"
+        "agent" | "agents" | "gotoAgent" | "sessions" | "sessions.watchText"
+        | "sessions.unwatchText" | "sessionRead" | "whyLine" | "storyChanges" | "storyTotals" | "sessionUsage" | "sessionRecord" | "modelRates" | "canPasteToTerminal" | "prefs"
         | "setPrefs" | "setUiState" | "subscribe" | "unsubscribe" | "page" | "moveWorkspace"
         | "openLauncher" | "openRoutineDraft" | "launchUnder" | "dismiss_agent_mark"
         | "showMenu" | "showPopover" | "focusOut" | "focusTerminal" | "commands.register" => {
@@ -186,8 +209,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
         "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin"
-        | "unpin" | "reorderPins" => "inbox:write",
+        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin" | "unpin"
+        | "restorePin" | "replacePin" | "reorderPins" => "inbox:write",
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -229,8 +252,9 @@ impl VerbSpec {
         if matches!(&*self.name, "subscribe" | "unsubscribe" | "page") && args["topic"] == "pins" {
             return "inbox:read:team";
         }
+        // Where the human's messages to sessions stand reads like the inbox it comes from.
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
-            && args["topic"] == "inbox"
+            && (args["topic"] == "inbox" || args["topic"] == "messageDelivery")
         {
             if caller.scope == "team" {
                 "inbox:read:team"
@@ -268,7 +292,8 @@ fn register_resources(registry: &mut Registry) {
         );
     }
     // An agent thread's pin list. An agent pins and unpins its own thread with the `pin`
-    // tool; reading another thread and reordering are the person's, from a page.
+    // tool; reading another thread and reordering are the person's, from a page. Each verb
+    // is `inbox.<verb>`, and its flat name stays as an alias for the callers that use it.
     for (verb, class, twin, reason) in [
         (
             "pins",
@@ -278,6 +303,15 @@ fn register_resources(registry: &mut Registry) {
         ),
         ("pin", Class::Metadata, Some("pin"), None),
         ("unpin", Class::Metadata, Some("pin"), None),
+        // The Undo of an unpin: the pin comes back as it was.
+        ("restorePin", Class::Metadata, Some("pin"), None),
+        // At the cap, the person pins in place of a pin they choose.
+        (
+            "replacePin",
+            Class::Metadata,
+            None,
+            Some("The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin"),
+        ),
         (
             "reorderPins",
             Class::Metadata,
@@ -286,7 +320,10 @@ fn register_resources(registry: &mut Registry) {
         ),
     ] {
         let write = class != Class::Read;
-        registry.register("inbox", spec(verb, class, false, twin, reason, write, write));
+        let name = format!("inbox.{verb}");
+        assert_eq!(table_name(&name), verb, "a pin verb is listed in PIN_VERBS");
+        registry.register("inbox", spec(&name, class, false, twin, reason, write, write));
+        registry.register_existing("inbox", spec(verb, class, false, twin, reason, write, write));
     }
     registry.register(
         "commands",
@@ -990,6 +1027,23 @@ fn register_resources(registry: &mut Registry) {
             false,
         ),
     );
+    // A page hears a session's assistant prose as it is written (`onSessionText`): the bridge
+    // also confines it to the page's own team.
+    for name in ["sessions.watchText", "sessions.unwatchText"] {
+        Registry::register(
+            registry,
+            "sessions",
+            spec(
+                name,
+                Class::Read,
+                false,
+                None,
+                Some("A page hears a session's assistant prose as it is written; agents read a session's turns with session_read"),
+                false,
+                false,
+            ),
+        );
+    }
     registry.register_existing(
         "inbox",
         spec(
@@ -1241,6 +1295,18 @@ mod agent {
                 false,
                 Some("session_read"),
                 None,
+                false,
+                false,
+            ),
+        );
+        registry.register(
+            "agent",
+            spec(
+                "sessionRecord",
+                Class::Read,
+                false,
+                None,
+                Some("A page's per-agent summary of session_usage and story_changes; agents read those two tools directly."),
                 false,
                 false,
             ),

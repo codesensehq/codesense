@@ -27,6 +27,35 @@ pub fn team_key(team: &LaunchTeam) -> String {
 pub fn message_key(team: &LaunchTeam, id: i64) -> String {
     format!("message:{}/{}/{id}", team.org, team.team)
 }
+/// The `messageDelivery` topic: where each message the human sent to a session stands.
+pub const DELIVERY_TOPIC: &str = "messageDelivery";
+pub fn delivery_key(team: &LaunchTeam, id: i64) -> String {
+    format!("delivery:{}/{}/{id}", team.org, team.team)
+}
+/// The delivery row of a message the human sent to a session: `queued` until its agent
+/// is told about it (a confirmed notice) or it is read, then `delivered`, at
+/// `deliveredAtMs` (when told, else when read: mail read before any notice still has a
+/// delivered time). `None` for any other message; role mail and withdrawn mail carry their
+/// own `delivery`.
+pub fn delivery_row(team: &LaunchTeam, m: &InboxMessage) -> Option<Value> {
+    if m.from != HUMAN
+        || m.to == HUMAN
+        || Option::is_some(&m.delivery)
+        || Option::is_some(&m.role)
+        || Option::is_some(&m.via)
+    {
+        return None;
+    }
+    let delivered_at = m.told_at_ms.or(m.read_at_ms);
+    let state = if Option::is_some(&delivered_at) {
+        "delivered"
+    } else {
+        "queued"
+    };
+    Some(
+        json!({"id":delivery_key(team,m.id),"messageId":m.id,"team":team,"to":m.to,"state":state,"toldAtMs":m.told_at_ms,"deliveredAtMs":delivered_at}),
+    )
+}
 #[derive(Default, Clone)]
 struct TeamInbox {
     messages: BTreeMap<i64, (InboxMessage, MessageKind)>,
@@ -124,6 +153,7 @@ impl ViewParts {
             conversations: self.conversations.as_ref().clone(),
             has_more: false,
             matched: 0,
+            thread_sessions: None,
         }
     }
 }
@@ -211,6 +241,37 @@ impl InboxProjection {
                 .insert(key.clone(), (team.clone(), Arc::new(TeamInbox::default())));
         }
         &mut self.teams.get_mut(&key).unwrap().1
+    }
+    /// The `messageDelivery` patch for an inbox pass: the delivery rows of its projected
+    /// message rows, and the delivery ids of its removed messages and of projected
+    /// messages that have none.
+    pub fn delivery_patch(
+        &self,
+        updates: &[(Option<String>, Value)],
+        removes: &[String],
+    ) -> (Vec<(Option<String>, Value)>, Vec<String>) {
+        let mut gone: Vec<String> = removes
+            .iter()
+            .filter_map(|key| str::strip_prefix(key, "message:"))
+            .map(|rest| format!("delivery:{rest}"))
+            .collect();
+        let mut rows = Vec::new();
+        for (scope, row) in updates {
+            let (Some(scope), Some(id)) = (scope, Value::as_i64(&row["messageId"])) else {
+                continue;
+            };
+            let Some((team, state)) = self.teams.get(scope) else {
+                continue;
+            };
+            let Some((message, _)) = state.messages.get(&id) else {
+                continue;
+            };
+            match delivery_row(team, message) {
+                Some(row) => rows.push((Some(scope.clone()), row)),
+                None => gone.push(delivery_key(team, id)),
+            }
+        }
+        (rows, gone)
     }
     pub fn put(&mut self, team: &LaunchTeam, message: InboxMessage, kind: MessageKind) {
         let state = self.ensure_team(team);
@@ -414,9 +475,9 @@ impl InboxProjection {
             bridge.reactions = crate::weft::reactions::group_reactions(reactions);
         }
         conversation.reactions = bridge.reactions.clone();
-        let (id, created_at) = (message.id, message.created_at_ms);
+        let (id, created_at, told_at) = (message.id, message.created_at_ms, message.told_at_ms);
         self.put(team, message, kind);
-        let row = json!({"id":message_key(team,id),"rowType":"message","team":team,"messageId":id,"createdAt":created_at,"message":bridge,"conversation":conversation});
+        let row = json!({"id":message_key(team,id),"rowType":"message","team":team,"messageId":id,"createdAt":created_at,"toldAtMs":told_at,"message":bridge,"conversation":conversation});
         Arc::make_mut(self.bridge_rows.entry(team_key(team)).or_default())
             .insert(id, Arc::new(bridge));
         (Some(team_key(team)), row)

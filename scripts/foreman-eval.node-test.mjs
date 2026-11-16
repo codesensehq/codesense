@@ -21,7 +21,7 @@ import { stringify } from "yaml";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, fixtureFor, CARDS, CONFIG } = await lib("fixture");
+const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH } = await lib("fixture");
 const { loadCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
@@ -641,10 +641,11 @@ const WT = "../foreman-readme-ab12";
 const BRANCH = "foreman/readme-ab12";
 const inWorktree = (fx) => path.join(fx.root, "foreman-readme-ab12");
 const recover =
-  ({ before = [], attempt, after = [], replies = 1, remind = true } = {}) =>
+  ({ before = [], attempt, after = [], replies = 1, remind = true, read = true } = {}) =>
   async ({ fx }) => {
     fx.human(turnsOf("recover-error")[0]);
     for (const step of before) step(fx);
+    if (read) fx.tool("foreman", "read_content_file", { path: GIT_ACCESS_PATH });
     attempt(fx);
     for (const step of after) step(fx);
     for (let i = 0; i < replies; i += 1) fx.say("The PR failed. Retry?");
@@ -802,6 +803,7 @@ test("recover-error: green with -H, with no head flag from the worktree, with re
   const viaSend = await play(async ({ fx }) => {
     fx.human(turnsOf("recover-error")[0]);
     addWt(fx);
+    fx.tool("foreman", "read_content_file", { path: GIT_ACCESS_PATH });
     prCreate(fx);
     removeWt(fx);
     fx.tool("foreman", "send_message", { to: "human", text: "Failed. Retry?" });
@@ -1296,4 +1298,14 @@ test("registry: the CLI names the file it checked and refuses a flag with no val
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^other\.yml: /m);
   assert.equal(spawnSync("node", [script, "--variants"], { encoding: "utf8" }).status, 2);
+});
+
+test("recover-error: red when the pull request is attempted before the recorded git-access method is read", async () => {
+  redFor(
+    await play(
+      recover({ before: [addWt], attempt: prCreate, after: [removeWt], read: false }),
+      "recover-error",
+    ),
+    /before reading the recorded git-access method/,
+  );
 });

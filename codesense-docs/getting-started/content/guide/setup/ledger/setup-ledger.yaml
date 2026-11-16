@@ -1,0 +1,25 @@
+# The `setup-ledger` records collection: one record per setup act the agent finished, so a
+# new session or another runtime resumes from facts, never from the chat. The `team` step
+# writes this file to the user's team at `content/schema/setup-ledger.yaml`.
+#
+# Team rows hold no paths, usernames or tokens; a person's own machine facts go in private
+# rows, or nowhere before a team exists (the launch spike decides which). Agents add rows and
+# never delete one, so the ledger stays an honest history.
+collection: setup-ledger
+scope: team
+folder: content/setup-ledger
+id: slug
+title: title
+humanOnly: [delete]
+order: ["at desc"]
+fields:
+  title:           {type: text, required: true}    # "gh-auth sign-in done"
+  step:            {type: text, required: true}    # step id; a pack step is "<pack>/<step>"
+  act:             {type: text}                    # the act's id inside the step
+  state:           {type: choice, allowedValues: [done, failed, stopped, skipped], required: true}
+  at:              {type: number, required: true}  # epoch ms
+  verified_version: {type: text}                   # for an installer step, the version the check read
+  by:              {type: text}                    # session handle and runtime
+  step_version:    {type: number}                  # the step file's own revision, when it has one
+  created:         {type: text}                    # what the act made, in words; no paths or secrets in a team row
+  undo:            {type: text}                    # the step's undo hint, copied

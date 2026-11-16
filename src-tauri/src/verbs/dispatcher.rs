@@ -68,7 +68,7 @@ fn audited(spec: Option<&VerbSpec>) -> bool {
 }
 pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option<String> {
     let string = |key: &str| args[key].as_str().map(str::to_owned);
-    match verb {
+    match super::registry::table_name(verb) {
         "setStatus" => args["path"]
             .as_array()
             .map(|paths| format!("{} docs", paths.len()))
@@ -158,8 +158,8 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
         "reorderPins" => args["messageIds"]
             .as_array()
             .map(|pins| format!("{} pins", pins.len())),
-        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" => args
-            ["messageId"]
+        "loadMedia" | "replyAsHuman" | "react" | "openMessage" | "pin" | "unpin" | "restorePin"
+        | "replacePin" => args["messageId"]
             .as_number()
             .map(|id| format!("message {id}")),
         "archive" | "unarchive" | "markRead" | "markUnread" => args["messageIds"]

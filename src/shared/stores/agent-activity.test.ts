@@ -5,6 +5,7 @@ import {
   admitsAgentUpdate,
   agentInputSeq,
   resetPrunedAgentSessionsForTests,
+  getSessionActivityAt,
   useAgentStateStore,
 } from "./agent-state-store";
 const snapshot = (patch: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
@@ -26,7 +27,6 @@ beforeEach(() => {
     bySession: {},
     activityBySession: {},
     exitBySession: {},
-    outputAtBySession: {},
     completionSeqBySession: {},
   });
 });
@@ -36,15 +36,15 @@ describe("host activity projection", () => {
     const store = useAgentStateStore.getState();
     store.recordOutput("headless", 1000);
     expect(useAgentStateStore.getState().bySession.headless).toBeUndefined();
-    expect(useAgentStateStore.getState().outputAtBySession.headless).toBe(1000);
+    expect(getSessionActivityAt("headless")).toBe(1000);
     store.recordOutput("headless", 1100);
-    expect(useAgentStateStore.getState().outputAtBySession.headless).toBe(1000);
+    expect(getSessionActivityAt("headless")).toBe(1000);
     store.reset("headless");
-    expect(useAgentStateStore.getState().outputAtBySession.headless).toBeUndefined();
+    expect(getSessionActivityAt("headless")).toBeUndefined();
     store.recordOutput("headless", 2000);
     store.remove(["headless"]);
     store.recordOutput("headless", 3000);
-    expect(useAgentStateStore.getState().outputAtBySession.headless).toBeUndefined();
+    expect(getSessionActivityAt("headless")).toBeUndefined();
   });
 
   it.each([undefined, NaN, Infinity, -1, "0", null])(
@@ -55,10 +55,10 @@ describe("host activity projection", () => {
       const store = useAgentStateStore.getState();
       const old = snapshot({ state: "working", activityAgeMs: age as number });
       store.recordActivity(old, agentInputSeq());
-      expect(useAgentStateStore.getState().bySession.s.activityAt).toBeUndefined();
+      expect(getSessionActivityAt("s")).toBeUndefined();
       store.recordOutput("s", 11_000);
       store.recordActivity({ ...old, revision: 3 }, agentInputSeq());
-      expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(11_000);
+      expect(getSessionActivityAt("s")).toBe(11_000);
     },
   );
 
@@ -68,19 +68,19 @@ describe("host activity projection", () => {
     const store = useAgentStateStore.getState();
     const aged = snapshot({ state: "thinking", activityAgeMs: 600_000 });
     store.recordActivity(aged, agentInputSeq(), 800_000);
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(200_000);
+    expect(getSessionActivityAt("s")).toBe(200_000);
     vi.setSystemTime(1_200_000);
     store.activityUnavailable(["s"]);
     store.recordActivity({ ...aged, activityAgeMs: 0 }, agentInputSeq());
     expect(store.recordActivity({ ...aged, revision: 1, activityAgeMs: 0 }, agentInputSeq())).toBe(
       false,
     );
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(200_000);
+    expect(getSessionActivityAt("s")).toBe(200_000);
     store.recordActivity(
       snapshot({ session: "underflow", activityAgeMs: Number.MAX_VALUE }),
       agentInputSeq(),
     );
-    expect(useAgentStateStore.getState().bySession.underflow.activityAt).toBe(0);
+    expect(getSessionActivityAt("underflow")).toBe(0);
   });
 
   it("accepts first valid equal-revision metadata once and preserves fresher PTY evidence", () => {
@@ -93,25 +93,23 @@ describe("host activity projection", () => {
       snapshot({ state: "working", toolOpen: false, activityAgeMs: 500 }),
       agentInputSeq(),
     );
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(900);
+    expect(getSessionActivityAt("s")).toBe(900);
     expect(useAgentStateStore.getState().activityBySession.s.snapshot?.toolOpen).toBe(false);
     vi.setSystemTime(3_000);
     store.recordActivity(snapshot({ state: "working", activityAgeMs: 0 }), agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(900);
+    expect(getSessionActivityAt("s")).toBe(900);
     store.recordActivity(snapshot({ session: "first", activityAgeMs: undefined }), agentInputSeq());
     store.recordActivity(snapshot({ session: "first", activityAgeMs: 200 }), agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.first.activityAt).toBe(2_800);
+    expect(getSessionActivityAt("first")).toBe(2_800);
   });
 
   it("retains genuine legacy tool evidence only within the same invocation", () => {
     const store = useAgentStateStore.getState();
     store.recordSignal("s", { tier: 1, signal: { kind: "claude-hook", event: "PreToolUse" } });
-    const at = useAgentStateStore.getState().bySession.s.activityAt;
+    const at = getSessionActivityAt("s");
     store.recordActivity(snapshot({ state: "working" }), agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.s).toMatchObject({
-      openTools: 1,
-      activityAt: at,
-    });
+    expect(useAgentStateStore.getState().bySession.s.openTools).toBe(1);
+    expect(getSessionActivityAt("s")).toBe(at);
     store.recordActivity(snapshot({ state: "working", toolOpen: false }), agentInputSeq());
     expect(useAgentStateStore.getState().bySession.s.openTools).toBeUndefined();
     store.recordActivity(snapshot({ state: "working", revision: 3 }), agentInputSeq());
@@ -125,7 +123,7 @@ describe("host activity projection", () => {
       snapshot({ identity: { ...snapshot().identity, invocationId: "next" }, state: "working" }),
       agentInputSeq(),
     );
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBeUndefined();
+    expect(getSessionActivityAt("s")).toBeUndefined();
     expect(useAgentStateStore.getState().bySession.s.openTools).toBeUndefined();
   });
 
@@ -152,26 +150,26 @@ describe("host activity projection", () => {
         signal: { kind: "claude-hook", event: "UserPromptSubmit" },
       });
     hook();
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(1_000);
+    expect(getSessionActivityAt("s")).toBe(1_000);
     vi.setSystemTime(2_000);
     hook();
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(2_000);
+    expect(getSessionActivityAt("s")).toBe(2_000);
     vi.setSystemTime(3_000);
     store.recordProcess("s", { kind: "alive" }, agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(2_000);
+    expect(getSessionActivityAt("s")).toBe(2_000);
     store.recordActivity(snapshot({ state: "thinking", activityAgeMs: 0 }), agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(3_000);
+    expect(getSessionActivityAt("s")).toBe(3_000);
     vi.setSystemTime(4_000);
     store.recordActivity(snapshot({ state: "thinking", activityAgeMs: 0 }), agentInputSeq());
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(3_000);
+    expect(getSessionActivityAt("s")).toBe(3_000);
     store.recordActivity(
       snapshot({ state: "thinking", revision: 3, activityAgeMs: 0 }),
       agentInputSeq(),
     );
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(4_000);
+    expect(getSessionActivityAt("s")).toBe(4_000);
     vi.setSystemTime(5_000);
     store.recordOutput("s");
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(5_000);
+    expect(getSessionActivityAt("s")).toBe(5_000);
     store.remove(["s"]);
     store.recordOutput("s", 6_000);
     expect(useAgentStateStore.getState().bySession.s).toBeUndefined();

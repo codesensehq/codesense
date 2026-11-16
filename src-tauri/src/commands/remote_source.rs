@@ -18,6 +18,7 @@ use crate::commands::git_sync::{
     build_redline, is_toggle_type, looks_binary, FileRedline, PublishFile, PublishFileBadge,
     PublishFileStatus,
 };
+use crate::commands::raster_bytes;
 use crate::commands::route_to_context::{derive_active_context, ActiveContext};
 use crate::mcp::remote_workspace_target;
 use crate::terminal::session_server::SessionServerClient;
@@ -908,6 +909,94 @@ pub async fn source_remote_file_redline(
     }
 }
 
+/// A remote raster file's two sides, from the machine's [`wire::FileReply::Redline`] bytes,
+/// held to the same bar as a local read: a side that is not a regular file (`opaque`), or
+/// whose bytes are not a PNG, JPEG, GIF or WebP whatever its name says, is refused, and a
+/// side past the raster cap carries no bytes (`tooLarge`).
+pub(crate) fn remote_image_sides(
+    before: Option<Vec<u8>>,
+    after: Option<Vec<u8>>,
+    opaque: bool,
+) -> Result<raster_bytes::ImageSides, String> {
+    if opaque {
+        return Err("a side of this image is not a regular file".into());
+    }
+    let side = |bytes: Option<Vec<u8>>| -> Result<Option<raster_bytes::Capped>, String> {
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let capped = raster_bytes::capped(bytes);
+        if let raster_bytes::Capped::Bytes(bytes) = &capped {
+            if !raster_bytes::sniff_raster(bytes) {
+                return Err("a side of this image is not a raster image".into());
+            }
+        }
+        Ok(Some(capped))
+    };
+    Ok(raster_bytes::image_sides(side(before)?, side(after)?))
+}
+
+/// What a remote image read that failed shows: a side past the wire's limit is the
+/// raster cap's case (no bytes, the diff stays Source), anything else is a failure.
+fn remote_image_failure(
+    error: RemoteSourceError,
+) -> Result<raster_bytes::ImageSides, RemoteSourceError> {
+    match error {
+        RemoteSourceError::BoundsExceeded => Ok(raster_bytes::ImageSides {
+            before: None,
+            after: None,
+            too_large: true,
+        }),
+        other => Err(other),
+    }
+}
+
+/// The remote mirror of `source_image_sides` at the working tree: a raster file's Before |
+/// After bytes in a remote source worktree, against the same baseline as
+/// [`source_remote_file_redline`], read by the machine's Git over the workspace file
+/// protocol. Only raster paths are asked for, so this is never a general file reader.
+#[tauri::command]
+pub async fn source_remote_image_sides(
+    app: AppHandle,
+    machine_id: String,
+    handle: String,
+    file_path: String,
+    old_path: Option<String>,
+    base_ref: Option<String>,
+) -> Result<raster_bytes::ImageSides, RemoteSourceError> {
+    let old_path = old_path.filter(|p| !std::string::String::is_empty(p));
+    raster_bytes::require_raster(&file_path)
+        .and_then(|()| {
+            old_path
+                .as_deref()
+                .map_or(Ok(()), raster_bytes::require_raster)
+        })
+        .map_err(|message| RemoteSourceError::TransportFailure { message })?;
+    let (client, target) = resolve_target(&app, &machine_id, &handle).await?;
+    let reply = call_blocking(
+        file_target(client, target),
+        wire::FileOperation::Redline {
+            path: file_path,
+            old_path,
+            base_ref: base_ref.filter(|r| !std::string::String::is_empty(r)),
+        },
+    )
+    .await
+    .map_err(diff_error);
+    match reply {
+        Ok(wire::FileReply::Redline {
+            before,
+            after,
+            opaque,
+        }) => remote_image_sides(before, after, opaque)
+            .map_err(|message| RemoteSourceError::TransportFailure { message }),
+        Ok(_) => Err(RemoteSourceError::TransportFailure {
+            message: "unexpected reply to Redline".into(),
+        }),
+        Err(error) => remote_image_failure(error),
+    }
+}
+
 /// Which listing a watcher fingerprint came from. The two are never compared
 /// with each other: a tick that falls back from the diff stamp to the tracked
 /// listing (or back) must not read as a change.
@@ -1242,6 +1331,39 @@ fn next_operation_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+    #[test]
+    fn a_remote_image_draws_both_sides_only_when_their_bytes_are_raster() {
+        let sides = remote_image_sides(Some(PNG.to_vec()), Some(PNG.to_vec()), false).unwrap();
+        assert!(sides.before.is_some() && sides.after.is_some() && !sides.too_large);
+        // An added image has no before; a deleted one no after.
+        let added = remote_image_sides(None, Some(PNG.to_vec()), false).unwrap();
+        assert_eq!((added.before, added.after.is_some()), (None, true));
+        // A side whose bytes aren't a raster image is refused, whatever its name said.
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>x</script></svg>".to_vec();
+        assert!(remote_image_sides(Some(PNG.to_vec()), Some(svg), false).is_err());
+        // A side that isn't a regular file (a link, a submodule) is refused.
+        assert!(remote_image_sides(Some(PNG.to_vec()), Some(PNG.to_vec()), true).is_err());
+    }
+
+    #[test]
+    fn a_remote_side_past_the_cap_or_the_wire_limit_carries_no_bytes() {
+        let mut big = PNG.to_vec();
+        big.resize(raster_bytes::MAX_RASTER_BYTES + 1, 0);
+        let sides = remote_image_sides(Some(PNG.to_vec()), Some(big), false).unwrap();
+        assert_eq!(sides.after, None);
+        assert!(sides.too_large);
+        // The wire refuses a side past its own limit: the same case, not a failure.
+        let past_wire = remote_image_failure(RemoteSourceError::BoundsExceeded).unwrap();
+        assert_eq!((past_wire.before, past_wire.after), (None, None));
+        assert!(past_wire.too_large);
+        assert!(matches!(
+            remote_image_failure(RemoteSourceError::Disconnected),
+            Err(RemoteSourceError::Disconnected)
+        ));
+    }
 
     fn wire_file(
         path: &str,

@@ -50,7 +50,7 @@ Or ask an agent:
 
 > Set up the machine setup agent from the CodeSense docs, in my team.
 
-It follows the same steps as the [CodeSense setup recipe](codesense-setup-agent.md#or-ask-an-agent):
+It follows the same steps as the [Build a manager agent](manager-agent.md) recipe:
 copy the skills, then `agent_preview` and `agent_create` with the fields above.
 
 ## Use it

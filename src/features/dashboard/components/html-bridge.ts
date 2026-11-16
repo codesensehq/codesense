@@ -6,7 +6,12 @@ import {
   pasteToActiveTerminal,
   type PasteStatus,
 } from "@/shared/lib/send-to-terminal";
-import { agentLaunchOpen, fileSurfaceCall, fileSurfacePrepareView } from "@/tauri/commands";
+import {
+  agentLaunchOpen,
+  agentReadSessions,
+  fileSurfaceCall,
+  fileSurfacePrepareView,
+} from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
@@ -78,6 +83,7 @@ import {
   listManagedWorktrees,
   listMachines,
   sessionReadUsage,
+  sessionRecord,
   sessionRead,
   setupState,
   setupStatus,
@@ -238,7 +244,8 @@ async function subscriptionView(
   }
   if (args.topic === "agentDefinitions") {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
+    // The view key names this frame: it holds the view until it goes or rekeys.
+    liveHub.seed(view, (await ctx?.liveFrame?.()) ?? undefined);
     return { viewKey: view.viewKey };
   }
   if (args.order === "status") return { order: "status" as const };
@@ -417,6 +424,14 @@ async function openTeamWorkspace(a: Record<string, unknown>, target: Record<stri
 }
 
 /** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
+/** The `sessionId` a session-text call names. */
+function textSessionId(args: unknown, verb: string): string {
+  const a = argObject(args, verb);
+  if (typeof a.sessionId !== "string" || !a.sessionId)
+    throw new Error(`${verb}: {sessionId} must name a session`);
+  return a.sessionId;
+}
+
 function pageAdmittedTeams(ctx: BridgeContext | undefined): InboxTeam[] {
   const grant = ctx?.frameGrant ?? ctx?.frame?.grant;
   return useOrgStore
@@ -564,6 +579,11 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
   if (value === "needs-you" || value === "update") return value;
   throw new Error("inbox: kind, if present, must be 'needs-you' or 'update'");
 }
+
+/** A pin write's caller beyond the person: the sender of the HTML message calling, whose
+ *  writes the engine keeps to that sender's own thread. A page passes nothing. */
+const frameSender = (ctx: BridgeContext | undefined): [string] | [] =>
+  ctx?.message?.sender ? [ctx.message.sender] : [];
 
 /** The agent thread a pins call names: a saved agent id and an optional story id. */
 function pinThread(
@@ -920,8 +940,8 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // The prepared view applies the calling frame's grant to the shared catalog.
   agents: async (_args, ctx) => {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
     const frame = await ctx?.liveFrame?.();
+    liveHub.seed(view, frame ?? undefined);
     const snapshot = frame
       ? await frame.subscribe("agentDefinitions", undefined, { viewKey: view.viewKey })
       : view;
@@ -960,6 +980,14 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "inbox: sessionId must be a non-empty string",
     );
     if (sessionId) query.sessionId = sessionId;
+    // A saved agent's thread (the pins' key): every listed session of the agent on the story
+    // and every recorded one, ended ones included; an empty story is the agent's no-story
+    // thread, its listed sessions only. sessionId then names the seat.
+    if (a.storyId !== undefined) {
+      if (typeof a.storyId !== "string") throw new Error("inbox: storyId must be a string");
+      if (!agentId) throw new Error("inbox: storyId needs agentId");
+      query.storyId = a.storyId.trim();
+    }
     const conversation = optionalNonEmptyString(
       a.conversation,
       "inbox: conversation must be a non-empty string",
@@ -1185,6 +1213,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       ctx?.docPath,
     );
   },
+  // [session_usage + story_changes] one agent's record by launch handle: {handle, sessionId, cli,
+  // model, tokens, costUsd, durationMs, story, files, unavailable}.
+  sessionRecord: (args, ctx) => {
+    const a = argObject(args, "sessionRecord");
+    if (Object.keys(a).some((key) => key !== "handle"))
+      throw new Error("sessionRecord: unknown field");
+    const handle = requiredId(a, ["handle"], "sessionRecord: handle is required");
+    return sessionRecord({ handle }, ctx?.frame?.frameId, ctx?.docPath);
+  },
   openDiff: (args, ctx) =>
     openDiff(argObject(args, "openDiff") as unknown as OpenDiffParams, {
       frameId: ctx?.frame?.frameId,
@@ -1343,6 +1380,28 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     return { subscribed: "codesense:inbox-changed", agentId: agentId ?? null };
   },
   watchAgentActivity: async () => ({ subscribed: "codesense:agent-activity-changed" }),
+  // A page hears a session's assistant prose as it is written, then one final message per turn
+  // (`codesense:session-text`, through `onSessionText`): under sessions:read, and only a
+  // session of the page's own team.
+  "sessions.watchText": async (args, ctx) => {
+    const sessionId = textSessionId(args, "sessions.watchText");
+    if (!ctx?.frame?.effectiveGrant?.includes("sessions:read")) throw new Error("denied: grant");
+    const row = (await agentReadSessions()).find((s) => s.sessionId === sessionId);
+    if (!row) throw new Error("not_found: no session " + sessionId);
+    const team = (ctx.frameGrant ?? ctx.frame.grant)?.team;
+    if (team && !(row.team && row.team.org === team.org && row.team.team === team.team))
+      throw new Error("denied: session team");
+    const frame = await ctx.liveFrame?.();
+    if (!frame) throw new Error("unavailable: live frame is starting");
+    // The frame holds one host watch per session, released when the page goes.
+    await frame.watchText(sessionId);
+    return { watching: sessionId };
+  },
+  "sessions.unwatchText": async (args, ctx) => {
+    const sessionId = textSessionId(args, "sessions.unwatchText");
+    await (await ctx?.liveFrame?.())?.unwatchText(sessionId);
+    return null;
+  },
 
   // ── The human's writes from a dashboard ───────────────────────────────────
   // The same inbox operations the Inbox pane uses, as the human. Send class:
@@ -1440,12 +1499,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     }
     const preview = a.preview as AgentPinPreview | undefined;
     return inboxWrite(ctx, "pin", a, (team) =>
-      agentPins(team, agentId, storyId, {
-        op: "pin",
-        messageId: id,
-        position,
-        ...(preview ? { preview } : {}),
-      }),
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "pin", messageId: id, position, ...(preview ? { preview } : {}) },
+        ...frameSender(ctx),
+      ),
     );
   },
   unpin: async (args, ctx) => {
@@ -1453,7 +1513,42 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const { agentId, storyId } = pinThread(a, "unpin");
     const id = messageId(a.messageId, "unpin");
     return inboxWrite(ctx, "unpin", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
+      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }, ...frameSender(ctx)),
+    );
+  },
+  // The Undo of an unpin: the pin comes back as it was (who pinned it, when, its preview).
+  // With `replacing`, the Undo of a replace: that pin goes in the same step.
+  restorePin: async (args, ctx) => {
+    const a = argObject(args, "restorePin");
+    const { agentId, storyId } = pinThread(a, "restorePin");
+    const id = messageId(a.messageId, "restorePin");
+    const replacing =
+      a.replacing == null ? undefined : messageId(a.replacing, "restorePin: replacing");
+    return inboxWrite(ctx, "restorePin", a, (team) =>
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "restore", messageId: id, ...(replacing === undefined ? {} : { replacing }) },
+        ...frameSender(ctx),
+      ),
+    );
+  },
+  // At the cap, the person pins a message in place of a pin they choose, in one step.
+  replacePin: async (args, ctx) => {
+    const a = argObject(args, "replacePin");
+    const { agentId, storyId } = pinThread(a, "replacePin");
+    const id = messageId(a.messageId, "replacePin");
+    if (a.replaces == null) throw new Error("replacePin: {replaces} must name the pin to replace");
+    const replaces = messageId(a.replaces, "replacePin: replaces");
+    return inboxWrite(ctx, "replacePin", a, (team) =>
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "replace", messageId: id, replaces },
+        ...frameSender(ctx),
+      ),
     );
   },
   reorderPins: async (args, ctx) => {
@@ -1464,7 +1559,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     }
     const messageIds = a.messageIds.map((id) => messageId(id, "reorderPins"));
     return inboxWrite(ctx, "reorderPins", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
+      agentPins(team, agentId, storyId, { op: "reorder", messageIds }, ...frameSender(ctx)),
     );
   },
   dismiss_agent_mark: async (args, ctx) => {
@@ -2548,6 +2643,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // UNfilled; the capability is injected server-side (`viewer.rs`) into every live
   // render, not via this map.
 };
+// The pin verbs are registered as `inbox.<verb>` too; each runs its flat verb's handler.
+for (const verb of VERB_REGISTRY) {
+  const flat = verb.name.startsWith("inbox.") ? verb.name.slice("inbox.".length) : null;
+  if (flat && Object.prototype.hasOwnProperty.call(HTML_BRIDGE_ALLOWLIST, flat)) {
+    HTML_BRIDGE_ALLOWLIST[verb.name] = HTML_BRIDGE_ALLOWLIST[flat];
+  }
+}
 
 // Contract views derived from the native registry. Admission is owned by Rust.
 export const READ_VERBS: readonly string[] = VERB_REGISTRY.filter((v) => !v.action).map(

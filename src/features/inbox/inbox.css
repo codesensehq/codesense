@@ -182,6 +182,23 @@
   border-bottom: 1px solid var(--ibx-border);
   min-width: 0;
 }
+/* A short pane: the mockup's head padding. */
+.ibx-ov[data-height="short"] > .ibx-ov-head {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+/* A short pane's thread starts closer to its top, so more text is in view. */
+.ibx-ov[data-height="short"] .ibx-msgs {
+  padding-top: 6px;
+}
+/* The overlay's small text step: message text at 12 px on a 17 px line. */
+.ibx-ov[data-text="12"] .ibx-m .bub {
+  font-size: 12px;
+  line-height: 17px;
+}
+.ibx-ov[data-text="12"] .ibx-m .bub .inbox-md {
+  line-height: 17px;
+}
 .ibx-ov-line {
   display: flex;
   align-items: center;
@@ -259,10 +276,38 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* The one-line strip: each chip's own floor (its dot, its name's ellipsis, its value)
+   decides when the row wraps, so it keeps to one row while the floors fit, wraps rather than
+   drop a pin, and never runs past the pane. */
 .ibx-ov-pins[data-shape="line"] {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 6px;
+  gap: 4px;
+  padding: 4px;
+}
+/* A pins read that failed: one line in the zone, with Retry. */
+.ibx-ov-pins.ibx-ov-pins-failed {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ibx-mfg);
+}
+.ibx-ov-pins-retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ibx-accent);
+  cursor: pointer;
+}
+.ibx-ov-pins-retry:hover {
+  text-decoration: underline;
+}
+.ibx-ov-pins-retry:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 .ibx-ov[data-pins="rail"] {
   display: grid;
@@ -394,15 +439,34 @@
 /* Line: chips of dot, short name and value; a third chip wraps rather than hide. */
 .ibx-pk[data-shape="line"] {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  min-width: 0;
   max-width: 100%;
-  padding: 2px 8px;
-  border-radius: 999px;
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 12px;
   font-size: 11px;
 }
+/* The name shrinks to its ellipsis before the row wraps: the dot and the full value still
+   name the pin, and its full name is its title and in its accessible name. It grows into the
+   row's room. */
 .ibx-pk[data-shape="line"] .ibx-pk-t {
+  flex: 1 1 1ch;
+  width: 1ch;
+  min-width: 1ch;
+}
+.ibx-pk[data-shape="line"] .ibx-pk-d {
+  flex: none;
+}
+/* The value shows in full: only a chip alone on its row and still too wide wraps it. */
+.ibx-pk[data-shape="line"] .ibx-pk-v,
+.ibx-pk[data-shape="line"] .ibx-pk-s {
+  flex: 0 1 auto;
   min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* An opened pin: above the chat (≤ 45%) on a tall pane, else in the chat's place. */
@@ -442,6 +506,24 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
+}
+/* The run-start avatar of the other side's messages, in a column the rest of the run keeps. */
+.ibx-m.in.av {
+  position: relative;
+  padding-left: 28px;
+}
+.ibx-m.in.av > .ibx-av {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+/* The record line's story link. */
+.ibx-ov-story {
+  color: var(--ibx-accent);
+  text-decoration: none;
+}
+.ibx-ov-story:hover {
+  text-decoration: underline;
 }
 /* XS or short: no avatar column; the sender's name and time lead the text. */
 .ibx-ov[data-avatars="false"] .ibx-m .ibx-av {
@@ -874,6 +956,12 @@
   align-items: center;
   flex-wrap: wrap;
 }
+.ibx-mark {
+  font-size: 10.5px;
+}
+.ibx-mark[data-mark="queued"] {
+  font-style: italic;
+}
 .ibx-m .bub {
   padding: 8px 11px;
   border-radius: 12px;
@@ -1112,7 +1200,7 @@
   padding: 2px 0;
 }
 .ibx-box textarea::placeholder {
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
 }
 .ibx .ibx-send {
   display: flex;
@@ -1417,6 +1505,18 @@
   color: var(--ibx-fg);
   font: 12px var(--ibx-mono);
 }
+/* Kept mounted while a pin takes the thread's place (its stick-to-bottom wiring stays). */
+.ibx-scrollwrap[hidden],
+.ibx-group-pane .ibx-th-head[hidden] {
+  display: none;
+}
+/* The room's log, a box only to be hidden: in the room's flex column it lays out as the log. */
+.ibx-group-log {
+  display: contents;
+}
+.ibx-group-log[hidden] {
+  display: none;
+}
 /* A scroller with a "Jump to latest" pill over its foot (the Mailspool log, a conversation). */
 .ibx-scrollwrap {
   position: relative;
@@ -1426,8 +1526,8 @@
   flex-direction: column;
 }
 .ibx-msgs:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 1px var(--ibx-accent-line);
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: -2px;
 }
 @keyframes ibx-rise {
   from {
@@ -1965,7 +2065,19 @@
   gap: 10px;
   min-width: 0;
   font-size: 11px;
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
+}
+/* The one-row composer of a small or short pane: the design's 4/6 px padding, and no footer
+   unless a failure has something to say. */
+.ibx-comp.quick.compact {
+  padding: 4px 6px;
+  gap: 4px;
+}
+.ibx-comp.quick.compact .ibx-box {
+  padding: 2px 4px 2px 8px;
+}
+.ibx-comp.quick.compact .ibx-comp-foot:empty {
+  display: none;
 }
 /* A long hint truncates (its title holds it whole) and a failure wraps: neither pushes the keys
    out of the footer. */
@@ -1976,7 +2088,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--ibx-faint);
+  color: var(--ibx-mfg);
 }
 .ibx-comp-keys {
   flex: none;
@@ -1984,7 +2096,7 @@
   white-space: nowrap;
 }
 .ibx-comp-keys kbd {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 13px;
   padding: 0 3px;
   margin: 0 2px 0 6px;
@@ -2265,4 +2377,393 @@ button.ibx-media-open {
 }
 .ibx-lb-foot a:hover {
   text-decoration: underline;
+}
+
+/* The person's pins of a chat's messages. A message's action row sits over the bubble's top
+   edge (top right; top left for your own), shown on hover, while focus is inside the message,
+   and after a tap; an HTML message's title bar is its action row, always shown. */
+.ibx-m .bub {
+  position: relative;
+}
+/* Hidden by opacity, not display: none: a redrawn Pin… or Unpin must be able to take focus back (after a
+   replace, its Undo, or Esc in the chooser), and then focus-within shows it. */
+.ibx-acts {
+  position: absolute;
+  top: -14px;
+  right: 6px;
+  z-index: 2;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  padding: 1px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 6px;
+  background: var(--ibx-bg);
+  box-shadow: var(--ibx-shadow);
+}
+.ibx-m.out .ibx-acts {
+  right: auto;
+  left: 6px;
+}
+.ibx-m:hover .ibx-acts,
+.ibx-m:focus-within .ibx-acts,
+.ibx-m[data-tapped] .ibx-acts {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ibx-pin-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ibx-mfg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ibx-pin-b:hover {
+  background: var(--ibx-raise);
+  color: var(--ibx-fg);
+}
+.ibx-pin-b:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+/* Pressed (Unpin): accent ink on the bare page. The on-accent ink is only for text on an accent fill. */
+.ibx-pin-b[aria-pressed="true"] {
+  color: var(--ibx-accent);
+}
+/* At the cap: dimmed ahead of time, still focusable, and hover doesn't brighten it. */
+.ibx-pin-b[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.ibx-pin-b[aria-disabled="true"] > * {
+  opacity: 0.45;
+}
+.ibx-pin-b[aria-disabled="true"]:hover {
+  background: none;
+  color: var(--ibx-mfg);
+}
+/* In the overlay (under 480 px wide, always) Pin is its icon, named by its tooltip. */
+.ibx-ov .ibx-pin-b {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+}
+.ibx-ov .ibx-pin-b .lbl {
+  display: none;
+}
+/* The cap's count on Pin…: shown where the label is hidden (the overlay's 24 px icon). */
+.ibx-pin-cap {
+  display: none;
+}
+/* At the cap the 24 px icon holds the count beside it, in its row with a 2 px gap, so the 11 px
+   count never sits over the 13 px icon. */
+.ibx-ov .ibx-pin-b[data-pin="cap"] {
+  gap: 2px;
+}
+.ibx-ov .ibx-pin-cap {
+  display: block;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+}
+@media (pointer: coarse) {
+  .ibx-pin-b {
+    min-width: 36px;
+    height: 36px;
+  }
+  .ibx-acts {
+    top: -40px;
+  }
+}
+.ibx-m.pinned .bub {
+  border-color: var(--ibx-accent-line);
+}
+.ibx-pin-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-tag svg {
+  color: var(--ibx-accent);
+}
+.ibx-pin-tag b {
+  color: var(--ibx-fg);
+  font-weight: 600;
+}
+.ibx-m.out .ibx-pin-tag,
+.ibx-m.out .ibx-pin-note {
+  justify-self: end;
+}
+.ibx-pin-note {
+  display: grid;
+  grid-template-columns: 16px minmax(0, auto) auto;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 8px;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-note.danger {
+  border-color: var(--destructive);
+}
+.ibx-pin-note.danger svg {
+  color: var(--destructive);
+}
+.ibx-pin-act {
+  border: 1px solid var(--ibx-border);
+  border-radius: 6px;
+  background: var(--ibx-bg);
+  color: var(--ibx-fg);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.ibx-pin-act:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+
+/* At the cap, under the message: which pin to replace. The full width of the column. */
+.ibx-pin-chooser {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--ibx-border);
+  border-radius: 8px;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .hd {
+  font-weight: 600;
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .chg {
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .chg:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.ibx-pin-chooser .rows {
+  display: grid;
+  gap: 2px;
+}
+.ibx-pin-chooser .choice {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  grid-template-areas: "dot t v go" ". by by by";
+  align-items: center;
+  gap: 2px 8px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ibx-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ibx-pin-chooser .choice:hover {
+  background: color-mix(in srgb, var(--ibx-fg) 5%, transparent);
+}
+.ibx-pin-chooser .choice[data-current] {
+  border-color: var(--ibx-accent-line);
+  background: var(--ibx-accent-wash);
+}
+.ibx-pin-chooser .choice:focus-visible {
+  outline: 2px solid var(--ibx-accent);
+  outline-offset: 1px;
+}
+.ibx-pin-chooser .dot {
+  grid-area: dot;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ibx-muted);
+}
+.ibx-pin-chooser .dot.own {
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .dot[data-status="on-track"] {
+  background: var(--ibx-green);
+}
+.ibx-pin-chooser .dot[data-status="running"] {
+  background: var(--ibx-accent);
+}
+.ibx-pin-chooser .dot[data-status="needs-you"] {
+  background: var(--ibx-amber);
+}
+.ibx-pin-chooser .dot[data-status="not-updating"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ibx-mfg);
+}
+.ibx-pin-chooser .t {
+  grid-area: t;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ibx-pin-chooser .v {
+  grid-area: v;
+  font-weight: 650;
+}
+.ibx-pin-chooser .new {
+  grid-area: go;
+  color: var(--ibx-accent);
+  font-weight: 600;
+}
+.ibx-pin-chooser .by {
+  grid-area: by;
+  color: var(--ibx-mfg);
+}
+.ibx-pin-chooser .go {
+  grid-area: go;
+  color: var(--ibx-accent);
+  font-weight: 600;
+}
+/* On the highlighted row's accent wash the muted and accent inks drop under AA (light: 4.36:1, 4.25:1); the full ink holds, and the row's line and wash still mark it. New is accent too. */
+.ibx-pin-chooser .choice[data-current] .by,
+.ibx-pin-chooser .choice[data-current] .go,
+.ibx-pin-chooser .choice[data-current] .new {
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .room {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ibx-fg);
+}
+.ibx-pin-chooser .cancel {
+  justify-self: start;
+}
+/* The pin the chooser's current row would replace, in the Pinned strip. */
+.ibx-pk[data-replacing="true"] {
+  border-style: dashed;
+  border-color: var(--ibx-mfg);
+}
+.ibx-pk[data-replacing="true"] .ibx-pk-t,
+.ibx-pk[data-replacing="true"] .ibx-pk-v b {
+  text-decoration: line-through;
+}
+.ibx-dm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--ibx-hair);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--ibx-card);
+  font-size: 11.5px;
+}
+.ibx-dm-bar + .bub {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.ibx-dm-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ibx-fg);
+}
+.ibx-dm-kind {
+  color: var(--ibx-mfg);
+}
+.ibx-m.pinned .ibx-dm-bar {
+  border-color: var(--ibx-accent-line);
+}
+/* The live region: read, never seen. */
+.ibx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The tag fades in where motion is welcome; with reduced motion nothing moves or fades. */
+@media (prefers-reduced-motion: no-preference) {
+  .ibx-pin-tag {
+    animation: ibx-pin-tag-in 160ms var(--ibx-ease);
+  }
+}
+@keyframes ibx-pin-tag-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A pin with no preview (the person's): a glyph where an agent's pin has its status dot. */
+.ibx-pk.own .ibx-pk-g {
+  grid-area: d;
+  flex: none;
+  color: var(--ibx-accent);
+}
+.ibx-pk-meta {
+  color: var(--ibx-mfg);
+}
+.ibx-pk-q {
+  font-style: italic;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A pin just made or restored drops into place and glows once; with reduced motion it keeps a
+   still accent wash and the word New instead. Both clear on the next click or key press. */
+.ibx-pk-new {
+  display: none;
+  font-size: 11px;
+  font-weight: 600;
+  /* Accent ink on the pin's light wash; the on-accent ink is only for a full accent fill. */
+  color: var(--ibx-accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ibx-pk[data-new="true"] {
+    animation:
+      ibx-pin-drop 260ms var(--ibx-ease),
+      ibx-pin-glow 1800ms var(--ibx-ease);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ibx-pk[data-new="true"] {
+    background: var(--ibx-accent-wash);
+    box-shadow: inset 0 0 0 1px var(--ibx-accent-line);
+  }
+  .ibx-pk[data-new="true"] .ibx-pk-new {
+    display: inline;
+  }
+}
+@keyframes ibx-pin-drop {
+  from {
+    transform: translateY(-6px);
+  }
+}
+@keyframes ibx-pin-glow {
+  from {
+    box-shadow: 0 0 0 3px var(--ibx-accent-wash);
+  }
 }
