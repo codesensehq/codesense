@@ -2958,8 +2958,25 @@
       }
       cs.onFocusIn?.(enterPane);
       cs.onFlush?.(flushEdits);
+      // Architecture: the age labels tick only while the pane is shown, so a hidden pane runs no
+      // timer. A show after a hide re-renders them at once, then ticks.
+      let clock = null,
+        hidden = false;
+      const tick = () => {
+        renderList();
+        renderHistory();
+        renderSaveAge();
+      };
       cs.onVisibility((visible) => {
-        if (!visible) return flushEdits();
+        if (!visible) {
+          clearInterval(clock);
+          clock = null;
+          hidden = true;
+          return flushEdits();
+        }
+        if (hidden) tick();
+        hidden = false;
+        if (!clock) clock = setInterval(tick, 30000);
       });
       cs.onSlotContext?.((slot) => {
         presentation = slot.presentation;
@@ -3009,6 +3026,7 @@
         clearTimeout(searchTimer);
         clearTimeout(paletteTimer);
         clearInterval(clock);
+        clock = null;
         cancelAnimationFrame(spyFrame);
         editor.destroy();
         cs.unsubscribe?.("records", recordsChanged);
@@ -3032,8 +3050,20 @@
         }
         if (before && JSON.stringify(before) !== JSON.stringify(after)) run(refreshActive);
       }
-      let sessionsEpoch = 0;
+      let sessionsEpoch = 0,
+        sessionsSig = null;
+      // The facts the pane draws from a session. Deltas that move only other fields (spend,
+      // activity) change none of them, so they cost no read.
+      const sessionsSignature = (list) =>
+        list
+          .map((x) =>
+            [x.handle, x.state, x.role, x.alive, x.displayName, x.rowNames?.primary].join("\u0001"),
+          )
+          .join("\u0002");
       async function sessionsChanged(snapshot) {
+        const signature = sessionsSignature(snapshot.snapshot);
+        if (signature === sessionsSig) return;
+        sessionsSig = signature;
         const epoch = ++sessionsEpoch;
         const next = await cs.sessions().catch(() => snapshot.snapshot);
         if (epoch !== sessionsEpoch || disposed) return;
@@ -3043,11 +3073,6 @@
         if (menu === "send") renderSendAgents();
       }
 
-      const clock = setInterval(() => {
-        renderList();
-        renderHistory();
-        renderSaveAge();
-      }, 30000);
       function loadContextFiles() {
         if (contextLoading) return contextLoading;
         contextLoading = (async () => {

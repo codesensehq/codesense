@@ -2840,6 +2840,7 @@
         let refreshTimer,
           saveTimer,
           offSessions,
+          offDefinitions,
           readDone = false,
           newIds = new Set();
         // Others' mail that landed below the reader while scrolled up: counted by
@@ -6648,6 +6649,7 @@
                 .slice(0, 500);
               roles = roleView.roles;
             }
+            noteRegistered(crossTeam ? [...teamRoles.values()].flat() : roles);
             // Attachment and reaction changes need not change a conversation's count or last
             // preview. Re-read loaded media, rows the engine says changed and rows with my
             // unconfirmed toggles outside the rollup window on this existing inbox refresh.
@@ -6868,6 +6870,83 @@
             nudgeReadAt = refreshStartedAt;
           }
           urgentRefresh = skipQueued = false;
+        }
+        // The session facts this pane draws, compared field by field (no serializing per delta).
+        const sessionFact = (x) => ({
+          handle: x.handle,
+          displayName: x.displayName,
+          state: x.state,
+          role: x.role,
+          team: x.team ? teamKey(x.team) : null,
+          avatar: x.avatar,
+          face: x.face,
+        });
+        const sameFace = (a, b) =>
+          a === b ||
+          (!!a &&
+            !!b &&
+            typeof a === "object" &&
+            typeof b === "object" &&
+            Object.keys(a).length === Object.keys(b).length &&
+            Object.keys(a).every((k) => a[k] === b[k]));
+        const sameSessionFacts = (a, b) =>
+          a.length === b.length &&
+          a.every(
+            (x, i) =>
+              x.handle === b[i].handle &&
+              x.displayName === b[i].displayName &&
+              x.state === b[i].state &&
+              x.role === b[i].role &&
+              x.team === b[i].team &&
+              x.avatar === b[i].avatar &&
+              sameFace(x.face, b[i].face),
+          );
+        let sessionFacts = null,
+          runningSignature = null;
+        // Handles the last roles read lists as registered. The launcher's `role` label is not a
+        // registration, so a running, labelled session outside this set asks for a roles
+        // re-read: one when first seen, and one more after a settle (the claim lands seconds
+        // after the session starts, so the first read can race it). Two per handle, no more.
+        const ROLES_SETTLE_MS = 5000;
+        const registeredHandles = new Set(),
+          rolesTries = new Map();
+        const unregistered = (x) =>
+          x.role && x.state !== "exited" && !registeredHandles.has(x.handle);
+        function rolesStale() {
+          const fresh = sessions.filter((x) => unregistered(x) && !rolesTries.has(x.handle));
+          for (const x of fresh) {
+            rolesTries.set(x.handle, 1);
+            setTimeout(() => {
+              const again = sessions.find((y) => y.handle === x.handle);
+              if (visible && again && unregistered(again)) {
+                rolesTries.set(x.handle, 2);
+                readRoles();
+              }
+            }, ROLES_SETTLE_MS);
+          }
+          return fresh.length > 0;
+        }
+        const noteRegistered = (list) => {
+          registeredHandles.clear();
+          for (const r of list) for (const h of r.registrations) registeredHandles.add(h.instanceId);
+        };
+        // Roles alone: no inbox, sent or humanStatus read.
+        async function readRoles() {
+          if (!visible || !loaded) return;
+          try {
+            if (crossTeam) {
+              teamRoles = new Map(
+                await Promise.all(
+                  allTeams.map(async (team) => [teamKey(team), (await cs.roles(team)).roles]),
+                ),
+              );
+              noteRegistered([...teamRoles.values()].flat());
+            } else {
+              roles = (await cs.roles()).roles;
+              noteRegistered(roles);
+            }
+            if (visible) drawConversationView();
+          } catch {}
         }
         // A refresh the human starts (or that follows the human's own write) runs at once.
         function scheduleRefresh() {
@@ -7389,7 +7468,7 @@
         // read starts within a second of the nudge read two before it. While hidden, only a
         // change that names no rows, names a row this pane hasn't loaded, or names mail to the
         // human can touch the human's unread set. A change without `changes` could be anything;
-        // an empty `changes` (the host's sessions re-read) names no inbox rows.
+        // an empty `changes` names no inbox rows.
         cs.onInboxChanged((change) => {
           const named = [];
           let unnamed = !Array.isArray(change?.changes);
@@ -7406,7 +7485,10 @@
           if (visible && rows.some((m) => m?.toHuman)) skipQueued = true;
           paceRefresh(unnamed || rows.some((m) => !m || m.toHuman !== false));
         });
-        cs.onTeardown?.(() => offSessions?.());
+        cs.onTeardown?.(() => {
+          offSessions?.();
+          offDefinitions?.();
+        });
         cs.onVisibility((shown) => {
           visible = shown;
           if (!shown) {
@@ -7420,18 +7502,37 @@
             return;
           }
           if (!offSessions) {
+            // Architecture: a sessions change redraws only what reads `sessions` (names,
+            // running state), and only when those facts changed. Mail comes from inbox nudges
+            // and humanStatus from show and its own nudge, so neither is re-read here. Roles
+            // are re-read alone when a running handle or role label appears or goes, and
+            // again once after a settle for a labelled session whose claim hasn't landed.
             const changed = (snapshot) => {
               if (!visible) return;
-              sessions = snapshot.snapshot;
+              const first = sessionFacts === null;
+              const next = snapshot.snapshot;
+              const facts = next.map(sessionFact);
+              if (!first && sameSessionFacts(sessionFacts, facts)) return;
+              sessionFacts = facts;
+              sessions = next;
               drawConversationView();
-              paceRefresh(false);
+              const running = next
+                .filter((x) => x.state !== "exited")
+                .map((x) => x.handle + "\u0001" + (x.role || ""))
+                .join("\u0002");
+              const moved = running !== runningSignature;
+              runningSignature = running;
+              const stale = rolesStale();
+              // The first snapshot lands with the show refresh, which reads roles itself.
+              if (!first && (moved || stale)) readRoles();
             };
             cs.subscribe?.("sessions", { onChange: changed }).catch((error) =>
               drawNotice(error.message),
             );
             offSessions = () => cs.unsubscribe?.("sessions", changed);
             // Definitions give ended sessions their faces; they change rarely, so redraw
-            // only when a face could have changed.
+            // only when a face could have changed. The subscription's first snapshot loads
+            // them, and each definitions change reloads them; a sessions delta does not.
             const loadAgents = () =>
               cs
                 .agents()
@@ -7444,8 +7545,8 @@
                   if (visible) drawConversationView();
                 })
                 .catch(() => {});
-            loadAgents();
-            cs.onAgentsChanged?.(loadAgents);
+            cs.subscribe?.("agentDefinitions", { onChange: loadAgents }).catch(loadAgents);
+            offDefinitions = () => cs.unsubscribe?.("agentDefinitions", loadAgents);
           }
           if (prefsReady) scheduleRefresh();
         });
