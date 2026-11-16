@@ -185,6 +185,10 @@ async function run(
     expect((await manager.ensure(SESSION, { fontSizePx: 13 }))?.outcome).toEqual({
       kind: "attached",
     });
+    // A parked display parses nothing; the comparison needs it on screen.
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    manager.attach(SESSION, slot, { focus: false });
     const compare = async (): Promise<Compare> => ({
       emulator: await host.worker.dump(KEY),
       display: await manager.debugDump(SESSION),

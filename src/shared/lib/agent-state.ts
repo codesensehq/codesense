@@ -392,9 +392,6 @@ export interface SessionAgentRecord {
   turnStartedSeq?: number;
   /** Legacy hooks have no tool ids; retain unmatched starts across progress reports. */
   openTools?: number;
-  /** Last admitted hook, MCP signal, host revision or live PTY output (epoch ms).
-   * Liveness probes and repeated snapshot polls do not refresh this clock. */
-  activityAt?: number;
   t1: Tier1Input | null;
   t2: Tier2Input | null;
   state: AgentState;

@@ -161,6 +161,159 @@ fn context_index_changes_refresh_agent_definitions() {
     }
 }
 
+#[test]
+fn only_agent_state_events_are_activity_causes() {
+    use super::*;
+    for event in [
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
+        "agent-state-changed",
+        "agents-changed",
+    ] {
+        assert_eq!(event_cause(event), CAUSE_ACTIVITY, "{event}");
+    }
+    for event in ["sessions-waiter-changed", "machines-changed", "mcp:agent-done"] {
+        assert_eq!(event_cause(event), CAUSE_OTHER, "{event}");
+    }
+}
+
+#[tokio::test]
+async fn a_terminal_status_update_is_an_activity_only_rebuild_and_a_done_event_is_not() {
+    use super::*;
+    use crate::mcp::session_status::SessionOutcomes;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(LiveHub::default());
+    app.manage(SessionOutcomes::default());
+    listen_sources(app.handle());
+    let hub = app.state::<LiveHub>();
+    assert_eq!(hub.rebuild_cause.load(Ordering::Acquire), 0);
+    // The normal hook payload reaches both the generic and the dedicated listener.
+    app.emit(
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
+        json!({"tab_session_id":"s","status":"running"}),
+    )
+    .unwrap();
+    hub.next_batch().await;
+    assert_eq!(hub.rebuild_cause.swap(0, Ordering::AcqRel), CAUSE_ACTIVITY);
+    app.emit("mcp:agent-done", json!({"sessionId":"s","status":"done"}))
+        .unwrap();
+    hub.next_batch().await;
+    assert_eq!(hub.rebuild_cause.swap(0, Ordering::AcqRel), CAUSE_OTHER);
+}
+
+#[test]
+fn rebuilds_are_counted_and_only_activity_rebuilds_count_as_activity_only() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let (rebuilds, activity) = (
+        metric_total("live_hub.rebuild"),
+        metric_total("live_hub.rebuild.activity_only"),
+    );
+    count_rebuild(CAUSE_OTHER);
+    count_rebuild(CAUSE_ACTIVITY | CAUSE_OTHER);
+    assert!(metric_total("live_hub.rebuild") >= rebuilds + 2);
+    assert_eq!(metric_total("live_hub.rebuild.activity_only"), activity);
+    count_rebuild(CAUSE_ACTIVITY);
+    assert_eq!(metric_total("live_hub.rebuild.activity_only"), activity + 1);
+}
+
+#[test]
+fn projection_metrics_include_message_delivery_and_change_with_deltas() {
+    let mut registry = TopicRegistry::default();
+    let (entries, subscriptions, topics) = registry.metrics_snapshot();
+    assert_eq!((entries, subscriptions), (0, 0));
+    let delivery = topics
+        .iter()
+        .find(|(topic, _, _)| topic == "messageDelivery")
+        .unwrap();
+    assert_eq!(delivery.1, 0);
+    registry
+        .replace_view(
+            "messageDelivery",
+            "all",
+            vec![(Some("row-1".into()), json!({"id":"row-1"}))],
+        )
+        .unwrap();
+    let (entries, _, topics) = registry.metrics_snapshot();
+    assert_eq!(entries, 1);
+    let delivery = topics
+        .iter()
+        .find(|(topic, _, _)| topic == "messageDelivery")
+        .unwrap();
+    assert_eq!((delivery.1, delivery.2), (1, 1));
+}
+
+#[test]
+fn the_projection_gauges_count_entries_views_and_fold_ui_topics() {
+    use super::*;
+    let mut model = Model::default();
+    let row = |id: &str| vec![(Some("team:a".to_owned()), json!({"id": id}))];
+    model.projections.snapshot("ui:a", "team:a").unwrap();
+    model.projections.snapshot("ui:b", "team:a").unwrap();
+    model
+        .projections
+        .replace_view("messageDelivery", "all", row("m1"))
+        .unwrap();
+    model.agent_views.insert("all".into());
+    let gauges: std::collections::BTreeMap<_, _> = projection_gauges(&model).into_iter().collect();
+    assert_eq!(gauges["live_hub.views.ui"], 2);
+    assert_eq!(gauges["live_hub.views.messageDelivery"], 1);
+    assert_eq!(gauges["live_hub.delta_log_entries"], 1);
+    assert_eq!(gauges["live_hub.subscriptions"], 0);
+    assert_eq!(gauges["live_hub.agent_views"], 1);
+    assert!(!gauges.keys().any(|name| name.contains("ui:")));
+}
+
+#[test]
+fn publish_counts_delta_bytes_per_topic_but_not_inbox_and_folds_ui_topics() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(LiveHub::default());
+    let emitted = std::sync::Arc::new(Mutex::new(Vec::<(String, usize)>::new()));
+    let seen = emitted.clone();
+    app.listen("codesense:delta", move |event| {
+        let delta: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+        seen.lock()
+            .unwrap()
+            .push((delta["topic"].as_str().unwrap().to_owned(), event.payload().len()));
+    });
+    let hub = app.state::<LiveHub>();
+    let mut deltas = Vec::new();
+    for (topic, key) in [("messageDelivery", "all"), ("ui:x", "team:a"), ("inbox", "all")] {
+        let rows = vec![(Some(key.to_owned()), json!({"id": "r1"}))];
+        deltas.extend(
+            hub.model
+                .lock()
+                .unwrap()
+                .projections
+                .replace_view(topic, key, rows)
+                .unwrap(),
+        );
+    }
+    let names = [
+        "live_hub.delta.bytes.messageDelivery",
+        "live_hub.delta.bytes.ui",
+        "live_hub.delta.bytes.inbox",
+        "live_hub.delta.bytes.ui:x",
+    ];
+    let before = names.map(metric_total);
+    publish(app.handle(), deltas);
+    let after = names.map(metric_total);
+    assert!(after[0] > before[0], "messageDelivery bytes move");
+    assert!(after[1] > before[1], "ui topics count under one name");
+    assert_eq!(after[2], before[2], "inbox deltas are not emitted or counted");
+    assert_eq!(after[3], before[3], "no per-ui-topic name");
+    let emitted = emitted.lock().unwrap();
+    let topics: Vec<_> = emitted.iter().map(|(topic, _)| topic.as_str()).collect();
+    assert_eq!(topics, ["messageDelivery", "ui:x"]);
+    // The count is the delta payload: at least the bytes the event carried.
+    assert!(after[0] - before[0] >= emitted[0].1 as u64);
+}
+
 #[tokio::test]
 async fn every_domain_source_invalidates_the_projection_and_bursts_coalesce() {
     use super::*;
