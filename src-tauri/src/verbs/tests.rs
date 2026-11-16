@@ -1037,6 +1037,35 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         assert_eq!(verb.args_schema["required"][0], "agentId", "{name}");
         let ok = json!({"status":"pins","org":"acme","team":"core","agentId":"a","storyId":"","pins":[{"messageId":1,"position":0,"pinnedBy":"human","pinnedAtMs":1}],"outcome":"pinned"});
         assert!(jsonschema::is_valid(&verb.result_schema, &ok), "{name}");
+        // `message` is optional on a pin; when present it is checked.
+        let with_message = |message: serde_json::Value| {
+            let mut pin = ok.clone();
+            pin["pins"][0]["message"] = message;
+            pin
+        };
+        assert!(
+            jsonschema::is_valid(
+                &verb.result_schema,
+                &with_message(
+                    json!({"from":"human","createdAtMs":1,"text":"hi","contentType":"markdown","summary":"s"})
+                )
+            ),
+            "{name}"
+        );
+        assert!(
+            !jsonschema::is_valid(
+                &verb.result_schema,
+                &with_message(json!({"from":"human","createdAtMs":1,"text":1}))
+            ),
+            "{name}"
+        );
+        assert!(
+            !jsonschema::is_valid(
+                &verb.result_schema,
+                &with_message(json!({"from":"human","createdAtMs":1}))
+            ),
+            "{name}"
+        );
         assert!(jsonschema::is_valid(
             &verb.result_schema,
             &json!({"status":"invalid","message":"no message 9"})
