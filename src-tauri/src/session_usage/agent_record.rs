@@ -25,13 +25,15 @@ pub struct Params {
 }
 
 /// The other sessions the registry lists on one session's thread, by the thread read's seat
-/// rule ([`crate::commands::agent_inbox::thread_peers`]), by launch handle.
+/// rule ([`crate::commands::agent_inbox::thread_peers`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThreadPeers {
-    /// The listed ones its record sums: the ended ones, and every one once it has ended itself.
+    /// The listed ones its record sums, by launch handle: the ended ones, and every one once it
+    /// has ended itself.
     pub counted: Vec<String>,
-    /// The concurrent live seats, left out while it is a seat: each seat's record holds its own
-    /// and the ended ones, so nothing is counted twice.
+    /// The concurrent live seats, by tab session id (a relaunch can reuse an ended
+    /// predecessor's handle), left out while it is a seat: each seat's record holds its own and
+    /// the ended ones, so nothing is counted twice.
     pub seats: Vec<String>,
 }
 
@@ -131,8 +133,8 @@ pub(crate) fn thread_sessions_in(
 }
 
 /// The earlier sessions of the same saved agent and story as `record`, oldest first, less the
-/// concurrent live `seats` (by handle). A session with no agent or no story (none, or blank) has
-/// no handoff chain.
+/// concurrent live `seats` (by tab session id). A session with no agent or no story (none, or
+/// blank) has no handoff chain.
 fn earlier_sessions(
     store: &UsageStore,
     record: &SessionRecord,
@@ -149,7 +151,7 @@ fn earlier_sessions(
     let mut stmt = rusqlite::Connection::prepare(
         &store.conn,
         &format!(
-            "SELECT session_id, handle FROM session_record
+            "SELECT session_id FROM session_record
              WHERE {THREAD_MATCH} AND recorded_at_ms < ?3 AND session_id != ?4
              ORDER BY recorded_at_ms, session_id"
         ),
@@ -158,16 +160,13 @@ fn earlier_sessions(
     let rows = stmt
         .query_map(
             rusqlite::params![story, key, record.recorded_at_ms, record.session_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| row.get::<_, String>(0),
         )
         .map_err(super::db_err)?;
     let mut earlier = vec![];
     for row in rows {
-        let (session_id, handle) = row.map_err(super::db_err)?;
-        let seat = Option::is_some_and(handle.as_deref(), |h| {
-            Iterator::any(&mut seats.iter(), |s| s == h)
-        });
-        if !seat {
+        let session_id: String = row.map_err(super::db_err)?;
+        if !Iterator::any(&mut seats.iter(), |s| *s == session_id) {
             Vec::push(&mut earlier, session_id);
         }
     }

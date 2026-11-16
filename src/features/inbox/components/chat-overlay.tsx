@@ -22,6 +22,7 @@ import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
@@ -232,13 +233,26 @@ export function ChatOverlay({
     retry: retryPins,
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
-  // A pin is named as its message, from what the pins read says it is (another seat's mail
-  // too): an HTML one by its summary, title or heading, never markup.
-  const pinTitle = (p: AgentPin) => pinTitleOf(p.message, labelOf(dir, p.message.from));
+  // A pin's message as the thread holds it: for the Foreman, its merged thread (earlier
+  // sessions' mail too), else the rest of its mail, in the pin team.
+  const pinnedMessage = (id: number) =>
+    foreman
+      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        null)
+      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
+  // What a pin's message says: the thread's own row, else what the pins read says it is (a
+  // concurrent seat's mail, which this seat's thread leaves out).
+  const saidOf = (p: AgentPin) => pinnedMessage(p.messageId) ?? p.message;
+  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
+  const pinTitle = (p: AgentPin) => {
+    const m = saidOf(p);
+    return pinTitleOf(m, labelOf(dir, m.from));
+  };
   // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
   const ownCard = (p: AgentPin): OwnPinCard | null => {
     if (p.preview) return null;
-    const m = p.message;
+    const m = saidOf(p);
     const who = labelOf(dir, m.from);
     const at = formatClock(m.createdAtMs);
     if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
@@ -249,14 +263,6 @@ export function ChatOverlay({
       rest: quoteOf(m, who).rest,
     };
   };
-  // The opened pin's message as the thread holds it: for the Foreman, its merged thread
-  // (earlier sessions' mail too), else the rest of its mail, in the pin team.
-  const pinnedMessage = (id: number) =>
-    foreman
-      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
-        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
-        null)
-      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
   const openedMessage = opened ? pinnedMessage(opened.messageId) : null;
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -508,6 +514,17 @@ export function ChatOverlay({
             <div className="ibx-ov-sheet-b">
               {openedMessage ? (
                 <MessageBody m={openedMessage} liveDashboards />
+              ) : opened.message && pinTeam ? (
+                // A concurrent seat's message: what the pins read says, an HTML one live.
+                <InboxMessageContent
+                  text={opened.message.text}
+                  contentType={opened.message.contentType}
+                  live={
+                    opened.message.contentType === "html"
+                      ? { team: pinTeam, messageId: opened.messageId, sender: opened.message.from }
+                      : null
+                  }
+                />
               ) : (
                 <span className="ibx-ov-gone">This view is no longer in the thread.</span>
               )}

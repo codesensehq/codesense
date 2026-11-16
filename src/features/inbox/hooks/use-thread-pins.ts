@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import type { AgentPin } from "@/tauri/commands";
 import type { ConversationMessage } from "../api";
 import type { InboxView } from "../components/inbox-view-context";
 import { pinTitleOf } from "../lib/person-pins";
@@ -29,6 +30,7 @@ export function useThreadPins(
     : null;
   const storyId = session?.story ?? null;
   const { pins, apply } = useAgentPins(team, agentId, storyId);
+  const saidOf = (p: AgentPin) => messages.find((x) => x.id === p.messageId) ?? p.message;
   return usePersonPins({
     team,
     agentId,
@@ -38,10 +40,13 @@ export function useThreadPins(
     sender: (m) => labelOf(view.dir, m.from),
     labelOf: (from) => labelOf(view.dir, from),
     // A pin is named as the agent's chat names it: its short name, else its message's title,
-    // from what the pins read says the message is (another seat's mail too).
-    titleOf: (p) =>
-      p.preview?.shortName || pinTitleOf(p.message, labelOf(view.dir, p.message.from)),
-    ownOf: (p) => (p.message.contentType === "html" ? "name" : "quote"),
+    // from this conversation's row, else what the pins read says it is (another seat's mail).
+    titleOf: (p) => {
+      if (p.preview?.shortName) return p.preview.shortName;
+      const m = saidOf(p);
+      return pinTitleOf(m, labelOf(view.dir, m.from));
+    },
+    ownOf: (p) => (saidOf(p).contentType === "html" ? "name" : "quote"),
     onShowPins: () => view.goTo(key),
   });
 }

@@ -1175,7 +1175,7 @@ export interface AgentPinMessage {
   from: string;
   createdAtMs: number;
   text: string;
-  contentType?: string | null;
+  contentType?: MessageContentType | null;
   summary?: string | null;
 }
 

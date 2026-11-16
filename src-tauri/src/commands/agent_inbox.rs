@@ -1109,7 +1109,7 @@ pub(crate) fn registry_thread(
 }
 
 /// The other listed sessions of the thread the session launched under `handle` is on (its
-/// saved agent and story, or no story), by the thread read's seat rule, by handle. While that
+/// saved agent and story, or no story), by the thread read's seat rule. While that
 /// session is a seat (it hasn't `ended`), the thread's other live seats are left out, as the
 /// thread read leaves their conversations out: each seat's record holds its own and the ended
 /// ones, so nothing is counted twice. Empty when that row names no saved agent.
@@ -1135,12 +1135,12 @@ pub(crate) fn thread_peers(
         row.handle != handle && Option::as_ref(&registry_thread(row)) == Some(&thread)
     });
     for row in others {
-        let into = if seat && !ended(&row.handle) {
-            &mut peers.seats
-        } else {
-            &mut peers.counted
-        };
-        Vec::push(into, std::string::String::clone(&row.handle));
+        if !(seat && !ended(&row.handle)) {
+            Vec::push(&mut peers.counted, std::string::String::clone(&row.handle));
+        } else if let Some(session) = row.session_id.as_deref() {
+            // By its tab session: a relaunch can reuse an ended predecessor's handle.
+            Vec::push(&mut peers.seats, session.to_owned());
+        }
     }
     peers
 }
