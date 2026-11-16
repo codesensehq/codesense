@@ -137,6 +137,8 @@
   // A session's assistant prose as it is written, then one final message per turn, never a
   // tool call or the model's thinking: callback({kind:'prose'|'final', turn, key, text}). A
   // refusal (no sessions:read, another team's session, no session) comes as callback(null, error).
+  // One host watch per session in this frame, however many subscribers: it ends when the last leaves.
+  var textWatches = {};
   c.onSessionText = function (sessionId, callback) {
     var active = true;
     function heard(e) {
@@ -145,7 +147,14 @@
       callback({ kind: d.kind, turn: d.turn, key: d.key, text: d.text }, null);
     }
     window.addEventListener('message', heard);
-    c.invoke('sessions.watchText', { sessionId: sessionId }).catch(function (error) {
+    var watch = textWatches[sessionId];
+    if (watch) watch.count++;
+    else {
+      watch = textWatches[sessionId] = { count: 1 };
+      watch.started = c.invoke('sessions.watchText', { sessionId: sessionId });
+      watch.started.catch(function () { if (textWatches[sessionId] === watch) delete textWatches[sessionId]; });
+    }
+    watch.started.catch(function (error) {
       if (!active) return;
       active = false;
       window.removeEventListener('message', heard);
@@ -155,6 +164,8 @@
       if (!active) return;
       active = false;
       window.removeEventListener('message', heard);
+      if (--watch.count > 0 || textWatches[sessionId] !== watch) return;
+      delete textWatches[sessionId];
       c.invoke('sessions.unwatchText', { sessionId: sessionId }).catch(function () {});
     };
   };

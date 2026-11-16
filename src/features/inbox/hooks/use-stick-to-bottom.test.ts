@@ -2,7 +2,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
-import { useStickToBottom } from "./use-stick-to-bottom";
+import { readFileSync } from "node:fs";
+
+import { PIN_NEAR, nearBottom, useStickToBottom } from "./use-stick-to-bottom";
+
+describe("the pin-to-bottom threshold", () => {
+  const at = (scrollTop: number) => {
+    const el = document.createElement("div");
+    Object.defineProperty(el, "scrollHeight", { value: 1000 });
+    Object.defineProperty(el, "clientHeight", { value: 100 });
+    el.scrollTop = scrollTop;
+    return el;
+  };
+  it("follows within 79 px of the end and not at 80", () => {
+    expect(nearBottom(at(1000 - 100 - 79))).toBe(true);
+    expect(nearBottom(at(1000 - 100 - 80))).toBe(false);
+  });
+  it("is the kit chat's rule: same PIN_NEAR, same strict comparison", () => {
+    const kit = readFileSync("src-tauri/src/http/routes/dashboard_kit/chat/pin.js", "utf8");
+    expect(Number(/const PIN_NEAR=(\d+);/.exec(kit)?.[1])).toBe(PIN_NEAR);
+    expect(kit).toContain("log.scrollHeight-log.scrollTop-log.clientHeight<PIN_NEAR");
+  });
+});
 
 describe("useStickToBottom", () => {
   const observers: { cb: () => void; targets: Element[] }[] = [];
@@ -73,13 +94,13 @@ describe("useStickToBottom", () => {
     // The browser clamps the pinned list to its last screenful.
     el.scrollTop = 800;
     el.dispatchEvent(new Event("scroll"));
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 90; i++) {
       el.scrollTop -= 1;
       el.dispatchEvent(new Event("scroll"));
     }
     height.value = 1200;
     observers.at(-1)!.cb();
-    expect(el.scrollTop).toBe(740);
+    expect(el.scrollTop).toBe(710);
   });
 
   it("leaves a reader who scrolled up where they are when content grows", () => {

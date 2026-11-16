@@ -1045,3 +1045,115 @@ it("seeds a pins subscription from the first paint only when the paint is its ow
   );
   expect(seen).not.toContain("secret of a");
 });
+
+it("onSessionText counts subscribers per session: the stream is unwatched when the last leaves", async () => {
+  const handlers = new Set<(event: unknown) => void>();
+  const parent = {};
+  const invoke = vi.fn(async (_verb: string, _args: Record<string, unknown>) => null);
+  const window: Record<string, any> = {
+    parent,
+    codesense: {
+      invoke,
+      onVisibility: (cb: (shown: boolean) => void) => {
+        cb(true);
+        return () => {};
+      },
+      onInboxChanged: () => () => {},
+    },
+    __codesenseProxy: { token: "frame-token" },
+    addEventListener: (_type: string, cb: (event: unknown) => void) => handlers.add(cb),
+    removeEventListener: (_type: string, cb: (event: unknown) => void) => handlers.delete(cb),
+  };
+  vm.runInNewContext(source, { window, queueMicrotask, document: { querySelector: () => null } });
+  const say = (sessionId: string, text: string) =>
+    handlers.forEach((cb) =>
+      cb({
+        source: parent,
+        data: {
+          type: "codesense:session-text",
+          sessionId,
+          kind: "prose",
+          turn: "t",
+          key: "k",
+          text,
+        },
+      }),
+    );
+  const verbs = (verb: string) => invoke.mock.calls.filter(([v]) => v === verb);
+  const one = vi.fn();
+  const two = vi.fn();
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const offOne = window.codesense.onSessionText("s1", one);
+  const offTwo = window.codesense.onSessionText("s1", two);
+  await settle();
+  expect(verbs("sessions.watchText")).toHaveLength(1);
+  offOne();
+  await settle();
+  expect(verbs("sessions.unwatchText")).toHaveLength(0);
+  say("s1", "still arriving");
+  expect(one).not.toHaveBeenCalled();
+  expect(two).toHaveBeenCalledWith(
+    { kind: "prose", turn: "t", key: "k", text: "still arriving" },
+    null,
+  );
+  offTwo();
+  await settle();
+  expect(verbs("sessions.unwatchText")).toHaveLength(1);
+  // A later subscriber starts a fresh watch.
+  window.codesense.onSessionText("s1", vi.fn());
+  await settle();
+  expect(verbs("sessions.watchText")).toHaveLength(2);
+});
+
+it("onSessionText: a refused watch tells every subscriber, then a later subscriber starts a fresh one", async () => {
+  const handlers = new Set<(event: unknown) => void>();
+  const parent = {};
+  let refuse = true;
+  const invoke = vi.fn(async (verb: string, _args: Record<string, unknown>) => {
+    if (verb === "sessions.watchText" && refuse) {
+      refuse = false;
+      throw new Error("refused: a remote session");
+    }
+    return null;
+  });
+  const window: Record<string, any> = {
+    parent,
+    codesense: {
+      invoke,
+      onVisibility: (cb: (shown: boolean) => void) => {
+        cb(true);
+        return () => {};
+      },
+      onInboxChanged: () => () => {},
+    },
+    __codesenseProxy: { token: "frame-token" },
+    addEventListener: (_type: string, cb: (event: unknown) => void) => handlers.add(cb),
+    removeEventListener: (_type: string, cb: (event: unknown) => void) => handlers.delete(cb),
+  };
+  vm.runInNewContext(source, { window, queueMicrotask, document: { querySelector: () => null } });
+  const verbs = (verb: string) => invoke.mock.calls.filter(([v]) => v === verb);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const one = vi.fn();
+  const two = vi.fn();
+  const shimListeners = handlers.size;
+  const offOne = window.codesense.onSessionText("s1", one);
+  const offTwo = window.codesense.onSessionText("s1", two);
+  await settle();
+  expect(verbs("sessions.watchText")).toHaveLength(1);
+  for (const cb of [one, two]) expect(cb).toHaveBeenCalledWith(null, expect.any(Error));
+  expect(handlers.size).toBe(shimListeners);
+  // Both already heard the refusal, so letting go has nothing to unwatch.
+  offOne();
+  offTwo();
+  await settle();
+  expect(verbs("sessions.unwatchText")).toHaveLength(0);
+  // The refused watch is gone: the next subscriber starts a fresh one and is not refused.
+  const three = vi.fn();
+  const offThree = window.codesense.onSessionText("s1", three);
+  await settle();
+  expect(verbs("sessions.watchText")).toHaveLength(2);
+  expect(three).not.toHaveBeenCalled();
+  offThree();
+  await settle();
+  expect(verbs("sessions.unwatchText")).toHaveLength(1);
+});

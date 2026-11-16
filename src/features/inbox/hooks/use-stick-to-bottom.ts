@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
-/** Within this many pixels of the end counts as "at the bottom". */
-export const NEAR_BOTTOM_PX = 48;
+/**
+ * Closer than this many pixels to the end counts as "at the bottom". The kit chat's
+ * `chat/pin.js` holds the same value and comparison; a test pins this copy to it.
+ */
+export const PIN_NEAR = 80;
 
-/** True when `el` is scrolled to within {@link NEAR_BOTTOM_PX} of its end. */
+/** True when `el` is scrolled to within {@link PIN_NEAR} of its end. */
 export const nearBottom = (el: HTMLElement): boolean =>
-  el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  el.scrollHeight - el.scrollTop - el.clientHeight < PIN_NEAR;
 
 /**
  * Whether the reader has scrolled `ref` away from its end. Updated on scroll, and only on a

@@ -1307,8 +1307,9 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/chat.js
   var initialsOf = (name) => {
-    const parts = String(name || "?").split(/[\s_-]+/).filter(Boolean);
-    return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || "?").slice(0, 2)).toUpperCase();
+    const parts = String(name || "?").replace(/[^\p{L}\p{N}\s_-]/gu, "").split(/[\s_-]+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts.length === 1 ? parts[0].slice(0, 2) : parts[0][0] + parts[1][0]).toUpperCase();
   };
   function avatarOf(info) {
     const kit = window.codesense && window.codesense.kit;

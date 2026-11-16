@@ -39,7 +39,7 @@ import {cardNode} from './card.js';
 import {inlineNodes} from './inline.js';
 // Faces carry their words next to them (the header line, the row text), so they are hidden from assistive tech; data-label keeps the same words for tests.
 // A sender's avatar for the faces option: an image by src, else kit.avatar (a face ref or initials from the name); a page without kit.avatar gets the initials in a plain span.
-const initialsOf=name=>{const parts=String(name||'?').split(/[\s_-]+/).filter(Boolean);return(parts.length>1?parts[0][0]+parts[1][0]:(parts[0]||'?').slice(0,2)).toUpperCase();};
+const initialsOf=name=>{const parts=String(name||'?').replace(/[^\p{L}\p{N}\s_-]/gu,'').split(/[\s_-]+/).filter(Boolean);if(!parts.length)return'?';return(parts.length===1?parts[0].slice(0,2):parts[0][0]+parts[1][0]).toUpperCase();};
 function avatarOf(info){
  const kit=window.codesense&&window.codesense.kit;
  if(kit&&typeof kit.avatar==='function')return kit.avatar({face:info.face,name:info.name,size:24});
