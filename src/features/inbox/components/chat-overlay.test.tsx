@@ -46,6 +46,7 @@ vi.mock("@/shared/lib/open-file-in-team", () => ({ openFileInTeam: openFile }));
 
 const api = vi.hoisted(() => ({
   loadSessionInbox: vi.fn(),
+  loadThreadInbox: vi.fn(),
   loadInboxSessions: vi.fn(),
   sendAsHuman: vi.fn(),
 }));
@@ -227,6 +228,10 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("sets the cap count on Pin… and a fresh pin's New at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-ov .ibx-pin-cap")).toContain("font-size: 11px");
+    expect(ruleOf(".ibx-pk-new")).toContain("font-size: 11px");
+  });
   it("draws the chooser's highlighted row's Pinned by and Replace in the full ink, which reads at AA on its accent wash", () => {
     // Muted and accent inks only just pass on the bare page: on the wash they fell to 4.36:1 and 4.25:1 in light.
     const current = ".ibx-pin-chooser .choice[data-current]";
@@ -285,6 +290,11 @@ beforeEach(() => {
     dto: { handle: LEAD, roles: [], messages: MESSAGES },
     source: "live",
   });
+  // A session launched on a saved agent and story reads its thread: by default what the session
+  // read gives for its seat, so a test that sets the session read sets what the chat shows.
+  api.loadThreadInbox.mockImplementation((key: string) =>
+    api.loadSessionInbox((JSON.parse(key) as string[])[2]),
+  );
   api.loadInboxSessions.mockResolvedValue([]);
   api.sendAsHuman.mockResolvedValue({ status: "sent", messageId: 99 });
   vi.mocked(invoke).mockImplementation(async (cmd: string) =>
@@ -1700,6 +1710,8 @@ describe("ChatOverlay for the Foreman", () => {
       expect.stringContaining("Hello from the live Foreman."),
     ]);
     expect(api.loadSessionInbox).toHaveBeenCalledWith(EARLIER);
+    // The Foreman merges its own sessions; it never reads a thread.
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
   });
 
   it("reads no more earlier sessions than the page keeps in its thread", async () => {
@@ -1873,5 +1885,85 @@ describe("ChatOverlay for the Foreman", () => {
     fireEvent.click(card!);
     expect(screen.queryByText("This view is no longer in the thread.")).toBeNull();
     expect(screen.getAllByText(/Lead note for the Foreman/).length).toBeGreaterThan(1);
+  });
+});
+
+describe("ChatOverlay on a successor session", () => {
+  it("reads the thread of its saved agent and story, so its predecessor's mail shows though the roster no longer lists it", async () => {
+    api.loadThreadInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        agentId: "builtin/claude",
+        storyId: "BUG-142",
+        sessions: ["BUG-142#lead-old", LEAD],
+        addresses: ["sess-old", "BUG-142#lead-old", SESSION, LEAD],
+        roles: [],
+        messages: [
+          msg(1, "human", "BUG-142#lead-old", "Asked the first session"),
+          msg(2, "BUG-142#lead-old", "human", "The first session answered"),
+          // Mail the thread read found by the predecessor's tab session id.
+          msg(3, "sess-old", "human", "Sent from the first session's tab"),
+          ...MESSAGES,
+        ],
+      },
+      source: "live",
+    });
+    await renderOverlay(420, 700, "dock");
+    expect(await screen.findByText("The first session answered")).toBeInTheDocument();
+    expect(screen.getByText("Asked the first session")).toBeInTheDocument();
+    expect(screen.getByText("Sent from the first session's tab")).toBeInTheDocument();
+    expect(api.loadThreadInbox).toHaveBeenCalledWith(
+      JSON.stringify(["builtin/claude", "BUG-142", SESSION]),
+    );
+    expect(api.loadSessionInbox).not.toHaveBeenCalledWith(SESSION);
+  });
+
+  it("marks the predecessor's mail read on screen as it does the session's own, and nothing else", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 420,
+      bottom: 700,
+      width: 420,
+      height: 700,
+      toJSON: () => ({}),
+    });
+    api.loadThreadInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        agentId: "builtin/claude",
+        storyId: "BUG-142",
+        sessions: ["BUG-142#lead-old", LEAD],
+        addresses: ["sess-old", "BUG-142#lead-old", SESSION, LEAD],
+        roles: [],
+        messages: [
+          msg(41, "BUG-142#lead-old", "human", "Unread from the first session", { unread: true }),
+          msg(42, "sess-old", "human", "Unread from its tab", { unread: true }),
+          msg(43, LEAD, "human", "Unread from this session", { unread: true }),
+          msg(44, "human", "BUG-142#lead-old", "Sent by you", { unread: true }),
+          ...MESSAGES,
+        ],
+      },
+      source: "live",
+    });
+    await renderOverlay(420, 700, "dock");
+    await screen.findByText("Unread from this session");
+    const read = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === "mark_inbox_message_read")
+        .map(([, args]) => (args as { messageId: number }).messageId)
+        .sort();
+    await waitFor(() => expect(read()).toEqual([41, 42, 43]));
+    vi.restoreAllMocks();
+  });
+
+  it("reads one session's inbox when the session was launched from no saved agent", async () => {
+    roster({ agentRevision: null, story: null });
+    await renderOverlay(420, 700, "dock");
+    await waitFor(() => expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION));
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
   });
 });

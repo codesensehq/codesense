@@ -220,7 +220,7 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
     expect(screen.queryByTestId("code-diff")).toBeNull();
     // It renders alone, and says so once under the diff.
     expect(screen.getByTestId("file-diff-rendered-alone")).toHaveTextContent(
-      "Rendered on its own: linked files such as stylesheets and images aren't loaded here.",
+      "Rendered on its own: linked files such as stylesheets and images aren’t loaded here.",
     );
     expect(screen.queryByTestId("html")).toBeNull();
   });
@@ -278,7 +278,7 @@ describe("renderFileDiff — HTML, image, Excalidraw (AC 2)", () => {
       ),
     );
     expect(screen.getAllByTestId("excalidraw")).toHaveLength(1);
-    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't read this side's drawing");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn’t read this side’s drawing");
   });
 
   it("off Files: a raster image renders from the bytes the surface holds", () => {
@@ -555,9 +555,19 @@ describe("renderFileDiff — the switches and the skeleton (critique D3, D4, D9)
   it("the loading skeleton pulses only where motion is welcome, and says it is loading", () => {
     render(renderFileDiff(args("/repo/a.ts", { state: { kind: "loading" } })));
     const skeleton = screen.getByTestId("file-diff-code-skeleton");
-    expect(skeleton.className).toContain("motion-safe:animate-pulse");
-    expect(skeleton.className).not.toMatch(/(^|\s)animate-pulse/);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading the diff");
+    const pulse = skeleton.querySelector<HTMLElement>("[data-skeleton-pulse]")!;
+    expect(pulse.className).toContain("motion-safe:animate-pulse");
+    expect(pulse.className).not.toMatch(/(^|\s)animate-pulse/);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading the diff");
+    // Only the placeholder pulses: a label that fades with it drops under AA.
+    for (
+      let node: HTMLElement | null = status;
+      node && node !== skeleton.parentElement;
+      node = node.parentElement
+    )
+      expect(node.className).not.toContain("animate-pulse");
+    expect(pulse.contains(status)).toBe(false);
   });
 });
 
@@ -579,7 +589,8 @@ describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () 
   it("while its bytes are read it says so, never the final binary state", () => {
     render(renderFileDiff(png({ imageState: { kind: "reading" } })));
     expect(screen.getByTestId("file-diff-code-skeleton")).toBeInTheDocument();
-    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    // Shown in the skeleton and said by the image's one status node.
+    expect(screen.getAllByText("Reading the image…")).toHaveLength(2);
     expect(screen.queryByText("surface binary note")).toBeNull();
   });
 
@@ -599,6 +610,44 @@ describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () 
     expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
       "An image has no text diff. Over the 8 MB limit for drawing here.",
     );
+  });
+
+  it("one status node says Reading the image… and then the reason it won't draw, so the change is announced", () => {
+    const { rerender } = render(renderFileDiff(png({ imageState: { kind: "reading" } })));
+    const status = screen.getByTestId("file-diff-image-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveTextContent("Reading the image…");
+    // The status is this one node: nothing else in the body claims it.
+    expect(screen.getAllByRole("status")).toEqual([status]);
+    rerender(
+      renderFileDiff(
+        png({
+          imageState: { kind: "unavailable", reason: "Over the 8 MB limit for drawing here" },
+        }),
+      ),
+    );
+    expect(screen.getByTestId("file-diff-image-status")).toBe(status);
+    expect(status).toHaveTextContent("Over the 8 MB limit for drawing here");
+    expect(screen.getAllByRole("status")).toEqual([status]);
+  });
+
+  it("an image whose diff read failed with nothing read of it says the real error, not that the image failed", () => {
+    render(
+      renderFileDiff(
+        args(
+          "/repo/logo.png",
+          {
+            sides: { before: "", after: "", status: "modified" },
+            state: { kind: "error", message: "git show failed" },
+            modes: { html: "source" },
+          },
+          { onModeChange: vi.fn() },
+        ),
+      ),
+    );
+    const line = screen.getByTestId("file-diff-image-source");
+    expect(line).toHaveTextContent("git show failed");
+    expect(line).not.toHaveTextContent(/Couldn.t read the image/);
   });
 
   it("a Side by side preference over an image that can't draw presses Source, as the body shows", () => {
@@ -662,11 +711,12 @@ describe("renderFileDiff — a raster image's states (critique D5, D6, D8)", () 
     const group = screen.getByTestId("file-diff-mode-switch");
     const sideBySide = within(group).getByRole("button", { name: "Side by side" });
     expect(sideBySide).toBeDisabled();
-    expect(sideBySide).toHaveAttribute("title", IMAGE_UNAVAILABLE.failed);
+    // The reason is the diff's own error: nothing of the image was read, so it isn't blamed.
+    expect(sideBySide).toHaveAttribute("title", "Couldn’t read the diff (permission denied)");
     for (const code of ["Line", "Ignore whitespace", "Structural"])
       expect(within(group).queryByRole("button", { name: code })).toBeNull();
     expect(screen.getByTestId("file-diff-image-source")).toHaveTextContent(
-      `An image has no text diff. ${IMAGE_UNAVAILABLE.failed}.`,
+      "An image has no text diff. Couldn’t read the diff (permission denied).",
     );
   });
 

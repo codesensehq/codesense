@@ -115,7 +115,8 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   });
   const change=open.change?h('div',{class:'chg',tabindex:'-1',role:'status'},open.change):null;
   const error=open.error?h('div',{class:'pin-note danger',role:'alert'},h('span',{},open.error)):null;
-  node.replaceChildren(head,change,h('div',{class:'rows'},...rows),error,cancel);
+  // A chooser with no change line or no error leaves it out: replaceChildren would draw a null as the text "null".
+  node.replaceChildren(...[head,change,h('div',{class:'rows'},...rows),error,cancel].filter(Boolean));
   mark(open.current);
  }
  /** After a render (or a move): the chooser is drawn in place, and focus that was in it, or that a move or a change wants there, goes to the current row, else the change
