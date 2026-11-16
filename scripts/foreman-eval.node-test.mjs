@@ -949,6 +949,25 @@ test("every case states its reply wording as rubric items", () => {
   );
 });
 
+test("fixture: read_content_file answers any other path from the team's checkout, or not found", async () => {
+  const fx = await createFixture();
+  try {
+    assert.equal(
+      fx.tool("foreman", "read_content_file", { path: "story-view.yml" }).text,
+      `sprint: ${CONFIG.sprintLeadAgent}\n`,
+    );
+    assert.equal(fx.tool("foreman", "read_content_file", { path: "./README.md" }).text, "# demo\n");
+    for (const p of ["nope.md", "../origin.git/config", "/etc/hosts"])
+      assert.deepEqual(
+        fx.tool("foreman", "read_content_file", { path: p }),
+        { error: "File not found" },
+        p,
+      );
+  } finally {
+    fx.teardown();
+  }
+});
+
 // ---- runner --------------------------------------------------------------------------------
 
 const runnerOptions = (t, extra = {}) => ({

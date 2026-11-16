@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -486,6 +487,12 @@ function build(root, opts) {
       if (tool === "read_content_file" && opts.storyTeam === "scripted" && record.args.path === SKILL_PATH) return { text: SKILL };
       if (tool === "read_content_file" && record.args.path === GIT_ACCESS_PATH)
         return opts.gitAccess === "none" ? { error: "File not found" } : { text: GIT_ACCESS[opts.gitAccess] };
+      // Home is a checkout of the team's content: any other team path reads from it.
+      if (tool === "read_content_file") {
+        const file = path.resolve(home, String(record.args.path ?? ""));
+        const inside = file.startsWith(home + path.sep);
+        return inside && existsSync(file) && statSync(file).isFile() ? { text: readFileSync(file, "utf8") } : { error: "File not found" };
+      }
       if (tool === "who_am_i") return { handle: CONFIG.self, sessionId: CONFIG.self };
       if (tool === "agent_list") return { agents: [{ id: CONFIG.sprintLeadAgent }, { id: "story-lead-claude" }, { id: `guide-${CONFIG.runtime}` }] };
       if (tool === "get_story_format") return { text: "Frontmatter: type, status, sprint. Then Purpose and Acceptance Criteria." };
