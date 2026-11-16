@@ -283,18 +283,22 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
   });
 });
 
-const AGENT_PAGE = "pages/agent.html";
+const AGENT_PAGE = "/r/acme/widgets/content/pages/agent.html";
 /** The registry's view of the team: `agent_page` is what teams.yml declares (absent ⇒ no page). */
 function declareTeam(agentPage?: string) {
   useOrgStore.setState({
     orgs: [
-      { slug: "acme", teams: [{ name: "widgets", source_repos: [], agent_page: agentPage }] },
+      {
+        slug: "acme",
+        org_root: "/r/acme",
+        teams: [{ name: "widgets", source_repos: [], agent_page: agentPage }],
+      },
     ] as never,
   });
 }
 
 beforeEach(() => {
-  declareTeam(AGENT_PAGE);
+  declareTeam("pages/agent.html");
   clearInboxDrafts();
   vi.clearAllMocks();
   events.clear();

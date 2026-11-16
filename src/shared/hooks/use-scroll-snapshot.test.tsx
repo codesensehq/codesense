@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { useRef } from "react";
 
@@ -134,5 +134,95 @@ describe("useScrollSnapshot in a warm team", () => {
     warmScopes.forget(TEAM);
     warmScopes.forget(OTHER);
     warmScopes.activate(null);
+  });
+});
+
+describe("useScrollSnapshot when its box is hidden and shown again", () => {
+  type Observer = { cb: ResizeObserverCallback; target: Element | null };
+  let observers: Observer[];
+
+  beforeEach(() => {
+    observers = [];
+    class StubResizeObserver {
+      private readonly record: Observer;
+      constructor(cb: ResizeObserverCallback) {
+        this.record = { cb, target: null };
+        observers.push(this.record);
+      }
+      observe(target: Element) {
+        this.record.target = target;
+      }
+      unobserve() {}
+      disconnect() {
+        observers = observers.filter((o) => o !== this.record);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", StubResizeObserver);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function resize(width: number, height: number) {
+    act(() => {
+      for (const { cb, target } of observers) {
+        cb(
+          [{ target, contentRect: { width, height } } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      }
+    });
+  }
+
+  it("puts the tracked scrollTop back on the hidden to visible edge", () => {
+    const { getByTestId } = render(<Harness viewKey={KEY} />);
+    const el = getByTestId("scroller");
+    resize(400, 100);
+    el.scrollTop = 240;
+    el.dispatchEvent(new Event("scroll"));
+    resize(0, 0);
+    // A hidden box loses its scroll offset in the engine.
+    el.scrollTop = 0;
+    resize(400, 100);
+    expect(el.scrollTop).toBe(240);
+  });
+
+  it("ignores a scroll event fired while hidden", () => {
+    const { getByTestId } = render(<Harness viewKey={KEY} />);
+    const el = getByTestId("scroller");
+    resize(400, 100);
+    el.scrollTop = 240;
+    el.dispatchEvent(new Event("scroll"));
+    resize(0, 0);
+    el.scrollTop = 0;
+    el.dispatchEvent(new Event("scroll"));
+    resize(400, 100);
+    expect(el.scrollTop).toBe(240);
+  });
+
+  it("leaves an offset set after the box was shown, such as an anchor jump", () => {
+    const { getByTestId } = render(<Harness viewKey={KEY} />);
+    const el = getByTestId("scroller");
+    resize(400, 100);
+    el.scrollTop = 240;
+    el.dispatchEvent(new Event("scroll"));
+    resize(0, 0);
+    el.scrollTop = 500;
+    resize(400, 100);
+    expect(el.scrollTop).toBe(500);
+  });
+
+  it("does not restore on the first mount", () => {
+    const { getByTestId } = render(<Harness viewKey={KEY} />);
+    const el = getByTestId("scroller");
+    el.scrollTop = 90;
+    resize(400, 100);
+    expect(el.scrollTop).toBe(90);
+  });
+
+  it("stays inert without a viewKey", () => {
+    render(<Harness viewKey={null} />);
+    expect(observers).toHaveLength(0);
   });
 });
