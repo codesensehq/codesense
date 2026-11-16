@@ -481,7 +481,7 @@ async fn serve_frame_file(
                 .effective_grant
                 .iter()
                 .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
-            && !crate::verbs::foreman_launch::still_granted(&contents)
+            && !crate::verbs::foreman_launch::still_granted(&real, &contents)
         {
             return Err(StatusCode::FORBIDDEN);
         }

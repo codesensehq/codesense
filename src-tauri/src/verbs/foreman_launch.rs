@@ -68,12 +68,17 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
     grant_in(PAGES, docs_root, document_path)
 }
 
-/// Whether bytes the viewer is about to serve to a frame holding the capability are still a
-/// bundled page. The grant is hashed at mint, but the viewer re-reads the page on every load, so
-/// a page edited while its tab is open would otherwise reload holding the grant.
-pub fn still_granted(bytes: &[u8]) -> bool {
+/// Whether bytes the viewer is about to serve to a frame holding the capability are still the
+/// frame's own bundled page: the `PAGES` entry whose path `document` ends with, with that
+/// entry's bytes. The grant is hashed at mint, but the viewer re-reads the page on every load, so
+/// a page edited while its tab is open, or replaced by another pinned page, would otherwise
+/// reload holding the grant.
+pub fn still_granted(document: &Path, bytes: &[u8]) -> bool {
     let digest = format!("{:x}", Sha256::digest(bytes));
-    PAGES.iter().any(|page| page.sha256 == digest)
+    PAGES
+        .iter()
+        .filter(|page| document.ends_with(page.path))
+        .any(|page| page.sha256 == digest)
 }
 
 /// The setup guide's place in the docs checkout. Its pin is looked up in the page list by this
