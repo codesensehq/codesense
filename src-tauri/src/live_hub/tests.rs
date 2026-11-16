@@ -2490,7 +2490,17 @@ fn read_held(
     owner: &str,
 ) -> super::Held<SubscriptionReply> {
     use super::*;
-    super::subscribe_held(app.handle(), topic, key, None, None, None, Some(owner)).unwrap()
+    super::subscribe_held(
+        app.handle(),
+        topic,
+        key,
+        None,
+        None,
+        None,
+        Some(owner),
+        None,
+    )
+    .unwrap()
 }
 
 fn hold_count(app: &tauri::App<tauri::test::MockRuntime>, topic: &str, key: &str) -> usize {

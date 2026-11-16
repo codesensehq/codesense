@@ -91,13 +91,22 @@ impl DashboardStreamHub {
         let Some(parsed) = SessionStatus::from_wire(status) else {
             return;
         };
-        if let Ok(mut latest) = self.inner.latest_done.lock() {
-            latest.insert(
-                session_id.to_string(),
-                (status.to_string(), summary.clone(), now_ms(), self.write()),
-            );
+        let added = self.inner.latest_done.lock().is_ok_and(|mut latest| {
+            latest
+                .insert(
+                    session_id.to_string(),
+                    (
+                        status.to_string(),
+                        summary.clone(),
+                        now_ms(),
+                        self.next_seq(),
+                    ),
+                )
+                .is_none()
+        });
+        if added {
+            self.bound();
         }
-        self.bound();
         let status = parsed;
         let _ = self.inner.tx.send(StreamEvent::Session {
             delta: StatusDelta::SessionStatus {
@@ -133,22 +142,26 @@ impl DashboardStreamHub {
         let Some(parsed) = crate::roles::Phase::from_wire(phase) else {
             return;
         };
-        if let Ok(mut latest) = self.inner.latest_progress.lock() {
-            latest.insert(
-                session_id.to_string(),
-                (
-                    SessionProgress {
-                        phase: phase.to_string(),
-                        step,
-                        total,
-                        note: note.clone(),
-                        at_ms: now_ms(),
-                    },
-                    self.write(),
-                ),
-            );
+        let added = self.inner.latest_progress.lock().is_ok_and(|mut latest| {
+            latest
+                .insert(
+                    session_id.to_string(),
+                    (
+                        SessionProgress {
+                            phase: phase.to_string(),
+                            step,
+                            total,
+                            note: note.clone(),
+                            at_ms: now_ms(),
+                        },
+                        self.next_seq(),
+                    ),
+                )
+                .is_none()
+        });
+        if added {
+            self.bound();
         }
-        self.bound();
         let phase = parsed;
         let _ = self.inner.tx.send(StreamEvent::Session {
             delta: StatusDelta::SessionProgress {
@@ -163,12 +176,13 @@ impl DashboardStreamHub {
 }
 
 impl DashboardStreamHub {
-    fn write(&self) -> u64 {
+    fn next_seq(&self) -> u64 {
         self.inner.written.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// Keep at most [`LATEST_SESSIONS`] sessions: past it, the sessions written least recently
-    /// leave both maps together, since `progress_note_for_title` compares them.
+    /// leave both maps together, since `progress_note_for_title` compares them. Called only
+    /// when a signal adds an entry: an update to a kept session can't grow the maps.
     fn bound(&self) {
         let (Ok(mut progress), Ok(mut done)) = (
             self.inner.latest_progress.lock(),

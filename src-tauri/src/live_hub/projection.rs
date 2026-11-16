@@ -553,7 +553,7 @@ pub struct TopicRegistry {
     subscriptions: BTreeMap<String, Subscription>,
     /// The views a webview holds a cached copy of: (topic, view key) → owner window label → the
     /// generation of its latest hold. The hold count is the number of owners.
-    held: BTreeMap<(String, String), BTreeMap<String, u64>>,
+    held: BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>,
     /// The last hold generation issued; every hold takes a new one.
     hold_generation: u64,
     /// The latest [`TopicRegistry::sweep_unwatched`] run.
@@ -681,8 +681,17 @@ impl TopicRegistry {
     /// Keep `deltas` in their views' logs while someone watches the view. An unwatched view's
     /// change clears its log, so a later log never skips the change.
     fn log(&mut self, deltas: &[Delta]) {
-        for delta in deltas {
-            let watched = self.is_watched(&delta.topic, &delta.view_key);
+        if deltas.is_empty() {
+            return;
+        }
+        let watched: Vec<bool> = {
+            let followed = followed(&self.subscriptions);
+            deltas
+                .iter()
+                .map(|delta| self.watched_in(&followed, &delta.topic, &delta.view_key))
+                .collect()
+        };
+        for (delta, watched) in deltas.iter().zip(watched) {
             let Some(view) = self
                 .topics
                 .get_mut(&delta.topic)
@@ -956,19 +965,19 @@ impl TopicRegistry {
     }
     /// Evict the views nobody watches and nobody has read for more than [`SWEEP_IDLE_SWEEPS`]
     /// sweeps, on the topics `swept` allows, except the [`PINNED`] ones; drop a `ui:` topic
-    /// with its last view; and clear the logs of the unwatched views that stay. Returns the
-    /// evicted (topic, view key)s.
+    /// with its last view; and clear the logs of the unwatched views that stay on those topics.
+    /// Returns the evicted (topic, view key)s.
     pub fn sweep_unwatched(&mut self, sweep_no: u64) -> Vec<(String, String)> {
         self.sweep = sweep_no;
         let mut idle = Vec::new();
         let mut unwatched = Vec::new();
-        for (topic, projection) in &self.topics {
+        let followed = followed(&self.subscriptions);
+        for (topic, projection) in self.topics.iter().filter(|(topic, _)| swept(topic)) {
             for (key, view) in &projection.views {
-                if self.is_watched(topic, key) {
+                if self.watched_in(&followed, topic, key) {
                     continue;
                 }
-                if swept(topic)
-                    && sweep_no.saturating_sub(view.last_read) > SWEEP_IDLE_SWEEPS
+                if sweep_no.saturating_sub(view.last_read) > SWEEP_IDLE_SWEEPS
                     && !PINNED.contains(&(topic.as_str(), key.as_str()))
                 {
                     idle.push((topic.clone(), key.clone()));
@@ -977,6 +986,7 @@ impl TopicRegistry {
                 }
             }
         }
+        drop(followed);
         for (topic, key) in &unwatched {
             if let Some(view) = self
                 .topics
@@ -1043,7 +1053,9 @@ impl TopicRegistry {
     pub fn hold(&mut self, topic: &str, key: &str, owner: &str) -> u64 {
         self.hold_generation += 1;
         self.held
-            .entry((topic.to_owned(), key.to_owned()))
+            .entry(topic.to_owned())
+            .or_default()
+            .entry(key.to_owned())
             .or_default()
             .insert(owner.to_owned(), self.hold_generation);
         self.hold_generation
@@ -1051,35 +1063,48 @@ impl TopicRegistry {
     /// Drop `owner`'s hold on (topic, key) taken at `generation` or before. A release older
     /// than the owner's latest hold is late, and keeps the newer hold.
     pub fn release(&mut self, topic: &str, key: &str, owner: &str, generation: u64) {
-        let view = (topic.to_owned(), key.to_owned());
-        let Some(owners) = self.held.get_mut(&view) else {
+        let Some(keys) = self.held.get_mut(topic) else {
+            return;
+        };
+        let Some(owners) = keys.get_mut(key) else {
             return;
         };
         if owners.get(owner).is_some_and(|held| *held <= generation) {
             owners.remove(owner);
         }
         if owners.is_empty() {
-            self.held.remove(&view);
+            keys.remove(key);
+        }
+        if keys.is_empty() {
+            self.held.remove(topic);
         }
     }
     /// Drop every hold `owner` has (its window closed or its page reloaded). Returns the last
     /// generation issued: every hold the owner took up to it is gone.
     pub fn release_owner(&mut self, owner: &str) -> u64 {
-        self.held.retain(|_, owners| {
-            owners.remove(owner);
-            !owners.is_empty()
+        self.held.retain(|_, keys| {
+            keys.retain(|_, owners| {
+                owners.remove(owner);
+                !owners.is_empty()
+            });
+            !keys.is_empty()
         });
         self.hold_generation
     }
     /// How many owners hold (topic, key).
     pub fn hold_count(&self, topic: &str, key: &str) -> usize {
         self.held
-            .get(&(topic.to_owned(), key.to_owned()))
+            .get(topic)
+            .and_then(|keys| keys.get(key))
             .map_or(0, |owners| owners.len())
     }
     /// Whether anyone reads (topic, key): an owner holds it or a scoped subscription follows it.
     pub fn is_watched(&self, topic: &str, key: &str) -> bool {
         self.hold_count(topic, key) > 0 || self.has_view_subscribers(topic, key)
+    }
+    /// [`Self::is_watched`] against the views `followed` names, built once for many lookups.
+    fn watched_in(&self, followed: &BTreeSet<(&str, &str)>, topic: &str, key: &str) -> bool {
+        self.hold_count(topic, key) > 0 || followed.contains(&(topic, key))
     }
     /// The topic and view key subscription `id` follows.
     pub fn subscription_view(&self, id: &str) -> Option<(String, String)> {
@@ -1181,6 +1206,13 @@ impl TopicRegistry {
         }
         out
     }
+}
+/// The (topic, view key)s some scoped subscription follows.
+fn followed(subscriptions: &BTreeMap<String, Subscription>) -> BTreeSet<(&str, &str)> {
+    subscriptions
+        .values()
+        .map(|s| (s.topic.as_str(), s.key.as_str()))
+        .collect()
 }
 fn select(rows: &[Value], window: Option<[usize; 2]>, paged: bool) -> Vec<Value> {
     let [from, to] = window.unwrap_or([0, if paged { PAGE_SIZE } else { rows.len() }]);

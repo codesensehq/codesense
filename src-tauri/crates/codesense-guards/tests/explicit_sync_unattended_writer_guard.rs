@@ -2423,10 +2423,11 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// the in-memory `TopicRegistry` and std collections and strings; none calls a write primitive.
 /// The live hub's bounded memory: CI's census measured +6. The candidates, new calls on
 /// ambiguous names, are `.read(..)` in `LiveHub::snapshot` (live_hub/mod.rs); `.push(..)`,
-/// `.clear()` and `.since(..)` on the delta logs (live_hub/projection.rs); and `.write()` and
-/// `.bound()` in `DashboardStreamHub` (dashboard_stream/hub.rs). Their targets are the
-/// in-memory `TopicRegistry`, its delta logs, an atomic counter and two maps; none calls a
-/// write primitive.
+/// `.clear()`, `.since(..)` on the delta logs and `.contains(..)` on the followed-view set in
+/// `watched_in` (live_hub/projection.rs); and `.bound()` in `DashboardStreamHub`
+/// (dashboard_stream/hub.rs), whose sequence counter is the unambiguous `next_seq`. Their
+/// targets are the in-memory `TopicRegistry`, its delta logs and sets, an atomic counter and
+/// two maps; none calls a write primitive.
 const MAX_UNRESOLVED_METHODS: usize = 6_551;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is

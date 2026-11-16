@@ -1617,15 +1617,8 @@ pub async fn live_hub_subscribe(
         subscription_id.as_deref(),
         window,
         Some(owner_window.label()),
+        frame_id.as_deref(),
     )?;
-    if let Some(id) = subscription_id {
-        let hub = app.state::<LiveHub>();
-        let mut model = hub.model.lock().unwrap();
-        model.projections.set_owner(&id, owner_window.label());
-        if let Some(frame) = frame_id {
-            model.projections.set_frame(&id, &frame);
-        }
-    }
     Ok(reply)
 }
 pub(crate) fn subscribe<R: tauri::Runtime>(
@@ -1644,11 +1637,15 @@ pub(crate) fn subscribe<R: tauri::Runtime>(
         subscription_id,
         window,
         None,
+        None,
     )
     .map(|held| held.view)
 }
 /// [`subscribe`], and a default read (no `subscription_id`) by `holder` holds the view under
-/// the lock that reads it, so no delta can fall between the read and the hold.
+/// the lock that reads it, so no delta can fall between the read and the hold. A scoped
+/// subscription is tagged with `holder` as its owner and with `frame` under that same lock, so
+/// a `drop_window` or `release_frame` landing between them can't miss it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn subscribe_held<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     topic: &str,
@@ -1657,6 +1654,7 @@ pub(crate) fn subscribe_held<R: tauri::Runtime>(
     subscription_id: Option<&str>,
     window: Option<[usize; 2]>,
     holder: Option<&str>,
+    frame: Option<&str>,
 ) -> Result<Held<SubscriptionReply>, String> {
     let hub = app.state::<LiveHub>();
     let mut fetched = None;
@@ -1686,8 +1684,16 @@ pub(crate) fn subscribe_held<R: tauri::Runtime>(
     let reply = match subscription_id {
         Some(id) => model
             .projections
-            .subscribe_window(&id, &topic, &view_key, since_rev, window)
-            .map(|view| Held { view, hold: None }),
+            .subscribe_window(id, topic, view_key, since_rev, window)
+            .map(|view| {
+                if let Some(owner) = holder {
+                    model.projections.set_owner(id, owner);
+                }
+                if let Some(frame) = frame {
+                    model.projections.set_frame(id, frame);
+                }
+                Held { view, hold: None }
+            }),
         None => model
             .projections
             .subscribe(&topic, &view_key, since_rev)
