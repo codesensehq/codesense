@@ -6,6 +6,7 @@ import { SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useViewerStore, type Workspace } from "@/shared/stores/viewer-store";
+import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { ROW_POPUP_ATTR, TERMINAL_POPUP_ATTR } from "@/shared/lib/focus-utils";
@@ -41,6 +42,28 @@ function seedActiveWorkspace() {
     workspaces: { [TEST_TEAM_KEY]: [root] },
     activeWorkspace: { [TEST_TEAM_KEY]: root.id },
   });
+}
+const TILE_ID = "s-1";
+/** A foreground story tile as the active workspace: the CLI has something to show and focus. */
+function seedForegroundTile() {
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "core" });
+  const tile: Workspace = { id: TILE_ID, kind: "story", cwd: "/s-1", status: "ready" };
+  useViewerStore.setState({
+    workspaces: { [TEST_TEAM_KEY]: [tile] },
+    activeWorkspace: { [TEST_TEAM_KEY]: tile.id },
+  });
+}
+/** The CLI host with one terminal for the seeded tile. */
+function cliDom() {
+  return (
+    <div data-xterm-host>
+      <div data-pane-id={TILE_ID}>
+        <div className="xterm">
+          <textarea data-testid="terminal" defaultValue="terminal content" />
+        </div>
+      </div>
+    </div>
+  );
 }
 function clearActiveWorkspace() {
   useOrgStore.setState({ activeOrgSlug: null, activeTeamName: null });
@@ -482,12 +505,10 @@ describe("useShortcutHandler", () => {
     }
   });
 
-  it("⌘\\ on the Settings tab reveals/focuses the existing CLI from non-CLI focus and hides from CLI focus", async () => {
-    // SV-PBF-184: real listener + registry + action integration through ordinary
-    // rendered DOM. Settings focus is outside the CLI host, so the chord reveals a
-    // collapsed CLI and focuses its terminal; from actual CLI-host focus it toggles
-    // to hide. No action spy or helper stub — the real store transitions prove it.
-    seedActiveWorkspace();
+  it("⌘\\ on the Settings tab is a plain toggle: reveals from hidden, hides from visible, hides from CLI focus", async () => {
+    // Real listener + registry + action integration through ordinary rendered DOM, with no
+    // action spy or helper stub: the real store transitions prove it.
+    seedForegroundTile();
     useViewerStore.setState({
       layoutMode: "viewer",
       terminalVisible: false,
@@ -499,60 +520,45 @@ describe("useShortcutHandler", () => {
       <div>
         <Harness />
         <input data-testid="settings-control" />
-        <div data-xterm-host>
-          <div data-pane-id="root:acme/web">
-            <div className="xterm">
-              <textarea data-testid="terminal" defaultValue="terminal content" />
-            </div>
-          </div>
-        </div>
+        {cliDom()}
       </div>,
     );
 
     const settingsControl = screen.getByTestId("settings-control");
     const terminal = screen.getByTestId("terminal");
 
-    // 1. Settings/non-CLI focus with collapsed CLI -> reveal existing CLI and focus terminal.
+    // 1. Settings focus with the CLI hidden -> reveal the CLI and focus the terminal.
     act(() => settingsControl.focus());
-    expect(document.activeElement).toBe(settingsControl);
-
     act(() => {
       fireEvent.keyDown(document, { key: "\\", metaKey: true });
     });
     expect(useViewerStore.getState().layoutMode).toBe("shared");
     expect(useViewerStore.getState().terminalVisible).toBe(true);
-    expect(useViewerStore.getState().activeWorkspace[TEST_TEAM_KEY]).toBe("root:acme/web");
     await act(async () => {
       await new Promise((r) => requestAnimationFrame(r));
     });
     expect(document.activeElement).toBe(terminal);
 
-    // 2. Settings focus again while CLI is visible -> keep visible and focus the SAME terminal.
+    // 2. Settings focus with the CLI visible -> hide it; Settings keeps focus.
     act(() => settingsControl.focus());
-    expect(document.activeElement).toBe(settingsControl);
-
-    act(() => {
-      fireEvent.keyDown(document, { key: "\\", metaKey: true });
-    });
-    expect(useViewerStore.getState().layoutMode).toBe("shared");
-    expect(useViewerStore.getState().terminalVisible).toBe(true);
-    expect(useViewerStore.getState().activeWorkspace[TEST_TEAM_KEY]).toBe("root:acme/web");
-    await act(async () => {
-      await new Promise((r) => requestAnimationFrame(r));
-    });
-    expect(document.activeElement).toBe(terminal);
-    expect((terminal as HTMLTextAreaElement).value).toBe("terminal content");
-
-    // 3. Actual CLI-host focus -> hide via the real listener/registry/action.
-    act(() => terminal.focus());
-    expect(document.activeElement).toBe(terminal);
-
     act(() => {
       fireEvent.keyDown(document, { key: "\\", metaKey: true });
     });
     expect(useViewerStore.getState().layoutMode).toBe("viewer");
     expect(useViewerStore.getState().terminalVisible).toBe(false);
-    expect(useViewerStore.getState().activeWorkspace[TEST_TEAM_KEY]).toBe("root:acme/web");
+    expect(document.activeElement).toBe(settingsControl);
+    expect((terminal as HTMLTextAreaElement).value).toBe("terminal content");
+
+    // 3. Terminal focus with the CLI visible -> hide via the real listener/registry/action.
+    act(() => {
+      useViewerStore.getState().setLayoutMode("shared");
+    });
+    act(() => terminal.focus());
+    act(() => {
+      fireEvent.keyDown(document, { key: "\\", metaKey: true });
+    });
+    expect(useViewerStore.getState().layoutMode).toBe("viewer");
+    expect(useViewerStore.getState().terminalVisible).toBe(false);
 
     unmount();
   });
@@ -604,5 +610,318 @@ describe("useShortcutHandler", () => {
     } finally {
       restore();
     }
+  });
+});
+
+// ---------- ⌘\\ is a plain toggle in every focus context ----------
+
+const nextFrame = () => act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+const cmdBackslash = (target: Element | Document = document) =>
+  act(() => {
+    fireEvent.keyDown(target, { key: "\\", code: "Backslash", metaKey: true });
+  });
+const layout = () => useViewerStore.getState().layoutMode;
+
+type FocusTarget = {
+  name: string;
+  /** Mount the focus target; returns the element to focus. */
+  mount: () => HTMLElement;
+};
+
+function mountEditor(cls: "cm-content" | "ProseMirror"): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.innerHTML =
+    cls === "cm-content"
+      ? '<div class="cm-editor"><div class="cm-content" contenteditable="true" tabindex="0">some text</div></div>'
+      : '<div class="ProseMirror" contenteditable="true" tabindex="0">some text</div>';
+  document.body.appendChild(wrap);
+  return wrap.querySelector<HTMLElement>(`.${cls}`)!;
+}
+
+const TARGETS: FocusTarget[] = [
+  {
+    name: "an Inbox composer",
+    mount: () => {
+      const t = document.createElement("textarea");
+      t.value = "draft";
+      document.body.appendChild(t);
+      return t;
+    },
+  },
+  {
+    name: "an HTML document frame",
+    mount: () => {
+      const f = document.createElement("iframe");
+      document.body.appendChild(f);
+      return f;
+    },
+  },
+  { name: "a CodeMirror editor", mount: () => mountEditor("cm-content") },
+  { name: "a ProseMirror editor", mount: () => mountEditor("ProseMirror") },
+];
+
+describe("⌘\\ toggles the CLI from any focus", () => {
+  beforeEach(() => {
+    seedForegroundTile();
+    useViewerStore.setState({ lastTerminalMode: "shared" });
+  });
+
+  describe.each(TARGETS)("with focus in $name", ({ mount }) => {
+    it("hides a visible CLI and leaves focus and the selection where they were", () => {
+      useViewerStore.setState({ layoutMode: "shared", terminalVisible: true });
+      render(
+        <div>
+          <Harness />
+          {cliDom()}
+        </div>,
+      );
+      const target = mount();
+      act(() => target.focus());
+      expect(document.activeElement).toBe(target);
+      const text = target.firstChild;
+      if (text) {
+        const range = document.createRange();
+        range.setStart(text, 2);
+        range.setEnd(text, 5);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+      }
+      cmdBackslash(target);
+      expect(layout()).toBe("viewer");
+      expect(document.activeElement).toBe(target);
+      if (text) {
+        const after = window.getSelection()!.getRangeAt(0);
+        expect([after.startContainer, after.startOffset, after.endOffset]).toEqual([text, 2, 5]);
+      }
+      document.body.innerHTML = "";
+    });
+
+    it("reveals a hidden CLI and focuses its terminal", async () => {
+      useViewerStore.setState({ layoutMode: "viewer", terminalVisible: false });
+      render(
+        <div>
+          <Harness />
+          {cliDom()}
+        </div>,
+      );
+      const target = mount();
+      act(() => target.focus());
+      cmdBackslash(target);
+      expect(layout()).toBe("shared");
+      await nextFrame();
+      expect(document.activeElement).toBe(screen.getByTestId("terminal"));
+      document.body.innerHTML = "";
+    });
+  });
+
+  describe("with focus in an Agents row popup chat", () => {
+    function mountPopup() {
+      const popup = document.createElement("div");
+      popup.setAttribute(ROW_POPUP_ATTR, "");
+      popup.innerHTML = "<textarea>popup draft</textarea>";
+      document.body.appendChild(popup);
+      return { popup, draft: popup.querySelector("textarea")! };
+    }
+
+    it("hides a visible CLI; the popup keeps focus and its draft", () => {
+      useViewerStore.setState({ layoutMode: "shared", terminalVisible: true });
+      render(
+        <div>
+          <Harness />
+          {cliDom()}
+        </div>,
+      );
+      const { popup, draft } = mountPopup();
+      act(() => draft.focus());
+      cmdBackslash(draft);
+      expect(layout()).toBe("viewer");
+      expect(document.activeElement).toBe(draft);
+      expect(draft.value).toBe("popup draft");
+      expect(document.body.contains(popup)).toBe(true);
+      document.body.innerHTML = "";
+    });
+
+    it("reveals a hidden CLI and focuses its terminal; the popup stays open with its draft", async () => {
+      useViewerStore.setState({ layoutMode: "viewer", terminalVisible: false });
+      render(
+        <div>
+          <Harness />
+          {cliDom()}
+        </div>,
+      );
+      const { popup, draft } = mountPopup();
+      act(() => draft.focus());
+      cmdBackslash(draft);
+      expect(layout()).toBe("shared");
+      await nextFrame();
+      expect(document.activeElement).toBe(screen.getByTestId("terminal"));
+      expect(draft.value).toBe("popup draft");
+      expect(document.body.contains(popup)).toBe(true);
+      document.body.innerHTML = "";
+    });
+  });
+
+  it("restores a full-screen CLI when that was the last terminal mode", async () => {
+    useViewerStore.setState({
+      layoutMode: "viewer",
+      terminalVisible: false,
+      lastTerminalMode: "console",
+    });
+    render(
+      <div>
+        <Harness />
+        <input data-testid="outside" />
+        {cliDom()}
+      </div>,
+    );
+    act(() => screen.getByTestId("outside").focus());
+    cmdBackslash();
+    expect(layout()).toBe("console");
+    await nextFrame();
+    expect(document.activeElement).toBe(screen.getByTestId("terminal"));
+  });
+
+  it("a rebound chord toggles from outside the CLI, and the old default does not", () => {
+    useShortcutsStore.setState({
+      shortcuts: { "viewer.toggle-terminal": "CmdOrCtrl+Shift+Y" },
+      stateLoaded: true,
+    });
+    useViewerStore.setState({ layoutMode: "shared", terminalVisible: true });
+    render(
+      <div>
+        <Harness />
+        <input data-testid="outside" />
+        {cliDom()}
+      </div>,
+    );
+    const outside = screen.getByTestId("outside");
+    act(() => outside.focus());
+    cmdBackslash(outside);
+    expect(layout()).toBe("shared");
+    act(() => {
+      fireEvent.keyDown(outside, { key: "Y", code: "KeyY", metaKey: true, shiftKey: true });
+    });
+    expect(layout()).toBe("viewer");
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("a plain backslash types a backslash: no toggle, and the key is not prevented", () => {
+    useViewerStore.setState({ layoutMode: "shared", terminalVisible: true });
+    render(
+      <div>
+        <Harness />
+        <textarea data-testid="composer" />
+        {cliDom()}
+      </div>,
+    );
+    const composer = screen.getByTestId("composer");
+    act(() => composer.focus());
+    const ev = new KeyboardEvent("keydown", {
+      key: "\\",
+      code: "Backslash",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      composer.dispatchEvent(ev);
+    });
+    expect(layout()).toBe("shared");
+    expect(ev.defaultPrevented).toBe(false);
+  });
+});
+
+// ---------- ⌘I is unchanged (pinned) ----------
+
+describe("⌘I (Toggle Agent Inbox) across focus contexts", () => {
+  const cmdI = (target: Element, beforeDispatch?: (e: KeyboardEvent) => void) => {
+    const ev = new KeyboardEvent("keydown", {
+      key: "i",
+      code: "KeyI",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    beforeDispatch?.(ev);
+    act(() => {
+      target.dispatchEvent(ev);
+    });
+    return ev;
+  };
+
+  beforeEach(() => {
+    seedForegroundTile();
+  });
+
+  it.each(TARGETS.slice(0, 2))("fires from $name", ({ mount }) => {
+    const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
+    try {
+      render(<Harness />);
+      const target = mount();
+      act(() => target.focus());
+      cmdI(target);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("fires from the CLI terminal", () => {
+    const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
+    try {
+      render(
+        <div>
+          <Harness />
+          {cliDom()}
+        </div>,
+      );
+      const terminal = screen.getByTestId("terminal");
+      act(() => terminal.focus());
+      cmdI(terminal);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it.each(TARGETS.slice(2))("is left to the editor's own Mod-i in $name", ({ mount }) => {
+    const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
+    try {
+      render(<Harness />);
+      const target = mount();
+      act(() => target.focus());
+      // The editor's keymap handles Mod-i (italic, selectParentSyntax) and prevents the default.
+      target.addEventListener("keydown", (e) => e.preventDefault());
+      cmdI(target);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("stays blocked in an Agents row popup", () => {
+    const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
+    try {
+      render(<Harness />);
+      const popup = document.createElement("div");
+      popup.setAttribute(ROW_POPUP_ATTR, "");
+      popup.innerHTML = "<textarea></textarea>";
+      document.body.appendChild(popup);
+      const draft = popup.querySelector("textarea")!;
+      act(() => draft.focus());
+      cmdI(draft);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("is a no-op unless the active tab is a running agent", () => {
+    render(<Harness />);
+    const before = JSON.stringify(useAgentInboxRailStore.getState().bySession);
+    cmdI(document.body);
+    expect(JSON.stringify(useAgentInboxRailStore.getState().bySession)).toBe(before);
   });
 });

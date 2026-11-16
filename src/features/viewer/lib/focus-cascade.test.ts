@@ -801,7 +801,7 @@ describe("toggleTerminalWithFocus restore focus (SW-FX-87)", () => {
   });
 });
 
-describe("revealOrToggleTerminal (SV-PBF-184)", () => {
+describe("revealOrToggleTerminal", () => {
   const raf = installControllableRaf();
 
   it("from CLI focus toggles the terminal closed via the shared helper", () => {
@@ -818,24 +818,53 @@ describe("revealOrToggleTerminal (SV-PBF-184)", () => {
     document.body.innerHTML = `<input id="outside"><div data-xterm-host><div data-pane-id="ws-a"><div class="xterm"><textarea id="ta-a"></textarea></div></div></div>`;
     document.getElementById("outside")!.focus();
     revealOrToggleTerminal("acme:default");
-    expect(revealTerminalInPlace).toHaveBeenCalledWith("acme:default");
+    expect(setLayoutMode).toHaveBeenCalledWith("shared");
     raf.flush();
     expect(document.activeElement?.id).toBe("ta-a");
   });
 
-  it("from non-CLI focus focuses a visible terminal without changing layout mode", () => {
+  it("from non-CLI focus hides a visible terminal and leaves focus where it was", () => {
     state.layoutMode = "shared";
     state.terminalVisible = true;
     state.activeWorkspace["acme:default"] = "ws-a";
-    // A foreground tile, so this stays on the focus path (SV-GHI-2 hides only an empty CLI).
+    // A foreground tile, so the empty-state rule is not what hides it.
     state.workspaces["acme:default"] = [{ id: "ws-a", kind: "story" }];
     document.body.innerHTML = `<input id="outside"><div data-xterm-host><div data-pane-id="ws-a"><div class="xterm"><textarea id="ta-a"></textarea></div></div></div>`;
     document.getElementById("outside")!.focus();
     revealOrToggleTerminal("acme:default");
-    expect(revealTerminalInPlace).not.toHaveBeenCalled();
     raf.flush();
+    expect(setLayoutMode).toHaveBeenCalledWith("viewer");
+    expect(document.activeElement?.id).toBe("outside");
+  });
+
+  it("from non-CLI focus reveals a hidden terminal in the last terminal mode", () => {
+    state.layoutMode = "viewer";
+    state.terminalVisible = false;
+    state.lastTerminalMode = "console";
+    state.activeWorkspace["acme:default"] = "ws-a";
+    state.workspaces["acme:default"] = [{ id: "ws-a", kind: "story" }];
+    document.body.innerHTML = `<input id="outside"><div data-xterm-host><div data-pane-id="ws-a"><div class="xterm"><textarea id="ta-a"></textarea></div></div></div>`;
+    document.getElementById("outside")!.focus();
+    revealOrToggleTerminal("acme:default");
+    raf.flush();
+    expect(setLayoutMode).toHaveBeenCalledWith("console");
     expect(document.activeElement?.id).toBe("ta-a");
-    expect(setLayoutMode).not.toHaveBeenCalled();
+  });
+
+  it("round-trips full-screen CLI from outside focus: console, viewer, console", () => {
+    state.layoutMode = "console";
+    state.terminalVisible = true;
+    state.lastTerminalMode = "console";
+    state.activeWorkspace["acme:default"] = "ws-a";
+    state.workspaces["acme:default"] = [{ id: "ws-a", kind: "story" }];
+    document.body.innerHTML = `<input id="outside"><div data-xterm-host><div data-pane-id="ws-a"><div class="xterm"><textarea id="ta-a"></textarea></div></div></div>`;
+    document.getElementById("outside")!.focus();
+    revealOrToggleTerminal("acme:default");
+    raf.flush();
+    expect(state.layoutMode).toBe("viewer");
+    revealOrToggleTerminal("acme:default");
+    raf.flush();
+    expect(state.layoutMode).toBe("console");
   });
 
   it("does not create a terminal when none is visible and there is no active workspace", () => {
@@ -846,7 +875,7 @@ describe("revealOrToggleTerminal (SV-PBF-184)", () => {
       revealOrToggleTerminal("acme:default");
       raf.flush();
     }).not.toThrow();
-    expect(revealTerminalInPlace).toHaveBeenCalledWith("acme:default");
+    expect(setLayoutMode).toHaveBeenCalledWith("shared");
     expect(document.activeElement).toBe(document.getElementById("outside"));
   });
 
