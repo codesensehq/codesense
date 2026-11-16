@@ -63,15 +63,16 @@ const NEVER_SKIPPED_ON = ["merge_group", "push", "schedule"];
 const RUST_PATH_FILTER = {
   file: "rust.yml",
   job: "changes",
-  jobs: ["rust-macos", "rust-linux", "rust-check-linux"],
+  jobs: ["rust-macos-build", "rust-macos", "rust-linux", "rust-check-linux"],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
-// And one more: rust.yml's macOS job is not a required check and skips merge groups (it runs on
-// push to main and nightly instead). It may put exactly this term right after the path filter's;
-// what follows must still begin with OFF_PULL_REQUESTS, so push and schedule always run it.
+// And one more: rust.yml's macOS jobs are not a required check and skip merge groups (they run on
+// push to main and nightly instead): the build and the result job that reports it (the test
+// shards run only after the build). Each may put exactly this term right after the path filter's;
+// what follows must still begin with OFF_PULL_REQUESTS, so push and schedule always run them.
 const OFF_MERGE_GROUPS = {
   file: "rust.yml",
-  job: "rust-macos",
+  jobs: ["rust-macos-build", "rust-macos"],
   term: "github.event_name != 'merge_group'",
 };
 const SCORECARD_ACTIONS = new Set([
@@ -255,7 +256,7 @@ export function workflowPolicy(text, file = "") {
         let rest = terms.slice(RUST_PATH_FILTER.terms.length);
         if (
           file === OFF_MERGE_GROUPS.file &&
-          name === OFF_MERGE_GROUPS.job &&
+          OFF_MERGE_GROUPS.jobs.includes(name) &&
           rest[0] === OFF_MERGE_GROUPS.term
         )
           rest = rest.slice(1);
