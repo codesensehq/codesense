@@ -24,6 +24,7 @@ import {
   comments,
   configReads,
   kitConfigKeys,
+  kitConfigProblem,
   launchPages,
   pageText,
   parseVendored,
@@ -370,4 +371,16 @@ test("the recorded keys are the kit config's leaves under foreman, timers and th
     "foreman.lifecycle.settleMs",
     "timers.slowMs",
   ]);
+});
+
+test("--vendor refuses the public config as the kit's own: the record would check the config against itself", () => {
+  const pub = readFileSync(join(ROOT, CONFIG), "utf8");
+  const kit = pub.replace(/^team: .*$/m, "team: some-team");
+  assert.match(kitConfigProblem(pub, pub), /is this folder's story-view\.yml/);
+  assert.match(kitConfigProblem(`${pub}\n`, pub), /team "getting-started"/);
+  assert.match(
+    kitConfigProblem(pub.replace(/^# .*\n/gm, ""), pub),
+    /team "getting-started" is the public config's/,
+  );
+  assert.equal(kitConfigProblem(kit, pub), null);
 });
