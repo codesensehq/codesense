@@ -8,7 +8,8 @@
 //   which logs each through `fx.tool` and answers from the sandbox profile.
 // - git from the agent's shell goes through a shim first on PATH that runs it with `fx.git`.
 // - gh is the fixture's own shim.
-// Cost and tokens come from the CLI's own result line.
+// Cost and tokens come from the CLI's own result line. On `--resume` its `total_cost_usd` is the
+// session's running total (`usage` is the one invocation's).
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -165,31 +166,45 @@ async function startHost(fx, { github, inbox }) {
   return { url, mcpServers, errors, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-// One `claude -p` turn: its stream-json lines, or an InfraError when it could not run.
-function runTurn({ bin, args, cwd, env, timeoutMs, transcript }) {
+// Each running CLI leads its own process group, so a timeout, its own exit or the runner's end
+// kills it with anything it started (a shell, a background job).
+const groups = new Set();
+const killGroup = (pid) => {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // Already gone.
+  }
+};
+export const killGroups = () => {
+  for (const pid of groups) killGroup(pid);
+  groups.clear();
+};
+
+// Runs `bin` as a group leader: `{ code, stdout, stderr, timedOut }`, or the spawn error.
+export function runGroup(bin, args, { cwd, env, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    if (child.pid) groups.add(child.pid);
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
+      killGroup(child.pid);
     }, timeoutMs);
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", (e) => {
       clearTimeout(timer);
-      reject(new InfraError(`could not start ${bin}: ${e.message}`));
+      groups.delete(child.pid);
+      reject(e);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (transcript) writeFileSync(transcript, stdout, { flag: "a" });
-      resolve({ code, lines: jsonLines(stdout), stderr, timedOut });
+      if (child.pid) killGroup(child.pid);
+      groups.delete(child.pid);
+      resolve({ code, stdout, stderr, timedOut });
     });
   });
 }
@@ -238,8 +253,9 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
     const fail = (message) => new InfraError(message, { cost_usd: cost });
     try {
       for (const [i, text] of caseDef.input.turns.entries()) {
-        const cap = Math.min(runCapUsd, budgetLeft) - cost;
-        if (!(cap > 0)) throw fail(`budget: no spend left for turn ${i + 1}`);
+        // The CLI holds the cap against the session's total, so it is the run's whole cap.
+        const cap = Math.min(runCapUsd, budgetLeft);
+        if (!(cap > cost)) throw fail(`budget: no spend left for turn ${i + 1}`);
         fx.human(text);
         inbox.push({ messageId: 7001 + i, from: "human", fromName: "You", text });
         const notice = `[inbox t${i + 1}] You have 1 new message. Call read_messages with session_id ${self}.`;
@@ -259,16 +275,26 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
           ...(i === 0 ? ["--session-id", session] : ["--resume", session]),
           notice,
         ];
-        const turn = await runTurn({ bin, args, cwd: path.join(fx.root, "home"), env, timeoutMs, transcript });
-        const result = turn.lines.findLast((l) => l.type === "result");
+        let turn;
+        try {
+          turn = await runGroup(bin, args, { cwd: path.join(fx.root, "home"), env, timeoutMs });
+        } catch (e) {
+          throw fail(`could not start ${bin}: ${e.message}`);
+        }
+        if (transcript) writeFileSync(transcript, turn.stdout, { flag: "a" });
+        const lines = jsonLines(turn.stdout);
+        const result = lines.findLast((l) => l.type === "result");
         if (result) {
-          const spent = Number(result.total_cost_usd);
-          if (!Number.isFinite(spent) || spent < 0) throw fail(`turn ${i + 1}: the CLI reported cost ${result.total_cost_usd}`);
-          cost += spent;
+          const total = Number(result.total_cost_usd);
+          if (!Number.isFinite(total) || total < cost) throw fail(`turn ${i + 1}: the CLI reported cost ${result.total_cost_usd} after ${cost}`);
+          cost = total;
           tokens += tokensOf(result.usage);
+        } else {
+          // What a killed or result-less turn spent is unknown: charge it up to its cap.
+          cost = cap;
         }
         if (turn.timedOut) throw fail(`turn ${i + 1} timed out after ${timeoutMs / 1000}s`);
-        const init = turn.lines.find((l) => l.type === "system" && l.subtype === "init");
+        const init = lines.find((l) => l.type === "system" && l.subtype === "init");
         const down = (init?.mcp_servers ?? []).find((s) => s.status !== "connected");
         if (down) throw fail(`turn ${i + 1}: MCP server ${down.name} ${down.status}`);
         if (!result) throw fail(`turn ${i + 1}: the CLI exited ${turn.code} with no result: ${turn.stderr.trim().split("\n").at(-1) ?? ""}`);

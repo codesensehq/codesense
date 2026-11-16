@@ -12,8 +12,9 @@
 // (with what it spent as `cost_usd`) when the sandbox or the API fails: the runner retries that
 // run once in a fresh fixture, and a second one stops the report. Any other throw is a fail.
 //
-// An optional `judge({ caseDef, turns, replies })` returns `{ verdicts, why, cost_usd }` for the
-// case's rubric. Its verdicts go in the report's `rubric`, beside the script grade, never in it.
+// An optional `judge({ caseDef, turns, replies, budgetLeft })` returns `{ verdicts, why, cost_usd }`
+// for the case's rubric, and throws with what it spent as `cost_usd`. Its verdicts go in the
+// report's `rubric`, beside the script grade, never in it.
 import console from "node:console";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -21,7 +22,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
-import { claudeDriver } from "./claude-driver.mjs";
+import { claudeDriver, killGroups } from "./claude-driver.mjs";
 import { InfraError } from "./errors.mjs";
 import { fixtureFor } from "./fixture.mjs";
 import { CASE_IDS, packDir, runtimeOf } from "./floor.mjs";
@@ -75,16 +76,22 @@ export async function runEval({ variant, model, k = 3, driver, driverName, judge
       runs.push({ case: caseDef.id, run, result: verdict.pass ? "pass" : "fail", session: spent.session ?? null });
       if (!verdict.pass) notes.push(`${caseDef.id} run ${run}: ${verdict.failures.join("; ")}`);
       if (judge && rubric[caseDef.id]) {
-        try {
-          const judged = await judge({ caseDef, turns: state.turns, replies: state.replies });
-          cost += Number(judged.cost_usd) || 0;
-          rubric[caseDef.id].push(judged.verdicts);
-          for (const [id, v] of Object.entries(judged.verdicts))
-            if (v !== "pass") rubricNotes.push(`${caseDef.id} run ${run} ${id}: ${judged.why?.[id] ?? v}`);
-        } catch (error) {
+        const errored = (why) => {
           rubric[caseDef.id].push(Object.fromEntries(caseDef.rubric.map((r) => [r.id, "error"])));
-          rubricNotes.push(`${caseDef.id} run ${run}: the judge failed: ${error.message}`);
-        }
+          rubricNotes.push(`${caseDef.id} run ${run}: ${why}`);
+        };
+        if (!(budget - cost > 0)) errored("the judge was skipped: no budget left");
+        else
+          try {
+            const judged = await judge({ caseDef, turns: state.turns, replies: state.replies, budgetLeft: budget - cost });
+            cost += Number(judged.cost_usd) || 0;
+            rubric[caseDef.id].push(judged.verdicts);
+            for (const [id, v] of Object.entries(judged.verdicts))
+              if (v !== "pass") rubricNotes.push(`${caseDef.id} run ${run} ${id}: ${judged.why?.[id] ?? v}`);
+          } catch (error) {
+            cost += Number(error.cost_usd) || 0;
+            errored(`the judge failed: ${error.message}`);
+          }
       }
     } finally {
       fx?.teardown();
@@ -183,8 +190,17 @@ async function main(argv) {
   const out = flags.out ?? (real ? path.join(packDir, "evals", "reports") : mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-")));
   // FOREMAN_EVAL_CLAUDE names another CLI binary (the tests use a fake one).
   const bin = process.env.FOREMAN_EVAL_CLAUDE || "claude";
-  // Transcripts stay on this machine, never in the repo.
-  const logDir = real ? mkdtempSync(path.join(os.tmpdir(), "foreman-eval-logs-")) : undefined;
+  // Transcripts stay on this machine, never in the repo: in FOREMAN_EVAL_LOGS when set.
+  const logDir = real ? process.env.FOREMAN_EVAL_LOGS || mkdtempSync(path.join(os.tmpdir(), "foreman-eval-logs-")) : undefined;
+  // Each CLI runs in its own process group, outside the terminal's: end them with the runner.
+  if (real) {
+    process.on("exit", killGroups);
+    for (const [signal, code] of [
+      ["SIGINT", 130],
+      ["SIGTERM", 143],
+    ])
+      process.once(signal, () => process.exit(code));
+  }
   const driver = real ? claudeDriver({ model, bin, logDir }) : DRIVERS[flags.driver];
   const judge = real ? claudeJudge({ bin }) : undefined;
   const suite = flags.suite ?? "floor";
