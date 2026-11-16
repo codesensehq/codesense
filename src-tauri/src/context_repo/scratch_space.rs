@@ -815,6 +815,34 @@ pub enum ScratchLocation {
 /// ASCII case. `None` outside every scratch repo. Symlinks are NOT followed:
 /// see [`write_refusal`] for the check that resolves them.
 pub fn scratch_location(path: &Path) -> Option<ScratchLocation> {
+    let rest = scratch_parts(path)?;
+    Some(match rest.as_slice() {
+        [first, ..] if first == ALL_ORGS_DIR => ScratchLocation::AllOrgs,
+        [first, owner, repo, ..] if first == ORGS_DIR => {
+            ScratchLocation::Org(format!("{owner}/{repo}"))
+        }
+        _ => ScratchLocation::Repo,
+    })
+}
+
+/// Whether `path` lies in an org space other than `org_slug`'s, compared by path
+/// segments, so a one-segment slug works too. `orgs/` and the folders above the
+/// org's own space are not another org's. Lexical and case-insensitive, like
+/// [`scratch_location`].
+pub fn in_other_org_space(path: &Path, org_slug: &str) -> bool {
+    let Some(rest) = scratch_parts(path) else {
+        return false;
+    };
+    let [first, space @ ..] = rest.as_slice() else {
+        return false;
+    };
+    let own: Vec<String> = org_slug.split('/').map(str::to_ascii_lowercase).collect();
+    first == ORGS_DIR && !space.starts_with(&own) && !own.starts_with(space)
+}
+
+/// `path`'s lowercased, lexically normalised components below
+/// `…/users/<profile>/scratch/`; `None` outside every scratch repo.
+fn scratch_parts(path: &Path) -> Option<Vec<String>> {
     use std::path::Component;
     let mut parts: Vec<String> = Vec::new();
     for component in path.components() {
@@ -829,14 +857,7 @@ pub fn scratch_location(path: &Path) -> Option<ScratchLocation> {
     let at = parts
         .windows(3)
         .position(|w| w[0] == super::path::USERS_DIR && w[2] == SCRATCH_DIR)?;
-    let rest = &parts[at + 3..];
-    Some(match rest {
-        [first, ..] if first == ALL_ORGS_DIR => ScratchLocation::AllOrgs,
-        [first, owner, repo, ..] if first == ORGS_DIR => {
-            ScratchLocation::Org(format!("{owner}/{repo}"))
-        }
-        _ => ScratchLocation::Repo,
-    })
+    Some(parts.split_off(at + 3))
 }
 
 /// `path` with its deepest existing ancestor resolved through symlinks and the

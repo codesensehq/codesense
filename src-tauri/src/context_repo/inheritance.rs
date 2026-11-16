@@ -891,11 +891,7 @@ impl TeamView {
             Some(root.clone())
         } else {
             // Another org's private space has no org.yml of its own to say so.
-            if matches!(
-                super::scratch_space::scratch_location(&path),
-                Some(super::scratch_space::ScratchLocation::Org(slug))
-                    if !slug.eq_ignore_ascii_case(&self.org)
-            ) {
+            if super::scratch_space::in_other_org_space(&path, &self.org) {
                 return Err(missing());
             }
             let start = if memo.rows_are_files {
@@ -993,13 +989,16 @@ impl TeamView {
     }
 }
 
-/// The one other org a team caller reads: the bundled docs, at the profile's
-/// placed docs root and under the bundle's slug. Neither alone is enough.
+/// The one other org a team caller reads: the bundled docs, at the placed docs
+/// root of the profile the path sits in and under the bundle's slug. Neither
+/// alone is enough, and a profile-shaped folder inside any org's repo is not a
+/// profile, so a copy nested in another org never passes.
 fn is_placed_docs(memo: &mut ScopeMemo, source: &Path, slug: &str) -> bool {
     use super::codesense_docs::{bundle_info, docs_root};
     slug == bundle_info().slug
         && profile_namespace(source).is_some_and(|(home, principal)| {
             memo.real_dir(&docs_root(&home, &principal)) == Some(source)
+                && memo.source_dir(&home).is_none()
         })
 }
 

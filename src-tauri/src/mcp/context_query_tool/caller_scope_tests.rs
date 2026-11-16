@@ -296,7 +296,7 @@ fn a_team_callers_query_returns_nothing_from_another_org() {
     let docs = json!({"where":{"orgs":["codesense/docs"]}});
     assert_eq!(
         file_names(&service, docs.clone(), &Viewer::default()),
-        ["fake.md", "fake.md", "guide.md"]
+        ["fake.md", "fake.md", "fake.md", "guide.md"]
     );
     assert_eq!(file_names(&service, docs, &viewer), ["guide.md"]);
 }

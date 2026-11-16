@@ -137,10 +137,12 @@ impl Fixture {
             &docs.join(&bundle.team).join("content/guide.md"),
             "docs-guide-bytes",
         );
-        // The docs' slug outside the placed root, and a docs-shaped folder in another org.
+        // The docs' slug outside the placed root, a docs-shaped folder in another
+        // org, and a whole placed-docs layout nested in another org.
         let named_like = self.home.join("users/1/orgs/lookalike/docs");
         let nested = other.join("codesense-docs");
-        let look_alikes: Vec<PathBuf> = [named_like, nested]
+        let nested_profile = codesense_docs::docs_root(&other, &principal);
+        let look_alikes: Vec<PathBuf> = [named_like, nested, nested_profile]
             .iter()
             .map(|root| {
                 write_org(root, &bundle.slug, &bundle.team);
@@ -444,4 +446,43 @@ fn a_team_caller_keeps_its_own_private_space_and_profile_files() {
     let mut memo = inheritance::ScopeMemo::for_index_rows();
     assert!(memo.unknown_caller_admits_real(&other.private_file));
     assert!(!memo.unknown_caller_admits_real(&other.team_file));
+}
+#[test]
+fn a_team_caller_in_an_attached_org_still_reads_the_placed_docs() {
+    let f = Fixture::new();
+    let other = f.other_org();
+    let attached = f.home.parent().unwrap().join("checkouts/ext");
+    write_org(&attached, "acme/ext", "core");
+    let view = inheritance::team_view(&attached, "acme/ext", "core");
+    assert_ne!(view.admits_path(&other.docs_file), Admit::Denied);
+    assert_eq!(view.admits_path(&other.team_file), Admit::Denied);
+    for file in &other.look_alikes {
+        assert_eq!(view.admits_path(file), Admit::Denied, "{file:?}");
+    }
+}
+#[test]
+fn a_one_segment_org_keeps_its_own_private_space_only() {
+    let f = Fixture::new();
+    let principal = Principal::from(1u64);
+    let root = f.home.join("users/1/orgs/solo");
+    write_org(&root, "solo", "core");
+    let space = |slug: &str| {
+        let (space, _) =
+            crate::context_repo::scratch_space::ensure_org_space(&f.home, &principal, slug)
+                .unwrap();
+        write_file(&space.content_dir().join("note.md"), slug)
+    };
+    let own = space("solo");
+    let other = space("other");
+    let two_segment = space("acme/ctx");
+    let view = inheritance::team_view(&root, "solo", "core");
+    assert_eq!(view.admits_path(&own), Admit::Private);
+    assert_eq!(view.admits_path(&other), Admit::Denied);
+    assert_eq!(view.admits_path(&two_segment), Admit::Denied);
+    let scope = CallerScope::Team(view);
+    assert_eq!(
+        scope.existing(&other),
+        scope.existing(&other.with_file_name("missing.md"))
+    );
+    assert!(scope.existing(&own).is_ok());
 }
