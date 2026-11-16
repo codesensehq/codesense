@@ -2093,11 +2093,6 @@ describe("AgentsList", () => {
         listResult = [row({ handle: "silent" })];
         progressBySessionMock = { "sid-silent": { phase: "dev", note: "writing the old file" } };
         await hookOn("sid-silent", "UserPromptSubmit");
-        const rec = useAgentStateStore.getState().bySession["sid-silent"];
-        useAgentStateStore.setState({
-          bySession: { "sid-silent": { ...rec, activityAt: now - 20 * 60_000 } },
-          outputAtBySession: { "sid-silent": now - 12 * 60_000 },
-        });
         projectSessionStatus("sid-silent", "stalled", { activityAtMs: now - 12 * 60_000 });
         renderList();
         await screen.findByRole("button", { name: rowName(/silent/) });
@@ -2108,7 +2103,6 @@ describe("AgentsList", () => {
         expect(rowButton(/silent/)).not.toHaveTextContent("writing the old file");
         expect(rowButton(/silent/).getAttribute("title")).toContain("Last activity 12m ago");
         expect(rowButton(/silent/).getAttribute("title")).not.toContain("Doing:");
-        useAgentStateStore.setState({ outputAtBySession: {} });
       },
     );
 

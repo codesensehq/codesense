@@ -4,14 +4,14 @@ import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-pr
 beforeEach(() => useAgentListProjectionStore.setState({ sessions: [] }));
 import { beforeEach, describe, it, expect } from "vitest";
 import {
-  selectScopeMarkKey,
+  selectScopeMarkFacts,
   selectSessionMark,
   type ScopeMarkFacts,
 } from "./terminal-tab-selectors";
 
 const NO_AGENT = { bySession: {}, exitBySession: {} };
 
-type Agent = Parameters<typeof selectScopeMarkKey>[2];
+type Agent = Parameters<typeof selectScopeMarkFacts>[2];
 
 /** The roll-up facts over `ids`, from stored statuses and agent-state sources. */
 function facts(
@@ -28,18 +28,16 @@ function facts(
       )[status as "done"] ?? "unknown",
       { statusSinceMs: agent.stateSince?.[id] },
     );
-  return JSON.parse(
-    selectScopeMarkKey(
-      { aiStatusBySession: stored } as Parameters<typeof selectScopeMarkKey>[0],
-      {},
-      { stateSince: {}, ...NO_AGENT, ...agent } as Agent,
-      ids.map((sessionId) => ({ sessionId })),
-      pendingAsks,
-    ),
-  ) as ScopeMarkFacts;
+  return selectScopeMarkFacts(
+    { aiStatusBySession: stored } as Parameters<typeof selectScopeMarkFacts>[0],
+    {},
+    { stateSince: {}, ...NO_AGENT, ...agent } as Agent,
+    ids.map((sessionId) => ({ sessionId })),
+    pendingAsks,
+  );
 }
 
-describe("selectScopeMarkKey — a finished turn is ready", () => {
+describe("selectScopeMarkFacts — a finished turn is ready", () => {
   it.each([
     ["failed", "error"],
     ["needs-attention", "question"],
@@ -78,7 +76,7 @@ describe("selectScopeMarkKey — a finished turn is ready", () => {
   });
 });
 
-describe("selectScopeMarkKey — the words' facts over a scope", () => {
+describe("selectScopeMarkFacts — the words' facts over a scope", () => {
   it("nothing when no member shows a status", () => {
     expect(facts({}, {}, ["a"])).toEqual({ counts: {} });
   });

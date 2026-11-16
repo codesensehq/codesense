@@ -52,7 +52,6 @@ beforeEach(() => {
     activityBySession: {},
     exitBySession: {},
     stateSince: {},
-    outputAtBySession: {},
     completionSeqBySession: {},
   });
   useMachinesStore.setState({ byTeam: {} });

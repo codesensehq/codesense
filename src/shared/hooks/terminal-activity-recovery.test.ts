@@ -18,6 +18,7 @@ import { createActivityRecovery } from "./terminal-activity-recovery";
 import {
   agentInputSeq,
   resetPrunedAgentSessionsForTests,
+  getSessionActivityAt,
   useAgentStateStore,
 } from "@/shared/stores/agent-state-store";
 const target: RuntimeMemberTarget = {
@@ -191,13 +192,13 @@ describe("activity recovery admission", () => {
     h.requests[0]({ target, snapshots: [{ ...snap(2, "thinking"), activityAgeMs: 20_000 }] });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.apply).toHaveBeenLastCalledWith(queued, 1, 1_000_000);
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(990_000);
+    expect(getSessionActivityAt("s")).toBe(990_000);
     await vi.advanceTimersByTimeAsync(1_000);
     h.event(queued);
     h.recovery.resync();
     h.requests[1]({ target, snapshots: [queued] });
     await vi.advanceTimersByTimeAsync(0);
-    expect(useAgentStateStore.getState().bySession.s.activityAt).toBe(990_000);
+    expect(getSessionActivityAt("s")).toBe(990_000);
     h.recovery.dispose();
   });
 
