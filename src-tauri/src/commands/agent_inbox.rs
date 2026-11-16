@@ -1099,7 +1099,43 @@ pub(crate) fn registry_thread(
     row: &super::dashboard_launch::SessionSnapshot,
 ) -> Option<(String, Option<String>)> {
     let agent = crate::agents::manifest::AgentRevisionRef::key_of(row.agent_revision.as_deref()?)?;
-    Some((agent.to_string(), row.meta.story.clone()))
+    // Keyed as the engine keys every thread (`ThreadKey::new`): no story is one rule, `""` or none.
+    let key = Result::ok(crate::weft::pins::ThreadKey::new(
+        &ToString::to_string(&agent),
+        row.meta.story.as_deref(),
+    ))?;
+    let story = bool::then_some(!str::is_empty(&key.story_id), key.story_id);
+    Some((key.agent_id, story))
+}
+
+/// A no-story session's thread is its listed sessions, by the thread read's seat rule: the
+/// other rows of `rows` with the same saved agent and no story as the one launched under
+/// `handle`, by handle. While that session is a seat (it hasn't `ended`), the other live seats
+/// are left out, as the thread read leaves their conversations out: each seat's record holds
+/// its own and the ended ones, so nothing is counted twice. Empty when that row has a story or
+/// names no saved agent.
+pub(crate) fn no_story_peers(
+    rows: &[super::dashboard_launch::SessionSnapshot],
+    ended: impl Fn(&str) -> bool,
+    handle: &str,
+) -> Vec<String> {
+    let handle = str::trim(handle);
+    let own = Option::and_then(
+        Iterator::find(&mut rows.iter(), |row| row.handle == handle),
+        registry_thread,
+    );
+    let Some(thread @ (_, None)) = own else {
+        return vec![];
+    };
+    let seat = !ended(handle);
+    let peers = Iterator::filter(rows.iter(), |row| {
+        row.handle != handle
+            && Option::as_ref(&registry_thread(row)) == Some(&thread)
+            && !(seat && !ended(&row.handle))
+    });
+    Iterator::collect(Iterator::map(peers, |row| {
+        std::string::String::clone(&row.handle)
+    }))
 }
 
 /// `send_message`: the caller (by its self-reported session id) messages `to`. Mail to

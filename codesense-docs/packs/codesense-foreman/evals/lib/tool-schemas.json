@@ -1,0 +1,3163 @@
+{
+  "note": "The CodeSense MCP tools the eval host offers: the Foreman allowlist, its denied tools and the floor cases forbidden and send tools. Copied from the app MCP server tools/list; refresh when a tool argument changes.",
+  "tools": [
+    {
+      "name": "accept_role_message",
+      "description": "Accept a claimed delivery: commits a permanent receipt. {disposition.kind} is 'work' (you will do the work, then ack_role_message) or 'no_work' (acceptance records why no work was spawned). Role work lives in this receipt and ack_role_message; it is not mirrored into wv_queue. Idempotent on same (delivery, instance, generation, kind) — a replay returns the same receiptId; a different kind returns status='conflict'. Returns {receiptId}.\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "claimToken": {
+            "type": "string"
+          },
+          "deliveryId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "disposition": {
+            "description": "Disposition payload for `accept_role_message`.",
+            "properties": {
+              "kind": {
+                "description": "`\"work\"` records that the acceptor will do the work (then\n`ack_role_message`); `\"no_work\"` records the `noteOrReason` and spawns\nno work. Neither value writes a `wv_queue` row — role work lives only\nin the acceptance receipt.",
+                "type": "string"
+              },
+              "noteOrReason": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "generation": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "team": {
+            "description": "The `(org, team)` the role mailbox lives in. The viewer-visible\nteam identity, mirroring `InboxTeam`.",
+            "properties": {
+              "org": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "org",
+              "team"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "team",
+          "deliveryId",
+          "claimToken",
+          "instanceId",
+          "generation",
+          "disposition"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "ack_role_message",
+      "description": "Acknowledge a delivery previously accepted by this instance. Pass the {receiptId} accept_role_message returned. Idempotent: a re-ack with the same receiptId succeeds. A different receiptId or a stale (expired / released) claim fails with StaleAck. Returns {}. Acknowledgement is distinct from completing the underlying work — a work item in wv_queue remains governed by the queue state machine.\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "claimToken": {
+            "type": "string"
+          },
+          "deliveryId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "generation": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "team": {
+            "description": "The `(org, team)` the role mailbox lives in. The viewer-visible\nteam identity, mirroring `InboxTeam`.",
+            "properties": {
+              "org": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "org",
+              "team"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "team",
+          "deliveryId",
+          "claimToken",
+          "instanceId",
+          "generation",
+          "receiptId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "add_source_repo",
+      "description": "Add a source repo to a team. Pass `org` (owner/repo) and `team`, plus exactly one of `url` (a remote — https://…, git@…, host/owner/repo, or GitHub shorthand owner/repo — tracked on the team) or `path` (the absolute path of a folder on this machine, which is then bound as the repo's local clone). A folder is tracked as the repo its `upstream` remote names when it has one (the canonical repo in a fork workflow), else its `origin`, else `local/<folder>`; the result's `remoteName` says which remote was used. A folder inside a git repository must be that repository's root. CodeSense never clones: clone with git yourself, then pass `path` (or add by `url` and bind the clone later with attach_source_repo_path). Returns { status:\"ok\", data:{ owner, repo, provider, host, remoteKey, localPath, remoteName, remoteUrl } }; an unknown or archived team returns { status:\"unauthorizedTeam\" }; a bad URL or folder, a duplicate, or invalid source identity returns { status:\"validation\", message }.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "org": {
+            "description": "The context-repo org slug (`owner/repo`).",
+            "type": "string"
+          },
+          "path": {
+            "default": null,
+            "description": "An absolute path to a folder on this machine: tracked as the repo its\ngit `origin` names (`local/<folder>` without one) and bound as that\nrepo's local clone. Pass this or `url`, not both.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "description": "The team to add the repo to.",
+            "type": "string"
+          },
+          "url": {
+            "default": null,
+            "description": "A remote to track: `https://…`, `git@…`, `host/owner/repo`, or GitHub\nshorthand `owner/repo`. Pass this or `path`, not both.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "org",
+          "team"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "agent_list",
+      "description": "List every agent you can see: your Only-me agents (private, per-org), team agents on teams synced on this Mac, and the shipped starters — `builtin/claude`, `builtin/codex` (each runtime's defaults with your own CLI login), and their `*-unattended` twins (permission checks skipped — what a background launch naming no agent runs). Starters are read-only (copy one to customize). Optional: {scope} `all` (default) | `mine` | `team` | `builtin` (view filter, not permission). {includeArchived} default false. {includeManifest} default false — resolves each agent's startup manifest (reads every startup file). Returns `{ok:true, data:[{id, name, description, runtime, launch, mcp_servers, startup_count, created_by, scope, org, team, archived, revision, manifest?:{files, bytes, error_count}}]}`. `id` is what every agent_* tool takes; `revision` is agent_update's `baseRevision`. To fork any listed agent (\"Copy to Mine\"), including a starter: agent_get it, then agent_create its `definition` with `scope:\"personal\"` + the `org`. Spend fields include budgetUsd {perDay?, perWeek?}, budgetPending, and spend {today, week, state: ok|warn|reached|unpriced}; spend counts all machines on this core.\nDocs: arc-e-agents/agent-design.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "includeArchived": {
+            "default": false,
+            "description": "Include archived agents. Default false.",
+            "type": "boolean"
+          },
+          "includeManifest": {
+            "default": false,
+            "description": "Resolve each agent's startup manifest and add its `{files, bytes,\nerror_count}`. Default false: it reads every startup file.",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": null,
+            "description": "`all` (default), `mine` (your Only me agents and the team agents you\ncreated), `team` (team agents only) or `builtin` (the read-only starter\nagents CodeSense ships: `builtin/claude`, `builtin/codex`, their unattended twins\n`builtin/claude-unattended` and `builtin/codex-unattended`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "archive_team",
+      "description": "Archive (`archived:true`) or unarchive (`archived:false`) a team — org-wide, reversible retirement, the same edit as the UI's Archive. An archived active team is switched off in the UI. Pass `org`, `team`, `archived`. Returns { status:\"ok\", data:{ orgSlug, edit:\"ArchiveTeam\", team } }; an unknown team returns { status:\"validation\", message }.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "archived": {
+            "description": "`true` archives the team, `false` unarchives it.",
+            "type": "boolean"
+          },
+          "org": {
+            "description": "The context-repo org slug (`owner/repo`).",
+            "type": "string"
+          },
+          "team": {
+            "description": "The team to archive or unarchive.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "org",
+          "team",
+          "archived"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "attach_context_repository",
+      "description": "Attach an existing local context checkout in place. No provider account, remote URL or active team required. Never copies files or runs Git transport. Paths are on this Mac.\nDocs: arc-b-model/orgs.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "clonePath": {
+            "description": "Absolute path to the existing checkout on the local desktop.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clonePath"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "attach_source_repo_path",
+      "description": "Bind (or rebind) a local clone to one of a team's source repos, so worktrees, terminals and editor actions find its code. Pass `org`, `team`, `repo` (owner/repo, or host/owner/repo when the same owner/repo is on two forges) and `path` — the absolute path of a git working tree's root with a remote that names that repo. Remotes are tried `origin`, then `upstream`, then the rest, so a fork whose `upstream` is the team's repo binds; the result's `remoteName` says which remote matched. A folder that is not a working-tree root (the error names the root to pick), has no remote, or has no remote naming the repo is refused. Rebinding replaces the previous clone. CodeSense never clones: clone with git first. Returns { status:\"ok\", data:{ owner, repo, provider, host, remoteKey, localPath, remoteName, remoteUrl } }; an unknown team returns { status:\"unauthorizedTeam\" }; a repo the team does not track or a bad clone returns { status:\"validation\", message }.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "org": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path to a git working tree whose `origin` is `repo`.",
+            "type": "string"
+          },
+          "repo": {
+            "description": "One of the team's source repos: `owner/repo`, or `host/owner/repo`\nwhen the same `owner/repo` is on two forges.",
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org",
+          "team",
+          "repo",
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_role_messages",
+      "description": "Take messages from a role's queue so no other holder works them. Args: {team} `{org, team}`, {role}, {instanceId} and {generation} exactly as register_role returned them; {limit} optional, 1-50, default 50. Returns {deliveries: [{deliveryId, messageId, role, claimToken, claimExpiresAt, text, from, createdAtMs, existingReceipt?}]}, oldest first; an empty list means the queue is empty. text/from/createdAtMs are the message itself (createdAtMs epoch ms), so no second read is needed. claimToken is this claim's proof: pass it to accept_role_message, then ack_role_message. claimExpiresAt is epoch seconds; while your session runs (registered with sessionId) CodeSense keeps your claims alive with your registration, otherwise accept and ack before it or the message returns to the queue. existingReceipt {receiptId, kind, queueItemId}, when present, means an earlier holder already accepted this message: do not accept again, finish the work and ack_role_message with that receiptId. queueItemId is deprecated and always null for new receipts — role work is not mirrored into wv_queue. Reading the inbox never claims; only this verb does, in one atomic step. Fails with 'registration is stale or expired' when your registration lapsed or the generation is wrong: call register_role again and use the generation it returns. Next: accept_role_message.\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "generation": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "limit": {
+            "default": null,
+            "description": "Up to 50. Omit for the default (50).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "team": {
+            "description": "The `(org, team)` the role mailbox lives in. The viewer-visible\nteam identity, mirroring `InboxTeam`.",
+            "properties": {
+              "org": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "org",
+              "team"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "team",
+          "role",
+          "instanceId",
+          "generation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "codesense_overview",
+      "description": "Overview of CodeSense right now, in ONE read-only call: start here to answer any question about CodeSense state. Returns { generatedAt, context (active org/team), machines (connection status), sessions (running agents/terminals by state and machine, who launched whom, who needs you), agents (saved Agents), routines (enabled, last run, needs you), inbox (human unread; sessions with unread mail), roleQueues (per role in the active team: pending/claimed/accepted deliveries and live instances), workspaces (open workspaces and their tabs), docs (where the bundled CodeSense docs and the concepts guide are) }. Each section has `detail`: the tools to call for the full data. A section that could not be read has `error` instead of data; the rest still answer. Lists are capped (`truncated: true` when cut). Optional {guide: true}: return the concepts guide instead (how CodeSense works: orgs, teams, content layers, workspaces, machines, sessions, Agents, roles, inboxes, routines, notes, dashboards, each with its MCP tools).\nDocs: arc-a-first-touch/identity-menu-and-switcher.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "guide": {
+            "default": false,
+            "description": "Return the concepts guide (how CodeSense works, with the tool for each concept)\ninstead of the state overview. Default false.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_local_organization",
+      "description": "Create and attach a local organization in a NEW absolute destinationPath under an existing parent. displayName defines its stable local identity. Uses canonical empty registries and unborn Git main; no account, active team, remote, credentials or commit. Existing folders and duplicate identities are refused. Paths are on this Mac. Returns the loaded organization and created outcome. If registration fails, the error names the preserved folder for Attach context repository retry.\nDocs: arc-b-model/orgs.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "destinationPath": {
+            "description": "Absolute NEW folder beneath an existing parent. Existing folders are refused.",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Nonempty organization name; identity becomes local/<sanitized-name>.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "destinationPath"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_team",
+      "description": "Create a team in an org — the same edit as the UI's New team. Pass `org` (owner/repo) and `name` (a lowercase slug); optional `parent` nests it under an existing team (checked first, so a bad parent creates nothing), and `activate:true` then switches the app to it exactly as set_active_team does. You are recorded as the creator. The UI shows the new team without a reload. Returns { status:\"ok\", data:{ orgSlug, edit:\"CreateTeam\", team, activated, activationError?, warnings? } }; warnings appears only when `parent` has no config/sharing.yml and so shares nothing with the new team. If the switch fails the team stays created with activated:false and activationError saying why; an invalid, reserved or duplicate name or a bad parent returns { status:\"validation\", message } with the registry's reason and writes nothing.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "activate": {
+            "default": false,
+            "description": "Also switch the app to the new team, as `set_active_team` does.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The new team's name (lowercase slug).",
+            "type": "string"
+          },
+          "org": {
+            "description": "The context-repo org slug (`owner/repo`) to create the team in.",
+            "type": "string"
+          },
+          "parent": {
+            "default": null,
+            "description": "An existing team to nest the new team under.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "org",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete_team",
+      "description": "Delete a team from an org's registry — the same edit as the UI's Delete team. Only the registry entry is removed; the team's content stays on disk (git-recoverable). If it was the active team the UI falls back to another team. Pass `org`, `team`. Returns { status:\"ok\", data:{ orgSlug, edit:\"DeleteTeam\", team } }; an unknown team returns { status:\"validation\", message }.\nDocs: arc-l-factory/team-and-notes-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "org": {
+            "description": "The context-repo org slug (`owner/repo`).",
+            "type": "string"
+          },
+          "team": {
+            "description": "The team to remove from the org's registry.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "org",
+          "team"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "describe_setup",
+      "description": "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors?, teams:[...]}`; each team has `{name, archived, parent?, starterPage?, synced, sourceRepos:[{repo, status, localPath}]}` (`starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html) where `status` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create.\nDocs: arc-b-model/orgs.html",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "detach_context_repository",
+      "description": "Unregister a local context checkout by orgSlug. Never deletes or modifies checkout files. Works for unavailable roots. Paths are on this Mac.\nDocs: arc-b-model/orgs.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "orgSlug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orgSlug"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_story_format",
+      "description": "Authoring entry point. Returns the decision-first contract for creating CodeSense content: whether you need frontmatter at all (most content is a plain doc and needs none), the full pipeline-story frontmatter schema (Markdown + HTML `cs:*` forms, with the closed `type`/`status` enums), the validate_story finding codes, and cross-refs to list_source_repos + validate_story. Call this first.\nDocs: arc-h-pipelines-and-sdlc/runs-and-stories.html",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "inbox_list",
+      "description": "List inbox messages WITHOUT marking anything read (read_messages is the one that drains your own unread mail). Every agent session, every role (any role name, usually a saved Agent's id) and the human (`human`) has an inbox in each team. Args, all optional: {scope} `to-human` (messages to the human), `to-agents` (to sessions and roles) or `all` — default `to-human` with no filter, `all` with one; {agentId} (a saved Agent id from agent_list: its role inbox, the inboxes of the sessions running it, and every reply under them); {sessionId} (a list_sessions handle or a session id: what that session sent and received, and the replies; pass your own $CODESENSE_TAB_SESSION_ID for your own history); {role} (messages to and from that role queue); {limit} (newest N; default 50, at most 500); {before} (a messageId: only older ones; to page, pass the last listed messageId while hasMore); {include} [\"text\"] for every body in full (else a body over 2 KB comes as textPreview, its first 512 bytes, with truncated:true) and [\"conversations\"] for the human's conversation summaries; {kind} `needs-you` | `update` (only messages of that kind, applied before {limit}; kind marks whether mail waits on the human for agent views and dashboards); {team} `{org, team}` (default: the {sessionId}'s team, else the team active in the app). Returns {messages, humanUnread, hasMore, total (messages that matched, older than before when given, ahead of limit)}; an answer stays under 64 KB, so older messages past that wait for the next page; conversations are opt-in: include:[\"conversations\"]. `messages` is newest first: [{messageId, from, fromName, to, toName, text (or textPreview and truncated), createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, kind}]. `kind`: `needs-you` (waits on the human) or `update` (informational); the human Inbox shows both in conversations and counts all unread human mail, so on a message to a session or role (scope `to-agents`/`all`) it is just what the sender set — text typed into a terminal is always `update`; else the kind its sender set; else `needs-you` when it carries a `replyTo` naming someone other than the human, its sender or a role its sender holds; else `update`. `via`: `terminal` for text typed into the recipient's terminal with send_to_session (it already has it: stored read, never returned by read_messages); absent for mail. `summary`: the sender's one-line plain-text preview (show it instead of `text` in a list; absent when the sender gave none). `replyTo`: where replies to it go instead of its sender (a session handle, `human`, or `role:<id>`); `replyToName` its display name. `replyTargetEnded`: a reply would go to a session that is no longer running (it waits unread in that inbox; send to a role instead). `from`/`to` are session handles, role ids or `human`; `fromName`/`toName` their display names. `createdAtMs`/`archivedAtMs` are epoch milliseconds. `unread`: the recipient has not read it yet. `inReplyTo`: the messageId it answers (thread link). `primaryFile`: an attached team-content path. `onClick`: `{type: goto-agent|open-file|show-message}`. `contentType`: plain | markdown (default) | html. `delivery` (role messages and withdrawn ones; else null): {state, pickedUpAtMs, instance, acceptedAtMs, disposition (work|no_work), note, withdrawnAtMs} where state is `queued` (no instance holds it), `reading` (claimed), `accepted`, `done` (acknowledged) or `withdrawn`. `humanUnread` counts unread messages to the human in the whole team inbox, of both kinds. Next: answer one with reply {messageId}; see a role's queue and who holds it with role_state; see who runs with list_sessions.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agentId": {
+            "default": null,
+            "description": "A saved Agent's id (`agent_list`): its role inbox, the inboxes of its running\ninstances, and every reply under them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "default": null,
+            "description": "A messageId: only messages older than it. To page, pass the last listed messageId\nwhile `hasMore`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "conversation": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "include": {
+            "description": "`text`: every body in full; `conversations`: the human's conversation summaries.",
+            "items": {
+              "description": "What an agent's `inbox_list` asks for beyond the bounded default.",
+              "oneOf": [
+                {
+                  "const": "text",
+                  "description": "Every body in full, however long.",
+                  "type": "string"
+                },
+                {
+                  "const": "conversations",
+                  "description": "The human's conversation summaries (`conversations`).",
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "description": "What a message asks of the human, for agent views and dashboards. The human\ninbox shows both kinds as conversations and counts all unread human mail. Stored as given on `wv_inbox.kind` (NULL when the sender set none); reads\nresolve the effective kind with [`InboxMessage::effective_kind`].",
+                "oneOf": [
+                  {
+                    "const": "needs-you",
+                    "description": "Waits on the human: a question, a decision, something only they can unblock.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "update",
+                    "description": "Informational: progress, \"merged\", \"done\".",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only messages of this effective kind: `needs-you` (waits on the human) or\n`update` (informational). Applied before `limit`."
+          },
+          "limit": {
+            "default": null,
+            "description": "At most this many messages, newest first: at most 500 (the inbox keeps the newest\n500); an agent's `inbox_list` lists 50 when it names none, a page's `inbox()` 500.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "role": {
+            "default": null,
+            "description": "A role (any role name, usually a saved Agent's id): messages to and from it, and replies.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "`to-human` (messages to the human), `to-agents` (messages to sessions and\nroles) or `all`. Default: `to-human` with no filter below, `all` with one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "default": null,
+            "description": "A session (a `list_sessions` handle or a session id): what it sent and received,\nand every reply under them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "anyOf": [
+              {
+                "description": "The `(org, team)` the role mailbox lives in. The viewer-visible\nteam identity, mirroring `InboxTeam`.",
+                "properties": {
+                  "org": {
+                    "type": "string"
+                  },
+                  "team": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "org",
+                  "team"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The team `{org, team}`; default: the `sessionId`'s team, else the team active\nin the app."
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "inbox_post",
+      "description": "Post an item to the Inbox (\"I need you\"). The dead-simple outbound primitive: An agent with a verified CodeSense tab connection calls this to call a human back (an unbound CLI or trigger is refused; start it in a CodeSense terminal) — it appears on the ONE universal Inbox next to CodeSense-native items. Inputs: `title` (REQUIRED, non-blank — the headline the human lands on), optional `context` (folded into the item's sentence), optional `backlink` (a link back to the run/subject), and `need` — one of `awaiting-answer` | `needs-approval` | `needs-attention` | `awaiting-validation` | `done` (defaults to `needs-attention`) so the Inbox maps need → the matching action. This SHOWS a pending item; it does NOT gate a run. Returns {id}.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "backlink": {
+            "default": null,
+            "description": "Optional backlink to the run / subject this post is about (an opaque routing\nref the Inbox row links back to). Scrubbed + bounded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "default": null,
+            "description": "Optional extra context, folded into the item's one-sentence summary after the\ntitle. Scrubbed + bounded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "need": {
+            "default": null,
+            "description": "The DECLARED need — one of `awaiting-answer` | `needs-approval` |\n`needs-attention` | `awaiting-validation` | `done`. Defaults to\n`needs-attention` when omitted, so every posted item carries a need.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "The headline the human lands on — REQUIRED, non-blank. Scrubbed + bounded.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_machines",
+      "description": "List the machines an org/team sees, as the Machines panel lists them: This Mac first, then the team's shared machines, then your private ones. Required: `orgSlug`. Optional: `team` (include that team's shared machines; describe_setup lists orgs and teams). Returns `[{machineId, kind, label, scope, declaration, binding, canPublish, status, attention, capabilities, remoteMcpControl?, terminalServer?, load1?, cpuCount?, memUsedBytes?, memTotalBytes?, diskFreeBytes?, diskTotalBytes?, diskPath?, sampledAt?, machineStatsSupported?}]`. `machineId` is what open_workspace {machineId} and open_remote_tab take (`local` = This Mac). `kind`: `local` | `ssh`. `scope`: null for This Mac, `{kind:\"personal\"}`, or `{kind:\"team\", orgSlug, team}`. `declaration` (null for This Mac): the shareable half — `{host, port, jumpHost, defaultBaseDir, pinnedHostKeyFp, pinnedServerId}`; `binding`: your own connection settings for it, null when you never connected. `status.state`: `connected` (with `workspaces`, the open workspace count), `idle`, `connecting`, `handshaking`, `reconnecting` (`attempt`), `disconnected`, `unreachable` (`lastReachedAtMs`, `retryInSecs`), `connectionFailed` (`lastError`), `needsCredential`, `authFailed` (`reason`), `hostKeyChanged`, `notInstalled` (its terminal server is not installed), `versionMismatch`, `terminalServerFrozen`. `attention`: how many agents there wait on you. `capabilities.agentCallbacks`: whether agents launched there can reach this app's MCP (inbox, roles, progress, hooks): true only for a set-up private-account machine with remote MCP control on (set_machine_remote_mcp_control); a team-shared machine has none. `terminalServer` (connected machines only; absent otherwise): the running terminal server next to this app — `{serverVersion?` (the app release it was built for; absent for an older build that predates build stamps), `appVersion`, `upToDate`, `relation` (`same` | `older` | `newer` | `otherBuild`: This Mac's server belongs to another CodeSense build sharing this Mac — `upToDate` is false, but only `older` servers are out of date and offered the update), `announcedVersion`, `buildCommit?`, `builtAtMs?`, `buildDigest?`, `devBuild`, and for This Mac `serverPath`, `appServerPath` (the server this app ships), `startedAtMs`, `pid}`. A remote machine whose server is `older` also has `status.terminalServerUpdate: true`, and after connect_machine or retry_machine `status.terminalServerSessions` (the sessions an update ends; a list leaves it out). Resources are optional self-reported terminal-server observations: `load1` is the 1-minute load average, `cpuCount` logical cores; memory and disk are bytes, memory used is total minus available, disk is the volume holding the server workspace directory labelled by `diskPath`, and `sampledAt` is Unix epoch milliseconds on the server. A call reuses a sample under 30 seconds old or takes one one-shot sample without subscribing. An older server has `machineStatsSupported: false` and no resource fields: unknown (update the terminal server). Disconnected rows omit these fields. Samples are local runtime state, never synced or a reservation; re-check before depending on free disk. The visible Machines tab receives a 30-second stream through the machineStats LiveHub topic; it stops watching when hidden. No secrets are returned. A dashboard's codesense.machines() returns the same list for the page's team.\nDocs: arc-d-terminals-and-machines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "orgSlug": {
+            "type": "string"
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "orgSlug"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_orgs_teams",
+      "description": "List the signed-in user's orgs and teams: the discovery surface for targeting team-scoped tools at a specific team. Returns { org, team, synced, starterPage? } entries (`starterPage`: the team's declared starter page, relative to its content folder) bounded to the user's LOCALLY-SYNCED memberships (not all teams). No arguments. Use the org/team you find here as the optional `org`/`team` args on other team-scoped tools; omit them to use the active team.\nDocs: arc-b-model/orgs.html",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_sessions",
+      "description": "List every session CodeSense is running — local + remote. Returns `{sessions: [{handle, displayName, state, sessionId, effectiveStatus, crashId?, needsYouKind?, launchedBy, unread, oldestUnreadAt, mailNotice, notifiedAt, inboxWaiter, subagents?, story?, workspace?, machine?, machineId?, workspaceHandle?, role?, avatar?, agent?, progress?, launchTelemetry?, deadlineAtMs?, expiring?}]}`. `effectiveStatus` is the sessions projection's display status; `crashId`, when present, names the current crash/failure mark for dismiss_agent_mark. `needsYouKind`, when set, says why it needs you (`startup`: stuck on a startup screen). `deadlineAtMs` is the epoch-ms deadline of a bounded local launch (`open_workspace`'s `maxRuntime`), pushed later while a person types in its pane; absent for unbounded or remote rows. The row goes once the sweep's kill releases it. `expiring: true` marks the ~30s grace between the sweep's `/exit` and its kill; absent otherwise. `progress` is its latest signal_progress: `{phase, step?, total?, note?, atMs}`, phase as in signal_progress, `step` of `total`, `atMs` epoch ms; kept while the app runs. `launchTelemetry` is the saved-agent launch's record, present once finalized: `{sessionId, agent, launchMode: \"shell\"|\"argv\", metricsVersion, startedAtMs, ptyFirstByteMs?, settleMs?, injectedAtMs?, agentLiveMs?, outcome: \"succeeded\"|\"settle_timeout\"|\"wait_live_elapsed\"|\"spawn_failed\"|\"canceled\", errorText?, binaryPath?, binaryVersion?} — `binaryPath`/`binaryVersion` are present when the launch resolved the agent CLI (metricsVersion 3+); the shell-only `settleMs`, `injectedAtMs` are null on argv launches; absent on older sessions. `releaseQualified: false` (+`releaseNote`): its CLI release is unqualified; status, wake and usage may fail. Else absent. `agent` is the saved Agent it runs (an agent_list id; agent_get shows it with all its running instances); `role` and `avatar` are display labels its launcher gave it, not a role inbox. `state`: `running` | `idle` (turn finished) | `needs-you` (a real permission prompt, an open ask_user question, or blocked progress; never a completed needs-attention outcome) | `exited` | `offline` (machine disconnected; may still run there) | `unknown` (no observation). `subagents` counts its running subagents (absent at none); `state` stays the agent's own, so a finished turn with subagents working is `idle` with `subagents: N`, and mail reaches it as for any idle agent. `displayName` is the live tab name. `machine` is \"This Mac\" for local tabs; `launchedBy` is the launcher handle or null for human-launched. `unread` is this session's unread inbox count (same as read_messages with its session id; role-inbox mail excluded; null when the team is not synced here); `oldestUnreadAt` is the RFC-3339 timestamp of the oldest unread, or null when unread is 0. `mailNotice` says whether its inbox notice told the agent about that unread mail: `told` (all of it; told is not read; the agent decides when), `pending` (newer mail not announced yet), null with none unread; `notifiedAt` is when it was last told (RFC 3339) or null. `inboxWaiter` is true when new mail reaches the agent at once (an idle agent starts a turn, a running one hears at its next step or turn); false when CodeSense cannot tell it (no CLI wake path, an unnamed process, or a gone waiter), so its mail stays held. An idle Claude with a dead waiter may be recovered with a one-line inbox notice only when its input box is empty and nobody is typing; otherwise wake it with send_to_session telling it to call read_messages. A supported CLI can be inbox-ready before its first prompt once its engine and trusted observers establish readiness; startup menus, approvals and unavailable engines keep it unready. `inboxWaiter` is \"unknown\" for a tab on a machine that is not connected now (its waiter may still be waiting there). Listing marks nothing read (inbox_list {sessionId: handle} peeks). Optional {launched_by} filters to sessions that launcher started.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "launched_by": {
+            "default": null,
+            "description": "A session id or handle: list only the sessions it launched.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_source_repos",
+      "description": "List legal legacy `source_repo` values plus structured canonical repository identities. `primary`/`byTeam` omit host-ambiguous owner/repo values; use `sourceRepoIdentities` for explicit provider, host, and remoteKey details, plus each repo's local clone: `attachment` (`attached` = bound to a checkout that exists, `missing` = bound but the checkout is gone, `unattached` = none) and `localPath`. Never invent a source_repo; resolve it here.\nDocs: arc-h-pipelines-and-sdlc/runs-and-stories.html",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "open_workspace",
+      "description": "Open a story workspace and return its handle (the story_id — pass back as an abstract address, never a raw PTY id). Creates the managed worktree on first open (no context is copied until an agent launches there or calls hydrate_worktree/hydrate_story). Args: {story_id} (e.g. \"DEMO-1\"; unknown/non-managed id is refused). Optional: {mode} `headed` (default; visible + focused) | `visible-unfocused` | `headless` (background agent, opt-in); {initial_prompt} (the agent's starting prompt — a slash command works). Returns `{handle, mode, headed, reconciled}` (reconciled: `{from,to}` when the story's `branch` frontmatter was converged to the opened branch, else null). Drive with send_to_session. Gated by the Interactive tier (refuses `not-granted:`/`denied:`/`busy`).\n\nLAUNCH AN AGENT: pass {target} `story` (with {story_id}; add {name} to open a new tab in that worktree — handle `<storyId>#<name>`; name is lowered + dash-normalized, max 64) or `team-workspace` (with {name}; a context worktree of the team's context repo, on its own branch, with CWD <team>/content. Pick an existing one by {worktree} id or name from list_worktrees {kind:context, team}, or create one with {worktree, createWorktree:true}. Pass {worktree} whenever the user named one. Omit both to reuse the most recently used, or create one named after {name} when none exists. Several agents share a worktree as tabs; reopening is the same call. Result adds worktree:{id,name,branch,created}; tell the user where it landed). Optional: {team} (defaults to your own team for agent sessions, or the active team when a person calls it; with `story`, a team other than the story's is refused), {org} (defaults to your own org; a person's story is found by id, and an id in several orgs needs org), {agent} (an agent id from agent_list; default `builtin/claude`, or `builtin/claude-unattended` for headless), {initial_prompt}, {launched_by} (your $CODESENSE_TAB_SESSION_ID; omit for human-launched), {queue_role} (queue id; omitted inherits the saved agent default; null joins no queue), {role} (display label; a story launch whose role or saved agent is a reviewer gets a `type: review` task with `typeSource`), {reviews} (story target only: the dev task id the reviewer reviews, linked `relates_to:reviews` exactly; omitted, the story's latest open task, `associated`), {avatar} (display only: `pack:id` from avatar_list, a `#rrggbb`, or an emoji), {max_runtime} (how long the launched session may run, like `30m` or `2h`, range 1m–24h; when it is reached the agent is sent `/exit`, then killed 30s later, and the launcher is notified; while a person types in the session's pane the deadline moves to at least 15 minutes after their last keystroke, so a session someone is using is not stopped; absent = no limit; This Mac only). Returns `{status:\"opened\"|\"alreadyLive\"|\"busy\"|\"invalid\", handle, name, message, warnings?}`. On `alreadyLive` with `maxRuntime`, the existing deadline (or lack of one) is left unchanged and the result carries a `maxRuntime ignored: session already live` warning.\n\nON A MACHINE: pass {story_id} + {machine_id} (from list_machines; \"local\" = this Mac). First open on a new machine copies the local clone there (no GitHub creds needed). To launch an agent there, add {target} `story` + {name}/{agent}/{initial_prompt}. A story whose workspace lives elsewhere is refused. With {machine_id} the call returns once the workspace is open there (status `opened`), or fails with the reason; it waits up to 10 minutes, then fails as `unconfirmed`. Team-workspace targets run on this Mac only; machine launches are never headless. {max_runtime} + a non-local {machine_id} is refused `invalid` (enforcement is This Mac only; follow-up for remote). Identity comes from the verified MCP connection; an unbound caller is refused. A supplied launched_by must name the caller itself. Omitted team selects the agent session's own team; human calls use the active team. A child agent cannot open a workspace on a shared parent story; a human can.\nDocs: arc-c-workspaces-and-worktrees/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "default": null,
+            "description": "The agent to launch (with `target`): its key, or a bare id found in the target\nteam, then your private space, then the starters. Defaults to `builtin/claude`, or\n`builtin/claude-unattended` for a headless open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar": {
+            "default": null,
+            "description": "The face to show for the session: `pack:id` (see `avatar_list`), or a colour or\nemoji hint. Display only; a face whose pack is not on this machine falls back.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createWorktree": {
+            "default": null,
+            "description": "Create worktree as a new name; refuse an existing name.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "headed": {
+            "default": null,
+            "description": "Legacy visibility toggle, kept for back-compat. Prefer\n`mode`. When `mode` is absent: `Some(false)` → background (headless),\n`Some(true)`/`None` → headed (visible + focused). `mode` wins when both set.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "initial_prompt": {
+            "default": null,
+            "description": "Optional first prompt seeded into the spawned agent (e.g. \"/review\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launched_by": {
+            "default": null,
+            "description": "Who is launching: your `$CODESENSE_TAB_SESSION_ID`. Omit when a person asked.\nShown as \"Launched by\"; nothing is checked against it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "machine_id": {
+            "default": null,
+            "description": "Open the story's workspace on this machine (an id from `list_machines`, or\n`local` for This Mac) instead of This Mac. Its worktree is created there on\nfirst open; later opens reuse it. With `target: \"story\"` the agent launches\nthere; a team-workspace target runs on This Mac only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_runtime": {
+            "default": null,
+            "description": "how long the launched session may run, like `30m` or `2h`\n(range 1m–24h). When it is reached the agent is sent `/exit`, then killed\n30s later, and the launcher is notified. Absent/blank: no limit. This Mac\nonly — combining it with a non-local `machineId` is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "default": null,
+            "description": "How the workspace surfaces — `\"headed\"` (visible + focused, the\ndefault) · `\"visible-unfocused\"` (a real tab that does not steal focus) ·\n`\"headless\"` (background; opt-in only). Absent → resolved from `headed`\n(default headed). An unrecognized value is refused `denied:`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "default": null,
+            "description": "The session's display name. Required for `team-workspace` (e.g. \"Sprint 1\");\nthe same name in the same team while it runs is the same session. With `story`\nit opens another session in the story's workspace under `<storyId>#<name>`;\nwithout it the story's own session.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "org": {
+            "default": null,
+            "description": "The org of the story or team. Defaults to your own org for agent sessions. For a person, the story's org is found by id, and an id in more than one org needs `org`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue_role": {
+            "default": null,
+            "description": "Team queue id; omitted inherits saved default, null joins no queue.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviews": {
+            "default": null,
+            "description": "The task a reviewer launch reviews (a task id from `task_list`). `target: \"story\"`\nonly: the launch's review task links `relates_to:reviews` to it (`fieldSources.reviews:\nexact`); without it, a reviewer's task links the story's latest open task\n(`associated`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "default": null,
+            "description": "The role to show for the session: `manager`, `worker` or any free\nlabel (`reviewer`, `qa`). Display only; nothing is checked against it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "story_id": {
+            "default": null,
+            "description": "The story id to open (e.g. \"DEMO-1\"). Required for a story target and\nresolved trusted-side to its managed worktree; an unknown id or a story\nwith no worktree yet is refused (the frontend never supplies a path).\nWith `target: \"team-workspace\"`, optional:\nlinks the session to that story without changing its context worktree.\nOtherwise it inherits its launcher's known story within the same org and team.\nNever inferred from names or carried implicitly across teams or orgs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "default": null,
+            "description": "`\"story\"` or `\"team-workspace\"`. Absent → the legacy story open (its result\nshape is unchanged and the fields below are ignored).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "default": null,
+            "description": "The team to open in: defaults to your own team for agent sessions, or the active team when a person calls it. With `story`, a team other than the story's is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "default": null,
+            "description": "Context worktree id or name. Pass it whenever the user named one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "post_agent_message",
+      "description": "Post a progress note to the chat surface bound to your session and to the agent-updates store, available to dashboards through codesense.updates(). Notes do not appear in the native human Inbox. To send the human a report there, use send_message to human with kind update. Fire-and-forget: emits a UI event and returns immediately — for a blocking question, use ask_user instead. Inputs: `sessionId` (your `$CODESENSE_TAB_SESSION_ID`, stamped into your PTY at spawn), `text`. Optional: `role` (default \"agent\"). The render tripwire may route long or artifact-bearing messages to a doc or artifact pane; pass `subclass` (your Weft subclass: `review`/`research`/`impl`/`planning`) and `hasArtifacts: true` after a report_artifact call for better routing. For a DrillDoc target, `openDocPath` is the absolute context-repo path to open in the viewer (absent → DrillDoc rule skipped).\nDocs: arc-e-agents/mcp-only-agents.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "hasArtifacts": {
+            "default": null,
+            "description": "Set `true` after calling `report_artifact` so the render\ntripwire can annotate the bubble. The server does NOT infer this from\nrun-store state — the agent is the authoritative source.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "openDocPath": {
+            "default": null,
+            "description": "The context-repo absolute path to open in the viewer when the\nrender target resolves to `DrillDoc`. Absent → the DrillDoc rule is\nskipped (no blind navigation to an unknown path).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "default": null,
+            "description": "Sender role; defaults to `\"agent\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "The calling session's tab id — pass your `$CODESENSE_TAB_SESSION_ID`\n(codesense stamped it into your PTY env at spawn). The UI routes the\nmessage to the chat surface bound to this session.",
+            "type": "string"
+          },
+          "subclass": {
+            "default": null,
+            "description": "The sending worker's Weft subclass (e.g. `\"review\"`,\n`\"research\"`, `\"impl\"`, `\"planning\"`). Feeds the render tripwire — agents\nthat set it get better routing; omission falls through to length-based\nrules.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The message text to surface in the chat.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "query_context",
+      "description": "Find context files by metadata across synced orgs (team context repos, your private space per org, and all-orgs content). Footprint-wide by default; narrow with `where`. Child callers see only shared ancestor files, even with where.teams. Every arg is optional; `{}` lists the first page of visible files sorted by path.\n\nRows: { id (story_id or file name), path, relPath, fileName, org (null = all-orgs), team (null = private/all-orgs), layer (team|private|all-orgs), kind (story|bug|spike|epic|doc|dashboard|skill|other), mtime (ms), title, fields (ALL frontmatter / HTML cs:* meta), relationships?, metadataTruncated?, textMatches?: [{title, anchor}] }.\n\nPrivate items (the user's private space) come back only for ONE org you name: `where.orgs: [\"acme\"]` (exactly one) or `where.sameOrgAs`. With `orgs: \"all\"` (the default) or several orgs you get team and all-orgs content only, never private items — and links to private items stay hidden.\n\nTop-level `reviews/` files are excluded by default. To read them deliberately, set `where.pathPrefix` or `where.pathGlob` starting with `reviews/` (for example `reviews/sam/` or `reviews/**/*.md`). Pane queries are unchanged.\n\n- where: { orgs: \"all\" | [\"org\"], sameOrgAs: \"/abs/path\", teams: [..], layers: [..], kinds: [..], pathPrefix: \"_bmad-output/13-x\" or \"/abs\", pathGlob: \"**/DEMO-*.md\" }\n- filters: [{ key, op, value | min/max }] — op: eq, in, not, exists, missing, contains (list item or case-insensitive text), range (numeric, or text e.g. ISO dates), prefix. Any frontmatter key or built-in (path, relPath, fileName, id, org, team, layer, kind, mtime, title, dir). Same key → OR; different keys → AND. Value \"@me\" = the signed-in user.\n- match: { status: [\"todo\",\"review\"], team: \"default\" } — shorthand (scalar = eq, array = in).\n- relationships: { dependsOn, dependedOnBy, hasSupportingDoc, backlinkedBy, parentEpic, hasDeps, isBacklinked } — tokens are a path, story_id, file name or stem.\n- text: token-aware full-text across title, headings and body (case-insensitive; reads at most 5,000 files / 64 MB per query after the other filters; textScanTruncated / totalApproximate say when that bound hit).\nText results rank by title coverage, then heading coverage, then body coverage unless sort is explicit. Schema-1 search-index.json sidecars supply optional textMatches anchors on the page row. Only nonempty text queries scoped exactly to where.orgs: [\"codesense/docs\"] default-exclude generated/ before scanning, reported as excluded: [\"generated/\"]. Opt in with where.pathPrefix: \"generated/\" or a pathGlob starting with \"generated/\". Listings and other orgs are unchanged.\n\n- select: frontmatter keys to return (+ \"relationships\"); omit for everything. All query field keys accept an optional cs: prefix; topic/task/tools/audience are lists, returned with canonical unprefixed keys.\n- sort: [\"priority\", \"-mtime\", {key, dir, missing, order}] — status sorts by the built-in workflow order (planning, todo, in-progress, blocked, review, qa, done) unless you pass `order` (e.g. the team's own status list); priority by p0…p4. Values order numbers < dates < text (text naturally: DEMO-9 < DEMO-10). Ties by path.\n- eq/in/not compare text exactly (\"01\" ≠ \"1\"); pass a JSON number to compare numerically.\n- limit (default 200, max 10000), cursor (prior nextCursor, same query; one snapshot per walk, 30 s idle/120 s max, text until a change; then data.code stale_cursor: restart), groupBy: a key → groups [{value, count}] over ALL matches (board columns).\n\nExample — open stories in epic DEMO assigned to me, by priority, as a board:\n{\"where\":{\"kinds\":[\"story\"]},\"relationships\":{\"parentEpic\":\"DEMO\"},\"filters\":[{\"key\":\"status\",\"op\":\"in\",\"value\":[\"todo\",\"in-progress\"]},{\"key\":\"assigned_to\",\"op\":\"eq\",\"value\":\"@me\"}],\"sort\":[\"priority\"],\"groupBy\":\"status\",\"select\":[\"status\",\"priority\"]}\n\nExample — dashboards in one org changed since a date: {\"where\":{\"orgs\":[\"acme\"],\"kinds\":[\"dashboard\"]},\"filters\":[{\"key\":\"mtime\",\"op\":\"range\",\"min\":1759300000000}],\"sort\":[\"-mtime\"]}\nDocs: arc-k-sync/file-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "The `nextCursor` of the previous page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filters": {
+            "default": null,
+            "description": "Filter clauses `[{ key, op, value | min | max }]`; ops: eq, in, not, exists, missing, contains, range, prefix."
+          },
+          "groupBy": {
+            "default": null,
+            "description": "Count matches per value of this key (board columns).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "Rows per page (default 200, max 10000).",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "match": {
+            "default": null,
+            "description": "Shorthand filters `{ key: value | [values] }` (scalar = eq, array = in)."
+          },
+          "relationships": {
+            "default": null,
+            "description": "Relationship predicates `{ dependsOn, dependedOnBy, hasSupportingDoc, backlinkedBy, parentEpic, hasDeps, isBacklinked }`."
+          },
+          "select": {
+            "default": null,
+            "description": "Frontmatter keys to return (add \"relationships\" for refs). Omit for every key.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sort": {
+            "default": null,
+            "description": "Sort keys: `\"status\"`, `\"-mtime\"`, or `{ key, dir: \"asc\"|\"desc\", missing: \"first\"|\"last\" }`."
+          },
+          "text": {
+            "default": null,
+            "description": "Token-aware title, heading and body match (bounded scan).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "where": {
+            "default": null,
+            "description": "Where to look: `{ orgs: \"all\" | [slugs], sameOrgAs, teams, layers, kinds, pathPrefix, pathGlob }`."
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "react",
+      "description": "React to a message in your inbox with one emoji, like a tapback: the sender and the human see it on the message, and it is not mail (no unread, no wake, no reply). Args: {message_id} (a message you sent, received, or are the reply target of; from read_messages or reply), {emoji} (any single emoji, one character cluster such as 👍, ❤️, 🎉, 🧑🏽‍💻 or a flag; at most 64 bytes; text or two emoji are refused), {remove} (optional boolean: omit it to toggle, true to take your reaction back, false to make sure it is there), {session_id} (optional: omit it to use this connection's verified tab identity). One reaction per (you, message, emoji): reacting again with the same emoji toggles it off, so to keep it pass {remove:false}. The message's sender hears of a new reaction once, in a `reactions` list next to `messages` the next time it calls read_messages. A message you are not a party to (for example mail between two other agents) answers `no message`. Returns `{status:\"reacted\",messageId,emoji,outcome:\"added\"|\"removed\"|\"unchanged\"}` or `{status:\"invalid\",message}`. Example: react {message_id: 42, emoji: \"👍\"}.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "emoji": {
+            "description": "Exactly one emoji (one character cluster, at most 64 bytes).",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message to react to, from `read_messages` or `reply`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "remove": {
+            "default": null,
+            "description": "Omit to toggle; `true` takes your reaction back; `false` makes sure it is there.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_id": {
+            "default": null,
+            "description": "Omit to react as this connection's verified tab. If supplied, it must name that\nsame tab. An unbound connection is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message_id",
+          "emoji"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_content_file",
+      "description": "Read content file by path. Reads use the calling session's team: ancestor files must be shared with that child, even for an absolute parent path. Private content retains its existing scope. Returns {text?, bytesUrl?, size, truncated, sha256}. maxBytes is capped at 1.5 MB; bytesUrl streams large or binary files through /viewer. This is the MCP twin of files.read.\nDocs: arc-k-sync/file-tools.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "maxBytes": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_messages",
+      "description": "Drain your unread inbox messages (oldest first; each returned once then marked read). Inbox mail comes from people and agents that your user's setup lets reach you, so anyone who can message you is someone your user trusts. Call this when your hook tells you \"You have N new messages. Call read_messages with session_id <id>.\" — pass that id as {session_id} (your $CODESENSE_TAB_SESSION_ID), or omit it to read the inbox of the tab this MCP connection runs in. A hand-started CLI in a CodeSense terminal is bound to that tab. An outside or unbound connection is refused; start the CLI in a CodeSense terminal. A supplied session_id must name this same tab. Returns `{messages: [{messageId, from, fromName, text, inReplyTo, inReplyToTeam, replyTo?, summary?, primaryFile?, attachmentHint?}]}`; `summary` is the sender's one-line plain-text preview of `text`, when it set one; `replyTo` (when the sender set one) is where your reply goes instead of to the sender; `primaryFile` is a logical path the sender attached, and when `attachmentHint` is present an agent whose workspace lacks the file can call `hydrate_story` with `attachmentHint.owningStoryId` to copy it in. Answer any one with reply, or acknowledge it with react. When someone reacted to a message you sent, the result also has `reactions: [{messageId, emoji, reactor, createdAtMs, team: {org, team}}]` (`team` names the team that holds the message, which matters when you mailed an agent in another team), each new reaction reported once (a reaction taken back before you read it is never reported); reactions are not mail and are never counted as unread.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "session_id": {
+            "default": null,
+            "description": "Your `$CODESENSE_TAB_SESSION_ID`; omit it to read the inbox of the tab this MCP\nconnection runs in. An unbound connection is refused; start the CLI in a CodeSense terminal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "records_create",
+      "description": "Records create: operate on a declared Markdown folder collection through the shared records core. Org and team default to the session context. At most 64 fields per call. Private collections have local git history; team and story collections do not. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-i-dashboard-primitives/records.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "append": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collection": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "org": {
+            "description": "Org containing the collection; defaults to the session's org.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch": {
+            "description": "Edits to apply to the record's body, as a JSON value."
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "Identity comes from the verified connection; a supplied id must name the same caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "description": "Team for a shared collection; defaults to the session's team.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "window": {
+            "items": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "records_list",
+      "description": "Records list: operate on a declared Markdown folder collection through the shared records core. Org and team default to the session context. Private collections have local git history; team and story collections do not. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-i-dashboard-primitives/records.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "append": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collection": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "org": {
+            "description": "Org containing the collection; defaults to the session's org.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch": {
+            "description": "Edits to apply to the record's body, as a JSON value."
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "Identity comes from the verified connection; a supplied id must name the same caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "description": "Team for a shared collection; defaults to the session's team.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undo": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "window": {
+            "items": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "remove_source_repo",
+      "description": "Remove a source repo from a team: the team stops tracking it, and when no team in any of your orgs still tracks it, the record binding its local clone is forgotten. The clone itself stays on disk, untouched. Pass `org`, `team` and `repo` (owner/repo or host/owner/repo). Returns { status:\"ok\", data:{ remoteKey, unboundClone } } where `unboundClone` is the clone whose binding was forgotten (still on disk), or null when none was bound or another team still uses it; an unknown team returns { status:\"unauthorizedTeam\" }; a repo the team does not track returns { status:\"validation\", message }.\nDocs: arc-k-sync/moving-between-contexts.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "org": {
+            "type": "string"
+          },
+          "repo": {
+            "description": "One of the team's source repos: `owner/repo` or `host/owner/repo`.",
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org",
+          "team",
+          "repo"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "reply",
+      "description": "Optional {requestId} deduplicates retries: send the same key and payload after a disconnect to return the original messageId; a changed payload is refused. Omit it to create a new message. Reply to an inbox message — delivered like send_message to whoever sent the original (agent or human), or, when the original carries a `replyTo`, ONLY to that address instead (email Reply-To): a session's inbox, the human, or for `role:<id>` a pending delivery in that role's queue that any instance of the role claims later, even after the original sender exited. Args: {message_id} (from read_messages), {text}, {session_id} (optional: omit it to answer as this connection's verified tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never answered as the human; the reply shows as the sender's current tab name, see who_am_i). Optional {media:{url|path,alt}} attaches a GIF or image; alt is required. Reply body renders as markdown by default. {summary} is one plain-text line (≤280 chars) shown as this reply's preview in lists; set it when the body is long or heavily formatted. {kind} \"needs-you\" | \"update\": what a reply to the human asks of them, as in send_message; omitted, a reply is an \"update\" (the human is waiting on your answer, not you on theirs) — pass \"needs-you\" when your reply asks them something back. A reply queued for a role keeps no kind. Returns `{status:\"sent\",messageId,kind?,hint?}` (`kind` and `hint` as for send_message, for a reply to the human) or `{status:\"invalid\",message}` (blank text without media / unknown message id / a sessionId that is not running).\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "description": "What a message asks of the human, for agent views and dashboards. The human\ninbox shows both kinds as conversations and counts all unread human mail. Stored as given on `wv_inbox.kind` (NULL when the sender set none); reads\nresolve the effective kind with [`InboxMessage::effective_kind`].",
+                "oneOf": [
+                  {
+                    "const": "needs-you",
+                    "description": "Waits on the human: a question, a decision, something only they can unblock.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "update",
+                    "description": "Informational: progress, \"merged\", \"done\".",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What a reply to the human asks of them: `\"needs-you\"` when it asks them\nsomething back, else `\"update\"` (the default for a reply). A reply queued for a\nrole keeps no kind."
+          },
+          "media": {
+            "anyOf": [
+              {
+                "properties": {
+                  "alt": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "alt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional GIF or image: exactly one of HTTPS url or local path, and required alt text."
+          },
+          "message_id": {
+            "description": "The message to answer, from `read_messages`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "requestId": {
+            "default": null,
+            "description": "Retry key: reuse the same value and payload after a transport disconnect.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "default": null,
+            "description": "Omit to answer as this connection's verified tab. If supplied, it must name\nthat same tab. An unbound connection is refused; start the CLI in a CodeSense\nterminal. Only the native app can answer as the person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "default": null,
+            "description": "One plain-text line (≤280 chars) shown as this reply's preview in lists; set it\nwhen the body is long or heavily formatted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_arm_on",
+      "description": "Routine arm on — move where a routine fires: `machine:\"this_mac\"` (this Mac fires it, as \"Run on this Mac\" does) or a machine id from list_machines (that machine's terminal server fires it on its own clock, in the routine's zone, whether or not any Mac is open; this Mac manages it: it prepares the agent there now and on every edit, pushes the routine's definition whenever it reconnects, and records its runs; later changes to the agent's own files reach the machine only through routine_refresh_on_machine). A routine armed on a machine runs on its schedule only (no agent_done, inbox_idle or role_pending triggers), once for the team, with its agent on that machine. Each move is a new revision under a new arm epoch: the machine refuses anything older, so a stale definition never re-arms it. Moving it off a machine waits for that machine to acknowledge before anything else fires it (`handover_pending`), so a move never doubles a fire. Required: `id`, `machine`. Optional: `sessionId` (omitted, the verified connection; if supplied, the same caller only). Counts against the 25 enabled-routine cap. Returns { status:\"ok\", data:{ id, armed_machine, arm_epoch, revision, handover_pending, machine_warning? } } (`machine_warning`: armed, but not prepared on the machine yet, and why: not connected, preparation failed or still running, or waiting on the machine it moved off), or `validation`. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-g-routines/routine-yml.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "machine": {
+            "description": "`this_mac`: this Mac fires it. A machine id (from list_machines): that\nmachine's terminal server fires it on its own clock, with or without\nthis Mac.",
+            "type": "string"
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "machine"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_create",
+      "description": "Create a routine. For something only for your current session, use schedule_wakeup. Each fire runs `task` on `agent` per `mode`, with history. `task` is the agent's whole prompt: CodeSense adds nothing to it. It may use `{{date}}`, `{{timestamp}}`, `{{last_run_at}}` (empty on the first run), `{{last_run_summary}}` (the last successful `signal_done` summary) and declared `{{variables}}`. `task` is the whole contract: a run ends when the agent process exits, when it calls `signal_done`, or at `maxRuntime`. For a result or question, instruct `signal_done` with `summary` or status `needs-attention` and the question; otherwise the run simply ends. A `visible` agent stays open after work; without that call its run lasts until the user closes the tab or `maxRuntime`. Meanwhile fires follow `overlap`. For a structured result, declare `resultSchema` and have the task call routine_publish_result, then signal_done success. Headless Claude may call `routine_context` / `routine_publish_result` only when `permissions.claude.allow` lists them (as `mcp__codesense__<tool>`; `signal_done` always works). Routines never deliver results: to send, post or file something, the task must name the tool, and the agent needs that server in `mcpServers`. Example: `{\"name\":\"Triage\",\"when\":\"weekdays 09:00\",\"agent\":\"triage\",\"task\":\"Read mail, then signal_done with a summary.\"}`. Unsure? Pass `dryRun:true` first. Wake limits: maxWakes, maxWakesPerDay, minGap (mode wake only). Creation is a local context-repo edit that notifies no one, shown under its agent in Agents | Schedule; sharing needs a git push. An each_mac recipe is off until enabled on each Mac. Returns { status:\"ok\", data:{ id, agent, agent_key, mode, effective_mode, schedule_in_words, next_fires:[next 3, RFC3339; empty for a draft], enabled, revision, warnings:[{code, message}], deprecations? } }: `warnings` never block the save (e.g. a `/name` task missing from the agent's `startup`; fix with agent_update). Or validation, unauthorizedTeam, notSyncedLocally. Events use the YAML model: events:[{kind:\"inbox_idle\"}] fires on idle sessions with unread mail; events:[{kind:\"agent_done\",from_agent:\"reviewer\"}] watches that agent finishing (omit from_agent for all in reach). Use events:[{kind:\"role_pending\"}] to watch every queue in reach. Use events:[{kind:\"role_pending\",role:\"reviewer\"}] to watch only reviewer mail. role must be nonblank and is valid only for role_pending; from_agent only for agent_done. No role or from_agent existence check. Omitted/null events keeps current events; [] clears these three kinds; nonempty replaces only them, preserving schedules and metadata triggers. Event errors return status:validation with events[i].field and a hint. These events support each_mac; machine arming restrictions still apply. metadataTriggers takes query_context selection, target eq and optional previous eq for a transition. Existing matches baseline at discovery/restart. [] clears metadata triggers; omitted/null keeps them. Metadata triggers require one_mac. Recipients use routine_context and the wake header runId. action:command runs command:[program,arg,...] directly without an agent/model; rendered argv is returned. Commands are team/local only, default overlap queue/maxRuntime 5m. Bare executables use PATH; relative executable paths must stay inside the team content root; absolute executable paths are refused. Exit 0 succeeds; routine_run exposes bounded, secret-redacted output (last 4 KB). after:{routine:id,on:succeeded|finished} chains in the same space; finished excludes cancelled/skipped/coalesced, cycles and missing upstream are refused. after:null clears on update. budgetUsd {perDay?,perWeek?} is fresh-agent only; raising/removing a cap needs native Accept. dryRun:true validates resolved triggers and rendered argv without writing a definition. Verified caller required; sessionId must match.\nDocs: arc-g-routines/trigger-cookbook.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agent",
+                  "command"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "agent (default) or command. action:command takes command:[program,arg,...]\ninstead of agent/task/mode; it runs as you, with no agent or model, in a\nteam workspace or managed repo clone. Defaults: overlap queue, maxRuntime 5m.\nOnly me and machine-armed command routines are refused."
+          },
+          "after": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "on": {
+                    "enum": [
+                      "succeeded",
+                      "finished"
+                    ],
+                    "type": "string"
+                  },
+                  "routine": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "routine",
+                  "on"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Fire after a routine in the same space succeeds or finishes. `finished`\nexcludes cancelled/skipped/coalesced. Cycles and missing upstream routines\nare refused. Chained fires carry trigger.{run_id,routine,phase,result_text,detail}."
+          },
+          "agent": {
+            "default": null,
+            "description": "The agent the routine belongs to and runs: its `id` from agent_list in the\nroutine's own space (a bare `triage` is the team's agent for a team\nroutine and your private agent for an Only me one), or its full key, which\nlets an Only me routine run a team agent. A team routine needs an agent of\nits own team or a starter (`builtin/claude`, `builtin/codex`), since any\nteammate's Mac may run it. Required, unless `sessionId` names a session\nlaunched as a saved agent (then that one; a session launched as a starter\nstill defaults to that starter, with a `deprecations` note). The routine\nlives under it, in `config/agents/<agent>/routines/<id>/`; each run\nlaunches it with the running user's own account at its current revision,\narchived or not.\nThe reply names the one chosen; routine_update changes it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budgetUsd": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "perDay": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "perWeek": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "budgetUsd {perDay?,perWeek?}: positive finite USD; local calendar day and\nMonday-start week, not rolling windows. Fresh only: wakes cap the agent;\ncommands cannot. Machine-armed caps are refused. Raising/removing a cap\nneeds native Accept; lowering ratchets the local accepted ceiling.\nUnrestricted shells are trusted; sandbox untrusted agents."
+          },
+          "command": {
+            "default": null,
+            "description": "Program and arguments, one entry each. A bare program uses PATH; a relative\nexecutable path must be executable inside the team content root; absolute\nexecutable paths are refused. Args render individually, never through a shell.\nExit 0 succeeds; routine_run exposes the secret-redacted last 4 KB of output.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "dryRun": {
+            "default": false,
+            "description": "Check everything and report what would be created, writing nothing;\nreports rendered argv for commands. Keep other defaults unless asked;\nreport `schedule_in_words`, the first `next_fires` and the `agent`.\nValidation includes a bad `when`, under 5 minutes, the 25 enabled-routine\ncap, no visible `agent`, an Only me agent for a team routine, or a taken `id`.",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": null,
+            "description": "Whether it fires from this Mac. Default true (false for a draft that\nnever fires until routine_set_enabled resumes it); for `runsOn:\neach_mac`, default false, and true turns it on for this Mac.\nThe 25 enabled-routine cap is checked when enabling.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "events": {
+            "description": "Events: [{\"kind\":\"inbox_idle\"}], [{\"kind\":\"agent_done\",\"from_agent\":\"reviewer\"}],\nor [{\"kind\":\"role_pending\",\"role\":\"reviewer\"}]. Omit role for every queue in reach.",
+            "items": {
+              "description": "Event inputs share the YAML model's spelling and validation.",
+              "properties": {
+                "from_agent": {
+                  "default": null,
+                  "description": "agent_done only: agent id or full key; omitted watches all agents in reach.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "inbox_idle, agent_done or role_pending.",
+                  "type": "string"
+                },
+                "role": {
+                  "default": null,
+                  "description": "role_pending only: nonempty queue name; omitted watches every queue in reach.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "default": null,
+            "description": "The routine id within its team. Default: derived from `name`; a taken id is validation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "machine": {
+            "default": null,
+            "description": "Where a wake looks for (and starts) the agent: `local` (default, this\nMac), a machine id from list_machines, or `any` connected machine (wakes\nthe agent wherever it runs, starts it here when none does). With\n`runsOn: each_mac` it must be `local`, except that a `fresh` routine may\nuse `any`. A session on an offline machine still counts as running, so\nthat wake is undelivered (machine_offline) and nothing starts.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxRuntime": {
+            "default": null,
+            "description": "How long one run may take, like `30m` or `2h`. Default `30m`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxWakes": {
+            "default": null,
+            "description": "Optional: how many wakes this routine may deliver in all. Reached, it\npauses itself and posts one inbox note; resuming starts a new count.\nLight checks need no wake limits; heavy work may use\n\"minGap\":\"4h\",\"maxWakesPerDay\":3,\"overlap\":\"skip\".\nPast 120 wakes/hour per session, wakes return rate_limited (one inbox note).\nOmit for no limit. Wake limits count wakes typed into a live session, so\nthey apply to `mode: wake` only (a `fresh` routine with limits saves with\na `wake_limits_ignored` warning; a start when none runs is not counted).\nThe terminal server running the session enforces them, so they hold\nwith the desktop closed; each Mac and machine keeps its own count, and\na machine whose terminal server is too old is sent no limited wake\n(undelivered (unavailable), with one inbox note to update it).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxWakesPerDay": {
+            "default": null,
+            "description": "Optional: wakes in any rolling 24 h. Fires over it are\n`undelivered(limit_reached)` and it resumes on its own. A wake limit\n(see `maxWakes`): `mode: wake` only.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "metadataTriggers": {
+            "default": null,
+            "description": "Metadata conditions using query_context's selection and eq clauses. Example:\n[{\"selection\":{\"where\":{\"kinds\":[\"story\"]}},\"target\":{\"key\":\"status\",\"op\":\"eq\",\"value\":\"in-progress\"}}].\nAdd previous:{\"key\":\"status\",\"op\":\"eq\",\"value\":\"planning\"} for an exact transition.\nMatches at first discovery or restart are a baseline; only later entry fires.\nOmit to preserve; [] removes metadata triggers on update, keeping other events.\nNot with runsOn:each_mac. Recipients read changes with routine_context and\nthe wake header runId (incl. coalesced_payloads).",
+            "items": {},
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "minGap": {
+            "default": null,
+            "description": "Optional: the least time between two wakes of this routine (into any\nsession) (`30m`, `2h`, `1d`; at most `7d`), for wakes that start heavy\nwork. A fire inside it is coalesced or skipped per `overlap`. A wake\nlimit (see `maxWakes`): `mode: wake` only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missed": {
+            "default": null,
+            "description": "`skip` (default) or `run_once`: what happens to fires missed while the\napp was closed or asleep.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "default": null,
+            "description": "`wake` (deliver the task into the agent's live session when it is\nidle, starting one with `task` as its first prompt only when none runs;\nnever a second instance) or `fresh` (\"start a new\" in the app: a new\ninstance in `where` on each fire, headless unless `visible`). Omitted: `wake` for a visible routine on a\nsaved agent that launches in a tab, else `fresh`; the reply's\n`effective_mode` says what a fire does. A built-in starter's routines\nare fresh only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "What the routine is called, e.g. \"Morning triage\".",
+            "type": "string"
+          },
+          "org": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overlap": {
+            "default": null,
+            "description": "`coalesce` (default), `skip` or `queue`: what a fire does while a run is\nstill going.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resultSchema": {
+            "default": null,
+            "description": "Optional bounded inline JSON Schema for the routine's private dashboard\nresult; omit when no structured result is required."
+          },
+          "runsOn": {
+            "default": null,
+            "description": "A team routine only: `one_mac` (default) runs it once for the team, on\nthis Mac until moved (a shared job, e.g. a bug bot or team triage); `each_mac` makes\nit a recipe each teammate turns on for their own Mac (e.g. a digest or a\nreminder for oneself), off everywhere until they do, with its own runs\non each.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "default": null,
+            "description": "`team` (default: teammates can see it) or `personal` (Only me, only when\nthe user asks for it: your private space for `org`, which is then\nrequired and must be an org synced on this Mac; it runs in that org\nonly). A team routine goes in `org`/`team`, or the active team when both\nare omitted. Anyone who sees it can change it; `owner` grants nothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "default": "",
+            "description": "What the agent should do on each run, in plain words. Example:\n\"Summarize acme/web issues since {{last_run_at}} to #web-triage with Slack\nMCP tools, then signal_done with it.\"",
+            "type": "string"
+          },
+          "team": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The IANA zone `when` is read in. Default: this machine's zone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "additionalProperties": true,
+            "default": null,
+            "description": "Task variables, `{ name: { type, default } }`, referenced as `{{name}}`:\ne.g. `{\"channel\": {\"type\": \"text\", \"default\": \"#web\"}}` used as\n`{{channel}}`.",
+            "type": "object"
+          },
+          "visible": {
+            "default": null,
+            "description": "Run in a visible terminal tab instead of headless. Default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "when": {
+            "default": null,
+            "description": "When it runs, read in `tz`: a preset (`every 5m|10m|15m|20m|30m`,\n`every 1h|2h|3h|4h|6h|8h|12h`, `hourly`, `daily 09:00`, `weekdays 08:30`,\n`weekly mon 17:00`, on a 24-hour clock) or a 5-field cron such as\n`0 9 * * 1-5`. Nothing fires more often than every 5 minutes. Omit it for a\nroutine that runs only when started by hand. Empty when removes schedules;\nother event triggers are kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "where": {
+            "default": null,
+            "description": "Where it runs: `team_workspace` (default) or `repo:<owner>/<repo>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_delete",
+      "description": "Routine delete — archive any routine you can see: it stops firing and leaves routine_list, and its run history stays readable. Required: `id`. Optional: `sessionId` (optional: omitted, the verified connection; if supplied, the same caller only). Any routine you can see is yours to change, a teammate's included: the change is a local edit to the context repo, and sharing it with the team is a git push your agent makes. Notifies no one. Returns { status:\"ok\", data:{ id, archived:true, revision } }, or `validation`. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-g-routines/routine-yml.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "The routine's `id` as `routine_list` returns it.",
+            "type": "string"
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_list",
+      "description": "Routine list — every routine you can see: your Only me ones (in your private space for the open org) and those of every team synced on this Mac, yours and teammates', all of which you can change. Optional `agent` (an agent's `id` or key from agent_list): only that agent's routines. Returns { status:\"ok\", data:[{ id, scope, org, team, name, schedule_in_words, agent, agent_key, unassigned (its agent is nowhere on this Mac: it never fires until routine_update gives it one), duplicate (another routine of its space has its id: it never fires), mode, effective_mode, where, runs_on, enabled, next_run_at, last_run:{status, reason, at}|null, owner, owner_name, created_by, armed_here, needs_you, revision, content_stale? }] }. `content_stale` ({ machine, since_ms, why }) marks a routine armed on a machine whose prepared content is behind it: the machine starts its agent from what was prepared before until routine_refresh_on_machine. Times are RFC3339. `runs_on` is `one_mac` (a shared job: it runs on exactly one Mac, and `armed_here` says it is this one; one written by hand that names no Mac runs nowhere, `armed_here` false and `next_run_at` null, until a save here places it on this Mac) or `each_mac` (a recipe each Mac runs: `enabled` says whether it is on for this Mac). `enabled`, `next_run_at`, `last_run` and `needs_you` are this Mac's. `id` is what every other routine tool takes; `revision` is routine_update's `baseRevision`.\nDocs: arc-g-routines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "default": null,
+            "description": "Only the routines of this agent: its `id` or key from agent_list.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_run",
+      "description": "Routine run — one routine run in full, by id. Required: `runId` (a `run_id` from routine_runs, routine_get's `runs`, or routine_list's `last_run`). Returns { status:\"ok\", data:{ routine_id, routine_name, run_id, revision, source, phase, reason, linked_run_id, created_at, started_at, ended_at, result_text, detail, agent } }: the routine_runs row plus the routine it belongs to (`routine_id` is what routine_get takes); `detail` explains why it ended, as in routine_runs. `phase`: `queued` | `running` | `succeeded` | `failed` | `needs_you` (it ended asking you something; `result_text` is the question) | `ended` (its agent exited without signal_done) | `timed_out` | `cancelled` | `skipped` (did not run; `reason` says why) | `coalesced` (folded into `linked_run_id`). `source`: what fired it (`schedule`, `manual`, an event). Times are RFC3339. A run of a routine you cannot see is `validation`.\nDocs: arc-g-routines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "runId": {
+            "description": "A routine run's `run_id` (from routine_runs, routine_get's `runs`, or\nroutine_list's `last_run`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_run_now",
+      "description": "Routine run now — fire any routine you can see once, by hand, on this Mac, through its own policy: a paused routine records a skip, and a run still going makes this fire coalesce, skip or wait per its `overlap`. Required: `id`. Optional: `variables` ({name: value} for its declared variables); `sessionId` (optional: omitted, the verified connection; if supplied, the same caller only). Returns { status:\"ok\", data:{ run_id, outcome } }, where outcome is `queued` (with `reason:\"held\"` when it waits behind the run still going), `coalesced` (with `active_run_id`), `skipped:<reason>`, or `duplicate` (this fire already has a run); or `validation`. Follow the run with routine_runs. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-g-routines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": null,
+            "description": "Values for the routine's declared variables.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_set_enabled",
+      "description": "Routine set enabled — pause (`enabled:false`) or resume (`enabled:true`) any routine you can see. It changes only whether it fires from this Mac; the definition is untouched, so it is never a git change. A paused routine is a draft. For an `each_mac` routine this is \"Run on my Mac\": `true` turns it on for this Mac, `false` off. A shared job armed on another Mac (`armed_here` false) fires and is paused there; pausing it here changes nothing until it is moved to this Mac. Required: `id`, `enabled`. Optional: `sessionId` (optional: omitted, the verified connection; if supplied, the same caller only). Resuming counts against the 25 enabled-routine cap. Resuming a routine armed on a machine prepares it there. Returns { status:\"ok\", data:{ id, enabled, machine_warning? } } (`machine_warning`: resumed, but not prepared on its machine, and why), or `validation`. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-g-routines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "enabled": {
+            "description": "false pauses it on this machine (turns an `each_mac` routine off for\nthis Mac); true resumes it (turns it on).",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "enabled"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "routine_update",
+      "description": "Update a routine. Optional `resultSchema` replaces the private dashboard result schema (`null` clears it; omitted keeps it); structured-result tasks must instruct routine_publish_result followed by signal_done success. Required: `id`; `baseRevision` (the `revision` you last read). Optional replacements: `name`, `task`, `when` (replaces schedules), `tz` (alone moves schedules to that zone), `agent` (moves it, preserving id/history), `mode`, `where`, `runsOn`, `maxRuntime`, `overlap`, `missed`, `visible`, `variables`; the wake limits `maxWakes`, `maxWakesPerDay`, `minGap` (as for routine_create; `null` removes one, omitted keeps it), e.g. `{\"maxWakesPerDay\":null}` for a cheap check, `{\"minGap\":\"6h\",\"maxWakes\":20}` for a long job; `sessionId` (optional: omitted, the verified connection; if supplied, the same caller only). `task` is the run's whole contract: a run ends when the agent process exits, when it calls `signal_done`, or at `maxRuntime`. For a result or a question on the run, the task must tell the agent to call `signal_done` (with a `summary`, or status `needs-attention` and the question); otherwise the run simply ends without a result. A `visible` agent stays open in its tab after its work, so without that call its run lasts until the user closes the tab or `maxRuntime`, and fires meanwhile follow `overlap`. Inside a run the agent can call `routine_context`. Routines never deliver results: if something should be sent, posted or filed, the task must say so. Pausing is routine_set_enabled, not this. Any routine you can see is yours to change, a teammate's included: it is a local context-repo edit, shared by a git push. Notifies no one. Returns { status:\"ok\", data:{ id, agent, schedule_in_words, next_fires, enabled, revision, warnings } } (warnings as for routine_create; machine_not_prepared means saved locally; delivery or preparation may be pending. The agent uses prior prepared content until preparation succeeds; routine_refresh_on_machine retries); { status:\"conflict\", data:{ message, current_revision } } when it changed since `baseRevision` (nothing was changed: routine_get it again and reapply); or `validation`. Events use the YAML model: events:[{kind:\"inbox_idle\"}] fires on idle sessions with unread mail; events:[{kind:\"agent_done\",from_agent:\"reviewer\"}] watches that agent finishing (omit from_agent for all in reach). Use events:[{kind:\"role_pending\"}] to watch every queue in reach. Use events:[{kind:\"role_pending\",role:\"reviewer\"}] to watch only reviewer mail. role must be nonblank and is valid only for role_pending; from_agent only for agent_done. No role or from_agent existence check. Omitted/null events keeps current events; [] clears these three kinds; nonempty replaces only them, preserving schedules and metadata triggers. Event errors return status:validation with events[i].field and a hint. These events support each_mac; machine arming restrictions still apply. metadataTriggers takes query_context selection, target eq and optional previous eq for a transition. Existing matches baseline at discovery/restart. [] clears metadata triggers; omitted/null keeps them. Metadata triggers require one_mac. Recipients use routine_context and the wake header runId. action:command runs command:[program,arg,...] directly without an agent/model; rendered argv is returned. Commands are team/local only, default overlap queue/maxRuntime 5m. Bare executables use PATH; relative executable paths must stay inside the team content root; absolute executable paths are refused. Exit 0 succeeds; routine_run exposes bounded, secret-redacted output (last 4 KB). after:{routine:id,on:succeeded|finished} chains in the same space; finished excludes cancelled/skipped/coalesced, cycles and missing upstream are refused. after:null clears on update. budgetUsd {perDay?,perWeek?} is fresh-agent only; raising/removing a cap needs native Accept. Verified caller required; sessionId must match.\nDocs: arc-g-routines/trigger-cookbook.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agent",
+                  "command"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "agent (default) or command. action:command takes command:[program,arg,...]\ninstead of agent/task/mode; it runs as you, with no agent or model, in a\nteam workspace or managed repo clone. Defaults: overlap queue, maxRuntime 5m.\nOnly me and machine-armed command routines are refused."
+          },
+          "after": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "on": {
+                    "enum": [
+                      "succeeded",
+                      "finished"
+                    ],
+                    "type": "string"
+                  },
+                  "routine": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "routine",
+                  "on"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Fire after a routine in the same space succeeds or finishes. `finished`\nexcludes cancelled/skipped/coalesced. Cycles and missing upstream routines\nare refused. Chained fires carry trigger.{run_id,routine,phase,result_text,detail}.\nafter:null removes it; omission preserves it."
+          },
+          "agent": {
+            "default": null,
+            "description": "Another agent, as for `routine_create`: the routine moves under it\n(same id and history): how an Unassigned routine gets an agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseRevision": {
+            "description": "The `revision` the change was made against.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budgetUsd": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "perDay": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "perWeek": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "budgetUsd {perDay?,perWeek?}: positive finite USD for the local calendar\nday and Monday-start week, not rolling windows. Lowering is immediate\nand ratchets the local accepted ceiling; raises/null removal need native\nAccept. Omitted keeps the cap. Fresh only: wakes cap the agent; commands\ncannot. Machine-armed caps are refused. Unrestricted shells are trusted;\nsandbox untrusted agents."
+          },
+          "command": {
+            "default": null,
+            "description": "Program and arguments, one entry each. A bare program uses PATH; a relative\nexecutable path must be executable inside the team content root; absolute\nexecutable paths are refused. Args render individually, never through a shell.\nExit 0 succeeds; routine_run exposes the secret-redacted last 4 KB of output.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "events": {
+            "description": "Replaces inbox_idle, agent_done and role_pending triggers only; schedules and\nmetadata triggers stay. Omitted or null preserves; [] clears these events.",
+            "items": {
+              "description": "Event inputs share the YAML model's spelling and validation.",
+              "properties": {
+                "from_agent": {
+                  "default": null,
+                  "description": "agent_done only: agent id or full key; omitted watches all agents in reach.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "inbox_idle, agent_done or role_pending.",
+                  "type": "string"
+                },
+                "role": {
+                  "default": null,
+                  "description": "role_pending only: nonempty queue name; omitted watches every queue in reach.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The routine's `id` as `routine_list` returns it.",
+            "type": "string"
+          },
+          "machine": {
+            "default": null,
+            "description": "`local`, a machine id or `any`, as for `routine_create`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxRuntime": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxWakes": {
+            "default": null,
+            "description": "As for routine_create; `null` removes the limit, omitted keeps it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxWakesPerDay": {
+            "default": null,
+            "description": "As for routine_create; `null` removes it, omitted keeps it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "metadataTriggers": {
+            "default": null,
+            "description": "Metadata conditions using query_context's selection and eq clauses. Example:\n[{\"selection\":{\"where\":{\"kinds\":[\"story\"]}},\"target\":{\"key\":\"status\",\"op\":\"eq\",\"value\":\"in-progress\"}}].\nAdd previous:{\"key\":\"status\",\"op\":\"eq\",\"value\":\"planning\"} for an exact transition.\nMatches at first discovery or restart are a baseline; only later entry fires.\nOmit to preserve; [] removes metadata triggers on update, keeping other events.\nNot with runsOn:each_mac. Recipients read changes with routine_context and\nthe wake header runId (incl. coalesced_payloads).",
+            "items": {},
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "minGap": {
+            "default": null,
+            "description": "As for routine_create; `null` removes it, omitted keeps it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missed": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "default": null,
+            "description": "`fresh` or `wake`, as for `routine_create`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overlap": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resultSchema": {
+            "default": null,
+            "description": "Replaces the output schema; explicit null clears it, omission preserves it."
+          },
+          "runsOn": {
+            "default": null,
+            "description": "A team routine only: `one_mac` or `each_mac`, as for `routine_create`.\nTo `each_mac`: stays on the Mac that ran it as a shared job, off\nelsewhere until turned on there. To `one_mac`: this editing Mac runs it\nand others stop.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "An IANA zone. Alone, it moves every schedule into it; with `when`, it is\nthe zone `when` is read in. Default: the routine's current zone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "additionalProperties": true,
+            "default": null,
+            "description": "Replaces every declared variable.",
+            "type": "object"
+          },
+          "visible": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "when": {
+            "default": null,
+            "description": "A new schedule (as for `routine_create`); replaces every schedule.\nwhen:\"\" removes schedules and keeps events; omitted preserves schedules.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "where": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "baseRevision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "run_in_terminal_tab",
+      "description": "Type input into a terminal tab and submit it, or press one key. Address the tab by {handle} (from open_terminal_tab, open_remote_tab, open_workspace or list_sessions; never a raw sessionId) or by {tab} (its current name from list_sessions) with optional {machine}/{workspace}; ambiguous names return the candidate set. Give exactly one of {command} or {key}. {command}: when the tab is at a shell prompt it runs as a shell command (it may itself start an agent, e.g. `claude \"fix the build\"`); when Claude or Codex is running in the tab — launched that way, or started by hand in a shell — it is sent as a prompt: the text, then Enter as a separate keystroke so the agent submits it rather than leaving it in its input box (multi-line text is sent as one paste). {key}: one key alone, nothing typed — `enter` submits whatever is already in an agent's input box; also `escape`, `tab`, `shift-tab`, `backspace`, `ctrl-c`, `ctrl-d`, `up`, `down`, `left`, `right`. Gated by the Interactive tier. Local tab: `{submitted, input?}`. Remote tab: `{status: submitted|notSent|unknown|refused, submitted: true|false|null, input?, code?, message?}`. `input` says how a command was sent: `shell` or `agent`. `unknown` means the input may have been typed or submitted — check with read_terminal_tab and never automatically resend it.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "command": {
+            "default": null,
+            "description": "The input to type and submit: a shell command, or — when Claude or Codex is\nrunning in the tab — a prompt or slash command. Give this or `key`.\nRemote `status: unknown, submitted: null` means it may have been submitted;\nnever automatically replay that input.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handle": {
+            "default": null,
+            "description": "The opaque terminal handle returned by `open_terminal_tab`, `open_remote_tab`\nor `list_sessions`. Give this or `tab`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "anyOf": [
+              {
+                "description": "A key `run_in_terminal_tab` can send on its own.",
+                "enum": [
+                  "enter",
+                  "escape",
+                  "tab",
+                  "shift-tab",
+                  "backspace",
+                  "ctrl-c",
+                  "ctrl-d",
+                  "up",
+                  "down",
+                  "left",
+                  "right"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One key to send on its own, nothing else typed: `enter` submits what is\nalready in an agent's input box; also `escape`, `tab`, `shift-tab`,\n`backspace`, `ctrl-c`, `ctrl-d`, `up`, `down`, `left`, `right`. Give this\nor `command`."
+          },
+          "machine": {
+            "default": null,
+            "description": "With `tab`: the machine it runs on, by label (\"This Mac\" for this one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tab": {
+            "default": null,
+            "description": "The tab's name as its tab bar shows it now (e.g. \"Terminal 2\"), instead of a handle.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "default": null,
+            "description": "With `tab`: the workspace id it is in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "schedule_wakeup",
+      "description": "Schedule wakeup — temporary routine / reminder for THIS session only — use it when asked to 'add a routine for your session', 'remind yourself', or 'check X every N minutes'. Unlike routine_create (a saved routine on an Agent that wakes its running session or starts a new one, and persists), the prompt is typed into this same conversation so you keep your context, and it ends when this session ends. When it fires, CodeSense types `prompt` into your terminal as a new message once you are idle: never while you are working or waiting on a permission prompt; a fire waits up to 24 h for you to be idle (then it is dropped as busy_timeout), and fires due while one still waits collapse into it. Works in any interactive CodeSense session, saved agent or not, on this Mac or a connected machine, where CodeSense can tell when the agent is idle (Claude; not a plain shell, not Codex yet); not for headless runs. It belongs to the session you call from, ends with it (exit, close, crash), and never starts anything. Required: `sessionId` (your own `$CODESENSE_TAB_SESSION_ID`, checked against the terminal you call from: another session's id is refused), `prompt`, and exactly one of `in` (a duration: `90s`, `20m`, `2h`, `1h30m`, `1d`; prefer it for relative times) or `at` (an RFC 3339 time WITH its offset, in the future, e.g. `2026-10-05T14:30:00-07:00`; `date +%z` prints your offset). The first fire must be within 366 days. Optional: `every` (repeat interval, at least `1m`), then at most one of `until` (RFC 3339 with offset, after the first fire) or `count` (fires, at least 1); `minGap` (`30m`, `2h`; 1m to `7d`: the least time between two of its deliveries; a fire inside it folds into the last one; a terminal server too old to enforce it refuses the timer); `name` (shown in the marker and the list; default: the prompt's first words). Choose the limits for the work each wake starts: a light check needs none, e.g. `{\"in\":\"15m\",\"every\":\"15m\",\"prompt\":\"Check CI; if it is green, say so in one line\"}` may fire hundreds of times over a week; a heavy one, e.g. `{\"in\":\"1h\",\"every\":\"1h\",\"minGap\":\"3h\",\"prompt\":\"Rebuild and rerun the integration suite\"}`, never wakes you again inside three hours. Limits: 10 active timers per session, 200 per machine; a safety backstop of 120 wakes an hour per session (all sources together) refuses the rest as rate_limited, posts one inbox note and resumes on its own; prompt plus its header at most 8 KiB. Each delivery starts with `[timer: <name> | fire <n>]`. Setting needs the CodeSense desktop connected; while it is away, timers already set keep firing, and on a machine list_wakeups and cancel_wakeup are answered by the machine. Returns { timerId, nextAt (RFC 3339, UTC), name, machineId, sessionId }; a refusal is an MCP error that says why. Identity comes from the verified MCP connection; a supplied sessionId must name that caller, and an unbound caller is refused.\nDocs: arc-g-routines/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "default": null,
+            "description": "First fire at this RFC 3339 time with its offset\n(`2026-10-05T14:30:00-07:00` or `…Z`); in the future.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "default": null,
+            "description": "Stop after this many fires (at least 1).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every": {
+            "default": null,
+            "description": "Then repeat this often (at least `1m`). Omit for a one-shot timer.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "in": {
+            "default": null,
+            "description": "First fire after this long: `90s`, `20m`, `2h`, `1h30m`, `1d`.\nExactly one of `in` or `at`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minGap": {
+            "default": null,
+            "description": "Optional: the least time between two of its deliveries (`30m`, `2h`;\n1m to `7d`). A fire inside it folds into the last one instead of\nwaking you again. Set it when each wake starts heavy work.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "default": null,
+            "description": "A short name for the marker and the list (default: the prompt's\nfirst words).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "description": "What your session receives when the timer fires.",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "Your own `$CODESENSE_TAB_SESSION_ID`, checked against the terminal\nyou call from: another session's id is refused.",
+            "type": "string"
+          },
+          "until": {
+            "default": null,
+            "description": "Stop repeating after this RFC 3339 time (with offset), after the first\nfire. At most one of `until` or `count`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "send_message",
+      "description": "Send an inbox message to an agent session or the human. To the human, set {kind}: \"needs-you\" when it waits on them (a question, a decision, something only they can unblock), \"update\" for progress, \"merged\", \"done\" (informational). Both kinds appear as conversations in the human Inbox; all unread human mail counts in its badge. Kind remains available to agent views and dashboards. Omitted, it is an \"update\" unless you set a {replyTo} naming someone other than the human, yourself or a role you hold (a question whose answer must reach someone) — so mark every question or decision `kind:\"needs-you\"`, or use ask_user when you must wait for the answer; a manager's digest with replyTo \"role:manager\" is an update. Durable. Optional {requestId} replays the original messageId for the same key and payload; changed payloads are refused. A recipient CodeSense can tell (inboxWaiter true in list_sessions) hears the inbox notice: an idle one starts a turn, a running one hears at its next step or turn. A Claude is told by its inbox waiter; an idle Codex is started a turn with it through its own engine (headed `[inbox <token>]`; this needs Codex 0.159.3 or a newer 0.x release), and a working one hears it at its next tool call or prompt. If Claude's waiter died, guarded recovery submits only the inbox notice when idle, with tools connected, empty input and no person typing. A recipient it cannot tell (inboxWaiter false in list_sessions: its CLI has no wake path, or its waiter has gone) keeps its mail held; wake it with send_to_session telling it to call read_messages. A supported CLI can be inbox-ready before its first prompt once its engine and trusted observers establish readiness; startup menus, approvals and unavailable engines keep it unready. Collect replies with read_messages. Args: {to} (a list_sessions handle or \"human\"), {text}, {session_id} (optional: omit it to use this connection's verified tab identity, including a CLI started by hand in a CodeSense tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never sent as the human; the message shows as the sender's current tab name, see who_am_i). Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown is the default so **bold** / code fences / tables render formatted. html to the human is a LIVE DASHBOARD: it renders in the Inbox exactly like an HTML dashboard file — scripts run, `window.codesense` is available (sessions(), inbox(), roles(), act(...) through the same action gate), and the frame hears pushed events (codesense:inbox-changed, codesense:agent-activity-changed); see get_live_data_contract. html to another agent is sanitized to plain formatting (agents read text). {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}` jumps to that agent's terminal, `{type:\"open-file\",path}` opens the path in the viewer, `{type:\"show-message\"}` (default) opens the thread. {media:{url|path,alt}} adds a GIF/image; alt and one source required. {attachFile} is a logical team-content path rendered as an attachment card with Open. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (the answer goes ONLY there, not also to you): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may exit before the answer: {replyTo:\"role:manager\"} sends the human's reply to the manager's durable role queue. {summary} is one plain-text line (≤280 chars) shown as this message's preview in the human's Inbox and lists. Set it for html and long markdown; otherwise the preview is derived. Returns `{status:\"sent\",messageId,kind?,hint?}` or `{status:\"invalid\",message}` — `kind` (to the human) says whether it waits on them; `hint` says when an unmarked question defaulted to update (it is never reclassified by its words) — (blank text without media / unknown recipient / a sessionId that is not running / a replyTo session that is not running).\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "attachFile": {
+            "default": null,
+            "description": "Optional logical team-content path to attach — the inbox renders an\nattachment card with an Open button. Stored verbatim; blank/omitted means no\nattachment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "description": "How a message body should be rendered. Stored as the lowercase variant name\non `wv_inbox.content_type`; omitted/`None` means the FE renderer applies its\ndefault (`markdown` — see `DESIGN-inbox-ux.md` §3).",
+                "enum": [
+                  "plain",
+                  "markdown",
+                  "html"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How to render the body. `\"markdown\"` (default) renders GFM — tables,\nstrikethrough, task lists, highlighted code fences. `\"plain\"` preserves\nwhitespace with no formatting. `\"html\"` to the human is a live dashboard:\nit renders in the Inbox like an HTML dashboard file, with scripts, the\n`window.codesense` bridge, pushed events and actions through the same\naction gate (e.g. `<script>codesense.sessions().then(...)</script>`).\n`\"html\"` to another agent is sanitized to plain formatting."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "description": "What a message asks of the human, for agent views and dashboards. The human\ninbox shows both kinds as conversations and counts all unread human mail. Stored as given on `wv_inbox.kind` (NULL when the sender set none); reads\nresolve the effective kind with [`InboxMessage::effective_kind`].",
+                "oneOf": [
+                  {
+                    "const": "needs-you",
+                    "description": "Waits on the human: a question, a decision, something only they can unblock.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "update",
+                    "description": "Informational: progress, \"merged\", \"done\".",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What the message asks of the human, for agent views and dashboards:\n`\"needs-you\"` (waits on them: a question, a decision) or `\"update\"` (progress,\n\"merged\", \"done\"). Omitted: `\"needs-you\"` when `replyTo` names someone other than\nthe human, the sender or a role the sender holds, else `\"update\"`."
+          },
+          "media": {
+            "anyOf": [
+              {
+                "properties": {
+                  "alt": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "alt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional GIF or image: exactly one of HTTPS url or local path, and required alt text."
+          },
+          "onClick": {
+            "anyOf": [
+              {
+                "description": "Per-message click action attached by the sender. Stored verbatim as JSON on\n`wv_inbox.on_click`; omitted/`None` is the ordinary \"open the thread\" default.",
+                "oneOf": [
+                  {
+                    "description": "Click the row → focus the agent's running terminal (`agents-list.tsx`\n`onLocate`). The id is the agent definition id (`agents_list` row key —\nthe sender picks the agent to jump to; the UI resolves to a running\nsession at click time).",
+                    "properties": {
+                      "agent_id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "goto-agent",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "agent_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Click the row → open `path` in the viewer. The host validates the path\nagainst the sender's team content root before opening (`openFileInTeam`).",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "open-file",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Explicit default — same as omitting the field. Kept so an agent that\nwants the row to open the message view can say so.",
+                    "properties": {
+                      "type": {
+                        "const": "show-message",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Make the row actionable. `{type:\"goto-agent\",agentId}` jumps to the agent's\nrunning terminal; `{type:\"open-file\",path}` opens the path in the viewer;\n`{type:\"show-message\"}` (default) opens the conversation view."
+          },
+          "replyTo": {
+            "default": null,
+            "description": "Where replies to this message go instead of to the sender, like an email\nReply-To (the answer goes ONLY there): a running session's handle, `\"human\"`, or\n`\"role:<agent id>\"` (that role's durable queue). Use a role when the sender may\nbe gone before the answer comes: a worker that asks the human with\n`replyTo: \"role:manager\"` and then exits still gets the answer to the manager's\nqueue. Omit for replies to come back to the sender.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "default": null,
+            "description": "Retry key: reuse the same value and payload after a transport disconnect.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "default": null,
+            "description": "Omit to send as this connection's verified tab, including a CLI started by hand\nin a CodeSense terminal. If supplied, it must name that same tab. An unbound\nconnection is refused; start the CLI in a CodeSense terminal. The message shows\nthe tab's current name. MCP cannot send as the person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "default": null,
+            "description": "One plain-text line (≤280 chars) shown as this message's preview in the\nhuman's Inbox and lists. Set it whenever contentType is html (otherwise the\npreview is derived from the markup) and for long markdown messages.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "Message body. Renders as `contentType` (markdown by default).",
+            "type": "string"
+          },
+          "to": {
+            "description": "Recipient: a session handle from `list_sessions`, or `\"human\"`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "send_role_message",
+      "description": "Send a message addressed to a ROLE (any role name, usually an agent id); the inbox row + pending wv_role_delivery row commit together. {requestId} is an idempotency key: same key + same payload replays the stored {messageId, deliveryId}; same key + different payload returns `conflict` and the original wins (payload hash includes text, attachFile, contentType, replyTo and summary). Omit requestId to always create a new row. {sender} defaults to this connection's verified tab, including a CLI started by hand in a CodeSense terminal. A supplied sender must name that same tab. Unbound callers are refused; MCP cannot send as the human. The message stays queued until an instance of the role claims it (claim_role_messages); reading the queue never claims, and routines with a `role_pending` trigger hear of it. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (the answer goes ONLY there, not also to you): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may be gone before the answer comes: a worker briefed by a manager sends its question to the human with {replyTo:\"role:manager\"}, then exits; the human's reply lands as a pending delivery in the manager role's queue, not in the dead worker's inbox. The inbox shows \"Replies go to: …\" under the message. Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown is the default so **bold** / code fences / tables render formatted; html is strictly sanitized (scripts, iframes, forms, event handlers, and non-http(s)/mailto/# URLs are dropped). {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}`, `{type:\"open-file\",path}`, or `{type:\"show-message\"}` (default). {attachFile} is a logical team-content path rendered as an attachment card with Open. {summary} is one plain-text line (≤280 chars) shown as this message's preview in inbox lists. Set it whenever contentType is html (otherwise the preview is derived from the markup) and for long markdown messages. Returns `{status:\"sent\",messageId,deliveryId}`, `{status:\"conflict\"}`, or `{status:\"invalid\",message}` (blank text / a replyTo session that is not running).\nDocs: arc-f-inboxes-and-triage/index.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "attachFile": {
+            "default": null,
+            "description": "Optional logical team-content path to attach — the inbox renders an\nattachment card with an Open button. Part of the `requestId` hash.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "description": "How a message body should be rendered. Stored as the lowercase variant name\non `wv_inbox.content_type`; omitted/`None` means the FE renderer applies its\ndefault (`markdown` — see `DESIGN-inbox-ux.md` §3).",
+                "enum": [
+                  "plain",
+                  "markdown",
+                  "html"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How to render the body. `\"markdown\"` (default) renders GFM. `\"plain\"`\npreserves whitespace with no formatting. `\"html\"` is strictly sanitized via\nDOMPurify — scripts, iframes, forms, style tags, and event handlers are\ndropped, non-https?/mailto/# URL schemes are rejected, only a plain\nformatting tag allowlist survives. Part of the `requestId` hash."
+          },
+          "onClick": {
+            "anyOf": [
+              {
+                "description": "Per-message click action attached by the sender. Stored verbatim as JSON on\n`wv_inbox.on_click`; omitted/`None` is the ordinary \"open the thread\" default.",
+                "oneOf": [
+                  {
+                    "description": "Click the row → focus the agent's running terminal (`agents-list.tsx`\n`onLocate`). The id is the agent definition id (`agents_list` row key —\nthe sender picks the agent to jump to; the UI resolves to a running\nsession at click time).",
+                    "properties": {
+                      "agent_id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "goto-agent",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "agent_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Click the row → open `path` in the viewer. The host validates the path\nagainst the sender's team content root before opening (`openFileInTeam`).",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "open-file",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Explicit default — same as omitting the field. Kept so an agent that\nwants the row to open the message view can say so.",
+                    "properties": {
+                      "type": {
+                        "const": "show-message",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Make the row actionable. `{type:\"goto-agent\",agentId}` jumps to the agent's\nrunning terminal; `{type:\"open-file\",path}` opens the path in the viewer;\n`{type:\"show-message\"}` (default) opens the conversation view."
+          },
+          "replyTo": {
+            "default": null,
+            "description": "Where replies to this message go instead of to the sender, like an email\nReply-To (the answer goes ONLY there): a running session's handle, `\"human\"`, or\n`\"role:<agent id>\"` (that role's durable queue). Use a role when the sender may\nbe gone before the answer comes: a worker that asks the human with\n`replyTo: \"role:manager\"` and then exits still gets the answer to the manager's\nqueue. Omit for replies to come back to the sender.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "default": null,
+            "description": "Idempotency key. A retry under the same key with the SAME payload (text +\nattachFile + contentType + replyTo + summary) replays the stored `{messageId, deliveryId}`.\nA retry under the same key with a DIFFERENT payload returns\n`status:\"conflict\"` and the original stays authoritative. Omit to always\ncreate a new row.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "Role id — usually an agent id (from `agent_list`).",
+            "type": "string"
+          },
+          "sender": {
+            "default": null,
+            "description": "Sender identifier (a session handle, or `\"human\"`). Omit to send as the tab this\nMCP connection runs in; a caller outside any CodeSense tab, or in a tab CodeSense\ndid not launch or register (one started by hand), is `\"human\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "default": null,
+            "description": "One plain-text line (≤280 chars) shown as this message's preview in inbox\nlists. Set it whenever contentType is html (otherwise the preview is derived\nfrom the markup) and for long markdown messages. Part of the `requestId` hash.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "description": "The `(org, team)` the role mailbox lives in. The viewer-visible\nteam identity, mirroring `InboxTeam`.",
+            "properties": {
+              "org": {
+                "type": "string"
+              },
+              "team": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "org",
+              "team"
+            ],
+            "type": "object"
+          },
+          "text": {
+            "description": "Message body. Renders as `contentType` (markdown by default).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team",
+          "role",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "send_to_session",
+      "description": "Send a prompt to a running agent session (Claude or Codex) by {handle} — the handle open_workspace, open_remote_tab or list_sessions gave you; a raw sessionId, or a handle with no running session, is refused and nothing is written. Args: {handle}, {text} (non-empty; a slash command works). The text is typed into the agent's input box and then Enter is sent as a separate keystroke, so it is submitted, not left as a draft (multi-line text is sent as one paste). Works for agents on this Mac and on remote machines. Gated by the Interactive tier. Local: returns `{submitted}` (false: the agent did not visibly start working; it may still be in its input box — check read_terminal_tab, or press Enter with run_in_terminal_tab {handle, key: \"enter\"}). Remote: returns `{status: submitted|notSent|unknown|refused, submitted: true|false|null, input, code?, message?}` — `unknown` means the prompt may have been submitted: check read_terminal_tab and never automatically resend it. Submitted text is also recorded in the target's inbox conversation (marked typed into terminal, already read) so its history shows it.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "handle": {
+            "description": "The opaque session handle returned by `open_workspace`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The text to deliver to the live agent session (non-empty).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "session_read",
+      "description": "Read one session's joined record, models, tokens, cost, allowed/used tools, timing, story and run outcome. Required sessionId is a CodeSense or CLI-native id naming the subject, not the caller. Returns {session (record or null), nativeSessionIds, story, run, models, cost, tools, tasks, retries, unavailable}. Models have model,calls,tokens,costUsd,costSource,reason; cost has totalUsd,source,reason,state. Source is reported, rate_table, mixed, or null. Unknown cost is null with a reason; a real zero-token call can cost 0. tools.used groups name,mcpServer,calls,errors,errorUnknown (unknown isError is never success). firstError is the earliest indexed failure; firstRetainedError is the earliest failure outside the dropped-turn interval, or null when no failure text is retained. Each candidate has turn and toolUseId; confirm its conversation lookup before linking. tools.usedState and usedReason distinguish present/truncated/expired counts from absent/unsupported/unavailable (used:null); expired retains the index. allowed comes from the record. Timing is session.timing (milliseconds). retries is null: no retry signal is recorded. Missing record/fields keep explicit unavailable reasons; an id with no record or usage is an error. Optional include:[conversation] adds the existing conversation page with present/truncated/absent/expired/unsupported/unavailable state. Use cursor (next turn index) and limit (1–200, default 20), or jump with turn (zero-based) or toolUseId (default 1 turn; a Codex exec-… file-change id jumps to its enclosing call). cursor, turn and toolUseId are exclusive and require conversation include. include:[turns] instead pages the same turns as summaries {index,role,tsMs,text (200 chars),toolCalls,toolErrors,model} (same cursor, limit, turn and toolUseId and the same states) with no tool input or result text, and the answer holds only session {sessionId,cli,branch,timing}, story and turns (not both includes). Conversation is omitted otherwise. Read scope matches session_usage: every local agent can read every session; caller content scope only gates story enrichment. Dashboard codesense.sessionRead takes identical arguments and returns identical JSON from the same backend. Next: page conversation with nextCursor, or read_run with session.runId for run evidence.\nDocs: arc-e-agents/mcp-only-agents.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Next turn index from the preceding conversation page.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "include": {
+            "description": "Omit for facts only. `conversation` pages the stored turns in full. `turns` pages them as\nsummaries (index, role, tsMs, text up to 200 chars, toolCalls, toolErrors, model) with no\ntool input or result and no provided skills (a call whose failure is not recorded adds\ntoolErrorsUnknown), and the answer holds only the session's id, cli, branch and timing, its\nstory, the reasons for those and the page. Not both.",
+            "items": {
+              "enum": [
+                "conversation",
+                "turns"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "description": "Turns to return (1–200). Defaults to 20, or 1 for a jump.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "A CodeSense session id or the CLI's native session id. Names the subject, not the caller.",
+            "type": "string"
+          },
+          "toolUseId": {
+            "description": "Jump to the turn containing this CLI-native tool call id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn": {
+            "description": "Jump to this zero-based turn index; exclusive with cursor and toolUseId.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "session_usage",
+      "description": "Token use and spend per agent session on this Mac and the remote machines it connects to, from each agent CLI's own reports. A connected machine's usage is pulled each minute, so its newest calls can take a minute or so to appear; a disconnected machine's arrive when it next connects. It is read-only. It covers only the sessions CodeSense launched (their telemetry is switched on at launch); while this Mac's managed Claude settings send session telemetry elsewhere, a Claude session's usage is read from its own session log when each turn ends, so it can take a minute or so to appear. Optional: `sinceMs`, `untilMs` (epoch milliseconds; counted by whole local day: sinceMs's day is included, untilMs's day is excluded), `sessionId` (one session), `cwd` (one working directory, exact path, e.g. a PR's worktree), `story` (one story id, e.g. `DEMO-5`: only the sessions spent on it; the days and totals cover only them), `limit` (the most sessions to return, newest first; the totals still cover them all), `cursor` (the previous page's `nextCursor`, with the same other args). Returns `{sessions, days, totals, total, nextCursor?, unavailableReason?}`; `nextCursor` is present only when more sessions follow, so pass it back as `cursor` to read the next page (during a walk a session that becomes active moves to the first page; a walk is complete when its distinct sessionIds equal total, otherwise walk again from page 1 through continuation, merging by sessionId, up to 2 recovery rewalks; after that report the truthful latest N of M). Each session is `{sessionId, cli (`claude`, `codex` or `opencode`), org, team, agent, machineId, cwd, story, models, firstAtMs, lastAtMs, messages, tokens: {input, output, cacheRead, cacheWrite}, costUsd, unpricedModels, runId}`, newest activity first. `org`, `team` and `agent` say who ran it and are null when it was not launched by CodeSense or launched before attribution existed. `runId` is the run it worked (a list_runs `outcome.run_id`), from the session's durable record, and null when it has no record or ran outside a run. `machineId` is the machine it ran on, as list_machines names it (`local` for this Mac; the machine of its latest call when its usage came from more than one). `story` is the story the session was spent on, `{id, title, status, epic, basis?}` (title, status and epic from the story file's frontmatter, null when it does not say), or null when the session is not tied to a story: a session whose cwd is a story worktree (as list_worktrees lists it) or a folder inside one is that story's, else the story its launch was opened for (open_workspace's storyId), when that launch is still listed (title, status and epic then come from the org's story file); else a context worktree named `<team>/<epic>-<n>` (under context-worktrees) joins the story whose id ends `-<EPIC>-<n>` in that team, with `basis:\"associated\"` (no basis means exact). `days` has one entry per local day with usage, newest first, with `{day, tokens, costUsd, unpricedModels}`. Each API message counts once, including one the CLI sends on its own: Codex's start-up cache warm-up (input, no output) counts, though Codex's own \"tokens used\" total leaves it out. `costUsd` is null when a call used tokens on a model with no confirmed list price (`unpricedModels` names it), so that session's tokens still count. `totals` sums tokens, the cost of priced sessions, and counts `pricedSessions` and `unpricedSessions`. Next: model_rates for the prices on file, set_model_rate to price a model in `unpricedModels` with a price the user gives. A dashboard's codesense.sessionUsage() returns the same. Spend caps use this same priced event store and local calendar-day keys across machines; day windows and Monday-start weeks detect unpriced models and refuse new work for a capped scope.\nDocs: arc-e-agents/mcp-only-agents.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "The `nextCursor` of the previous page: continue after the last session it returned. Pass the\nsame other fields. A cursor from a different window or filter is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cwd": {
+            "description": "Only usage recorded in this working directory (a workspace path, exact match).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "The most sessions to return, newest first. The totals still cover every session. Omitted: all.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "Only this session's usage (a session id from list_sessions or sessions()).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sinceMs": {
+            "description": "Count from the local day containing this time (epoch milliseconds). Omitted: no lower bound.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "story": {
+            "description": "Only the sessions spent on this story (a story id, e.g. `DEMO-5`; see each session's\n`story`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "untilMs": {
+            "description": "Count up to, not including, the local day containing this time (epoch milliseconds). Omitted:\nno upper bound.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "signal_done",
+      "description": "Report that your managed task is FINISHED — your FINAL act (the completion contract). `status`: `success` | `failed` | `needs-attention`. CodeSense records the outcome and notifies watchers; it does NOT run tests, validate, or move the story's status (do that yourself if your task says to). Going quiet without calling this leaves the session flagged `needs-attention` (not silently done). A routine run is the exception — its task decides. `needs-attention` records a completed outcome; it does not mean a permission prompt or needs-you. Optional `requestId` deduplicates retries with the same payload; reuse it after a disconnect. Optional `summary` is a short result line. Optional `doneRecord` (`{dispatchId, leg1Source, leg2Footprint, leg3Packet}`) is the Weft 3-leg verify payload a worker populates. Returns `{recorded}`. Inputs: `status`, and optional `sessionId` (omitted, this connection's verified tab session for Claude or Codex; if supplied, the same tab only). An unbound connection is refused; start the CLI in a CodeSense terminal.\nDocs: arc-e-agents/mcp-only-agents.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "doneRecord": {
+            "anyOf": [
+              {
+                "description": "The wire shape of the worker-supplied 3-leg done record (a dedicated\nsub-struct rather than inlining the four fields into `SignalDoneParams`, per\nTask 5c). Deserialized with `#[serde(default)]` on `SignalDoneParams.done_record`\nso existing call sites that omit it are unaffected.",
+                "properties": {
+                  "dispatchId": {
+                    "description": "The dispatch this record closes (`$CODESENSE_DISPATCH_ID`).",
+                    "type": "string"
+                  },
+                  "leg1Source": {
+                    "description": "Leg 1 — the canonical source ref the worker read at job start.",
+                    "type": "string"
+                  },
+                  "leg2Footprint": {
+                    "default": [],
+                    "description": "Leg 2 — the worker's footprint entries.",
+                    "items": {},
+                    "type": "array"
+                  },
+                  "leg3Packet": {
+                    "default": null,
+                    "description": "Leg 3 — the delivered packet (`signalStatus` + `canonicalRefs`)."
+                  }
+                },
+                "required": [
+                  "dispatchId",
+                  "leg1Source"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The OPTIONAL 3-leg done record. A Weft worker populates it as part\nof its exit checklist so the controller can re-verify the claimed green before\nfolding the queue row. Optional at the wire (a worker built before done\nrecords existed still succeeds); without a matching `dispatchId` the ledger\nwrite is skipped (a warning is logged) and `signal_done` succeeds normally."
+          },
+          "requestId": {
+            "default": null,
+            "description": "Retry key: reuse the same value and payload after a transport disconnect.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "default": null,
+            "description": "Omit to complete this connection's verified tab session (Claude or Codex).\nIf supplied, it must name that same tab. An unbound connection is refused;\nstart the CLI in a CodeSense terminal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "One of `success` | `failed` | `needs-attention`.",
+            "type": "string"
+          },
+          "summary": {
+            "default": null,
+            "description": "Optional short human-readable result summary.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "signal_progress",
+      "description": "Report WHERE IN THE RUN you are, mid-task, so dashboards show live per-story progress. Call repeatedly as you advance (contrast signal_done, which is your FINAL act). Fire-and-forget; routes over the same story-keyed stream as signal_done. `phase` is one of: `planning` | `dev` | `review` | `pr` | `blocked` (call this whenever you stop to wait on the human — surfaces that you need them) | `done`. Optional `step`/`total` drive an N-of-M sub-bar; `note` is a short safe-DOM line. Inputs: `sessionId` ($CODESENSE_TAB_SESSION_ID), `phase`.\nDocs: arc-e-agents/mcp-only-agents.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "note": {
+            "default": null,
+            "description": "Optional short, human-readable note (rendered untrusted / safe-DOM).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "description": "Where in the run you are — one of `planning` | `dev` | `review` | `pr` |\n`blocked` | `done`. A closed lifecycle set (NOT the durable story status).",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "The calling session's tab id — pass your `$CODESENSE_TAB_SESSION_ID`.",
+            "type": "string"
+          },
+          "step": {
+            "default": null,
+            "description": "Optional sub-step index for an N-of-M bar (e.g. `3` of `total`).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total": {
+            "default": null,
+            "description": "Optional sub-step count for an N-of-M bar.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "phase"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "start_remote_agent_task",
+      "description": "Start one Codex or Claude task with its selected local native subscription account and an exact managed remote workspace. Official local CLI owns provider authentication; remote machine requires Codex 0.159.3 or a newer 0.x release as its execution runtime, without remote provider login. requestId is an immutable UUID; retry never repeats uncertain submission. Explicit accountId requires accountGeneration; omit both for existing active-account/SystemDefault resolution. The task gets CodeSense only; desktop MCP servers come with a saved Agent. No provider credentials cross to the machine; no API billing fallback.\nDocs: arc-e-agents/spend-caps.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "accountGeneration": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "workspaceHandle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "workspaceHandle",
+          "provider",
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "validate_story",
+      "description": "Validate a candidate CodeSense file BEFORE writing it. Pass `path` (preferred — anchors depends_on/supporting_docs checks) and/or inline `content`. Detects intent (plain_doc | pipeline_story | epic_main_doc) and never nags a plain doc. For a story, returns blocking + advisory findings ({code, field, severity, message, hint}) computed with the same parser + source_repo/type rules the pipeline cache uses. Never returns valid:true for a file it could not fully evaluate.\nDocs: arc-h-pipelines-and-sdlc/runs-and-stories.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "default": null,
+            "description": "Inline candidate content (Markdown or HTML). Used instead of reading\n`path` from disk when provided.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "default": null,
+            "description": "Absolute or relative path to the candidate file. Preferred: it anchors\ndepends_on / supporting_docs resolution to the file's directory.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "who_am_i",
+      "description": "Who you are in CodeSense. {session_id} is optional: omitted, it is the tab this MCP connection runs in; pass your $CODESENSE_TAB_SESSION_ID to name a session (on a remote machine it is your remote tab's session id). Returns {handle, sessionId, displayName, machine, machineId?, workspaceHandle?, workspace, story?, role?, avatar?, agent?, launchedBy, state}: your own list_sessions row. `displayName` is your tab's current name — your inbox messages (send_message, reply) show as that name; rename yourself with rename_terminal_tab and the new name shows from then on. `handle` is how others address you (send_message {to}). `machine` is \"This Mac\" for a tab on this Mac. `machineId` is the id of a remote tab's machine (what machine tools address it by); it is absent on this Mac. Errors when the session is not running (exited, or its machine is not connected).\nDocs: arc-a-first-touch/identity-menu-and-switcher.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "session_id": {
+            "default": null,
+            "description": "Your `$CODESENSE_TAB_SESSION_ID`. Omit it to use the tab this MCP connection\nruns in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "workspace_chat_send",
+      "description": "Post one message to the chat of the workspace this session is bound to. The post is stored once in the shared transcript. Every other bound supported agent is offered a native inbox notice, including remote and busy sessions; no routine is required. Agents read it with `workspace_chat_read`, and the human sees the same transcript in the inbox group chat. Args: {sessionId} optional (identity comes from the verified connection; a supplied id must name that caller); {text} the post (non-empty, ≤32 KiB UTF-8; secret-scanned before persist). Optional: {workspace} must equal your session's bound workspace if present (anti-forgery; v1 workspace binding is one-per-session); {contentType} \"plain\"|\"markdown\"|\"html\" — markdown is the renderer default; html is DOMPurify-sanitized between agents and rendered as a live dashboard to the human; {onClick} same shape as send_role_message (`{type:\"goto-agent\",agentId}` / `{type:\"open-file\",path}` / `{type:\"show-message\"}`); {primaryFile} managed logical path rendered as an attachment card. Returns `{status:\"sent\",messageId,workspaceId}`. Refusals: `no session binding` (unknown sessionId), `session not bound to a workspace`, `workspace override does not match session's bound workspace`, `workspace archived` (the workspace archive flag).\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "contentType": {
+            "anyOf": [
+              {
+                "description": "How a message body should be rendered. Stored as the lowercase variant name\non `wv_inbox.content_type`; omitted/`None` means the FE renderer applies its\ndefault (`markdown` — see `DESIGN-inbox-ux.md` §3).",
+                "enum": [
+                  "plain",
+                  "markdown",
+                  "html"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "onClick": {
+            "anyOf": [
+              {
+                "description": "Per-message click action attached by the sender. Stored verbatim as JSON on\n`wv_inbox.on_click`; omitted/`None` is the ordinary \"open the thread\" default.",
+                "oneOf": [
+                  {
+                    "description": "Click the row → focus the agent's running terminal (`agents-list.tsx`\n`onLocate`). The id is the agent definition id (`agents_list` row key —\nthe sender picks the agent to jump to; the UI resolves to a running\nsession at click time).",
+                    "properties": {
+                      "agent_id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "goto-agent",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "agent_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Click the row → open `path` in the viewer. The host validates the path\nagainst the sender's team content root before opening (`openFileInTeam`).",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "open-file",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "description": "Explicit default — same as omitting the field. Kept so an agent that\nwants the row to open the message view can say so.",
+                    "properties": {
+                      "type": {
+                        "const": "show-message",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "primaryFile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "default": "",
+            "description": "Omit to use the verified connection. A supplied id must name the same caller.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "workspace": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

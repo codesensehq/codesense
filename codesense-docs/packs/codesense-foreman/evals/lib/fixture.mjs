@@ -12,7 +12,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -299,6 +301,16 @@ function build(root, opts) {
     CODESENSE_TAB_SESSION_ID: CONFIG.self,
   };
   const git = (args, cwd = home) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
+  // The agent's shell reports its real path (on macOS the temp dir sits under /private).
+  const realRoot = realpathSync(root);
+  const within = (dir) => {
+    try {
+      const real = realpathSync(dir);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch {
+      return false;
+    }
+  };
   const gitOk = (args, cwd) => {
     const r = git(args, cwd);
     if (r.status !== 0) throw new Error(`fixture git ${args.join(" ")}: ${r.stderr}`);
@@ -486,6 +498,12 @@ function build(root, opts) {
       if (tool === "read_content_file" && opts.storyTeam === "scripted" && record.args.path === SKILL_PATH) return { text: SKILL };
       if (tool === "read_content_file" && record.args.path === GIT_ACCESS_PATH)
         return opts.gitAccess === "none" ? { error: "File not found" } : { text: GIT_ACCESS[opts.gitAccess] };
+      // Home is a checkout of the team's content: any other team path reads from it.
+      if (tool === "read_content_file") {
+        const file = path.resolve(home, String(record.args.path ?? ""));
+        const inside = file.startsWith(home + path.sep);
+        return inside && existsSync(file) && statSync(file).isFile() ? { text: readFileSync(file, "utf8") } : { error: "File not found" };
+      }
       if (tool === "who_am_i") return { handle: CONFIG.self, sessionId: CONFIG.self };
       if (tool === "agent_list") return { agents: [{ id: CONFIG.sprintLeadAgent }, { id: "story-lead-claude" }, { id: `guide-${CONFIG.runtime}` }] };
       if (tool === "get_story_format") return { text: "Frontmatter: type, status, sprint. Then Purpose and Acceptance Criteria." };
@@ -497,8 +515,9 @@ function build(root, opts) {
     },
     gh: (args, cwd = home) => spawnSync("gh", args, { cwd, env, encoding: "utf8" }),
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
-    git(args, cwd) {
+    git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
+      if (!within(cwd)) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${cwd}\n` };
       return git(args, cwd);
     },
     // A script from the worktree (the team's `stories/*.sh`), run with the sandbox env.

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONSENT_CLASSES,
+  threadOf,
   cardAnswer,
   createMarkLatch,
   deliveryMark,
@@ -531,5 +532,23 @@ describe("the replace chooser's rules", () => {
   it("has room when a pin left: below the cap a plain Pin pins", () => {
     expect(pinChooserRoom(3)).toBeNull();
     expect(pinChooserRoom(2)).toBe(PIN_ROOM_NOW);
+  });
+});
+
+describe("threadOf: a thread's key, one rule for the agent and for no story", () => {
+  it("keys by the saved agent (the id before @) and the story, as the engine's ThreadKey does", () => {
+    expect(threadOf("acme/api/dev@4", "DEMO-1")).toEqual({
+      agentId: "acme/api/dev",
+      storyId: "DEMO-1",
+    });
+    expect(threadOf(" acme/api/dev ", " DEMO-1 ")).toEqual({
+      agentId: "acme/api/dev",
+      storyId: "DEMO-1",
+    });
+  });
+  it("gives no story as empty, however it comes", () => {
+    for (const story of [null, undefined, "", "  "])
+      expect(threadOf("acme/api/dev@3", story)).toEqual({ agentId: "acme/api/dev", storyId: "" });
+    expect(threadOf(null, "DEMO-1")).toEqual({ agentId: "", storyId: "DEMO-1" });
   });
 });

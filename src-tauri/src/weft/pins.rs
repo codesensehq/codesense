@@ -29,10 +29,18 @@ pub struct ThreadKey {
     pub story_id: String,
 }
 
+/// The saved agent an agent id or launch stamp names: the id before `@` (a new revision of it
+/// continues its threads), trimmed. The one rule for a thread's agent: [`ThreadKey::new`], the
+/// session record's thread and the registry's thread all key by it.
+pub fn saved_agent(agent: &str) -> &str {
+    str::trim(Option::unwrap_or(Iterator::next(&mut str::split(agent, '@')), agent))
+}
+
 impl ThreadKey {
+    /// A thread is a saved agent and a story; no story is `""`, one thread per saved agent
+    /// whose sessions are the ones the roster lists (the thread read's rule).
     pub fn new(agent_id: &str, story_id: Option<&str>) -> WvWriteResult<Self> {
-        // The saved agent is the id before `@`: a new revision of it continues its threads.
-        let agent_id = agent_id.split('@').next().unwrap_or(agent_id).trim();
+        let agent_id = saved_agent(agent_id);
         if str::is_empty(agent_id) {
             return Err(invalid("a pin thread needs a saved agent id"));
         }

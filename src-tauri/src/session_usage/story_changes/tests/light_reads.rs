@@ -549,6 +549,7 @@ async fn repeated_session_record_reads_do_not_spawn_more_git_children() {
                 handle: "record-reader".into(),
             },
             std::collections::HashMap::new(),
+            &[],
             &CallerScope::Human,
         )
         .await

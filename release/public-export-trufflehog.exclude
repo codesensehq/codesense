@@ -2,3 +2,5 @@
 (^|/)EXPORT-MANIFEST\.txt$
 (^|/)src/shared/lib/pending-join\.test\.ts$
 (^|/)src-tauri/src/attribution/notes_tests\.rs$
+# The git directory: FETCH_HEAD lists every remote branch, so it changes from run to run.
+(^|/)\.git/
