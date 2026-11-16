@@ -32,11 +32,14 @@
   });
   function rowId(row) { return row.id || row.handle; }
   function orderedRows(topic, rows) { return rows.sort(function(a,b){if(topic==='files')return Number(b.kind==='dir')-Number(a.kind==='dir')||String(a.name).localeCompare(String(b.name),undefined,{numeric:true});if(topic==='agentList'||topic==='records')return Number(a.order||0)-Number(b.order||0)||a.id.localeCompare(b.id);if(topic!=='inbox')return a.id.localeCompare(b.id);var at=function(r){return Number(r.createdAt||(r.message&&r.message.createdAtMs)||r.messageId||0)};return Number(b.rowType==='counts')-Number(a.rowType==='counts')||at(b)-at(a)||Number(b.messageId||0)-Number(a.messageId||0)||a.id.localeCompare(b.id)}); }
-  function selector(options) { if(options.topic==='files')return '|files:'+JSON.stringify([options.scope||'team',options.team||null,options.storyId||null,options.agentId||null,options.dir||null]).slice(0,-1); return options.collection !== undefined ? ':'+options.collection : options.order !== undefined ? '|'+options.order : ''; }
+  // A pins view is one thread's (saved agent + story, as threadOf keys it): its state, first paint and deltas are that thread's only.
+  function pinsThread(options) { return ':'+String(options.agentId||'').split('@')[0].trim()+':'+String(options.storyId||'').trim(); }
+  function selector(options) { if(options.topic==='pins')return '|pins:'+JSON.stringify([options.team||null,options.agentId||null,options.storyId||null]); if(options.topic==='files')return '|files:'+JSON.stringify([options.scope||'team',options.team||null,options.storyId||null,options.agentId||null,options.dir||null]).slice(0,-1); return options.collection !== undefined ? ':'+options.collection : options.order !== undefined ? '|'+options.order : ''; }
   function stateKey(topic, options) { return JSON.stringify([topic, selector(Object.assign({topic:topic},options || {}))]); }
   function matchesView(state, viewKey, resync) {
     if (!viewKey) return true;
     if (!resync && state.viewKey) return state.viewKey === viewKey;
+    if (state.topic === 'pins') return viewKey.startsWith('pins:') && viewKey.endsWith(pinsThread(state));
     var suffix = selector(state);
     return suffix ? (state.topic === 'files' ? viewKey.includes(suffix+',') : viewKey.endsWith(suffix)) : !viewKey.includes('|') && !viewKey.startsWith('records:');
   }
@@ -72,7 +75,7 @@
     var state = topics.get(key);
     if (!state) {
       var first = window.__codesenseFirstPaint;
-      state = { generation:0, topic: topic, scope:options.scope, team:options.team, storyId:options.storyId, agentId:options.agentId, dir:options.dir, collection: options.collection, order: options.order, value: first && first.topic === topic && matchesView(options,first.viewKey,true) ? first : null, listeners: [], stale: true, loading: null, sinceRev: options.sinceRev,window:options.window || ((topic === "records" || topic === "files" || topic === "stories") ? [0,200] : undefined) };
+      state = { generation:0, topic: topic, scope:options.scope, team:options.team, storyId:options.storyId, agentId:options.agentId, dir:options.dir, collection: options.collection, order: options.order, value: first && first.topic === topic && matchesView(topic==='pins'?Object.assign({topic:topic},options):options,first.viewKey,true) ? first : null, listeners: [], stale: true, loading: null, sinceRev: options.sinceRev,window:options.window || ((topic === "records" || topic === "files" || topic === "stories") ? [0,200] : undefined) };
       state.viewKey = state.value && state.value.viewKey;
       topics.set(key, state);
     }
