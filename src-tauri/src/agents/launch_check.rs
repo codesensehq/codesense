@@ -142,6 +142,9 @@ pub enum LaunchWarningCode {
     CliVersionUnqualified,
     /// A project document outranks the injected root instructions.
     ShadowingRootDocument,
+    /// A Claude file rule holds `{{launch_parent}}` that this launch folder can't take: an
+    /// allow is dropped, a deny or ask is kept as written and matches nothing.
+    LaunchParentUnexpanded,
     /// This Mac's managed Claude settings send the session's usage to the organization's own
     /// collector, so CodeSense records no tokens or cost for it and a spend cap can't be enforced.
     UsageNotRecorded,
@@ -225,6 +228,45 @@ pub(crate) fn root_document_warnings(
         }
     }
     Vec::new()
+}
+
+/// The warning naming each Claude rule in `generated` whose `{{launch_parent}}` a launch in
+/// `cwd` can't expand ([`super::permissions::expand_launch_parent`]), if any.
+pub(crate) fn launch_parent_warnings(
+    generated: &[super::manifest::GeneratedEntry],
+    cwd: &std::path::Path,
+) -> Vec<LaunchWarning> {
+    use super::permissions::{expand_launch_parent, UnexpandedReason, CLAUDE_SETTINGS_ID};
+    let rules: Vec<String> = generated
+        .iter()
+        .filter(|entry| entry.id == CLAUDE_SETTINGS_ID)
+        .flat_map(|entry| expand_launch_parent(&entry.content, cwd).unexpanded)
+        .map(|rule| {
+            let outcome = if rule.dropped {
+                "dropped"
+            } else {
+                "kept as written, so it matches nothing"
+            };
+            let why = match rule.reason {
+                UnexpandedReason::Position => "the token must be the whole first segment after //",
+                UnexpandedReason::Cwd => "the launch folder is not an absolute path with a parent",
+                UnexpandedReason::Parent => {
+                    "the launch folder's parent holds a character a rule can't match literally"
+                }
+            };
+            format!("{} {} is {outcome} ({why})", rule.list, rule.rule)
+        })
+        .collect();
+    if rules.is_empty() {
+        return Vec::new();
+    }
+    vec![LaunchWarning {
+        code: LaunchWarningCode::LaunchParentUnexpanded,
+        message: format!(
+            "{{{{launch_parent}}}} can't be expanded for this launch folder: {}.",
+            rules.join("; ")
+        ),
+    }]
 }
 
 /// Everything worth warning about before launching `resolved` with `prompt`.

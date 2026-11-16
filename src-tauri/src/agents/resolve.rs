@@ -121,6 +121,10 @@ impl ResolvedAgent {
                 &mut self.warnings,
                 launch_check::root_document_warnings(self.account.policy.runtime, cwd),
             );
+            std::iter::Extend::extend(
+                &mut self.warnings,
+                launch_check::launch_parent_warnings(&self.manifest.generated, cwd),
+            );
         }
         self
     }

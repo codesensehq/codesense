@@ -2751,3 +2751,58 @@ fn page_launch_settings_carry_status_hooks() {
         }
     }
 }
+
+/// A `{{launch_parent}}` rule a launch folder can't take reaches the launch's warnings: the
+/// allow is dropped from the written file and named.
+#[test]
+fn an_unexpandable_launch_parent_rule_is_a_launch_warning() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    team_content(&home, &alice());
+    save(
+        &home,
+        &alice(),
+        claude_with(
+            "bounded",
+            ClaudePermissions {
+                allow: vec!["Edit(//{{launch_parent}}/foreman-*/**)".into()],
+                ..ClaudePermissions::default()
+            },
+        ),
+    );
+    // A parent holding a glob character can't bound an allow exactly.
+    let cwd = worktree(&tmp.path().join("glob*"));
+    let launch = prepare_named(&home, &alice(), "bounded", interactive(None)).unwrap();
+    let id = session("pty-launch-parent");
+
+    let (prepared, _creation, settings) =
+        apply_for_session(launch, Path::new(CLI), &id, &cwd, None, true).unwrap();
+    let warning = prepared
+        .warnings
+        .iter()
+        .find(|w| w.code == LaunchWarningCode::LaunchParentUnexpanded)
+        .expect("the dropped allow is a launch warning");
+    assert!(
+        warning
+            .message
+            .contains("Edit(//{{launch_parent}}/foreman-*/**)"),
+        "{}",
+        warning.message
+    );
+    let written = read_json(settings.as_ref().unwrap().path());
+    assert!(!written.to_string().contains("foreman-*"));
+
+    // A launch folder whose parent takes the rule has no such warning.
+    let launch = prepare_named(&home, &alice(), "bounded", interactive(None)).unwrap();
+    let plain = worktree(&tmp.path().join("plain"));
+    let other = session("pty-launch-parent-ok");
+    let (prepared, _creation, _settings) =
+        apply_for_session(launch, Path::new(CLI), &other, &plain, None, true).unwrap();
+    assert!(!prepared
+        .warnings
+        .iter()
+        .any(|w| w.code == LaunchWarningCode::LaunchParentUnexpanded));
+    mcp_scope::remove_scope_config(&id);
+    mcp_scope::remove_scope_config(&other);
+}

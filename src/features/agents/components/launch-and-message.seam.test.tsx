@@ -305,6 +305,10 @@ describe("launch sheet", () => {
           code: "shadowing_root_document",
           message: ".hermes.md takes precedence over AGENTS.md; team instructions may be shadowed",
         },
+        {
+          code: "launch_parent_unexpanded",
+          message: "allow Edit(//{{launch_parent}}/x/**) is dropped",
+        },
       ],
     };
     const { sheet } = renderSheet({
@@ -319,6 +323,7 @@ describe("launch sheet", () => {
     );
     const shown = await sheet.findByTestId("launch-warnings");
     expect(shown.textContent).toContain(".hermes.md");
+    expect(shown.textContent).toContain("{{launch_parent}}");
     expect(launchCalls()).toHaveLength(0);
   });
 

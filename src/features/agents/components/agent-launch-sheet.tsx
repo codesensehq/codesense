@@ -265,10 +265,12 @@ function storyWorkspaceIdToBe(tree: DerivedPipelineTree | null, storyId: string)
 /** Stands in for the form while no agent is picked; never sent. */
 const NO_FORM = formFromDraft(emptyDraft(), { placement: { scope: "personal" } });
 
-/** CLI, selected-worktree and usage-recording warnings shown before Launch on this Mac. */
+/** CLI, selected-worktree, launch-folder rule and usage-recording warnings shown before Launch
+ *  on this Mac. */
 const SHEET_WARNING_CODES: readonly string[] = [
   "cli_version_unqualified",
   "shadowing_root_document",
+  "launch_parent_unexpanded",
   "usage_not_recorded",
 ];
 

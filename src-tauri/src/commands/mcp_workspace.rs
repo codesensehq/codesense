@@ -2003,6 +2003,10 @@ async fn spawn_and_bind(
         agent.runtime,
         Path::new(cwd),
     ));
+    warnings.extend(crate::agents::launch_check::launch_parent_warnings(
+        &agent.generated,
+        Path::new(cwd),
+    ));
     Ok(warnings)
 }
 

@@ -153,6 +153,10 @@ fn apply_for_session_with_cli(
                 launch.runtime,
                 cwd,
             ))
+            .chain(crate::agents::launch_check::launch_parent_warnings(
+                &launch.generated,
+                cwd,
+            ))
             .collect(),
         default_prompt: launch.default_prompt.clone(),
         default_role: launch.queue_role.clone(),
