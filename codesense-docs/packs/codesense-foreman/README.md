@@ -7,7 +7,7 @@ The agent (`foreman.md`, `agents/`, `variants.yml`, `pack.yml`) and the page the
 ## The page
 
 `getting-started/content/foreman/index.html` is one self-contained file: a vendored build of the
-story view kit with its config inlined, a `story-view:foreman` meta and the capabilities it
+story view kit with its config inlined, a `story-view:foreman` meta with the value `launcher` and the capabilities it
 declares (`sessions:read inbox:read:team inbox:write context:read launch machines:read`). It loads
 no sibling script or style, so its hash covers everything it runs.
 
@@ -15,7 +15,8 @@ The app lets a page open a `team-workspace` agent only when the page holds the `
 grant, which it never declares. The app mints it from the page's own bytes: the file must sit at
 its path in the placed docs checkout and hash to its entry in `PAGES`
 (`src-tauri/src/verbs/foreman_launch.rs`). A page edited by one byte, or a copy anywhere else,
-holds nothing. A page that holds it may launch only the Foreman, by the docs team's key
+holds nothing. The kit's other Foreman pages, which carry no `launcher` value, hand a launch to
+this page's tab instead of asking for one. A page that holds it may launch only the Foreman, by the docs team's key
 `codesense/docs/getting-started/foreman-claude`, and the setup guide's agents. The docs bundle
 ships that agent under `getting-started/config/agents/foreman-claude/` (`DOCS_BUNDLED` in
 `scripts/pack-build.mjs`), so a clean install can start it, and no team's own `foreman-claude`
@@ -37,6 +38,8 @@ answers for it.
   hash or `kit_rev`;
 - the config baked into the kit differs from `story-view.yml`, the config has a budget or point
   key or a team's id;
+- the vendored kit reads a config key the config lacks: any `foreman.*` or `timers.*` key, or the
+  `blocks:` entry (its `title`, `empty` and the words it reads) of a block the Foreman page mounts;
 - the vendored kit keeps a comment other than its config markers, or names a tracker story id, a
   local path, a path in the kit's own repository or a source file's hash;
 - the page is not exactly the template with the vendored build inlined;
@@ -50,11 +53,15 @@ answers for it.
 
 The kit is built in its own repository, from a merged commit, with the public config.
 
-1. In a checkout of the kit at the commit you are vendoring, copy this folder's `story-view.yml`
-   over the kit's `story-view.yml` (in a scratch copy, never committed there), run
-   `node build.mjs`, and run the kit's tests and `node check.mjs` on that build. `check.mjs`
-   compares the kit's dashboard manifest with its team value, so point that value at the public
-   config's `team` for the run.
+1. Bring this folder's `story-view.yml` up to the kit's at the commit you are vendoring: every
+   `foreman.*` and `timers.*` key the kit's config has, and the `blocks:` entries of the blocks its
+   Foreman page mounts, with public values (product ids only; no team's ids, names or story ids).
+   Then, in a scratch copy of the kit at that commit (never committed there), copy this folder's
+   `story-view.yml` over the kit's, run `node build.mjs`, and run the kit's tests and
+   `node check.mjs` on that build. `check.mjs` compares the kit's dashboard manifest with its team
+   value, so point that value at the public config's `team` for the run. Step 3's check fails if
+   the build reads a key this config lacks, so a key the kit added since the last vendor can't be
+   dropped silently.
 2. In a worktree of this repository:
 
    ```sh

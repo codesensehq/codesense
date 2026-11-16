@@ -27,6 +27,20 @@ foreman:
     team: getting-started
   senders: 20
   history: 5
+  # The lease's settle window and expiry, the wait for a handoff, the wait for the old Foreman
+  # to exit, and the retry after a busy answer (ms).
+  lifecycle:
+    settleMs: 1000
+    leaseMs: 120000
+    handoffMs: 60000
+    stopMs: 15000
+    busyRetryMs: 2000
+  # The agent's own model and the one the cheaper switch launches with; spendSessions is the
+  # most sessions today's spend reads.
+  models:
+    default: claude-opus-5-5
+    cheaper: claude-sonnet-5-5
+  spendSessions: 10
 storyTypes:
   - story
   - bug
@@ -55,8 +69,184 @@ timers:
   slowMs: 20000
   failMs: 120000
   debounceMs: 500
+  noReplyMs: 120000
 limits:
   needsYou: 200
   answers: 500
 panel:
   tabs: null
+# The copy for the blocks the Foreman page mounts: title and empty for each, and the words its
+# blocks read. `scripts/foreman-page.mjs --check` fails when the kit reads one this lacks.
+blocks:
+  identity:
+    title: Identity
+    empty: No agent session on this page
+    viewLabel: View
+    story: Story
+    auto: Automatic ({label})
+    pinned: "{label} · pinned"
+    pickerHint: Your page for {name}, wherever {name} opens
+    onePage: "Page: {label}"
+    showing: Showing {label}
+    saveFailed: Not saved · showing {label}
+    retry: Try again
+    sprintName: Sprint {n} lead
+    record:
+      file: "{n} file"
+      files: "{n} files"
+      sprint: Sprint {n}
+    roles:
+      codesense-foreman: Foreman
+      sprint-lead: Sprint lead
+      lead: Story lead
+      reviewer: Reviewer
+      dev: Developer
+    states:
+      running: running
+      idle: waiting for you
+      needs-you: needs you in its terminal
+      exited: not running
+      starting: starting…
+      failed: couldn't start
+      unknown: status unknown
+  chat:
+    title: Chat
+    empty: No messages yet.
+    unavailable: This page has no chat for its agent.
+  foreman-head:
+    title: The Foreman's model and spend
+    empty: Nothing to show yet.
+    unavailable: this page has no Foreman for its model and spend
+  foreman-welcome:
+    title: Welcome
+    empty: Nothing to show yet.
+    noSession: this page is not the Foreman's
+    noChat: this page has no chat for the welcome to sit above
+  foreman-panel:
+    title: Foreman panel
+    empty: Nothing to show here yet.
+    unavailable: The Foreman panel needs the Foreman page.
+    tablist: Foreman panel
+    counts:
+      working: "{n} working"
+      idle: "{n} idle"
+      needsOne: "{n} needs you"
+      needsN: "{n} need you"
+      none: None running
+    views:
+      h: Views
+      more: More views
+      waiting:
+        title: Waiting on you
+        empty: Nothing is waiting on you.
+        noneRecent: Nothing new in the last 14 days.
+        loading: Reading what waits on you…
+        failed: Couldn't read what waits on you{reason}
+        retry: Try again
+        reply: Reply
+        send: Send
+        replyName: Reply about {name}
+        sendFailed: Couldn't send your reply{reason}
+        merge: Merge
+        open: Open
+        openName: Open {name}
+        openFailed: Couldn't open that{reason}
+        partial: Some replies couldn't be read, so a card here may already be answered.
+        older: Older · {n} over 14 days
+        olderList: Cards over 14 days old
+        headline: "{n} open"
+      running:
+        title: Running
+        empty: No agents running.
+        loading: Reading the agents…
+        failed: Couldn't read the agents{reason}
+        retry: Try again
+        open: Open
+        openName: Open {name}
+        openFailed: Couldn't open {name}{reason}
+        needsList: Agents that need you
+        inTeam: The rest are in Team.
+      health:
+        title: Health
+        empty: No machines or routines to report on.
+        loading: Reading machines and routines…
+        failed: Couldn't read health{reason}
+        sectionFailed: Couldn't read {what}{reason}
+        retry: Try again
+        machines: Machines
+        routines: Routines
+        none: None yet.
+        flagged: Check
+        needsYou: Needs you
+        disabled: off
+        headline: "{n} to check"
+        headlineOk: All well
+      repos:
+        title: Repos and teams
+        empty: No context repo yet
+        loading: Reading repos and teams…
+        failed: Couldn't read repos and teams{reason}
+        retry: Try again
+        activeTeam: "{team} · active"
+        noRepos: No source repos.
+        attachment:
+          attached: attached
+          missing: missing
+          unattached: not attached
+        askSetup: Ask the Foreman to set one up
+        headline: "{n} to check"
+        headlineOk: All attached
+      spend:
+        title: Spend today
+        empty: No sessions today.
+        loading: Reading today's spend…
+        failed: Couldn't read today's spend{reason}
+        retry: Try again
+        sessions: "{n} sessions"
+        sessionOne: "{n} session"
+        partial: Some sessions are not counted yet.
+    team:
+      title: Team
+      h: Leads
+      running: "{n} running"
+      empty: No leads running yet. When the Foreman starts a sprint lead, or you start an agent in a tab, it shows here.
+      noCli: No agent can start until an agent CLI is on this Mac. Everything here still updates.
+      emptyNoCli: No leads running.
+      failed: Couldn't read the agents{reason}
+      groups:
+        sprint: Sprint lead
+        story: Story leads
+        ops: Conductor and Steward
+        adhoc: Ad hoc
+      adhocNote: launched by the Foreman
+      message: Message
+      messageName: Message {name}
+      openName: Open {name}
+      openFailed: "Couldn't open {name}: {reason}"
+      costUnknown: cost unknown
+    session:
+      title: Session
+      model: Model
+      change: Change
+      spend: Spend
+      today: Today
+      thread: This thread
+      threadOne: this session
+      threadN: "{n} sessions in this thread"
+      noSession: no Foreman session yet
+      machineUnknown: the roster does not say
+      homeUnknown: the roster does not say
+      homeIs: team {team} · its own read-only copy in the {worktree} worktree
+      runsOn: Runs on
+      home: Home
+      pinnedViews: Pinned views
+      pinnedCount: "{n} of {max}"
+      pinnedViewsNone: No view is pinned. Pin one below.
+      moreViews: More views
+      unpin: Unpin
+      unpinName: Unpin {name}
+      pin: Pin
+      pinName: Pin {name}
+      pinFull: The panel holds up to 3 views; unpin one first
+      pinnedMessages: Pinned messages
+      pinnedNone: Nothing pinned yet.
