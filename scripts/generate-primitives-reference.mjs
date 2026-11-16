@@ -2196,7 +2196,8 @@ export function buildManifest(root = ROOT) {
   };
   const invoke = sdk.verbs.map((verb) => {
     const name = verb.name;
-    const meta = INVOKE_META[name];
+    // A pin verb's `inbox.` name is the same verb as its flat alias: one entry for both.
+    const meta = INVOKE_META[name] ?? INVOKE_META[name.replace(/^inbox\./, "")];
     const category = verbCategory(name, lanes);
     const readOnlyDocsSafe =
       lanes.READ_VERBS.includes(name) || lanes.READ_ACTION_VERBS.includes(name);
