@@ -6648,6 +6648,7 @@
                 .slice(0, 500);
               roles = roleView.roles;
             }
+            rolesGen++;
             noteRegistered(crossTeam ? [...teamRoles.values()].flat() : roles);
             // Attachment and reaction changes need not change a conversation's count or last
             // preview. Re-read loaded media, rows the engine says changed and rows with my
@@ -6879,6 +6880,8 @@
           team: x.team ? teamKey(x.team) : null,
           avatar: x.avatar,
           face: x.face,
+          agentKey: x.agentKey,
+          agentRevision: x.agentRevision,
         });
         const sameFace = (a, b) =>
           a === b ||
@@ -6898,52 +6901,56 @@
               x.role === b[i].role &&
               x.team === b[i].team &&
               x.avatar === b[i].avatar &&
+              x.agentKey === b[i].agentKey &&
+              x.agentRevision === b[i].agentRevision &&
               sameFace(x.face, b[i].face),
           );
         let sessionFacts = null,
           runningSignature = null;
         // Handles the last roles read lists as registered. The launcher's `role` label is not a
         // registration, so a running, labelled session outside this set asks for a roles
-        // re-read: one when first seen, and one more after a settle (the claim lands seconds
-        // after the session starts, so the first read can race it). Two per handle, no more.
+        // re-read: one when first seen, and one more after one shared settle (the claim lands
+        // seconds after the session starts, so the first read can race it). Two per handle.
         const ROLES_SETTLE_MS = 5000;
         const registeredHandles = new Set(),
           rolesTries = new Map();
+        let settleTimer = null,
+          rolesGen = 0;
         const unregistered = (x) =>
           x.role && x.state !== "exited" && !registeredHandles.has(x.handle);
+        function settleRoles() {
+          settleTimer = null;
+          const waiting = sessions.filter((x) => rolesTries.get(x.handle) === 1 && unregistered(x));
+          for (const x of waiting) rolesTries.set(x.handle, 2);
+          if (visible && waiting.length) readRoles();
+        }
         function rolesStale() {
           const fresh = sessions.filter((x) => unregistered(x) && !rolesTries.has(x.handle));
-          for (const x of fresh) {
-            rolesTries.set(x.handle, 1);
-            setTimeout(() => {
-              const again = sessions.find((y) => y.handle === x.handle);
-              if (visible && again && unregistered(again)) {
-                rolesTries.set(x.handle, 2);
-                readRoles();
-              }
-            }, ROLES_SETTLE_MS);
-          }
+          for (const x of fresh) rolesTries.set(x.handle, 1);
+          if (fresh.length && !settleTimer) settleTimer = setTimeout(settleRoles, ROLES_SETTLE_MS);
           return fresh.length > 0;
         }
         const noteRegistered = (list) => {
           registeredHandles.clear();
           for (const r of list) for (const h of r.registrations) registeredHandles.add(h.instanceId);
         };
-        // Roles alone: no inbox, sent or humanStatus read.
+        // Roles alone: no inbox, sent or humanStatus read. A refresh bumps `rolesGen` too, so a
+        // read that started before a newer one lands can't overwrite it.
         async function readRoles() {
           if (!visible || !loaded) return;
+          const gen = ++rolesGen;
           try {
-            if (crossTeam) {
-              teamRoles = new Map(
-                await Promise.all(
-                  allTeams.map(async (team) => [teamKey(team), (await cs.roles(team)).roles]),
-                ),
-              );
-              noteRegistered([...teamRoles.values()].flat());
-            } else {
-              roles = (await cs.roles()).roles;
-              noteRegistered(roles);
-            }
+            const fresh = crossTeam
+              ? new Map(
+                  await Promise.all(
+                    allTeams.map(async (team) => [teamKey(team), (await cs.roles(team)).roles]),
+                  ),
+                )
+              : (await cs.roles()).roles;
+            if (gen !== rolesGen) return;
+            if (crossTeam) teamRoles = fresh;
+            else roles = fresh;
+            noteRegistered(crossTeam ? [...teamRoles.values()].flat() : roles);
             if (visible) drawConversationView();
           } catch {}
         }
@@ -7485,6 +7492,7 @@
           paceRefresh(unnamed || rows.some((m) => !m || m.toHuman !== false));
         });
         cs.onTeardown?.(() => {
+          clearTimeout(settleTimer);
           offSessions?.();
           offDefinitions?.();
         });
@@ -7531,7 +7539,15 @@
             offSessions = () => cs.unsubscribe?.("sessions", changed);
             // Definitions give ended sessions their faces; they change rarely, so redraw
             // only when a face could have changed. The subscription's first snapshot loads
-            // them, and each definitions change reloads them; a sessions delta does not.
+            // them, and a changed definition row reloads them; a sessions delta does not. The
+            // view's `compatibility` row moves with role registrations and queues, so it
+            // re-reads roles alone and never faces.
+            const definitionsChanged = (_view, delta) => {
+              const rows = delta?.upserts;
+              const compat = (r) => r.rowType === "compatibility";
+              if (rows?.some(compat)) readRoles();
+              if (!rows || delta.removes?.length || rows.some((r) => !compat(r))) loadAgents();
+            };
             const loadAgents = () =>
               cs
                 .agents()
@@ -7544,8 +7560,8 @@
                   if (visible) drawConversationView();
                 })
                 .catch(() => {});
-            cs.subscribe?.("agentDefinitions", { onChange: loadAgents }).catch(loadAgents);
-            offDefinitions = () => cs.unsubscribe?.("agentDefinitions", loadAgents);
+            cs.subscribe?.("agentDefinitions", { onChange: definitionsChanged }).catch(loadAgents);
+            offDefinitions = () => cs.unsubscribe?.("agentDefinitions", definitionsChanged);
           }
           if (prefsReady) scheduleRefresh();
         });

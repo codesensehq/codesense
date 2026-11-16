@@ -57,13 +57,16 @@ use crate::weft::WeftStore;
 /// Mirrored in `src/tauri/events.ts`.
 pub(crate) const AGENT_INBOX_CHANGED_EVENT: &str = "agent-inbox-changed";
 
-/// The one place `agent-inbox-changed` is emitted. `changes` names, per team, the messages
-/// the notice re-read (`{changes:[{team, messageIds}]}`, the shape the live hub and the inbox
-/// pane read); an empty `messageIds` is a team-wide nudge. An empty `changes` is a broad
-/// nudge that names no team (the human's status), which readers take to mean anything changed.
+/// What an `agent-inbox-changed` notice names: per team, the messages it touched. An empty
+/// id list means re-read the whole team; an empty slice is a broad nudge that names no team
+/// (the human's status), which readers take to mean anything changed.
+pub(crate) type InboxChanges = [(LaunchTeam, Vec<i64>)];
+
+/// The one place `agent-inbox-changed` is emitted: `{changes:[{team, messageIds}]}`, the shape
+/// the live hub and the inbox pane read, or no payload for a broad nudge.
 pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    changes: &[(LaunchTeam, Vec<i64>)],
+    changes: &InboxChanges,
 ) {
     use tauri::Emitter;
     let payload = if changes.is_empty() {
@@ -193,14 +196,14 @@ pub(crate) trait InboxHost: Send + Sync {
     fn projected_inbox(&self, _team: &LaunchTeam) -> Option<Result<InboxView, String>> {
         None
     }
-    fn inbox_changed(&self, changes: &[(LaunchTeam, Vec<i64>)]);
+    fn inbox_changed(&self, changes: &InboxChanges);
     /// The live hub committed a projection pass: `changes` names, per team, the messages it
     /// re-read. Readers that refresh on the notice find those messages committed.
-    fn inbox_committed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
+    fn inbox_committed(&self, changes: &InboxChanges) {
         self.inbox_changed(changes);
     }
     fn inbox_event(&self, event: InboxEvent) {
-        self.inbox_changed(&[(event.team, event.message_ids)]);
+        self.inbox_changed(&event.as_inbox_changes());
     }
     /// A message was stored for the session under `handle`. The app offers its host the
     /// inbox notice and tells routines with an `inbox_idle` trigger.
@@ -2896,7 +2899,7 @@ impl InboxHost for AppInboxHost {
         self.launch()?.display_name(handle)
     }
 
-    fn inbox_changed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
+    fn inbox_changed(&self, changes: &InboxChanges) {
         emit_inbox_changed(&self.app, changes);
     }
 

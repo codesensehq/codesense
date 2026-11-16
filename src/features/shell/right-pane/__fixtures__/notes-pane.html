@@ -3056,7 +3056,17 @@
       const sessionsSignature = (list) =>
         list
           .map((x) =>
-            [x.handle, x.state, x.role, x.alive, x.displayName, x.rowNames?.primary].join("\u0001"),
+            [
+              x.handle,
+              x.sessionId,
+              x.state,
+              x.role,
+              x.alive,
+              x.displayName,
+              x.rowNames?.primary,
+              x.team && x.team.org + "/" + x.team.team,
+              x.avatar,
+            ].join("\u0001"),
           )
           .join("\u0002");
       async function sessionsChanged(snapshot) {

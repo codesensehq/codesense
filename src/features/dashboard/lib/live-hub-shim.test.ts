@@ -454,6 +454,7 @@ it("a sessions delta fires no onInboxChanged and onAgentsChanged reads no sessio
   await vi.waitFor(() => expect(agents).toHaveBeenCalled());
   expect(inbox).not.toHaveBeenCalled();
   expect(reads()).toBe(before);
+  agents.mockClear();
   // The legacy ping is the only thing that nudges the inbox.
   const change = {
     type: "codesense:inbox-changed",
@@ -461,6 +462,8 @@ it("a sessions delta fires no onInboxChanged and onAgentsChanged reads no sessio
   };
   s.ping(change);
   expect(inbox).toHaveBeenCalledExactlyOnceWith(change);
+  // An inbox ping is not an agent change either: pages that render both register both.
+  expect(agents).not.toHaveBeenCalled();
   stopAgents();
   stopInbox();
 });

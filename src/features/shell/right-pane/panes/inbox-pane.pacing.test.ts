@@ -125,7 +125,10 @@ function boot(rows: Row[], scope: Scope) {
       sessionWatchers.forEach((cb) => cb({ snapshot: rows }));
       agentWatchers.forEach((cb) => cb());
     },
-    definitionsChanged: () => definitionWatchers.forEach((cb) => cb({ snapshot: [] })),
+    definitionsChanged: (delta?: unknown) =>
+      definitionWatchers.forEach((cb) =>
+        (cb as (s: unknown, d?: unknown) => void)({ snapshot: [] }, delta),
+      ),
     setRoles: (rows: unknown[]) => (roleRows = rows),
     show: (shown: boolean) => shows.forEach((cb) => cb(shown)),
     intent: (intent: unknown) => intents.forEach((cb) => cb(intent)),
@@ -273,6 +276,41 @@ describe("inbox pane refresh pacing", () => {
     for (let i = 0; i < 20; i++) p.sessionsDelta([{ handle: "Mia", state: "idle", spend: i }]);
     await settle(2000);
     expect(p.cs.agents).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads roles alone on a compatibility delta, and faces only when a definition moved", async () => {
+    const p = await shown([MIA]);
+    const compat = { id: "compatibility", rowType: "compatibility", activityRevision: 2 };
+    p.definitionsChanged({ upserts: [compat], removes: [] });
+    await settle(30);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+    expect(p.reads()).toBe(0);
+    expect(p.cs.agents).not.toHaveBeenCalled();
+    expect(p.cs.humanStatus).not.toHaveBeenCalled();
+    p.definitionsChanged({
+      upserts: [{ id: "definition:a/b", rowType: "definition" }],
+      removes: [],
+    });
+    await settle(30);
+    expect(p.cs.agents).toHaveBeenCalledTimes(1);
+    expect(p.cs.roles).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the last roles read when an older one lands after a refresh", async () => {
+    const p = await shown([MIA]);
+    let release!: (v: unknown) => void;
+    p.cs.roles.mockImplementationOnce(() => new Promise((r) => (release = r)) as never);
+    p.sessionsDelta([
+      { handle: "Mia", state: "idle" },
+      { handle: "Lee", state: "idle" },
+    ]);
+    await settle(30);
+    p.nudge([100]);
+    await settle(1500);
+    expect(p.cs.roles).toHaveBeenCalledTimes(2);
+    release({ roles: [] });
+    await settle(30);
+    expect(p.reads()).toBe(1);
   });
 
   it("refreshes a team named by a team-wide nudge with no message ids", async () => {

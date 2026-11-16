@@ -2093,21 +2093,24 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     // deltas published below are not news to them.
     // A retired team drops its counts row, so the counts comparison covers removals too.
     let notify_legacy = had_pending || hydrated || renamed || counts != counts_before;
-    // The notice names the teams a legacy reader must re-read: every team the projection holds
-    // after a hydration, a rename or a retry, else the teams whose counts moved. An empty
-    // list is a broad nudge, which no case here wants, so it only stands in if the counts rows
-    // name no team.
-    let notified_teams = if !notify_legacy {
-        Vec::new()
-    } else if had_pending || hydrated || renamed {
-        inbox.held_teams()
-    } else {
-        inbox::changed_count_teams(&counts_before, &counts)
-    };
-    let notified: Vec<(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)> = notified_teams
-        .into_iter()
-        .map(|team| (team, Vec::new()))
-        .collect();
+    // The notice names the teams a legacy reader must re-read: the teams whose counts moved
+    // (a retired team's row is gone, so it shows only here), plus every team the projection
+    // holds after a hydration, a rename or a retry. An empty list would be a broad nudge,
+    // which no case here wants. Only a pass with no committed ids sends it.
+    let notified: Vec<(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)> =
+        if notify_legacy && committed.is_empty() {
+            let mut teams = inbox::changed_count_teams(&counts_before, &counts);
+            if had_pending || hydrated || renamed {
+                for team in inbox.held_teams() {
+                    if !teams.contains(&team) {
+                        teams.push(team);
+                    }
+                }
+            }
+            teams.into_iter().map(|team| (team, Vec::new())).collect()
+        } else {
+            Vec::new()
+        };
     updates.extend(counts);
 
     // Publish the finished projection briefly under the model lock, then drop

@@ -30,6 +30,8 @@ pub(crate) struct FakeHost {
     /// handle → the team of the workspace its tab is in, as the terminal layout says.
     tab_teams: Mutex<HashMap<String, String>>,
     changed: Mutex<u32>,
+    /// The teams each inbox-changed notice named.
+    named: Mutex<Vec<Vec<(LaunchTeam, Vec<i64>)>>>,
     inbox_events: Mutex<Vec<InboxEvent>>,
     /// SW-BSI-3 fixture: `(team, logical_path) → story_id` for the fake
     /// attachment-owner resolver. A map hit on `read_messages` yields the
@@ -82,6 +84,7 @@ impl FakeHost {
             teams: Mutex::new(pairs(&[("H1", "default"), ("H2", "default")])),
             tab_teams: Mutex::default(),
             changed: Mutex::default(),
+            named: Mutex::default(),
             inbox_events: Mutex::default(),
             story_owners: Mutex::default(),
             store_delay: Mutex::default(),
@@ -338,12 +341,13 @@ impl InboxHost for FakeHost {
     async fn sessions(&self) -> Result<KnownSessions, String> {
         Ok(KnownSessions::new(self.sessions.lock().unwrap().clone()))
     }
-    fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
+    fn inbox_changed(&self, changes: &InboxChanges) {
+        self.named.lock().unwrap().push(changes.to_vec());
         *self.changed.lock().unwrap() += 1;
     }
     fn inbox_event(&self, event: InboxEvent) {
+        self.inbox_changed(&event.as_inbox_changes());
         self.inbox_events.lock().unwrap().push(event);
-        self.inbox_changed(&[]);
     }
     fn mail_stored(&self, handle: &str) {
         self.stored_for.lock().unwrap().push(handle.to_string());
@@ -6014,14 +6018,18 @@ fn inbox_changed_is_emitted_only_by_the_helper() {
     assert!(files.len() > 100, "the walk found the sources");
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        // Tests may listen for the event.
-        if name == "tests.rs" || name.ends_with("_tests.rs") || name == "tests" {
+        // Tests may listen for the event: a tests.rs, a *_tests.rs, or anything under tests/.
+        if name == "tests.rs"
+            || name.ends_with("_tests.rs")
+            || path.components().any(|part| part.as_os_str() == "tests")
+        {
             continue;
         }
         let code: String = std::fs::read_to_string(&path)
             .unwrap()
             .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
+            // Comments out, whole-line and trailing, so a mention can't hide an emit or fake one.
+            .map(|line| line.split("//").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
         // Whitespace out, so an emit split over lines still matches.
@@ -6040,4 +6048,26 @@ fn inbox_changed_is_emitted_only_by_the_helper() {
             assert_eq!(uses, 0, "{} names the inbox-changed event", path.display());
         }
     }
+}
+
+/// The default `inbox_event` notice names the event's team and messages, and the callers
+/// that can't take a test host keep their shape: the human's status is a broad nudge and the
+/// spend notice names its team and message.
+#[test]
+fn event_and_source_shapes_name_their_teams() {
+    let event = InboxEvent::new(InboxChange::Stored, &launch_team("web"), [7, 9]);
+    assert_eq!(
+        event.as_inbox_changes(),
+        vec![(launch_team("web"), vec![7, 9])]
+    );
+    let source = |path: &str| -> String {
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))
+            .unwrap()
+            .split_whitespace()
+            .collect()
+    };
+    // `set_human_status` takes a real app handle, so its shape is pinned in the source.
+    assert!(source("src/commands/agent_inbox.rs").contains("host.inbox_changed(&[]);"));
+    assert!(source("src/routines/wake_app.rs")
+        .contains("emit_inbox_changed(&app,&[(team,vec![id])])"));
 }

@@ -332,6 +332,7 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     host.take_changed();
+    host.take_named();
     set_rows(&app, vec![]);
     refresh_inbox_with_host(app.handle(), &host, true)
         .await
@@ -341,6 +342,13 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         team: "elsewhere".into(),
     }));
     assert_eq!(host.take_changed(), 1, "a retired team is announced");
+    assert!(
+        host.take_named()
+            .iter()
+            .flatten()
+            .any(|(team, ids)| team.team == "elsewhere" && ids.is_empty()),
+        "the retired team is named, team-wide"
+    );
 }
 
 #[tokio::test(start_paused = true)]

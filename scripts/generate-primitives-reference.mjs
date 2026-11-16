@@ -1929,7 +1929,8 @@ const EVENT_META = {
   },
   "codesense:inbox-changed": {
     direction: "parent-to-doc",
-    payload: "N/A",
+    payload:
+      "`{changes?: [{team: {org, team}, messageIds}]}`: the teams and messages the change touched. An empty `messageIds` means re-read the whole team; no `changes` means anything could have changed.",
     timing: "On inbox update",
     description:
       "Nudge for `watchInbox` / `onInboxChanged` listeners. Inbox changes only: a sessions change never fires it.",
