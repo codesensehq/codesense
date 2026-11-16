@@ -47,6 +47,8 @@ fn now_ms() -> u64 {
 }
 
 pub const COALESCE: Duration = Duration::from_millis(50);
+/// How often the hub loop sweeps views nobody watches out of the hub.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 const REBUILD: u8 = 1;
 const MACHINE_STATS: u8 = 32;
 const DEFINITIONS: u8 = 16;
@@ -396,7 +398,7 @@ impl LiveHub {
         if topic == "agentList" && model.agent_views.insert(key.to_owned()) {
             project_agent_views(&mut model)?;
         }
-        model.projections.snapshot(topic, key)
+        model.projections.read(topic, key)
     }
     pub(crate) fn with_effective_status(&self, source: &[SessionListRow]) -> serde_json::Value {
         let owner = self.snapshot("all", "sessions").unwrap().snapshot;
@@ -720,6 +722,8 @@ pub fn start(app: &tauri::AppHandle) {
             app: handle.clone(),
         };
         let mut inbox_gate = InboxGate::default();
+        let mut sweeps = 0;
+        let mut swept_at = tokio::time::Instant::now();
         loop {
             let (flags, cause) = next_updates(&handle).await;
             if flags & MACHINE_STATS != 0 {
@@ -744,8 +748,30 @@ pub fn start(app: &tauri::AppHandle) {
             if let Err(e) = inbox_pass(&handle, &host, flags, &mut inbox_gate).await {
                 log::warn!("inbox projection: {e}");
             }
+            // Time-gated, so a burst of passes doesn't walk every view under the lock.
+            if swept_at.elapsed() >= SWEEP_INTERVAL {
+                swept_at = tokio::time::Instant::now();
+                sweeps += 1;
+                sweep(&handle, sweeps);
+            }
         }
     });
+}
+
+/// Evict the views nobody watches or has read lately ([`TopicRegistry::sweep_unwatched`]).
+/// An evicted agent-list view takes its `agent_views` key, so rebuilds stop projecting it.
+pub(crate) fn sweep<R: tauri::Runtime>(app: &tauri::AppHandle<R>, sweep_no: u64) {
+    {
+        let hub = app.state::<LiveHub>();
+        let mut model = hub.model.lock().unwrap();
+        let evicted = model.projections.sweep_unwatched(sweep_no);
+        for (topic, key) in evicted {
+            if topic == "agentList" {
+                model.agent_views.remove(&key);
+            }
+        }
+    }
+    record_projection_metrics(app);
 }
 
 async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (u8, u8) {
@@ -1569,6 +1595,7 @@ pub async fn live_hub_subscribe(
     since_rev: Option<u64>,
     subscription_id: Option<String>,
     window: Option<[usize; 2]>,
+    frame_id: Option<String>,
 ) -> Result<Held<SubscriptionReply>, String> {
     if run_review::TOPICS.contains(&topic.as_str()) {
         run_review::prepare(
@@ -1590,15 +1617,8 @@ pub async fn live_hub_subscribe(
         subscription_id.as_deref(),
         window,
         Some(owner_window.label()),
+        frame_id.as_deref(),
     )?;
-    if let Some(id) = subscription_id {
-        app.state::<LiveHub>()
-            .model
-            .lock()
-            .unwrap()
-            .projections
-            .set_owner(&id, owner_window.label());
-    }
     Ok(reply)
 }
 pub(crate) fn subscribe<R: tauri::Runtime>(
@@ -1617,11 +1637,15 @@ pub(crate) fn subscribe<R: tauri::Runtime>(
         subscription_id,
         window,
         None,
+        None,
     )
     .map(|held| held.view)
 }
 /// [`subscribe`], and a default read (no `subscription_id`) by `holder` holds the view under
-/// the lock that reads it, so no delta can fall between the read and the hold.
+/// the lock that reads it, so no delta can fall between the read and the hold. A scoped
+/// subscription is tagged with `holder` as its owner and with `frame` under that same lock, so
+/// a `drop_window` or `release_frame` landing between them can't miss it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn subscribe_held<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     topic: &str,
@@ -1630,6 +1654,7 @@ pub(crate) fn subscribe_held<R: tauri::Runtime>(
     subscription_id: Option<&str>,
     window: Option<[usize; 2]>,
     holder: Option<&str>,
+    frame: Option<&str>,
 ) -> Result<Held<SubscriptionReply>, String> {
     let hub = app.state::<LiveHub>();
     let mut fetched = None;
@@ -1659,8 +1684,16 @@ pub(crate) fn subscribe_held<R: tauri::Runtime>(
     let reply = match subscription_id {
         Some(id) => model
             .projections
-            .subscribe_window(&id, &topic, &view_key, since_rev, window)
-            .map(|view| Held { view, hold: None }),
+            .subscribe_window(id, topic, view_key, since_rev, window)
+            .map(|view| {
+                if let Some(owner) = holder {
+                    model.projections.set_owner(id, owner);
+                }
+                if let Some(frame) = frame {
+                    model.projections.set_frame(id, frame);
+                }
+                Held { view, hold: None }
+            }),
         None => model
             .projections
             .subscribe(&topic, &view_key, since_rev)
@@ -1751,8 +1784,8 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
     record_projection_metrics(app);
 }
-/// The last subscriber of a pins view takes the view's refreshes with it: drop each pins view
-/// among `viewed` (topic, view key) that nothing follows any more.
+/// The last reader of a pins view takes the view's refreshes with it: drop each pins view
+/// among `viewed` (topic, view key) that nothing watches any more.
 fn drop_unwatched_pins<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     viewed: Vec<(String, String)>,
@@ -1764,10 +1797,26 @@ fn drop_unwatched_pins<R: tauri::Runtime>(
             .lock()
             .unwrap()
             .projections
-            .has_view_subscribers(pins::TOPIC, &key);
+            .is_watched(pins::TOPIC, &key);
         if !held {
             pins::drop_view(app, &key);
         }
+    }
+}
+/// A released frame takes the scoped subscriptions it opened: the backstop for a frame whose
+/// own unsubscribes never ran.
+pub(crate) fn drop_frame<R: tauri::Runtime>(app: &tauri::AppHandle<R>, frame: &str) {
+    let Some(hub) = app.try_state::<LiveHub>() else {
+        return;
+    };
+    let ids = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .frame_subscriptions(frame);
+    for id in ids {
+        unsubscribe(app, &id, false);
     }
 }
 pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &str) {
@@ -1888,17 +1937,26 @@ fn metric_topic(topic: &str) -> &str {
     }
 }
 
-/// The retained-size gauges: delta-log entries, subscriptions, agent views and the view
-/// count per topic (the page-created `ui:` topics summed into one).
+/// The retained-size gauges: delta-log entries and bytes, subscriptions, agent views, inbox
+/// messages and the view count per topic (the page-created `ui:` topics summed into one).
 fn projection_gauges(model: &Model) -> Vec<(String, usize)> {
-    let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+    let metrics = model.projections.metrics_snapshot();
     let mut gauges = vec![
         ("live_hub.agent_views".to_owned(), model.agent_views.len()),
-        ("live_hub.delta_log_entries".to_owned(), entries),
-        ("live_hub.subscriptions".to_owned(), subscriptions),
+        ("live_hub.delta_log_bytes".to_owned(), metrics.log_bytes),
+        ("live_hub.delta_log_entries".to_owned(), metrics.log_entries),
+        (
+            "live_hub.inbox_messages".to_owned(),
+            model.inbox.message_count(),
+        ),
+        (
+            "live_hub.subscription_log_entries".to_owned(),
+            metrics.subscription_log_entries,
+        ),
+        ("live_hub.subscriptions".to_owned(), metrics.subscriptions),
     ];
     let mut views = BTreeMap::<&str, usize>::new();
-    for (topic, count, _) in &topics {
+    for (topic, count, _) in &metrics.topics {
         *views.entry(metric_topic(topic)).or_default() += count;
     }
     gauges.extend(
