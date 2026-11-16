@@ -5816,10 +5816,15 @@ detached
 
         // Past the worktree facts' 60 s age they are read again, but the clone lookup and the
         // clone's worktree list have no age and are not.
-        let settled = list_once(&home, &ctx, &slug);
+        // The re-read was kept: the next listing spawns nothing again.
         let before = spawned_under(tmp.path()).len();
+        let settled = list_once(&home, &ctx, &slug);
         assert_eq!(settled.rows.len(), third.rows.len());
-        assert_eq!(spawned_under(tmp.path()).len(), before);
+        assert_eq!(
+            spawned_under(tmp.path()).len(),
+            before,
+            "the re-read facts were not kept"
+        );
         skew_clock(tmp.path(), Duration::from_secs(120));
         list_once(&home, &ctx, &slug);
         let aged: Vec<String> = spawned_under(tmp.path())[before..].to_vec();

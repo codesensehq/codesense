@@ -21,11 +21,12 @@
 //! worktree no watch covers (one with no editor open) lags by at most that long; the clone lookup
 //! and the clones' worktree lists never expire, because their stamps cover everything that
 //! changes them. A read that timed out is never kept, and neither is one an invalidation
-//! overtook while it ran. Concurrent readers of one path share one read: the second waits for the
-//! first and takes what it kept.
+//! overtook while it ran. Concurrent readers of one path share one read: the others wait for the
+//! first and take its value, kept or not, so a worktree whose git hangs costs one timeout, not
+//! one per waiter (a read an invalidation overtook is not shared, and a waiter then reads again).
 
 use crate::shared::proc_capture::{spawn_capture, CaptureRequest};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -259,8 +260,37 @@ struct Inner<V> {
     entries: HashMap<PathBuf, Entry<V>>,
     /// Bumped by every invalidation, so a read that started before one is not kept after it.
     generations: HashMap<PathBuf, u64>,
-    /// Paths with a read running now.
-    in_flight: HashSet<PathBuf>,
+    /// Paths with a read running now: the read's number and how many readers wait on it.
+    in_flight: HashMap<PathBuf, InFlight>,
+    /// A finished read's value for the readers that waited on it, by the read's number, until
+    /// the last of them takes it.
+    handoffs: HashMap<u64, Handoff<V>>,
+    next_flight: u64,
+}
+
+struct InFlight {
+    id: u64,
+    waiters: usize,
+}
+
+struct Handoff<V> {
+    stamp: Option<u64>,
+    value: V,
+    waiters: usize,
+}
+
+impl<V: Clone> Inner<V> {
+    /// A waiter on read `id` takes its value: `None` if the read left none (it panicked, or an
+    /// invalidation overtook it) or ran under another stamp (what it read has since changed).
+    fn take_handoff(&mut self, id: u64, stamp: Option<u64>) -> Option<V> {
+        let handoff = self.handoffs.get_mut(&id)?;
+        handoff.waiters -= 1;
+        let value = (handoff.stamp == stamp).then(|| handoff.value.clone());
+        if handoff.waiters == 0 {
+            self.handoffs.remove(&id);
+        }
+        value
+    }
 }
 
 pub(crate) struct ProbeCache<V> {
@@ -277,16 +307,24 @@ impl<V> Default for ProbeCache<V> {
     }
 }
 
-/// Ends a path's in-flight read when dropped, even if the probe panics.
+/// Ends a path's in-flight read when dropped, even if the probe panics (its waiters then find
+/// no handoff and read for themselves).
 struct Flight<'a, V> {
     cache: &'a ProbeCache<V>,
     path: PathBuf,
+    id: u64,
 }
 
 impl<V> Drop for Flight<'_, V> {
     fn drop(&mut self) {
         let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.in_flight.remove(&self.path);
+        if inner
+            .in_flight
+            .get(&self.path)
+            .is_some_and(|f| f.id == self.id)
+        {
+            inner.in_flight.remove(&self.path);
+        }
         drop(inner);
         self.cache.done.notify_all();
     }
@@ -298,7 +336,9 @@ impl<V> ProbeCache<V> {
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
                 generations: HashMap::new(),
-                in_flight: HashSet::new(),
+                in_flight: HashMap::new(),
+                handoffs: HashMap::new(),
+                next_flight: 0,
             }),
             done: Condvar::new(),
             max_age,
@@ -309,8 +349,10 @@ impl<V> ProbeCache<V> {
 impl<V: Clone> ProbeCache<V> {
     /// The cached value for `path` while `stamp` holds, else `probe()`, which returns the value
     /// and whether it may be kept. A path with no stamp is never kept. If another thread is
-    /// already reading `path`, this waits for it and takes what it kept (and reads itself only if
-    /// that read was not kept).
+    /// already reading `path`, this waits for it and takes its value whether or not it was kept
+    /// (a timed-out read is not kept, and its waiters must not each wait out a timeout of their
+    /// own); it reads itself only if that read left no value for it (it panicked, an invalidation
+    /// overtook it, or it ran under another stamp).
     pub(crate) fn get_at(
         &self,
         path: &Path,
@@ -331,32 +373,61 @@ impl<V: Clone> ProbeCache<V> {
                     }
                 }
             }
-            if !inner.in_flight.contains(&resolved) {
+            let Some(flight) = inner.in_flight.get_mut(&resolved) else {
                 break inner.generations.get(&resolved).copied().unwrap_or(0);
+            };
+            flight.waiters += 1;
+            let id = flight.id;
+            inner = self
+                .done
+                .wait_while(inner, |inner| {
+                    inner.in_flight.get(&resolved).is_some_and(|f| f.id == id)
+                })
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(value) = inner.take_handoff(id, stamp) {
+                return value;
             }
-            inner = self.done.wait(inner).unwrap_or_else(|e| e.into_inner());
         };
-        inner.in_flight.insert(resolved.clone());
+        let id = inner.next_flight;
+        inner.next_flight += 1;
+        inner
+            .in_flight
+            .insert(resolved.clone(), InFlight { id, waiters: 0 });
         drop(inner);
         let flight = Flight {
             cache: self,
             path: resolved,
+            id,
         };
         // No lock across the probe: other worktrees read while this one runs.
         let (value, keep) = probe();
-        if let (true, Some(stamp)) = (keep, stamp) {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if inner.generations.get(&flight.path).copied().unwrap_or(0) == generation {
-                inner.entries.insert(
-                    flight.path.clone(),
-                    Entry {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let current = inner.generations.get(&flight.path).copied().unwrap_or(0) == generation;
+        if let (true, true, Some(stamp)) = (current, keep, stamp) {
+            inner.entries.insert(
+                flight.path.clone(),
+                Entry {
+                    stamp,
+                    at: now,
+                    value: value.clone(),
+                },
+            );
+        }
+        // End the flight here, under the same lock, so a waiter that wakes finds the handoff.
+        if let Some(ended) = inner.in_flight.remove(&flight.path) {
+            if current && ended.waiters > 0 {
+                inner.handoffs.insert(
+                    id,
+                    Handoff {
                         stamp,
-                        at: now,
                         value: value.clone(),
+                        waiters: ended.waiters,
                     },
                 );
             }
         }
+        drop(inner);
+        drop(flight);
         value
     }
 
@@ -876,8 +947,32 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    /// Blocks until `count` readers wait on the read of `path` in flight, so a test's leader
+    /// ends its read only once its followers are known to be waiting on it.
+    fn until_waiting<V>(cache: &ProbeCache<V>, path: &Path, count: usize) {
+        let key = cache_key(path);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let waiting = cache
+                .inner
+                .lock()
+                .unwrap()
+                .in_flight
+                .get(&key)
+                .map_or(0, |flight| flight.waiters);
+            if waiting >= count {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "only {waiting} of {count} came to wait"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
-    fn a_waiter_reads_for_itself_when_the_read_it_waited_for_was_not_kept() {
+    fn waiters_take_the_read_they_waited_for_even_when_it_was_not_kept() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
         let cache = ProbeCache::new(Some(MAX_AGE));
@@ -885,13 +980,61 @@ mod tests {
         let started = std::sync::atomic::AtomicBool::new(false);
         let stamp = facts_stamp(&wt);
         let now = Instant::now();
-        std::thread::scope(|scope| {
+        let follow = || {
+            cache.get_at(&wt, stamp, now, || {
+                probes.fetch_add(1, Ordering::SeqCst);
+                clean()
+            })
+        };
+        let (first, second, third) = std::thread::scope(|scope| {
+            // A read that timed out: unknown, and not kept.
             let leader = scope.spawn(|| {
                 cache.get_at(&wt, stamp, now, || {
                     probes.fetch_add(1, Ordering::SeqCst);
                     started.store(true, Ordering::SeqCst);
-                    std::thread::sleep(Duration::from_millis(100));
+                    until_waiting(&cache, &wt, 2);
                     (facts(None), false)
+                })
+            });
+            while !started.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            let (one, two) = (scope.spawn(follow), scope.spawn(follow));
+            (
+                leader.join().unwrap(),
+                one.join().unwrap(),
+                two.join().unwrap(),
+            )
+        });
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "the waiters did not read again"
+        );
+        assert_eq!((second, third), (first.clone(), first));
+        // Shared, not kept: the next read probes.
+        follow();
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_read_an_invalidation_overtook_is_not_handed_to_its_waiters() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = fake_worktree(dir.path());
+        let cache = ProbeCache::new(Some(MAX_AGE));
+        let probes = AtomicUsize::new(0);
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let stamp = facts_stamp(&wt);
+        let now = Instant::now();
+        let followed = std::thread::scope(|scope| {
+            let leader = scope.spawn(|| {
+                cache.get_at(&wt, stamp, now, || {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    started.store(true, Ordering::SeqCst);
+                    until_waiting(&cache, &wt, 1);
+                    // A file event lands while git is still reading the old state.
+                    cache.invalidate(&cache_key(&wt));
+                    clean()
                 })
             });
             while !started.load(Ordering::SeqCst) {
@@ -900,13 +1043,14 @@ mod tests {
             let follower = scope.spawn(|| {
                 cache.get_at(&wt, stamp, now, || {
                     probes.fetch_add(1, Ordering::SeqCst);
-                    clean()
+                    (facts(Some(true)), true)
                 })
             });
             leader.join().unwrap();
-            follower.join().unwrap();
+            follower.join().unwrap()
         });
         assert_eq!(probes.load(Ordering::SeqCst), 2);
+        assert_eq!(followed, facts(Some(true)), "the waiter read the new state");
     }
 
     #[test]

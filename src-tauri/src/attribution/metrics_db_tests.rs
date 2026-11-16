@@ -212,6 +212,12 @@ fn a_prune_is_due_with_no_stamp_after_the_interval_and_when_the_stamp_is_in_the_
     assert!(due(Some(NOW + DAY), NOW));
 }
 
+/// The idle check as the timer runs it, without the wait: it reports the db's real newest id, so
+/// the prune's re-check before compaction agrees with it unless a row really arrived.
+fn idle_now(db: &Path) -> Option<i64> {
+    idle_id(db, Duration::ZERO, |_| {})
+}
+
 /// A managed root holding a metrics-db where git-ai keeps it.
 fn managed(dir: &Path, old: usize, fresh: usize) -> (PathBuf, PathBuf, PathBuf) {
     let root = dir.join("git-ai");
@@ -234,7 +240,7 @@ fn a_tick_without_a_db_does_nothing_and_stamps_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("git-ai");
     std::fs::create_dir_all(&root).unwrap();
-    let outcome = tick(&root, &root.join("home"), NOW, |_| Some(1), NO_PAUSE);
+    let outcome = tick(&root, &root.join("home"), NOW, idle_now, NO_PAUSE);
     assert_eq!(outcome, Tick::NoDb);
     assert!(!root.join("metrics-prune-ts").exists());
 }
@@ -244,9 +250,9 @@ fn a_tick_prunes_stamps_and_is_not_due_again_until_the_interval_passes() {
     let dir = tempfile::tempdir().unwrap();
     let (root, home, db) = managed(dir.path(), 40, 2);
 
-    let first = tick(&root, &home, NOW, |_| Some(1), NO_PAUSE);
+    let first = tick(&root, &home, NOW, idle_now, NO_PAUSE);
     assert!(
-        matches!(&first, Tick::Ran(p) if p.deleted == 40),
+        matches!(&first, Tick::Ran(p) if p.deleted == 40 && !p.stopped_busy),
         "{first:?}"
     );
     assert_eq!(rows(&db), 2);
@@ -256,14 +262,18 @@ fn a_tick_prunes_stamps_and_is_not_due_again_until_the_interval_passes() {
     );
 
     assert_eq!(
-        tick(&root, &home, NOW + 60, |_| Some(1), NO_PAUSE),
+        tick(&root, &home, NOW + 60, idle_now, NO_PAUSE),
         Tick::NotDue
     );
     insert(&db, 3, NOW - 10 * DAY);
-    let later = tick(&root, &home, NOW + 7 * 3600, |_| Some(1), NO_PAUSE);
+    let later = tick(&root, &home, NOW + 7 * 3600, idle_now, NO_PAUSE);
     assert!(
-        matches!(&later, Tick::Ran(p) if p.deleted == 3),
+        matches!(&later, Tick::Ran(p) if p.deleted == 3 && !p.stopped_busy),
         "{later:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("metrics-prune-ts")).unwrap(),
+        (NOW + 7 * 3600).to_string()
     );
 }
 
@@ -285,18 +295,25 @@ fn a_tick_the_daemons_lock_cut_short_is_not_stamped_so_the_next_tick_retries() {
     let holder = Connection::open(&db).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-    let outcome = tick(&root, &home, NOW, |_| Some(1), NO_PAUSE);
+    // The idle check reads (WAL readers are not blocked by the writer) and finds the db idle;
+    // the delete then cannot get the lock.
+    let outcome = tick(&root, &home, NOW, idle_now, NO_PAUSE);
 
     assert!(
-        matches!(&outcome, Tick::Ran(p) if p.stopped_busy),
+        matches!(&outcome, Tick::Ran(p) if p.deleted == 0 && p.stopped_busy),
         "{outcome:?}"
     );
     assert!(!root.join("metrics-prune-ts").exists());
     holder.execute_batch("ROLLBACK").unwrap();
-    assert!(matches!(
-        tick(&root, &home, NOW, |_| Some(1), NO_PAUSE),
-        Tick::Ran(p) if p.deleted == 40
-    ));
+    let retried = tick(&root, &home, NOW, idle_now, NO_PAUSE);
+    assert!(
+        matches!(&retried, Tick::Ran(p) if p.deleted == 40 && !p.stopped_busy),
+        "{retried:?}"
+    );
+    assert!(
+        root.join("metrics-prune-ts").exists(),
+        "the finished retry is stamped"
+    );
 }
 
 #[test]
@@ -309,12 +326,14 @@ fn a_failing_prune_is_reported_and_stamped_so_it_repeats_each_interval_not_each_
         .execute_batch("DROP TABLE metrics")
         .unwrap();
 
-    let outcome = tick(&root, &home, NOW, |_| Some(1), NO_PAUSE);
+    // The real idle check cannot read a db with no `metrics` table, so this one says idle to
+    // let the prune run into the failure.
+    let outcome = tick(&root, &home, NOW, |_| Some(0), NO_PAUSE);
 
     assert!(matches!(outcome, Tick::Failed(_)), "{outcome:?}");
     assert!(root.join("metrics-prune-ts").exists());
     assert_eq!(
-        tick(&root, &home, NOW + 60, |_| Some(1), NO_PAUSE),
+        tick(&root, &home, NOW + 60, |_| Some(0), NO_PAUSE),
         Tick::NotDue
     );
 }
