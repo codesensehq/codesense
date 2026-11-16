@@ -9,15 +9,16 @@ transcript stays on the machine that ran it.
 
 ## Rows
 
-| Model               | `spec_hash` | Status | Deciding report                  | Spend |
-| ------------------- | ----------- | ------ | -------------------------------- | ----- |
-| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-8.md` | $2.54 |
-| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-7.md` | $1.20 |
+| Model               | `spec_hash` | Status | Deciding report                   | Spend |
+| ------------------- | ----------- | ------ | --------------------------------- | ----- |
+| `claude-opus-5-5`   | null        | failed | `foreman-claude-2026-11-16-11.md` | $2.74 |
+| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-12.md` | $1.04 |
 
 `spec_hash` is null because there is no pack builder yet; the rows key on null until one exists.
-Both runs were k=3, complete and had no infra errors. The Foreman had plain `Read`, `Edit` and
-`Write` allows and no file rule: its instructions, not rules, say where it edits. Opus passed every
-case in every run. Sonnet passed `answer-card` 3/3 and failed one or two runs of each other case.
+Both runs were k=3, complete and had no infra errors, on the final `foreman.md` (5,828 bytes, with
+the sprint lookup's team scope and `who_am_i` hint restored). The Foreman had plain `Read`, `Edit`
+and `Write` allows and no file rule: its instructions, not rules, say where it edits. Opus passed
+11 of 12 runs. Sonnet passed 3 of 12: `answer-card` 3/3 and `recover-error` run 2.
 
 ## Permission refusals
 
@@ -32,10 +33,46 @@ done
 ```
 
 Add `| select(.tool_name == "Edit" or .tool_name == "Write")` after `[]?` to count only file
-writes. Every one of the 24 runs in `-7.md` and `-8.md` (12 per model, 3 per case) counted 0 for
-both, as did the 24 in `-5.md` and `-6.md`.
+writes. Every one of the 30 runs in `-11.md` to `-14.md` counted 0 for both, as did the 24 in
+`-7.md` and `-8.md` and the 24 in `-5.md` and `-6.md`.
 
 ## Fails
+
+| Report                            | Case                | Run     | Cause                                                                                                                 |
+| --------------------------------- | ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `foreman-claude-2026-11-16-11.md` | `start-sprint-lead` | 2       | Looked for `story-view.yml` with `query_context` instead of reading it, found no `sprint` key and asked for the agent |
+| `foreman-claude-2026-11-16-12.md` | `onboard-repo`      | 1, 2, 3 | Launched the setup session, then answered in plain text: no `reply` in turn 1                                         |
+| `foreman-claude-2026-11-16-12.md` | `recover-error`     | 1, 3    | Edited in the worktree, committed, pushed, hit the `gh` failure and removed the worktree, but answered in plain text  |
+| `foreman-claude-2026-11-16-12.md` | `start-sprint-lead` | 1, 2    | Launched the lead, then answered both turns in plain text: no `reply`                                                 |
+| `foreman-claude-2026-11-16-12.md` | `start-sprint-lead` | 3       | Looked for `story-view.yml` with `query_context` instead of reading it, launched nothing, and answered in plain text  |
+
+These are model failures, not permission ones. They fall into two classes:
+
+- **A turn answered in plain text without `reply`** (8 Sonnet runs; tracked as a Sonnet
+  tool-use issue). `-7.md` had it in 3 Sonnet runs (`onboard-repo` 1 and 2, `recover-error` 2),
+  so it is more frequent here. One candidate cause in this push: the "Read on demand" line went
+  from "Answer with `reply` or `send_message`" to "Answer: `reply` or `send_message`" to fund the
+  `who_am_i` restore.
+- **The team's `story-view.yml` not read** (Opus `start-sprint-lead` run 2, Sonnet run 3, and
+  Sonnet `start-sprint-lead-renamed` run 3 in `-14.md`, which called `read_content_file` with no
+  arguments). `-7.md` had it once (Sonnet `start-sprint-lead` run 2), and `-8.md` (Opus) not at all.
+  The sentence naming the file was reordered in this push ("the team's `story-view.yml` `sprint`
+  key").
+
+## Outside the floor: a renamed lead
+
+`foreman-claude-2026-11-16-13.md` (Opus, $0.77) and `-14.md` (Sonnet, $0.36) ran
+`start-sprint-lead-renamed` alone, k=3, from a temporary copy of the pack whose outside-floor
+folder held only that case. They are `suite: extra` and set no row. Opus passed 3/3, and Sonnet
+2/3: run 3 called `read_content_file` with no arguments, didn't find the sprint agent and asked
+for one. Every run that launched a lead recognised it by `launchedBy`
+after the rename and launched no second one.
+
+## Superseded: plain file access, before the restores
+
+`foreman-claude-2026-11-16-8.md` (Opus, 12/12) and `-7.md` (Sonnet, 8/12) ran on 4396dda7's
+`foreman.md`, before the sprint lookup's team scope, the `git remote` step, the `.msg` line and the
+`who_am_i` hint were restored. Their fails:
 
 | Report                           | Case                | Run  | Cause                                                                                                                                    |
 | -------------------------------- | ------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
