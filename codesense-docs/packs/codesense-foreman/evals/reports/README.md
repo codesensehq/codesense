@@ -11,14 +11,13 @@ transcript stays on the machine that ran it.
 
 | Model               | `spec_hash` | Status | Deciding report                  | Spend |
 | ------------------- | ----------- | ------ | -------------------------------- | ----- |
-| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-6.md` | $2.59 |
-| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-5.md` | $1.22 |
+| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-8.md` | $2.54 |
+| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-7.md` | $1.20 |
 
 `spec_hash` is null because there is no pack builder yet; the rows key on null until one exists.
 Both runs were k=3, complete and had no infra errors. The Foreman had plain `Read`, `Edit` and
 `Write` allows and no file rule: its instructions, not rules, say where it edits. Opus passed every
-case in every run. Sonnet passed `onboard-repo` and `start-sprint-lead` 3/3, failed `answer-card`
-run 1 and failed `recover-error` in all three runs.
+case in every run. Sonnet passed `answer-card` 3/3 and failed one or two runs of each other case.
 
 ## Permission refusals
 
@@ -33,18 +32,27 @@ done
 ```
 
 Add `| select(.tool_name == "Edit" or .tool_name == "Write")` after `[]?` to count only file
-writes. Every one of the 24 runs (12 per model, 3 per case) counted 0 for both.
+writes. Every one of the 24 runs in `-7.md` and `-8.md` (12 per model, 3 per case) counted 0 for
+both, as did the 24 in `-5.md` and `-6.md`.
 
 ## Fails
 
-| Report                           | Case            | Run     | Cause                                                                                                                                                       |
-| -------------------------------- | --------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `foreman-claude-2026-11-16-5.md` | `recover-error` | 1, 2, 3 | Edited the README in the worktree, committed, pushed, hit the injected `gh` failure and replied, but kept the worktree for a retry: no `git worktree remove` |
-| `foreman-claude-2026-11-16-5.md` | `answer-card`   | 1       | Sent an empty `reply`, then explained the card in plain text: no `reply` in turn 2                                                                          |
+| Report                           | Case                | Run  | Cause                                                                                                                                    |
+| -------------------------------- | ------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `foreman-claude-2026-11-16-7.md` | `onboard-repo`      | 1, 2 | Launched the setup session, then answered in plain text: no `reply` in turn 1                                                            |
+| `foreman-claude-2026-11-16-7.md` | `recover-error`     | 2    | Committed, pushed, hit the injected `gh` failure and removed the worktree, but answered both turns in plain text: no `reply`             |
+| `foreman-claude-2026-11-16-7.md` | `start-sprint-lead` | 2    | Called `read_content_file` with no arguments, so it never read `story-view.yml` and asked for the agent; turn 2 launched with no `reply` |
 
-These are model failures, not permission ones. Opus removed the worktree after the `gh` failure in
-every run. The `answer-card` fail is the plain-text-without-`reply` failure the earlier Sonnet run
-also had.
+These are model failures, not permission ones: every one but the empty `read_content_file` call is
+a turn answered in plain text without `reply`.
+
+## Superseded: plain file access, before the worktree-remove fix
+
+`foreman-claude-2026-11-16-6.md` (Opus, 12/12) and `-5.md` (Sonnet, 8/12) ran on a `foreman.md`
+whose worktree-remove line had been trimmed to "when done". Sonnet then kept the worktree for a
+retry after the `gh` failure in all three `recover-error` runs ("a foreman worktree was left
+behind"), and `answer-card` run 1 sent an empty `reply`, then plain text. The line now says to
+remove the worktree even if the PR failed, and no `-7.md` run left one.
 
 ## Earlier passes and fails (file rules in the `//**/foreman-*` form)
 
