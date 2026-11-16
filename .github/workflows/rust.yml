@@ -104,7 +104,7 @@ jobs:
         run: cargo test --locked -p codesense-guards
 
   rust-macos-build:
-    name: Rust (macOS arm64) build
+    name: Rust (macOS arm64) build ${{ matrix.part }}
     # macOS runners are scarce, and the macOS jobs are not a required check: they never run on a
     # merge group, so the queue merges on the Linux and TypeScript checks. They run after the
     # merge, on each push to main that changes something Rust can see (the changes job), and
@@ -113,16 +113,18 @@ jobs:
     # Dependabot pull request, and not again when another label is added. workflow-policy allows
     # only this job and rust-macos to skip merge groups, and keeps the
     # github.event_name != 'pull_request' || so push and schedule run them.
-    # This job compiles the tests once into a nextest archive; rust-macos-test runs it in shards.
+    # This job compiles the tests once into two nextest archives, on two runners at once: every
+    # crate's lib unit tests (the app's is most of the compile) and everything else (bins,
+    # examples, integration tests, doctests). rust-macos-test runs both in shards.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: macos-15
-    # Room for a full compile of the set, most of which the dependency cache does not cover.
+    # Room for a full compile of each half, most of which the dependency cache does not cover.
     timeout-minutes: 150
-    # The archive's name, from the attempt that built it: re-running only the failed shards
-    # starts a new attempt but keeps this job's output and artifact.
-    outputs:
-      archive: ${{ steps.archive-name.outputs.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [lib, rest]
     permissions:
       contents: read
     defaults:
@@ -133,6 +135,7 @@ jobs:
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
       RUST_PACKAGES: -p codesense-guards -p codesense -p codesense-host-proto -p codesense-pty-core -p codesense-fs-core -p codesense-session-server
+      PART: ${{ matrix.part }}
     steps:
       # All paths below are relative to this repository's checkout.
       - name: Check out source
@@ -198,34 +201,52 @@ jobs:
           for script in $scripts; do node "$script"; done
       - name: Compile macOS tests
         id: compile
+        # The two parts together are what a plain cargo test builds. A named --test is explicit,
+        # so cargo would refuse one whose required features are off; those are left out, as
+        # cargo test leaves them out.
         run: |
           read -r -a packages <<< "$RUST_PACKAGES"
-          cargo nextest archive "${packages[@]}" --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+          if [[ "$PART" == lib ]]; then
+            targets=(--lib)
+          else
+            targets=(--bins --examples)
+            names=$(cargo metadata --locked --no-deps --format-version 1 | jq -r --arg packages "$RUST_PACKAGES" '
+              ($packages | split(" ") | map(select(. != "-p"))) as $selected
+              | .packages[] | select(.name as $name | $selected | index($name))
+              | .targets[] | select(.kind == ["test"] and ((.["required-features"] // []) | length == 0))
+              | .name')
+            for name in $names; do targets+=(--test "$name"); done
+          fi
+          cargo nextest archive "${packages[@]}" "${targets[@]}" \
+            --archive-file "$RUNNER_TEMP/nextest-archive-$PART.tar.zst" \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-compile.log"
       - name: Collect test runtime files
-        # The untracked files the tests read beside the archive: sidecars, bundled resources and
-        # generated docs data.
+        # The untracked files the tests read beside the archives: sidecars, bundled resources and
+        # generated docs data. Both parts make the same ones; the rest part ships them.
+        if: matrix.part == 'rest'
         run: |
           git ls-files -z --others --ignored --exclude-standard -- src-tauri codesense-docs \
             | tar --null -T - -cf "$RUNNER_TEMP/test-runtime.tar"
-      - name: Name test archive
-        id: archive-name
-        run: echo "name=rust-macos-tests-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Upload test archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ steps.archive-name.outputs.name }}
+          # One name per part for the whole run, not per attempt: re-running only the failed
+          # shards starts a new attempt and still finds both archives, and a re-run part
+          # replaces its own.
+          name: rust-macos-tests-${{ matrix.part }}-${{ github.run_id }}
+          overwrite: true
           path: |
-            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/nextest-archive-${{ matrix.part }}.tar.zst
             ${{ runner.temp }}/test-runtime.tar
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
       - name: Test macOS doctests
         timeout-minutes: 15
-        # Runs after a failed upload, but not when the test build never ran; on macOS the build
-        # script then fails on sidecars an earlier failed step never built, hiding the real failure.
-        if: (success() || failure()) && steps.compile.outcome == 'success'
+        # In the rest part, which built the libraries the doctests link. Runs after a failed
+        # upload, but not when the test build never ran; on macOS the build script then fails on
+        # sidecars an earlier failed step never built, hiding the real failure.
+        if: (success() || failure()) && steps.compile.outcome == 'success' && matrix.part == 'rest'
         run: |
           read -r -a packages <<< "$RUST_PACKAGES"
           cargo test --doc "${packages[@]}" --no-fail-fast \
@@ -237,7 +258,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: rust-macos-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: rust-macos-logs-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rust-ci-logs/
           retention-days: 7
           if-no-files-found: warn
@@ -251,8 +272,8 @@ jobs:
 
   rust-macos-test:
     name: Rust (macOS arm64) tests ${{ matrix.shard }}/3
-    # Runs the build job's archive, a third of the tests per shard, so no shard compiles. It runs
-    # only after that build succeeds, and so never on a merge group.
+    # Runs the build job's two archives, a third of each per shard, so no shard compiles. It runs
+    # only after both parts of that build succeed, and so never on a merge group.
     needs: rust-macos-build
     runs-on: macos-15
     timeout-minutes: 30
@@ -300,32 +321,47 @@ jobs:
         run: |
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
-      - name: Download test archive
+      - name: Download test archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ needs.rust-macos-build.outputs.archive }}
+          pattern: rust-macos-tests-*-${{ github.run_id }}
+          merge-multiple: true
           path: ${{ runner.temp }}/rust-macos-tests
       - name: Restore test runtime files
         run: tar -xf "$RUNNER_TEMP/rust-macos-tests/test-runtime.tar"
+      - name: Build the emulator worker
+        # session-server's activity tests rebuild the worker in each test process. The pinned Bun
+        # they compile with is not in the archive, so on a fresh runner several processes fetched
+        # it at once, each replacing the binary another was running (macOS kills that process).
+        # One build first leaves Bun in place, and theirs only recompile.
+        run: pnpm run build:emulator
       - name: Test macOS crates
         id: test
-        # Extracted into the checkout, so the target directory is where the build job's was.
+        # Each archive is extracted into the checkout, so the target directory is where the build
+        # job's was. Both run, and each one's JUnit report is kept before the next overwrites it.
         # Exercises macOS cfg tests in the host crates as well as the desktop app.
         run: |
-          cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/rust-macos-tests/nextest-archive.tar.zst" \
-            --workspace-remap "$GITHUB_WORKSPACE" --extract-to "$GITHUB_WORKSPACE" --extract-overwrite --partition "slice:${{ matrix.shard }}/3"
+          mkdir -p "$RUNNER_TEMP/junit"
+          status=0
+          for part in lib rest; do
+            cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/rust-macos-tests/nextest-archive-$part.tar.zst" \
+              --workspace-remap "$GITHUB_WORKSPACE" --extract-to "$GITHUB_WORKSPACE" --extract-overwrite \
+              --partition "slice:${{ matrix.shard }}/3" || status=1
+            if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
+          done
+          exit "$status"
       - name: List flaky tests
         # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
         # and tracked as a public issue by flaky-issues on main.
         if: success() || failure()
-        run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
+        run: for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # flaky-issues reads rust-*-junit-<run>-<attempt>; flaky-tests drops the shard.
           name: rust-macos-shard-${{ matrix.shard }}-junit-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/nextest/ci/junit.xml
+          path: ${{ runner.temp }}/junit/
           retention-days: 7
           if-no-files-found: warn
       - name: Check tracked files are unchanged
@@ -337,14 +373,18 @@ jobs:
         if: (failure() || cancelled()) && github.ref == 'refs/heads/main'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
+        run: |
+          for part in lib rest; do
+            node scripts/flaky-tests.mjs failed "$RUNNER_TEMP/junit/$part.xml" --run-url "$RUN_URL"
+          done
 
   rust-macos:
     name: Rust (macOS arm64)
-    # The one macOS result: green only when the build and every test shard are. It runs exactly
-    # when the build job does (the same if), so a skipped build reports a skip here.
+    # The one macOS result: green only when the build and every test shard are. It runs when the
+    # build job does (the same if), so a skipped build reports a skip here, and also when the run
+    # is cancelled (always() in place of !cancelled()), so a cancelled run reports red, not skipped.
     needs: [changes, rust-macos-build, rust-macos-test]
-    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
+    if: ${{ always() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

@@ -206,6 +206,9 @@ test("a merge_group workflow saves no cache on merge groups", () => {
 const macosOptIn =
   "github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))";
 const pathFilter = "!cancelled() && needs.changes.outputs.rust != 'false'";
+// The macOS result job leads with always() instead, so a cancelled run reports red.
+const resultFilter = "always() && needs.changes.outputs.rust != 'false'";
+const macosFilter = { "rust-macos-build": pathFilter, "rust-macos": resultFilter };
 const offMergeGroups = "github.event_name != 'merge_group'";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
@@ -272,10 +275,10 @@ test("rust.yml runs on push to main and nightly, and only the nightly run saves 
   ]);
   assert.deepEqual(workflow.on.push, { branches: ["main"] });
   assert.deepEqual(workflow.on.schedule, [{ cron: "17 6 * * *" }]);
-  for (const name of ["rust-macos-build", "rust-macos"])
+  for (const [name, filter] of Object.entries(macosFilter))
     assert.ok(
       workflow.jobs[name].if.startsWith(
-        `\${{ ${pathFilter} && ${offMergeGroups} && (github.event_name != 'pull_request' ||`,
+        `\${{ ${filter} && ${offMergeGroups} && (github.event_name != 'pull_request' ||`,
       ),
       name,
     );
@@ -322,10 +325,10 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   ]);
   for (const trigger of ["merge_group", "schedule", "workflow_dispatch"])
     assert.ok(Object.hasOwn(workflow.on, trigger), trigger);
-  for (const name of ["rust-macos-build", "rust-macos"])
+  for (const [name, filter] of Object.entries(macosFilter))
     assert.equal(
       workflow.jobs[name].if,
-      `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      `\${{ ${filter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       name,
     );
   // The shards follow the build: no if of their own, so they run only when it succeeds.
@@ -470,6 +473,41 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       "rust.yml",
       "rust-macos",
     ],
+  ])
+    assert.match(
+      filtered(condition, file, job),
+      /if must begin with/,
+      `${file} ${job}: ${condition}`,
+    );
+});
+
+// Only rust.yml's macOS result job may lead with always(), so a cancelled run reports red; a job
+// that builds or tests must not run after a cancel.
+test("only rust.yml's macOS result job may run on a cancelled run", () => {
+  const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: changes\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  for (const condition of [
+    `\${{ ${resultFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+    `\${{ ${resultFilter} }}`,
+  ])
+    assert.equal(filtered(condition), "", condition);
+  for (const [condition, file, job] of [
+    [
+      `\${{ ${resultFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      "rust.yml",
+      "rust-macos-build",
+    ],
+    [`\${{ ${resultFilter} }}`, "rust.yml", "rust-linux"],
+    [`\${{ ${resultFilter} && ${offMergeGroups} && (${macosOptIn}) }}`, "ci.yml", "rust-macos"],
+    [`\${{ always() && ${pathFilter} && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
+    [`\${{ always() && needs.changes.outputs.rust == 'true' }}`, "rust.yml", "rust-macos"],
   ])
     assert.match(
       filtered(condition, file, job),
@@ -886,16 +924,17 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   const packages = (command) => [...command.matchAll(/-p ([a-z-]+)/g)].map((m) => m[1]).sort();
   // Linux runs only the crates that pass there today; the rest join once fixed.
   const portable = ["codesense-host-proto", "codesense-fs-core"];
-  const doctests = (steps) => {
+  // Doctests run after a failed step, but only once the test build ran and succeeded.
+  const afterCompile = "(success() || failure()) && steps.compile.outcome == 'success'";
+  const doctests = (steps, condition = afterCompile) => {
     const docs = steps.find((step) => step.run?.includes("cargo test --doc"));
     assert.match(docs.run, /\$RUST_PACKAGES/);
     assert.deepEqual(packages(docs.run), []);
     assert.equal(docs["timeout-minutes"], 15);
-    // Doctests run after a failed step, but only once the test build ran and succeeded.
-    assert.equal(docs.if, "(success() || failure()) && steps.compile.outcome == 'success'");
+    assert.equal(docs.if, condition);
   };
-  const junitUpload = (steps) => {
-    const junit = steps.find((step) => step.with?.path === "target/nextest/ci/junit.xml");
+  const junitUpload = (steps, path = "target/nextest/ci/junit.xml") => {
+    const junit = steps.find((step) => step.with?.path === path);
     assert.equal(junit.if, "always()");
     assert.equal(junit.uses, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
   };
@@ -915,8 +954,13 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   assert.ok(linux.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
   junitUpload(linux.steps);
 
-  // macOS compiles once into a nextest archive; the shards run it and compile nothing.
+  // macOS compiles once, in two parts on two runners, into two nextest archives; the shards run
+  // both and compile nothing.
   const build = workflow.jobs["rust-macos-build"];
+  const parts = build.strategy.matrix.part;
+  assert.deepEqual(parts, ["lib", "rest"]);
+  assert.equal(build.name, "Rust (macOS arm64) build ${{ matrix.part }}");
+  assert.equal(build.env.PART, "${{ matrix.part }}");
   assert.deepEqual(
     packages(build.env.RUST_PACKAGES),
     [
@@ -928,14 +972,28 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
     ].sort(),
   );
   const compile = build.steps.find((step) => step.id === "compile");
-  assert.match(compile.run, /cargo nextest archive "\$\{packages\[@\]\}" --archive-file/);
+  assert.match(
+    compile.run,
+    /cargo nextest archive "\$\{packages\[@\]\}" "\$\{targets\[@\]\}" \\\n\s*--archive-file "\$RUNNER_TEMP\/nextest-archive-\$PART\.tar\.zst"/,
+  );
+  // Together the parts build what cargo test builds: libs' unit tests, then bins, examples and
+  // every integration test cargo test would build (named, so those with required features are
+  // left out as cargo test leaves them out).
+  assert.match(compile.run, /targets=\(--lib\)/);
+  assert.match(compile.run, /targets=\(--bins --examples\)/);
+  assert.match(
+    compile.run,
+    /\.kind == \["test"\] and \(\(\.\["required-features"\] \/\/ \[\]\) \| length == 0\)/,
+  );
+  assert.match(compile.run, /targets\+=\(--test "\$name"\)/);
   assert.match(compile.run, /\$RUST_PACKAGES/);
   assert.deepEqual(packages(compile.run), []);
   assert.ok(build.steps.every((step) => !step.run?.includes("cargo nextest run")));
   // The docs data the build script writes exists before its first run, or it reruns.
   const docsData = build.steps.findIndex((step) => step.name === "Generate docs data");
   assert.ok(docsData >= 0 && docsData < build.steps.indexOf(compile));
-  doctests(build.steps);
+  // The rest part builds the libraries the doctests link.
+  doctests(build.steps, `${afterCompile} && matrix.part == 'rest'`);
   assert.ok(build.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
 
   const shards = workflow.jobs["rust-macos-test"];
@@ -950,18 +1008,25 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
     shards.steps.every((step) => !/\bcargo (?:build|test|nextest archive)\b/.test(step.run ?? "")),
   );
   const test = shards.steps.find((step) => step.id === "test");
-  assert.match(test.run, /cargo nextest run --profile ci --archive-file /);
+  assert.ok(test.run.includes(`for part in ${parts.join(" ")}; do`), test.run);
+  assert.match(
+    test.run,
+    /cargo nextest run --profile ci --archive-file "\$RUNNER_TEMP\/rust-macos-tests\/nextest-archive-\$part\.tar\.zst"/,
+  );
   assert.ok(test.run.includes(`--partition "slice:\${{ matrix.shard }}/${count}"`), test.run);
   assert.ok(shards.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
-  junitUpload(shards.steps);
-  // A re-run of only the failed shards is a new attempt; the archive keeps the build's name.
-  const name = build.steps.find((step) => step.id === "archive-name");
-  assert.match(name.run, /rust-macos-tests-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT/);
-  assert.equal(build.outputs.archive, "${{ steps.archive-name.outputs.name }}");
+  junitUpload(shards.steps, "${{ runner.temp }}/junit/");
+  // One archive name per part for the whole run: a re-run of only the failed shards is a new
+  // attempt and still finds both, and a re-run part replaces its own.
   const upload = build.steps.find((step) => step.name === "Upload test archive");
-  assert.equal(upload.with.name, "${{ steps.archive-name.outputs.name }}");
+  assert.equal(upload.with.name, "rust-macos-tests-${{ matrix.part }}-${{ github.run_id }}");
+  assert.equal(upload.with.overwrite, true);
   const download = shards.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
-  assert.equal(download.with.name, "${{ needs.rust-macos-build.outputs.archive }}");
+  assert.equal(download.with.pattern, "rust-macos-tests-*-${{ github.run_id }}");
+  assert.equal(download.with["merge-multiple"], true);
+  // The shards build the emulator worker once before the tests, which rebuild it per process.
+  const emulator = shards.steps.findIndex((step) => step.run === "pnpm run build:emulator");
+  assert.ok(emulator >= 0 && emulator < shards.steps.indexOf(test));
 });
 
 // The build script's generators that write into directories it watches run before cargo; the
@@ -1043,9 +1108,17 @@ test("flaky-issues runs only for pushes to main outside forks", () => {
 });
 test("Rust test jobs list flaky tests after nextest and only flaky-issues writes issues", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
-  for (const [name, after] of [
-    ["rust-macos-test", "success() || failure()"],
-    ["rust-linux", "(success() || failure()) && steps.compile.outcome == 'success'"],
+  for (const [name, after, run] of [
+    [
+      "rust-macos-test",
+      "success() || failure()",
+      'for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done',
+    ],
+    [
+      "rust-linux",
+      "(success() || failure()) && steps.compile.outcome == 'success'",
+      "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml",
+    ],
   ]) {
     const job = workflow.jobs[name];
     assert.deepEqual(job.permissions, { contents: "read" });
@@ -1054,19 +1127,21 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
       (step) => step.run?.includes("cargo nextest run") && !step.run.includes("--no-run"),
     );
     const flaky = steps[test + 1];
-    assert.equal(flaky.run, "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml");
+    assert.equal(flaky.run, run, name);
     assert.equal(flaky.if, after, name);
   }
   // A red macOS build or shard on main lists its failed tests and run link in the job summary,
   // read-only.
-  for (const name of ["rust-macos-build", "rust-macos-test"]) {
+  for (const [name, report] of [
+    ["rust-macos-build", "target/nextest/ci/junit.xml"],
+    ["rust-macos-test", '"$RUNNER_TEMP/junit/$part.xml"'],
+  ]) {
     const red = workflow.jobs[name].steps.find(
       (step) => step.name === "Summarize a red run on main",
     );
     assert.equal(red.if, "(failure() || cancelled()) && github.ref == 'refs/heads/main'", name);
-    assert.equal(
-      red.run,
-      'node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"',
+    assert.ok(
+      red.run.includes(`node scripts/flaky-tests.mjs failed ${report} --run-url "$RUN_URL"`),
       name,
     );
   }
@@ -1090,7 +1165,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     const uploads = workflow.jobs[name].steps.filter((step) =>
       step.uses?.startsWith("actions/upload-artifact@"),
     );
-    const junit = uploads.filter((step) => step.with.path === "target/nextest/ci/junit.xml");
+    const junit = uploads.filter((step) => /junit/.test(step.with.path));
     assert.equal(junit.length, reports, name);
     for (const step of junit) assert.match(step.with.name, glob, name);
     for (const step of uploads.filter((step) => !junit.includes(step)))
