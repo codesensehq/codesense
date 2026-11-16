@@ -130,6 +130,16 @@ impl FakeHost {
         }
     }
 
+    /// `handle`'s session ended: it exited (an ended session is no seat of its thread).
+    pub(crate) fn end(&self, handle: &str) {
+        for s in self.sessions.lock().unwrap().iter_mut() {
+            if s.handle == handle {
+                s.running = false;
+                s.ended = true;
+            }
+        }
+    }
+
     /// `handle`'s tab ended, or its machine went offline.
     fn stop(&self, handle: &str) {
         for s in self.sessions.lock().unwrap().iter_mut() {
