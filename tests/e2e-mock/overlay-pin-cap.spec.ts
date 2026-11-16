@@ -2,9 +2,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * The overlay's Pin… at the pin limit carries the count of pins beside its icon. The count is
- * 11 px, the icon 13 px: the count's box sits clear of the icon's, at least 1 px apart, in light
- * and dark (frontend mock backend, `?agents=team`; `agent_pins` answers three pins, so a
+ * The overlay's Pin… at the pin limit carries the count of pins beside its icon, inside its 24 px
+ * button. The count is 11 px, the icon 13 px: the count's box sits clear of the icon's, at least
+ * 1 px apart, in light and dark (frontend mock backend, `?agents=team`; `agent_pins` answers three pins, so a
  * message that isn't pinned offers Pin…). SHOTS=<dir> writes a crop of the button.
  */
 
@@ -96,8 +96,15 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(button.locator(".ibx-pin-cap")).toBeVisible();
     const boxes = await button.evaluate((b) => {
       const box = (n: Element) => n.getBoundingClientRect().toJSON() as DOMRect;
-      return { icon: box(b.querySelector("svg")!), cap: box(b.querySelector(".ibx-pin-cap")!) };
+      return {
+        button: box(b),
+        icon: box(b.querySelector("svg")!),
+        cap: box(b.querySelector(".ibx-pin-cap")!),
+      };
     });
+    // The icon button keeps its 24 px; the count sits inside it.
+    expect(boxes.button.width).toBe(24);
+    expect(boxes.cap.right).toBeLessThanOrEqual(boxes.button.right);
     const apart =
       boxes.cap.left >= boxes.icon.right + 1 ||
       boxes.cap.right + 1 <= boxes.icon.left ||
