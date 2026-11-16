@@ -101,18 +101,31 @@ fn other_org_same_named_team_is_refused_and_own_manifest_aliases_follow_the_real
     )
     .unwrap();
     std::fs::write(root.join("parent/panes/pane-manifest.yaml"), "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Other org report\n    icon: chart-bar\n").unwrap();
-    let read = |org: &str, team: &str, scope: &CallerScope| {
+    let panes = |org: &str, team: &str, scope: &CallerScope| {
         let ToolEnvelope::Ok(listing) = list_for(&f.home, &me, org, team, scope).unwrap() else {
             panic!("listing refused");
         };
-        listing.panes.into_iter().find(|pane| pane.id == "report")
+        listing.panes
+    };
+    let read = |org: &str, team: &str, scope: &CallerScope| {
+        panes(org, team, scope)
+            .into_iter()
+            .find(|pane| pane.id == "report")
     };
     assert_eq!(
         read(org, "parent", &CallerScope::Human).unwrap().title,
         "Other org report"
     );
     // A team agent reads only its own org, even where a team shares its ancestor's name.
-    assert_eq!(read(org, "parent", &f.scope), None);
+    // Only built-ins are listed: no team or private pane of the other org shows.
+    let listed = panes(org, "parent", &f.scope);
+    assert!(!listed.is_empty());
+    assert!(
+        listed
+            .iter()
+            .all(|pane| pane.dashboard_ref.scope == panes::DashboardScope::BuiltIn),
+        "{listed:?}"
+    );
     // In the agent's own team a manifest is read, but not one aliasing another
     // team's unshared file: the real owner decides.
     f.write("child", "panes/report.html", "<title>HTML fallback</title>");
