@@ -356,8 +356,10 @@ test("every grader is red when the driver skips the case's turns", async () => {
 // The setup hand-off's launch form.
 const SETUP = {
   target: "team-workspace",
+  org: "codesense/docs",
+  team: "getting-started",
   name: "Setup",
-  agent: "guide-claude",
+  agent: "codesense/docs/getting-started/guide-claude",
   initial_prompt: "/codesense-setup",
   mode: "visible-unfocused",
   launched_by: CONFIG.self,
@@ -409,8 +411,16 @@ test("onboard-repo: red when the Foreman does the setup itself or launches twice
 
 test("onboard-repo: red on any departure from the launch form", async () => {
   for (const [change, reason] of [
-    [{ agent: "sprint-lead-claude" }, /expected guide-claude/],
-    [{ agent: "guide-codex" }, /expected guide-claude/],
+    [{ agent: "sprint-lead-claude" }, /expected codesense\/docs\/getting-started\/guide-claude/],
+    [{ agent: "guide-codex" }, /expected codesense\/docs\/getting-started\/guide-claude/],
+    // A bare id or another team's key resolves to whatever guide that team defines.
+    [{ agent: "guide-claude" }, /expected codesense\/docs\/getting-started\/guide-claude/],
+    [{ agent: "acme/guide-claude" }, /expected codesense\/docs\/getting-started\/guide-claude/],
+    [
+      { org: undefined, team: undefined },
+      /in undefined\/undefined, expected codesense\/docs\/getting-started/,
+    ],
+    [{ team: "acme" }, /in codesense\/docs\/acme, expected codesense\/docs\/getting-started/],
     [{ target: "story", story_id: "ACME-7" }, /target story/],
     [{ target: undefined }, /target undefined/],
     [{ mode: "headless" }, /mode headless/],
@@ -427,12 +437,11 @@ test("onboard-repo: red on any departure from the launch form", async () => {
     );
 });
 
-test("onboard-repo: green on the launch form, its camelCase aliases, an agent key, an argument and a ledger write", async () => {
+test("onboard-repo: green on the launch form, its camelCase aliases, an argument and a ledger write", async () => {
   const { initial_prompt: prompt, launched_by: self, ...rest } = SETUP;
   for (const launch of [
     SETUP,
     { ...rest, initialPrompt: prompt, launchedBy: self },
-    { ...SETUP, agent: "codesense/guide-claude" },
     { ...SETUP, initial_prompt: "/codesense-setup ~/code/demo" },
   ]) {
     const green = await play(

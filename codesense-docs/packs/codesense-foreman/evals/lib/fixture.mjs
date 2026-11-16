@@ -64,11 +64,17 @@ export const ANSWERED_CARD = {
 // skill's `foreman-handback` block names (a test ties the two together).
 export const SETUP_STEPS = ["team", "source-repos", "git-access"];
 export const stepDone = (ledger, step) => ledger.some((r) => r.step === step && r.state === "done");
+// The docs team, where the setup guide ships and runs, and the guide's key there: a bare id would
+// resolve in the Foreman's own team once it re-homes.
+export const DOCS = { org: "codesense/docs", team: "getting-started" };
+export const guideKey = (runtime) => `${DOCS.org}/${DOCS.team}/guide-${runtime}`;
 // The setup hand-off's launch form (foreman.md); the stubs and tests share it.
 export const SETUP_LAUNCH = {
   target: "team-workspace",
+  org: DOCS.org,
+  team: DOCS.team,
   name: "Setup",
-  agent: `guide-${CONFIG.runtime}`,
+  agent: guideKey(CONFIG.runtime),
   initial_prompt: "/codesense-setup",
   mode: "visible-unfocused",
 };

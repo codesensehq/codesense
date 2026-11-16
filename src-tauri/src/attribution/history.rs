@@ -659,6 +659,8 @@ impl HistorySource {
         let mut record = fetch_record(home);
         serde_json::Map::retain(&mut record, |key, _| !key.starts_with(&prefix));
         save_fetch_record(home, &record);
+        // A kept story read may still say its fetch is spent.
+        crate::session_usage::story_changes::forget_kept(home);
     }
 
     fn record_fetch(&self, home: &Path) {

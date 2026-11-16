@@ -24,7 +24,7 @@ pub struct Page {
 pub const PAGES: &[Page] = &[
     Page {
         path: "getting-started/content/foreman/index.html",
-        sha256: "ff94132069b6e78fe2bc269be5e79c5c1c09bf01dadb659a505dfebeb775c8f2",
+        sha256: "532357165a6e3af577aca6e8dcfc7b5688f294003d0ee601ffab7bc7a48c5856",
     },
     Page {
         path: "getting-started/content/guide/index.html",
@@ -32,15 +32,16 @@ pub const PAGES: &[Page] = &[
     },
 ];
 
+/// The Foreman the docs bundle ships, by its docs-team key.
+pub const FOREMAN_KEY: &str = "codesense/docs/getting-started/foreman-claude";
+
 /// The agents a page holding the capability may launch: the Foreman and the setup guide, one
 /// guide agent per runtime. The grant is defence in depth beside the page's hash, so a page
-/// cannot start any other agent.
-pub const AGENTS: &[&str] = &[
-    "foreman-claude",
-    "guide-claude",
-    "guide-codex",
-    "guide-opencode",
-];
+/// cannot start any other agent. The Foreman is named by its key: a bare id resolves through
+/// the target team and the personal space first (`find_agent_for`), so it would run whatever
+/// agent a team defines under that name. The guide page launches its agents by bare id into
+/// the docs team itself.
+pub const AGENTS: &[&str] = &[FOREMAN_KEY, "guide-claude", "guide-codex", "guide-opencode"];
 
 /// Whether a `team-workspace` open names an agent the page may launch. An open with no agent
 /// would run the team's default agent, so it is refused too.
@@ -238,7 +239,13 @@ mod tests {
 
     #[test]
     fn only_the_foreman_and_the_setup_guide_may_be_launched() {
-        assert!(agent_allowed(Some("foreman-claude")));
+        // The Foreman by the docs team's key only: a bare id resolves through the target team
+        // and the personal space first, so it could start any agent a team names so.
+        assert!(agent_allowed(Some(FOREMAN_KEY)));
+        assert_eq!(FOREMAN_KEY, "codesense/docs/getting-started/foreman-claude");
+        assert!(!agent_allowed(Some("foreman-claude")));
+        assert!(!agent_allowed(Some("acme/web/foreman-claude")));
+        assert!(!agent_allowed(Some("codesense/docs/other/foreman-claude")));
         for guide in ["guide-claude", "guide-codex", "guide-opencode"] {
             assert!(agent_allowed(Some(guide)), "{guide}");
         }
@@ -248,6 +255,25 @@ mod tests {
         assert!(!agent_allowed(Some("")));
         // No agent would run the team's default agent.
         assert!(!agent_allowed(None));
+    }
+
+    #[test]
+    fn the_foreman_key_names_the_agent_the_docs_bundle_ships() {
+        let info = crate::context_repo::codesense_docs::bundle_info();
+        let key = crate::agents::AgentKey::parse(FOREMAN_KEY).expect("FOREMAN_KEY is an agent key");
+        assert_eq!(
+            (key.org.as_str(), key.team.as_str()),
+            (info.slug.as_str(), info.team.as_str()),
+            "FOREMAN_KEY names the docs bundle's team"
+        );
+        let agent: crate::agents::model::Agent = serde_yaml::from_str(include_str!(
+            "../../../codesense-docs/getting-started/config/agents/foreman-claude/agent.yaml"
+        ))
+        .expect("the docs bundle ships the Foreman agent");
+        agent
+            .validate()
+            .expect("the shipped Foreman agent is valid");
+        assert_eq!(agent.id, key.id);
     }
 
     #[test]

@@ -5874,7 +5874,7 @@ fn media_message(fake: &FakeHost, team: &str, attachment: crate::media::Attachme
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let store = WeftStore::open(path).unwrap();
     let id =
-        inbox::inbox_insert(&store, "agent-1", HUMAN, "", None, None, None, None, None).unwrap();
+        inbox::inbox_insert(&store, "agent-1", HUMAN, "hi", None, None, None, None, None).unwrap();
     inbox::inbox_set_attachments(&store, id, &[attachment]).unwrap();
     id
 }

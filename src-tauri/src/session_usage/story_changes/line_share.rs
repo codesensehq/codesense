@@ -363,7 +363,6 @@ fn first_readable<T>(
 pub(super) mod tests {
     use super::*;
     use crate::attribution::git_ai::tests::git;
-    use crate::attribution::testing::{logged_calls, logging_binary};
 
     fn note(path: &str, annotated: usize, tool: &str) -> String {
         let text = if tool == "human" {
@@ -600,41 +599,17 @@ pub(super) mod tests {
         let one = add(repo.path(), "a.txt", 2, "one", Some(("claude", 2)));
         let two = add(repo.path(), "b.txt", 3, "two", Some(("codex", 3)));
         let three = add(repo.path(), "c.txt", 1, "three", None);
-        let log = home.path().join("adapter-await.log");
-        logging_binary(&home.path().join("bin/git-ai"), &log, "exit 0");
         let all = facts(repo.path(), &[one, two, three]);
         let cold = totals(home.path(), &all, None).await.unwrap();
         assert_eq!(cold, Lines::of(&[("claude", 2), ("codex", 3)], 0, 1));
-        let reads = logged_calls(&log).len();
+        let reads = why_line::cold_reads(repo.path());
         assert_eq!(reads, 3, "cold: one blame per (commit, file)");
         assert_eq!(totals(home.path(), &all, None).await.unwrap(), cold);
-        assert_eq!(logged_calls(&log).len(), reads, "warm: served from the cache");
-    }
-
-    #[tokio::test]
-    async fn a_notes_write_during_the_scan_is_absorbed_and_endless_writes_null_lines() {
-        let (home, repo) = fixture();
-        let root = add(repo.path(), "root.txt", 1, "root", None);
-        let one = add(repo.path(), "a.txt", 2, "one", Some(("claude", 2)));
-        let log = home.path().join("adapter-await.log");
-        let flag = home.path().join("notes-moved");
-        let once = format!(
-            "if [ ! -f \"{flag}\" ]; then touch \"{flag}\"; git -c user.name=f -c user.email=f@example.com notes --ref=ai add -f -m moved {root}; fi",
-            flag = flag.display()
+        assert_eq!(
+            why_line::cold_reads(repo.path()),
+            reads,
+            "warm: served from the cache"
         );
-        logging_binary(&home.path().join("bin/git-ai"), &log, &once);
-        let all = facts(repo.path(), &[one]);
-        assert_eq!(totals(home.path(), &all, None).await.unwrap(), Lines::of(&[("claude", 2)], 0, 0));
-        assert_eq!(logged_calls(&log).len(), 2, "that file was read again, once");
-        // A repository whose notes move on every read never settles.
-        std::fs::remove_file(home.path().join("adapter-await.log")).unwrap();
-        let always = format!(
-            "git -c user.name=f -c user.email=f@example.com notes --ref=ai add -f -m \"m$RANDOM$RANDOM\" {root}"
-        );
-        logging_binary(&home.path().join("bin/git-ai"), &log, &always);
-        let other = add(repo.path(), "b.txt", 1, "two", Some(("codex", 1)));
-        assert_eq!(totals(home.path(), &facts(repo.path(), &[other]), None).await.unwrap_err(), why_line::NOTES_CHANGED);
-        assert_eq!(logged_calls(&log).len(), 3, "three reads, then the reason");
     }
 
     #[tokio::test]

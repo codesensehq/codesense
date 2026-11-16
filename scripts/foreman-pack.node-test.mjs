@@ -450,7 +450,10 @@ test("setup: offer once, launch the guide on a yes, resume, and take it back wit
     "offer setup once",
     "Set up now · Not now",
     "`setup-ledger`",
-    'agent:"guide-claude"',
+    // The docs team's guide, by its key, in the docs team: a bare id would resolve in the
+    // Foreman's own team once it re-homes there.
+    'org:"codesense/docs", team:"getting-started"',
+    'agent:"codesense/docs/getting-started/guide-claude"',
     'initial_prompt:"/codesense-setup"',
     'mode:"visible-unfocused"',
     "`/codesense-setup resume`",

@@ -59,7 +59,7 @@ static CHILD_PROCESSES: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mut
 static DRAINS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-fn count_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) {
+pub(crate) fn count_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) {
     let mut counts = counts.lock().unwrap();
     if let Some((_, count)) = counts.iter_mut().find(|(path, _)| path == repo) {
         *count += 1;
@@ -74,7 +74,7 @@ fn count_child(repo: &Path) {
 }
 
 #[cfg(test)]
-fn counted_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) -> usize {
+pub(crate) fn counted_in(counts: &std::sync::Mutex<Vec<(PathBuf, usize)>>, repo: &Path) -> usize {
     counts
         .lock()
         .unwrap()

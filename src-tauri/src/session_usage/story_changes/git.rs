@@ -338,12 +338,27 @@ pub(super) fn collect_kept(
         SessionRef::of_read,
     ));
     let key = super::cache::walk_key(home, story, scopes, &refs);
-    if let Some(kept) = super::cache::get_walk(&key) {
+    if let Some(kept) = super::cache::get_walk(home, story, &key) {
         return Ok(kept);
     }
     let git = collect_refs(home, store, story, &refs, scopes, true, None)?;
     super::cache::put_walk(key, &git);
     Ok(git)
+}
+
+/// The checkouts whose notes a story walk read, and how often (tests count walks with it).
+#[cfg(test)]
+static WALKED: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn walked_key(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())
+}
+
+/// How many story walks read the notes of the checkout at `root`.
+#[cfg(test)]
+pub(crate) fn walks(root: &Path) -> usize {
+    crate::attribution::git_ai::counted_in(&WALKED, &walked_key(root))
 }
 
 /// The error a walk ends with when its cancel flag is set (a hosted read past its deadline).
@@ -475,9 +490,22 @@ pub(super) fn collect_refs(
     // it as a fallback after a worktree disappears; context edit provenance is separate.
     let mut work_missing = false;
     let mut work_by_convention = false;
+    let mut files_seen = std::string::String::new();
     for scope in scopes {
         if let Some(source) = story_source(home, store, story, scope) {
-            if let Ok(text) = std::fs::read_to_string(&source.path) {
+            let bytes = Result::ok(std::fs::read(&source.path));
+            // A kept read is stamped with the story file too (its planned and done facts), from
+            // the bytes read here, so an edit after this read is never kept.
+            if stamp && !<[PathBuf]>::contains(&out.stamp_spec.files, &source.path) {
+                Vec::push(&mut out.stamp_spec.files, PathBuf::clone(&source.path));
+                String::push_str(
+                    &mut files_seen,
+                    &super::cache::file_stamp(&source.path, Option::as_deref(&bytes)),
+                );
+            }
+            if let Some(text) = Option::and_then(bytes, |bytes| {
+                Result::ok(std::string::String::from_utf8(bytes))
+            }) {
                 let fields = crate::commands::frontmatter_editor::frontmatter_json(
                     crate::commands::pipeline_format::format_of(&source.path),
                     &text,
@@ -580,6 +608,10 @@ pub(super) fn collect_refs(
     if work_missing {
         std::collections::BTreeMap::insert(&mut out.unavailable, "commits", WORK_REPO_NOT_ATTACHED);
     }
+    if stamp {
+        out.stamp_spec.story = str::to_owned(story);
+        out.refs_stamp = std::string::String::clone(&files_seen);
+    }
     let mut repositories = std::collections::BTreeMap::new();
     for root in roots {
         if let Ok(repo) = git2::Repository::open(&root) {
@@ -631,7 +663,7 @@ pub(super) fn collect_refs(
         if stamp {
             out.stamp_spec.story = story.to_owned();
             Vec::push(&mut out.stamp_spec.repos, (common.clone(), names.clone()));
-            out.refs_stamp = super::cache::stamp_of(&out.stamp_spec);
+            out.refs_stamp = format!("{files_seen}{}", super::cache::repos_stamp(&out.stamp_spec));
         }
         let mut merges = std::collections::BTreeMap::<String, Vec<git2::Oid>>::new();
         // Two-parent merges under the story's squash-style subject whose second parent is no
@@ -806,6 +838,8 @@ pub(super) fn collect_refs(
         if std::collections::BTreeSet::is_empty(&note_commits) {
             continue;
         }
+        #[cfg(test)]
+        crate::attribution::git_ai::count_in(&WALKED, &walked_key(root));
         for sha in &note_commits {
             out.repo_paths
                 .entry(sha.clone())

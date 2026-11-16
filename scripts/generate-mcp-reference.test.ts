@@ -239,4 +239,81 @@ describe("Node-only freshness and resolving teaching links", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it("tolerates a re-exported PR's drift only in inputs that main changed", async () => {
+    const { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } =
+      await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { dirname, join } = await import("node:path");
+    const { ROOT, CONTENT, CATALOG, sealReference, generateReference } =
+      await import("./generate-mcp-reference.mjs");
+    const root = mkdtempSync(join(tmpdir(), "mcp-reference-inherited-"));
+    const copy = (path: string) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      copyFileSync(join(ROOT, path), join(root, path));
+    };
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+        cwd: root,
+        stdio: "pipe",
+      });
+    try {
+      mkdirSync(join(root, "src-tauri/crates"), { recursive: true });
+      for (const path of [
+        "Cargo.lock",
+        "src-tauri/Cargo.toml",
+        "src-tauri/build.rs",
+        "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
+        "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
+        "src-tauri/src/mcp/handler.rs",
+        CATALOG,
+        `${CONTENT}/generated/mcp-tools.default.json`,
+        `${CONTENT}/generated/mcp-tools.dashboard-publish.json`,
+      ])
+        copy(path);
+      for (const f of readCatalog().families) copy(`${CONTENT}/${f.docs.split("#")[0]}`);
+      const ours = join(root, "src-tauri/src/ours.rs");
+      const theirs = join(root, "src-tauri/src/theirs.rs");
+      writeFileSync(ours, "// JsonSchema the PR's tool\n");
+      writeFileSync(theirs, "// JsonSchema another PR's tool\n");
+      writeFileSync(join(root, CATALOG), JSON.stringify(readCatalog(), null, 2) + "\n");
+      sealReference(root);
+      generateReference(root);
+      git("init", "-q", "-b", "main");
+      git("add", "-A");
+      git("commit", "-q", "-m", "base");
+      // The PR edits its tool and re-exports, so it changes the sealed export.
+      git("switch", "-q", "-c", "pr");
+      writeFileSync(ours, "// JsonSchema the PR's tool, changed\n");
+      sealReference(root);
+      git("commit", "-q", "-am", "pr");
+      // Meanwhile main changes another tool; the check runs on the merge, as CI does.
+      git("switch", "-q", "main");
+      writeFileSync(theirs, "// JsonSchema another PR's tool, changed\n");
+      git("commit", "-q", "-am", "main");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      git("switch", "-q", "pr");
+      git("merge", "-q", "--no-edit", "main");
+      const notices: string[] = [];
+      const tolerant = () =>
+        generateReference(root, {
+          check: true,
+          allowStaleExport: true,
+          warn: (line) => notices.push(line),
+        });
+      expect(tolerant()).not.toBeNull();
+      expect(notices.join("\n")).toMatch(/NOTICE: Stale MCP registry export.*theirs\.rs/);
+      // The strict check (the docs wave) still asks for the refresh.
+      expect(() => generateReference(root, { check: true })).toThrow(/theirs\.rs/);
+      // Drift in an input the PR changed is the PR's own: strict.
+      writeFileSync(ours, "// JsonSchema the PR's tool, changed after its export\n");
+      expect(tolerant).toThrow(/Stale MCP registry export.*ours\.rs/);
+      git("checkout", "-q", "--", "src-tauri/src/ours.rs");
+      // So is a hand-edited manifest, whatever drifted.
+      const output = join(root, `${CONTENT}/generated/mcp-tools.json`);
+      writeFileSync(output, readFileSync(output, "utf8").replace("pane_write", "pane_edit"));
+      expect(tolerant).toThrow(/stale .*mcp-tools\.json/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
