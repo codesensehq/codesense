@@ -155,22 +155,14 @@
       c.invoke('sessions.unwatchText', { sessionId: sessionId }).catch(function () {});
     };
   };
+  // Agent changes follow definitions and sessions; the callback takes no rows, so a sessions
+  // delta reads nothing.
   c.onAgentsChanged = function (callback) {
     function changed() { callback(); }
     c.subscribe('agentDefinitions', {onChange:changed}).catch(function(){});
-    var offSessions = c.onSessions(function (_rows, error) { if (!error) callback(); });
-    return function () { offSessions(); c.unsubscribe('agentDefinitions', changed); };
+    c.subscribe('sessions', {onChange:changed}).catch(function(){});
+    return function () { c.unsubscribe('sessions', changed); c.unsubscribe('agentDefinitions', changed); };
   };
-  ['onInboxChanged'].forEach(function (name) {
-    var legacy = c[name];
-    c[name] = function (callback) {
-      var offPing = legacy(callback);
-      // A sessions re-read changes no inbox rows; an empty `changes` says so, while a change
-      // without `changes` could be anything.
-      var offSessions = c.onSessions(function (_rows, error) { if (!error) callback({ type: 'codesense:inbox-changed', changes: [] }); });
-      return function () { offPing(); offSessions(); };
-    };
-  });
   c.sessions = function () {
     return c.invoke('sessions');
   };

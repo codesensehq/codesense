@@ -57,6 +57,31 @@ use crate::weft::WeftStore;
 /// Mirrored in `src/tauri/events.ts`.
 pub(crate) const AGENT_INBOX_CHANGED_EVENT: &str = "agent-inbox-changed";
 
+/// What an `agent-inbox-changed` notice names: per team, the messages it touched. An empty
+/// id list means re-read the whole team; an empty slice is a broad nudge that names no team
+/// (the human's status), which readers take to mean anything changed.
+pub(crate) type InboxChanges = [(LaunchTeam, Vec<i64>)];
+
+/// The one place `agent-inbox-changed` is emitted: `{changes:[{team, messageIds}]}`, the shape
+/// the live hub and the inbox pane read, or no payload for a broad nudge.
+pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    changes: &InboxChanges,
+) {
+    use tauri::Emitter;
+    let payload = if changes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        let named: Vec<_> = changes
+            .iter()
+            .map(|(team, ids)| serde_json::json!({"team": team, "messageIds": ids}))
+            .collect();
+        serde_json::json!({"changes": named})
+    };
+    // Fire-and-forget: a missing renderer refetches when the panel next mounts.
+    let _ = app.emit(AGENT_INBOX_CHANGED_EVENT, payload);
+}
+
 /// The registry and store side of the inbox.
 #[async_trait::async_trait]
 pub(crate) trait InboxHost: Send + Sync {
@@ -165,18 +190,20 @@ pub(crate) trait InboxHost: Send + Sync {
     fn has_handle(&self, handle: &str) -> bool;
     /// The name the session under `handle` was launched with, if any.
     fn display_name(&self, handle: &str) -> Option<String>;
-    /// Tell the viewer the inbox changed.
+    /// Tell the viewer the inbox changed. `changes` names, per team, the messages the change
+    /// touched (an empty id list is a team-wide nudge); an empty `changes` is a broad nudge
+    /// that names no team, for a change that isn't team-scoped.
     fn projected_inbox(&self, _team: &LaunchTeam) -> Option<Result<InboxView, String>> {
         None
     }
-    fn inbox_changed(&self);
+    fn inbox_changed(&self, changes: &InboxChanges);
     /// The live hub committed a projection pass: `changes` names, per team, the messages it
     /// re-read. Readers that refresh on the notice find those messages committed.
-    fn inbox_committed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
-        self.inbox_changed();
+    fn inbox_committed(&self, changes: &InboxChanges) {
+        self.inbox_changed(changes);
     }
-    fn inbox_event(&self, _event: InboxEvent) {
-        self.inbox_changed();
+    fn inbox_event(&self, event: InboxEvent) {
+        self.inbox_changed(&event.as_inbox_changes());
     }
     /// A message was stored for the session under `handle`. The app offers its host the
     /// inbox notice and tells routines with an `inbox_idle` trigger.
@@ -2916,22 +2943,8 @@ impl InboxHost for AppInboxHost {
         self.launch()?.display_name(handle)
     }
 
-    fn inbox_changed(&self) {
-        use tauri::Emitter;
-        // Fire-and-forget: a missing renderer refetches when the panel next mounts.
-        let _ = self.app.emit(AGENT_INBOX_CHANGED_EVENT, ());
-    }
-
-    fn inbox_committed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
-        use tauri::Emitter;
-        let changes: Vec<_> = changes
-            .iter()
-            .map(|(team, ids)| serde_json::json!({"team": team, "messageIds": ids}))
-            .collect();
-        let _ = self.app.emit(
-            AGENT_INBOX_CHANGED_EVENT,
-            serde_json::json!({"changes": changes}),
-        );
+    fn inbox_changed(&self, changes: &InboxChanges) {
+        emit_inbox_changed(&self.app, changes);
     }
 
     fn projected_inbox(&self, team: &LaunchTeam) -> Option<Result<InboxView, String>> {
@@ -3225,8 +3238,10 @@ pub async fn set_human_status(
     .await?
     .map_err(|e| e.to_string())?;
     // Reuse the inbox-changed event so the viewer refetches both the status chip
-    // and anything else keyed to inbox lifecycle (cheap — no new event wire).
-    host.inbox_changed();
+    // and anything else keyed to inbox lifecycle (cheap — no new event wire). Not
+    // team-scoped, so a deliberate broad nudge: the pane ignores an empty `changes`,
+    // which would leave the human-status chip stale.
+    host.inbox_changed(&[]);
     super::agent_read_model::agent_state_changed(&host.app);
     Ok(view)
 }
