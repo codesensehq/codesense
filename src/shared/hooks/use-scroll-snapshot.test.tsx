@@ -201,6 +201,18 @@ describe("useScrollSnapshot when its box is hidden and shown again", () => {
     expect(el.scrollTop).toBe(240);
   });
 
+  it("leaves an offset set after the box was shown, such as an anchor jump", () => {
+    const { getByTestId } = render(<Harness viewKey={KEY} />);
+    const el = getByTestId("scroller");
+    resize(400, 100);
+    el.scrollTop = 240;
+    el.dispatchEvent(new Event("scroll"));
+    resize(0, 0);
+    el.scrollTop = 500;
+    resize(400, 100);
+    expect(el.scrollTop).toBe(500);
+  });
+
   it("does not restore on the first mount", () => {
     const { getByTestId } = render(<Harness viewKey={KEY} />);
     const el = getByTestId("scroller");
