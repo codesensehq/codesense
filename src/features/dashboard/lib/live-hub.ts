@@ -23,6 +23,9 @@ import { readSharedUiState, writeSharedUiState, watchSharedUiState } from "./sha
 // Policy: hidden badge work is bounded independently of visible delivery.
 export const LIVE_HIDDEN_THROTTLE_MS = 2000;
 export const MAX_LIVE_HIDDEN_FRAMES = 4;
+/** Cached views no frame, read or write holds (seeded or read by a frameless caller) stay
+ *  for a quick re-read, this many at most, least recently used first out. */
+export const MAX_UNHELD_VIEWS = 16;
 type BadgeDelivery = {
   badge?: "live";
   owner?: string;
@@ -131,6 +134,10 @@ type Frame = {
   /** The sessions whose assistant prose this frame hears (`onSessionText`), each with the prose
    *  keys of its current turn already posted: a joiner's replay repeats nothing to this frame. */
   sessionText: Map<string, { turn: string; heard: Set<string> }>;
+  /** Views this frame seeded for itself (a prepared agent catalog): held until it rekeys. */
+  seeded: Set<string>;
+  /** The cached views this frame holds: its default topics' and the ones it seeded. */
+  held: Set<string>;
   themeChanged?: () => void;
 };
 const keyOf = (topic: string, viewKey: string) => JSON.stringify([topic, viewKey]);
@@ -344,6 +351,75 @@ export class LiveHub {
   private setupFirstAt: number | null = null;
   private uiTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private uiWrites = new Map<string, Promise<unknown>>();
+  /** How many holders keep each cached view: frames that read it as a default topic or
+   *  seeded it, and reads and writes in flight. The last release evicts it. */
+  private holders = new Map<string, number>();
+  /** Cached views nobody holds, least recently used first ({@link MAX_UNHELD_VIEWS}). */
+  private unheld = new Set<string>();
+  /** Each attached frame by the handle `attach` returned, for `seed`'s holder. */
+  private handles = new WeakMap<object, Frame>();
+  /** Bumped by `dispose`: a read or write that settles later releases nothing it did not hold. */
+  private lifetime = 0;
+  private hold(key: string) {
+    this.holders.set(key, (this.holders.get(key) ?? 0) + 1);
+    this.unheld.delete(key);
+  }
+  /** Hold `key` for a read or write in flight; the returned release leaves it unheld. */
+  private holdWhile(key: string): () => void {
+    this.hold(key);
+    const lifetime = this.lifetime;
+    return () => {
+      if (lifetime === this.lifetime) this.release(key, true);
+    };
+  }
+  /** Drop one hold. The last one evicts the view, or, for a read or write that settled
+   *  (`keep`), leaves it among the unheld. */
+  private release(key: string, keep = false) {
+    const count = (this.holders.get(key) ?? 0) - 1;
+    if (count > 0) {
+      this.holders.set(key, count);
+      return;
+    }
+    this.holders.delete(key);
+    if (keep) this.keepUnheld(key);
+    else this.evict(key);
+  }
+  /** Mark an unheld view as just used; past the cap, the least recently used goes. */
+  private keepUnheld(key: string) {
+    if (this.holders.has(key)) return;
+    if (!this.views.has(key)) {
+      this.evict(key);
+      return;
+    }
+    this.unheld.delete(key);
+    this.unheld.add(key);
+    if (this.unheld.size > MAX_UNHELD_VIEWS) this.evict(this.unheld.values().next().value!);
+  }
+  private evict(key: string) {
+    this.unheld.delete(key);
+    this.views.delete(key);
+    this.pendingReads.delete(key);
+    this.uiWrites.delete(key);
+  }
+  /** Hold exactly the views `frame` reads now: its default topics under its current view
+   *  key and the views it seeded. A disposed frame holds none. */
+  private syncHolds(frame: Frame) {
+    const keys = new Set<string>();
+    if (!frame.disposed) {
+      for (const key of frame.seeded) keys.add(key);
+      for (const topic of frame.defaults) keys.add(keyOf(topic, frameKey(frame, topic)));
+    }
+    for (const key of frame.held)
+      if (!keys.has(key)) {
+        frame.held.delete(key);
+        this.release(key);
+      }
+    for (const key of keys)
+      if (!frame.held.has(key)) {
+        frame.held.add(key);
+        this.hold(key);
+      }
+  }
   constructor(private deps: Dependencies) {}
   private listen(event: string, callback: (event: { payload: unknown }) => void) {
     this.unlisteners.push(
@@ -559,9 +635,16 @@ export class LiveHub {
       else frame.post(message);
     }
   }
-  seed(snapshot: HubSnapshot) {
+  /** Cache a view read elsewhere. A `holder` frame keeps it until it disposes or rekeys;
+   *  without one it is kept among the unheld views. */
+  seed(snapshot: HubSnapshot, holder?: HubFrame) {
     const key = keyOf(snapshot.topic, snapshot.viewKey);
     if ((this.views.get(key)?.rev ?? -1) <= snapshot.rev) this.views.set(key, snapshot);
+    const frame = holder && this.handles.get(holder);
+    if (frame && !frame.disposed) {
+      frame.seeded.add(key);
+      this.syncHolds(frame);
+    } else this.keepUnheld(key);
   }
   async joinSessions(rows: HubRow[]): Promise<Array<HubRow | SessionListRow>> {
     if (!this.joinedSessionsRead) {
@@ -577,6 +660,7 @@ export class LiveHub {
   /** Recover one cached view through the same read/delta ordering as a subscription. */
   resync(topic: string, viewKey: string): Promise<HubSnapshot> {
     this.views.delete(keyOf(topic, viewKey));
+    this.unheld.delete(keyOf(topic, viewKey));
     return this.snapshot(topic, viewKey);
   }
   async snapshot(topic: string, viewKey: string, sinceRev?: number): Promise<HubSnapshot> {
@@ -590,9 +674,14 @@ export class LiveHub {
         snapshot: [{ id: "theme", ...this.themeValue }],
       };
     const cached = this.views.get(key);
-    if (cached) return cached;
+    if (cached) {
+      this.keepUnheld(key);
+      return cached;
+    }
     let read = this.reads.get(key);
     if (!read) {
+      // The read holds its view until it settles; nobody else holding it then, it stays unheld.
+      const settled = this.holdWhile(key);
       read = (
         topic.startsWith("ui:")
           ? this.deps.readUi(key).then(
@@ -620,7 +709,10 @@ export class LiveHub {
           if (!this.views.has(key)) return this.snapshot(topic, viewKey, result.rev);
           return this.views.get(key)!;
         })
-        .finally(() => this.reads.delete(key));
+        .finally(() => {
+          this.reads.delete(key);
+          settled();
+        });
       this.reads.set(key, read);
     }
     return read;
@@ -659,8 +751,11 @@ export class LiveHub {
       waits: [],
       invalidations: new Map(),
       sessionText: new Map(),
+      seeded: new Set(),
+      held: new Set(),
     };
     this.frames.set(id, frame);
+    this.syncHolds(frame);
     this.balanceHidden();
     /** Resync each subscribed view independently. */
     const resyncAll = () => {
@@ -675,7 +770,10 @@ export class LiveHub {
     };
     const subscribe = async (topic: string, sinceRev?: number, options?: SubscriptionOptions) => {
       const started = frame.generation;
-      if (options?.viewKey === undefined && !options?.order) frame.defaults.add(topic);
+      if (options?.viewKey === undefined && !options?.order) {
+        frame.defaults.add(topic);
+        this.syncHolds(frame);
+      }
       await this.start();
       if (frame.disposed) throw new Error("frame disposed");
       while (!this.delivering(frame) && !frame.disposed) {
@@ -770,7 +868,7 @@ export class LiveHub {
       if (!canDeliver(frame, result)) throw new Error("unavailable: subscription scope changed");
       return result;
     };
-    return {
+    const handle = {
       subscribe,
       /** This frame hears `sessionId`'s assistant prose; the bridge checked its grant and team.
        *  One host watch per frame and session, however often the page asks. */
@@ -798,7 +896,10 @@ export class LiveHub {
           frame.scoped.delete(scopeKey);
           retired = this.releaseAfterRead(subscription);
         }
-        if (scopedViewKey === undefined) frame.defaults.delete(topic);
+        if (scopedViewKey === undefined) {
+          frame.defaults.delete(topic);
+          this.syncHolds(frame);
+        }
         frame.resync.delete(keyOf(topic, scopedViewKey ?? frameKey(frame, topic)));
         frame.pending = frame.pending.filter(
           (d) => d.topic !== topic || (scopedViewKey && d.viewKey !== scopedViewKey),
@@ -909,6 +1010,10 @@ export class LiveHub {
             this.scoped.set(rebound.id, rebound);
           }
         }
+        // The old key's views are released: the frame reads its defaults under the new key,
+        // and a view it seeded belonged to the old scope.
+        frame.seeded.clear();
+        this.syncHolds(frame);
         beforeResync?.();
         if (frame.visible) {
           resyncAll();
@@ -934,6 +1039,7 @@ export class LiveHub {
           } else void this.deps.unsubscribe?.(subscription.id).catch(() => {});
         }
         frame.scoped.clear();
+        this.syncHolds(frame);
         this.releaseText(frame);
         if (!this.frames.size && this.timer) {
           clearTimeout(this.timer);
@@ -942,6 +1048,8 @@ export class LiveHub {
         this.balanceHidden();
       },
     };
+    this.handles.set(handle, frame);
+    return handle;
   }
   private applyScoped(subscription: ScopedSubscription, delta: HubDelta) {
     subscription.value = patchRows(subscription.value, delta, {
@@ -1043,8 +1151,10 @@ export class LiveHub {
     }
     if (current && delta.rev <= current.rev) return;
     const gap = !current || delta.rev !== current.rev + 1;
-    if (gap) this.views.delete(key);
-    else
+    if (gap) {
+      this.views.delete(key);
+      this.unheld.delete(key);
+    } else
       this.views.set(
         key,
         patchRows(current, delta, { topic: delta.topic, viewKey: delta.viewKey, rev: delta.rev }),
@@ -1232,33 +1342,48 @@ export class LiveHub {
       return Promise.reject(new Error("writeUi needs a ui:<slotId> topic"));
     const key = keyOf(topic, viewKey);
     const prior = this.uiWrites.get(key) ?? Promise.resolve();
-    const next = prior
+    // The write holds its view until it settles, so the view it resolves with is still there.
+    const settled = this.holdWhile(key);
+    const next: Promise<HubSnapshot> = prior
       .catch(() => {})
       .then(async () => {
-        const before = await this.snapshot(topic, viewKey);
-        const state = await this.deps.writeUi(key, patch);
-        await new Promise<void>((resolve) => {
-          this.uiTimers.set(
-            key,
-            setTimeout(() => {
-              this.uiTimers.delete(key);
-              this.receive({
-                topic,
-                viewKey,
-                rev: before.rev + 1,
-                upserts: [{ ...state, id: topic }],
-                removes: [],
-                requestId,
-              });
-              resolve();
-            }, 50),
-          );
-        });
-        const result = this.views.get(key)!;
-        return result;
+        try {
+          return await this.writeUiNow(topic, viewKey, key, patch, requestId);
+        } finally {
+          if (this.uiWrites.get(key) === next) this.uiWrites.delete(key);
+          settled();
+        }
       });
     this.uiWrites.set(key, next);
     return next;
+  }
+  private async writeUiNow(
+    topic: string,
+    viewKey: string,
+    key: string,
+    patch: Record<string, unknown>,
+    requestId?: string,
+  ): Promise<HubSnapshot> {
+    const before = await this.snapshot(topic, viewKey);
+    const state = await this.deps.writeUi(key, patch);
+    await new Promise<void>((resolve) => {
+      this.uiTimers.set(
+        key,
+        setTimeout(() => {
+          this.uiTimers.delete(key);
+          this.receive({
+            topic,
+            viewKey,
+            rev: before.rev + 1,
+            upserts: [{ ...state, id: topic }],
+            removes: [],
+            requestId,
+          });
+          resolve();
+        }, 50),
+      );
+    });
+    return this.views.get(key)!;
   }
   /** A native subscription: `callback` gets the view on subscribe and after each
    *  change, with the delta that changed it when one did (not on a resync). */
@@ -1313,6 +1438,9 @@ export class LiveHub {
     this.reads.clear();
     this.pendingReads.clear();
     this.uiWrites.clear();
+    this.holders.clear();
+    this.unheld.clear();
+    this.lifetime++;
     this.uiTimers.clear();
     this.timer = null;
   }

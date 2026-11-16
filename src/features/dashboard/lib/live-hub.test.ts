@@ -2751,3 +2751,32 @@ it("a read that finishes after its key was released does not hold it", async () 
     local.dispose();
   }
 });
+
+it("a read that settles after the hub was disposed releases nothing the next lifetime holds", async () => {
+  const replies: Array<() => void> = [];
+  const local = retentionHub({
+    read: (topic, viewKey) =>
+      new Promise((resolve) =>
+        replies.push(() => resolve({ topic, viewKey, rev: 1, snapshot: [] })),
+      ),
+  });
+  try {
+    const key = JSON.stringify(["messageDelivery", "team:o/a"]);
+    const stale = local.snapshot("messageDelivery", "team:o/a");
+    await vi.advanceTimersByTimeAsync(0);
+    local.dispose();
+    const stop = local.watch("messageDelivery", "team:o/a", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    replies[0]();
+    await stale;
+    replies[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 20; i++)
+      local.seed({ topic: "messageDelivery", viewKey: `team:o/n${i}`, rev: 1, snapshot: [] });
+    expect(internals(local).views.has(key)).toBe(true);
+    stop();
+    expect(internals(local).views.has(key)).toBe(false);
+  } finally {
+    local.dispose();
+  }
+});
