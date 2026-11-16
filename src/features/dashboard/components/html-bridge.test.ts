@@ -2027,13 +2027,21 @@ describe("agents read model verbs", () => {
 
   it("keys a pins view with `%` and `:` escaped, so two threads can't share a key", () => {
     const team = { org: "acme", team: "core" };
-    // The same keys `live_hub/pins.rs` asserts for the host.
-    expect(pinsViewKey(team, { agentId: "a:b", storyId: "c" })).toBe("pins:acme/core:a%3Ab:c");
-    expect(pinsViewKey(team, { agentId: "a", storyId: "b:c" })).toBe("pins:acme/core:a:b%3Ac");
-    expect(pinsViewKey(team, { agentId: "100%", storyId: "x" })).toBe("pins:acme/core:100%25:x");
-    expect(pinsViewKey(team, { agentId: "acme/core/dev", storyId: "S-1" })).toBe(
-      "pins:acme/core:acme/core/dev:S-1",
+    // The fixtures are the `assert_eq!(key(..), "..")` triples in `live_hub/pins.rs`, read
+    // from the host's test so a change to either escape without the other fails here.
+    const rustSource = readFileSync(
+      resolve(__dirname, "../../../../src-tauri/src/live_hub/pins.rs"),
+      "utf-8",
     );
+    const triple = /assert_eq!\(\s*key\("([^"]*)",\s*"([^"]*)"\),\s*"([^"]*)"/g;
+    let checked = 0;
+    for (const [, agentId, storyId, expected] of rustSource.matchAll(triple)) {
+      // The host drops an `@suffix` from an agent id before keying; the page keys what it is given.
+      if (agentId.includes("@")) continue;
+      expect(pinsViewKey(team, { agentId, storyId })).toBe(expected);
+      checked++;
+    }
+    expect(checked, "pins key fixtures found in live_hub/pins.rs").toBeGreaterThanOrEqual(3);
   });
 
   it("pins then reads an agent thread's pin list in the doc's team", async () => {

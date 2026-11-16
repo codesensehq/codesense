@@ -37,8 +37,9 @@ impl PinViews {
 }
 
 /// A key part with `%` and `:` percent-encoded, so no part can run into the next. Ids that
-/// carry neither (every id today: `/` and `@` stay as they are) keep their key. The page's
-/// `pinsViewKey` (`html-bridge.ts`) writes the same key.
+/// carry neither (every id today: `/` and `@` stay as they are) keep their key. The `/`
+/// between org and team is not escaped, so uniqueness there relies on team slugs never
+/// containing `/`. The page's `pinsViewKey` (`html-bridge.ts`) writes the same key.
 fn key_part(part: &str) -> String {
     str::replace(&str::replace(part, "%", "%25"), ":", "%3A")
 }

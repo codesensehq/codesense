@@ -598,7 +598,6 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
 const frameSender = (ctx: BridgeContext | undefined): [string] | [] =>
   ctx?.message?.sender ? [ctx.message.sender] : [];
 
-/** The agent thread a pins call names: a saved agent id and an optional story id. */
 /** A key part with `%` and `:` percent-encoded, as the host's `live_hub::pins::key_part` does. */
 const keyPart = (part: string) => part.replace(/%/g, "%25").replace(/:/g, "%3A");
 
@@ -609,6 +608,7 @@ export const pinsViewKey = (
 ): string =>
   `pins:${keyPart(team.org)}/${keyPart(team.team)}:${keyPart(thread.agentId)}:${keyPart(thread.storyId)}`;
 
+/** The agent thread a pins call names: a saved agent id and an optional story id. */
 function pinThread(
   a: Record<string, unknown>,
   verb: string,
