@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { parseCard } from "../../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { agentId, DOCS, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, guideKey, sha256, SKILL_PATH } from "./fixture.mjs";
+import { everyTurnReplied } from "./floor.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -460,6 +461,6 @@ export function grade(caseDef, state) {
   const failures = [];
   if (JSON.stringify(played) !== JSON.stringify(caseDef.input.turns))
     failures.push(`played turns ${JSON.stringify(played)}, the case has ${JSON.stringify(caseDef.input.turns)}`);
-  failures.push(...grader(scriptView(state), caseDef.expected));
+  failures.push(...grader(scriptView(state), caseDef.expected), ...everyTurnReplied(caseDef, state));
   return { pass: failures.length === 0, failures };
 }

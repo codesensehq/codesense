@@ -23,7 +23,7 @@ const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
 const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH, TMP_PREFIX } =
   await lib("fixture");
-const { loadCases, grade, scriptView } = await lib("graders");
+const { loadCases, loadExtraCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
 const { CASE_IDS, statusFor, parseReport, loadReports } = await lib("floor");
@@ -395,6 +395,32 @@ for (const id of CASES) {
     assert.equal(green.pass, true);
   });
 }
+
+test("floor: any case run, floor or outside-floor, fails when a turn sent no reply", async () => {
+  const noReply = (n) => `floor: turn ${n} sent the person no reply`;
+  for (const caseDef of [...loadCases(), ...loadExtraCases()]) {
+    const fx = await fixtureFor(caseDef);
+    try {
+      await stubs.good({ caseDef, fx });
+      const state = fx.state();
+      assert.deepEqual(grade(caseDef, state).failures, [], `${caseDef.id}: the good stub passes`);
+      for (let n = 1; n <= caseDef.input.turns.length; n++) {
+        const dropped = { ...state, replies: state.replies.filter((r) => r.turn !== n) };
+        assert.ok(grade(caseDef, dropped).failures.includes(noReply(n)), `${caseDef.id} turn ${n}`);
+      }
+    } finally {
+      fx.teardown();
+    }
+    const idle = await fixtureFor(caseDef);
+    try {
+      await stubs.doNothing({ caseDef, fx: idle });
+      const red = grade(caseDef, idle.state()).failures;
+      assert.ok(red.includes(noReply(1)), `${caseDef.id}: do-nothing fails the floor check`);
+    } finally {
+      idle.teardown();
+    }
+  }
+});
 
 test("every grader is red when the driver skips the case's turns", async () => {
   for (const id of CASES) {

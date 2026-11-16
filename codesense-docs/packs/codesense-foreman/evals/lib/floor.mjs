@@ -12,6 +12,15 @@ export const packDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "
 export const runtimeOf = (variant) => String(variant).replace(/^foreman-/, "");
 
 export const CASE_IDS = ["onboard-repo", "start-sprint-lead", "answer-card", "recover-error"];
+
+// The floor-wide script check, on every case run (floor or outside-floor): each of the case's
+// turns sends the person at least one reply.
+export function everyTurnReplied(caseDef, state) {
+  return caseDef.input.turns
+    .map((_, i) => i + 1)
+    .filter((n) => !state.replies.some((r) => r.turn === n))
+    .map((n) => `floor: turn ${n} sent the person no reply`);
+}
 export const MIN_K = 3;
 
 // The report's front block, or null for a file that has none (a README, a note).
