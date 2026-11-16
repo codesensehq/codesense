@@ -35,11 +35,14 @@
 .cs-chat .sys .code{color:var(--cs-muted-fg)}
 .cs-chat .ico{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .cs-chat .ico.alert{color:var(--cs-danger)}
-.cs-chat .composer{flex:none;height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
+.cs-chat .composer{flex:none;min-height:96px;display:flex;flex-direction:column;gap:4px;padding:10px max(24px,calc((100% - 720px)/2)) 8px;border-top:1px solid var(--cs-border);background:var(--cs-bg)}
 .cs-chat .composer [data-composer-slot]{flex:none}
 .cs-chat .composer [data-composer-slot]:empty{display:none}
 .cs-chat .composer:has([data-composer-slot]:not(:empty)){height:auto;min-height:96px}
-.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:flex;gap:8px;align-items:flex-end;padding:6px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+.cs-chat .composer .box{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:4px;padding:6px 6px 6px 8px;border-radius:var(--cs-radius);border:1px solid var(--cs-border-control);background:var(--cs-bg)}
+/* The box's second row: the hint and Send (F5). */
+.cs-chat .composer .box-foot{display:flex;align-items:center;gap:8px;min-width:0}
+.cs-chat .composer .box-foot .hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cs-chat .composer .box:focus-within{border-color:var(--cs-accent)}
 .cs-chat .composer .hint{flex:none;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .composer textarea{flex:1 1 auto;align-self:stretch;resize:none;border:0;outline:0;padding:2px 4px;background:transparent;color:var(--cs-fg)}
@@ -93,6 +96,8 @@
 .cs-chat .card[data-state=answered]{background:var(--cs-bg)}
 .cs-chat .card .chosen{font-size:var(--cs-text-sm);color:var(--cs-fg)}
 .cs-chat .card .sys{margin:0}
+/* WF-62: under 600 tall or 320 wide the composer is one line: the textarea beside Send, the hint left to the placeholder. */
+@media (max-height:600px),(max-width:320px){.cs-chat .composer{min-height:0}.cs-chat .composer .box{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto;align-items:center}.cs-chat .composer .box-foot .hint{display:none}.cs-chat .composer textarea{height:calc(1.5em + 4px);max-height:calc(1.5em + 4px)}}
 @container (max-height:640px){.cs-chat .log{padding:8px 16px 6px}.cs-chat .act-foot{padding:0 16px 4px}.cs-chat .composer{padding:8px 16px 10px}}
 /* The person's pins (onPin): an action row over the message's top edge, shown on hover and while focus is inside it; a tag and a note under it. Nothing moves with reduced motion. */
 .cs-chat .msg{position:relative}
