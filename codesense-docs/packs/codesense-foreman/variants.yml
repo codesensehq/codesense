@@ -7,5 +7,5 @@ models:
 # (see evals/lib/floor.mjs); `report` and `at` name the report that decides it.
 # evals/check-registry.mjs recomputes all three from the reports.
 variants:
-  - { runtime: claude, model: claude-opus-5-5, spec_hash: null, eval: failed, report: foreman-claude-2026-11-16-2.md, at: 2026-11-16T03:27:15.474Z }
-  - { runtime: claude, model: claude-sonnet-5-5, spec_hash: null, eval: failed, report: foreman-claude-2026-11-16.md, at: 2026-11-16T03:23:47.712Z }
+  - { runtime: claude, model: claude-opus-5-5, spec_hash: null, eval: passed, report: foreman-claude-2026-11-16-3.md, at: 2026-11-16T10:51:46.523Z }
+  - { runtime: claude, model: claude-sonnet-5-5, spec_hash: null, eval: failed, report: foreman-claude-2026-11-16-4.md, at: 2026-11-16T10:56:31.252Z }
