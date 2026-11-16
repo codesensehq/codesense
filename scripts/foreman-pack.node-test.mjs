@@ -115,17 +115,16 @@ test("the spec says where to edit: a foreman-* worktree, never home, agent confi
     "only fast-forwards",
     "Edit only in a new worktree `../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
     "never edit agent config",
-    ...[
-      ".claude",
-      ".agents",
-      ".codex",
-      ".hermes",
-      ".opencode",
-      "config/agents",
-      "config/routines",
-      "agent-account-homes",
-      ".git",
-    ].map((dir) => `\`${dir}\``),
+    ".claude",
+    ".agents",
+    ".codex",
+    ".hermes",
+    ".opencode",
+    "config/agents",
+    "config/routines",
+    "agent-account-homes",
+    ".git",
+    "when done, even if the PR failed",
   ]) {
     assert.ok(work.includes(phrase), `Where you work says: ${phrase}`);
   }
