@@ -228,6 +228,10 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("sets the cap count on Pin… and a fresh pin's New at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-ov .ibx-pin-cap")).toContain("font-size: 11px");
+    expect(ruleOf(".ibx-pk-new")).toContain("font-size: 11px");
+  });
   it("draws the chooser's highlighted row's Pinned by and Replace in the full ink, which reads at AA on its accent wash", () => {
     // Muted and accent inks only just pass on the bare page: on the wash they fell to 4.36:1 and 4.25:1 in light.
     const current = ".ibx-pin-chooser .choice[data-current]";
