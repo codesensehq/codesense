@@ -20,7 +20,7 @@ import {
 installTerminalLayoutHarness();
 const TEAM = "acme:core";
 const WS = "ws-1";
-const story = { filePath: "/stories/one.md", storyId: "one" };
+const story = { filePath: "/work/one.md", storyId: "one" };
 const stories = [story];
 const SESSIONS = ["s-ask", "s-a", "s-b"];
 
