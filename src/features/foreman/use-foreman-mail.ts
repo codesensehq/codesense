@@ -16,11 +16,14 @@ export function foremanMailWaiting(queue: RoleQueue | undefined): boolean {
 
 /**
  * The team the Foreman runs in, where the setup guide hands back: a live Foreman row's team, else
- * the newest listed one's (a Foreman that re-homed holds its role in a user team), else the docs
- * team it starts in.
+ * the newest row's by start time, as the page's home rule reads it (a Foreman that re-homed holds
+ * its role in a user team), else the docs team it starts in.
  */
 export function foremanTeamOf(rows: readonly SessionListRow[] | null): InboxTeam {
-  const own = (rows ?? []).filter((r) => isForemanAgent(r.agent) && r.team?.org && r.team.team);
+  const startOf = (r: SessionListRow) => (r as { startedAtMs?: number }).startedAtMs ?? 0;
+  const own = (rows ?? [])
+    .filter((r) => isForemanAgent(r.agent) && r.team?.org && r.team.team)
+    .sort((a, b) => startOf(b) - startOf(a));
   const row = own.find((r) => r.state !== "exited") ?? own[0];
   return row?.team ?? { org: CODESENSE_DOCS_SLUG, team: CODESENSE_DOCS_TEAM };
 }
