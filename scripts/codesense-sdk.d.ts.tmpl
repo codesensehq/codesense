@@ -734,6 +734,18 @@ declare namespace CodesenseSdk {
       pinListChangeText(added: readonly string[], left: readonly string[]): string;
       /** The agent pinned this message while the chooser was open. */
       pinPinnedMeanwhileText(who: string): string;
+      /** A replace chooser opened on `pins`: the first row current, the pins it opened on known. */
+      pinChooserOpen<P extends { messageId: number }>(pins: readonly P[]): PinChooserState<P>;
+      /** The row a key moves the chooser's current row to, or null for any other key. */
+      pinChooserStep(key: string, at: number, count: number, fromChange: boolean): number | null;
+      /** The person arrived on a row: current and known, and a failed replace's line goes. */
+      pinChooserArrive<S extends PinChooserState<{ messageId: number }>>(state: S, id: number): S;
+      /** Choose a row: replace it if arrived on, else arrive on it first and say it is new. */
+      pinChooserChoose<S extends PinChooserState<{ messageId: number }>, P extends { messageId: number }>(state: S, pin: P, titleOf: (pin: P) => string): { state: S; replace: boolean };
+      /** Follow the live list: null when nothing changed, {pinned} when the agent pinned this message, else the next state. */
+      pinChooserSync<S extends PinChooserState<P>, P extends { messageId: number }>(state: S, pins: readonly P[], messageId: number, titleOf: (pin: P) => string): { pinned: P } | { state: S } | null;
+      /** The chooser's room line below the cap, else null. */
+      pinChooserRoom(count: number): string | null;
       PIN_REPLACE_FAILED: string;
       PIN_ROOM_NOW: string;
       PIN_UNDO_FULL: string;
@@ -745,6 +757,15 @@ declare namespace CodesenseSdk {
       newestFrom(rows: ChatRow[], leadHandles: Set<string>): number;
       rowsOf(answer: unknown): ChatRow[];
     };
+  }
+
+  /** The replace chooser's state: the pins it opened on plus the rows arrived on since, the list as last drawn, the current row, what changed, a failed replace. */
+  interface PinChooserState<P extends { messageId: number } = { messageId: number }> {
+    known: ReadonlySet<number>;
+    last: readonly P[];
+    current: number | null;
+    change: string | null;
+    error: string | null;
   }
 
   interface VirtualList<Row extends HubRow = HubRow> {

@@ -66,6 +66,14 @@
       "calls": [{"tool": "read_messages", "arguments": {}}]
     },
     {
+      "id": "inbox-pins",
+      "title": "Pinning messages in your thread",
+      "tools": ["pin"],
+      "docs": "arc-f-inboxes-and-triage/messages.html#tool-pin",
+      "searchTerms": ["pin", "pins", "unpin", "preview"],
+      "calls": [{"tool": "pin", "arguments": {"message_id": 42, "preview": {"shortName": "QA", "value": "5 of 5", "unit": "ACs traced", "status": "on-track"}}}]
+    },
+    {
       "id": "machines",
       "title": "Remote machines",
       "tools": ["list_machines"],

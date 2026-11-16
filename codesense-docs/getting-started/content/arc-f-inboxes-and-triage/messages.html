@@ -505,6 +505,21 @@ signal_done { status: 'success', summary: 'Checks passed' }</code></pre>
     }
   }
 }</code></pre>
+        <p id="pins"><strong>Pins</strong></p>
+        <h3 id="tool-pin"><code>pin</code></h3>
+        <p>Pins a message into your own thread's pin list (the saved Agent and story your session was launched with), or takes it out. A thread shows at most 3 pins; a fourth is refused until one is unpinned. <code>message_id</code> is required. Optional <code>position</code> (0 is first; omitted, it goes last), <code>remove: true</code> to unpin, <code>restore: true</code> to bring back an unpinned pin as it was, and <code>preview</code>, what the folded pin shows (<code>shortName</code>, <code>value</code>, <code>unit</code>, <code>status</code>, <code>chart</code>, <code>lines</code>); send it again to update the preview. Returns <code>{status:"pins", pins, outcome}</code>, or <code>{status:"invalid", message}</code> for a session with no saved Agent, a fourth pin or a preview too large.</p>
+        <pre data-tool-example="pin"><code>{
+  &quot;tool&quot;: &quot;pin&quot;,
+  &quot;arguments&quot;: {
+    &quot;message_id&quot;: 42,
+    &quot;preview&quot;: {
+      &quot;shortName&quot;: &quot;QA&quot;,
+      &quot;value&quot;: &quot;5 of 5&quot;,
+      &quot;unit&quot;: &quot;ACs traced&quot;,
+      &quot;status&quot;: &quot;on-track&quot;
+    }
+  }
+}</code></pre>
         <p id="roles"><strong>Role queues</strong></p>
         <h3 id="tool-roles_list"><code>roles_list</code></h3>
         <p>Lists a team's configured role queues: stable id, display name, icon (<code>pack:id</code>, or null) and <code>defaultHandler</code> (a saved-agent key or null). <code>teamKey</code> is required. Queue state and live holders come from <code>role_state</code>.</p>

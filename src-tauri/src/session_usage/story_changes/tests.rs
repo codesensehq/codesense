@@ -17,6 +17,40 @@ fn params() -> Params {
     serde_json::from_value(json!({"storyId":"SV-29"})).unwrap()
 }
 
+/// The story's sessions as `session_read` reads them, each once: the reference the indexed
+/// session half is compared with.
+async fn read_sessions(
+    home: &Path,
+    scope: &CallerScope,
+    usages: Vec<super::super::SessionUsage>,
+) -> Result<Vec<Value>, String> {
+    let mut sessions = Vec::new();
+    let mut seen = BTreeSet::new();
+    for usage in usages {
+        let basis = usage.story.as_ref().and_then(|s| s.basis).unwrap_or("exact");
+        let params: session_read::Params =
+            serde_json::from_value(json!({"sessionId":usage.session_id})).map_err(|e| e.to_string())?;
+        let mut session = session_read::read(
+            &home.join("usage.sqlite"),
+            &home.join("session-conversations"),
+            &params,
+            scope,
+        )
+        .await?;
+        let id = session["session"]["sessionId"]
+            .as_str()
+            .or_else(|| session["nativeSessionIds"][0].as_str())
+            .unwrap_or(&usage.session_id)
+            .to_owned();
+        if !seen.insert(id) {
+            continue;
+        }
+        session["basis"] = json!(basis);
+        sessions.push(session);
+    }
+    Ok(sessions)
+}
+
 fn seed(s: &mut UsageStore, home: &Path, id: &str, priced: bool, link_first: bool) {
     let link = StoryLink {
         story_id: "SV-29".into(),

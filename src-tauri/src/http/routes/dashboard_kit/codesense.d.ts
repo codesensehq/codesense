@@ -734,6 +734,18 @@ declare namespace CodesenseSdk {
       pinListChangeText(added: readonly string[], left: readonly string[]): string;
       /** The agent pinned this message while the chooser was open. */
       pinPinnedMeanwhileText(who: string): string;
+      /** A replace chooser opened on `pins`: the first row current, the pins it opened on known. */
+      pinChooserOpen<P extends { messageId: number }>(pins: readonly P[]): PinChooserState<P>;
+      /** The row a key moves the chooser's current row to, or null for any other key. */
+      pinChooserStep(key: string, at: number, count: number, fromChange: boolean): number | null;
+      /** The person arrived on a row: current and known, and a failed replace's line goes. */
+      pinChooserArrive<S extends PinChooserState<{ messageId: number }>>(state: S, id: number): S;
+      /** Choose a row: replace it if arrived on, else arrive on it first and say it is new. */
+      pinChooserChoose<S extends PinChooserState<{ messageId: number }>, P extends { messageId: number }>(state: S, pin: P, titleOf: (pin: P) => string): { state: S; replace: boolean };
+      /** Follow the live list: null when nothing changed, {pinned} when the agent pinned this message, else the next state. */
+      pinChooserSync<S extends PinChooserState<P>, P extends { messageId: number }>(state: S, pins: readonly P[], messageId: number, titleOf: (pin: P) => string): { pinned: P } | { state: S } | null;
+      /** The chooser's room line below the cap, else null. */
+      pinChooserRoom(count: number): string | null;
       PIN_REPLACE_FAILED: string;
       PIN_ROOM_NOW: string;
       PIN_UNDO_FULL: string;
@@ -745,6 +757,15 @@ declare namespace CodesenseSdk {
       newestFrom(rows: ChatRow[], leadHandles: Set<string>): number;
       rowsOf(answer: unknown): ChatRow[];
     };
+  }
+
+  /** The replace chooser's state: the pins it opened on plus the rows arrived on since, the list as last drawn, the current row, what changed, a failed replace. */
+  interface PinChooserState<P extends { messageId: number } = { messageId: number }> {
+    known: ReadonlySet<number>;
+    last: readonly P[];
+    current: number | null;
+    change: string | null;
+    error: string | null;
   }
 
   interface VirtualList<Row extends HubRow = HubRow> {
@@ -1327,6 +1348,371 @@ declare namespace CodesenseSdk {
       storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.pin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      preview?: {
+        chart?: {
+          kind: "segments";
+          label: string;
+          segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+          [key: string]: unknown;
+        } | {
+          kind: "progress";
+          label: string;
+          percent: number;
+          [key: string]: unknown;
+        } | {
+          kind: "stack";
+          label: string;
+          parts: Array<{
+            label: string;
+            value: number;
+            [key: string]: unknown;
+          }>;
+          [key: string]: unknown;
+        };
+        lines?: string[];
+        shortName?: string;
+        status?: "on-track" | "running" | "needs-you" | "not-updating";
+        unit?: string;
+        value?: string;
+      };
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:read:team */
+    "inbox.pins"(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    "inbox.reorderPins"(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    "inbox.replacePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.restorePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replacing?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.unpin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:read:all-teams */
     inboxRollup(args?: Record<string, unknown>): Promise<unknown>;
     /** spawn · sessions:read */

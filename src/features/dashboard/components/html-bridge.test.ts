@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { setDashboardLaunchController, type DashboardLaunchController } from "./dashboard-launch";
 import { liveHub } from "../lib/live-hub";
+import { VERB_REGISTRY } from "../lib/verb-registry.generated";
 import type { AgentPinsOp } from "@/tauri/commands";
 
 const mockGetDependencyStatus = vi.fn();
@@ -299,6 +300,12 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
+      "inbox.pin",
+      "inbox.pins",
+      "inbox.reorderPins",
+      "inbox.replacePin",
+      "inbox.restorePin",
+      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -407,6 +414,18 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       /must be an object/,
     );
     expect(READ_VERBS).toContain("queryContext");
+  });
+
+  it("runs each namespaced pin verb with its flat verb's handler", () => {
+    const spaced = VERB_REGISTRY.map((verb) => verb.name).filter((name) =>
+      name.startsWith("inbox."),
+    );
+    expect(spaced.length).toBeGreaterThan(0);
+    for (const name of spaced) {
+      expect(HTML_BRIDGE_ALLOWLIST[name], name).toBe(
+        HTML_BRIDGE_ALLOWLIST[name.slice("inbox.".length)],
+      );
+    }
   });
 
   it("does NOT expose the reserved LD-2 proxyFetch yet", () => {
