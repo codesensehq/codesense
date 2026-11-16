@@ -101,12 +101,28 @@ fn other_org_same_named_team_is_refused_and_own_manifest_aliases_follow_the_real
     )
     .unwrap();
     std::fs::write(root.join("parent/panes/pane-manifest.yaml"), "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Other org report\n    icon: chart-bar\n").unwrap();
-    let panes = |org: &str, team: &str, scope: &CallerScope| {
+    // The other org's private space holds a pane and a manifest too.
+    let private = crate::context_repo::scratch_space::ensure_org_space(&f.home, &me, org)
+        .unwrap()
+        .0;
+    std::fs::create_dir_all(private.panes_dir()).unwrap();
+    std::fs::write(
+        private.panes_dir().join("leaked.html"),
+        "<title>Other org private sentinel</title>",
+    )
+    .unwrap();
+    std::fs::write(
+        private.panes_dir().join(panes::manifest::MANIFEST_FILE),
+        "version: 1\npanes:\n  - id: leaked\n    html: leaked.html\n    title: Other org private sentinel\n",
+    )
+    .unwrap();
+    let listing = |org: &str, team: &str, scope: &CallerScope| {
         let ToolEnvelope::Ok(listing) = list_for(&f.home, &me, org, team, scope).unwrap() else {
             panic!("listing refused");
         };
-        listing.panes
+        listing
     };
+    let panes = |org: &str, team: &str, scope: &CallerScope| listing(org, team, scope).panes;
     let read = |org: &str, team: &str, scope: &CallerScope| {
         panes(org, team, scope)
             .into_iter()
@@ -116,16 +132,41 @@ fn other_org_same_named_team_is_refused_and_own_manifest_aliases_follow_the_real
         read(org, "parent", &CallerScope::Human).unwrap().title,
         "Other org report"
     );
+    // The planted layers are real: a human sees the other org's private pane and both
+    // its team and private manifest layers, so the refusals below are not vacuous.
+    let human = listing(org, "parent", &CallerScope::Human);
+    assert!(human
+        .panes
+        .iter()
+        .any(|pane| pane.id == "leaked" && pane.scope == PaneScope::Private));
+    for layer_scope in [PaneScope::Team, PaneScope::Private] {
+        assert!(
+            human
+                .manifests
+                .iter()
+                .any(|layer| layer.scope == layer_scope),
+            "{layer_scope:?}"
+        );
+    }
     // A team agent reads only its own org, even where a team shares its ancestor's name.
-    // Only built-ins are listed: no team or private pane of the other org shows.
-    let listed = panes(org, "parent", &f.scope);
-    assert!(!listed.is_empty());
+    // Only built-ins are listed: no team or private pane of the other org shows,
+    // and neither manifest layer comes with them.
+    let agent = listing(org, "parent", &f.scope);
+    assert!(!agent.panes.is_empty());
     assert!(
-        listed
+        agent
+            .panes
             .iter()
             .all(|pane| pane.dashboard_ref.scope == panes::DashboardScope::BuiltIn),
-        "{listed:?}"
+        "{:?}",
+        agent.panes
     );
+    assert!(
+        agent.panes.iter().all(|pane| pane.id != "leaked"),
+        "{:?}",
+        agent.panes
+    );
+    assert!(agent.manifests.is_empty(), "{:?}", agent.manifests);
     // In the agent's own team a manifest is read, but not one aliasing another
     // team's unshared file: the real owner decides.
     f.write("child", "panes/report.html", "<title>HTML fallback</title>");
