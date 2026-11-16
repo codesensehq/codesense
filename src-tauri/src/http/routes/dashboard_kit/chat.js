@@ -1352,10 +1352,11 @@
       }
     }
     for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id);
+    const keep = new Set(nodes);
+    for (const child of [...parent.childNodes]) if (!keep.has(child)) child.remove();
     nodes.forEach((node, index) => {
       if (parent.childNodes[index] !== node) parent.insertBefore(node, parent.childNodes[index] || null);
     });
-    while (parent.childNodes.length > nodes.length) parent.lastChild.remove();
   }
   var storyTarget = (storyId, leadRole) => ({
     rows: (sessions) => leadRowsOf(sessions, storyId, leadRole),
@@ -1550,6 +1551,7 @@
       if (!open) return;
       htmlOpen.delete(id);
       open.closed = true;
+      if (open.shown) open.shown.disconnect();
       open.slot.remove();
       if (typeof open.release === "function") open.release();
     };
@@ -1587,6 +1589,14 @@
           return;
         }
         htmlOpen.set(item.id, open);
+        const reveal = () => {
+          if (!slot.isConnected) return;
+          const l = log.getBoundingClientRect(), r = slot.getBoundingClientRect(), below = r.bottom - l.bottom;
+          if (below > 0) log.scrollTop += Math.min(below, r.top - l.top);
+        };
+        open.shown = new MutationObserver(reveal);
+        open.shown.observe(slot, { childList: true, subtree: true });
+        reveal();
         if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
           if (!open.closed) open.release = release;
           else if (typeof release === "function") release();

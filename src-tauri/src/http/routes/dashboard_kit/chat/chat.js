@@ -67,8 +67,10 @@ function reconcile(parent,cache,items){
   if(old&&old.sig===item.sig)nodes.push(old.node);else{const node=item.make();cache.set(item.id,{sig:item.sig,node});nodes.push(node);}
  }
  for(const id of [...cache.keys()])if(!seen.has(id))cache.delete(id);
+ // Stale children go first, so a node that keeps its place is not moved past them (moving an iframe reloads it).
+ const keep=new Set(nodes);
+ for(const child of [...parent.childNodes])if(!keep.has(child))child.remove();
  nodes.forEach((node,index)=>{if(parent.childNodes[index]!==node)parent.insertBefore(node,parent.childNodes[index]||null);});
- while(parent.childNodes.length>nodes.length)parent.lastChild.remove();
 }
 export const storyTarget=(storyId,leadRole)=>({
  rows:sessions=>leadRowsOf(sessions,storyId,leadRole),
@@ -205,7 +207,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // the thread or unmount releases it (a release that arrives after Close runs as it arrives). An open that throws leaves the bubble closed. The toggle changes the bubble in place, so a repaint
  // that changes nothing keeps an open frame, and a bubble rebuilt for another reason (a pin) is updated around its body (keepOpen): an iframe that leaves the page reloads.
  const htmlOpen=new Map();
- const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;open.slot.remove();if(typeof open.release==='function')open.release();};
+ const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;if(open.shown)open.shown.disconnect();open.slot.remove();if(typeof open.release==='function')open.release();};
  const keepOpen=(id,fresh)=>{
   const open=htmlOpen.get(id),old=open&&open.slot.isConnected?open.slot.closest('.msg'):null,body=old&&old.querySelector(':scope > .body'),freshBody=fresh.querySelector(':scope > .body');
   if(!body||!freshBody)return fresh;
@@ -227,6 +229,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    let answer;
    try{answer=html.open({messageId:item.id,title,contentType:'html'},slot);}catch{slot.remove();return;}
    htmlOpen.set(item.id,open);
+   // What the page draws into the slot is brought into the log's view, within the log only: Open on the newest message must not draw below the fold. A page fills the slot at
+   // once and its frame arrives later, inside what it drew, so the slot is watched while it is open (released with it).
+   const reveal=()=>{if(!slot.isConnected)return;const l=log.getBoundingClientRect(),r=slot.getBoundingClientRect(),below=r.bottom-l.bottom;if(below>0)log.scrollTop+=Math.min(below,r.top-l.top);};
+   open.shown=new MutationObserver(reveal);
+   open.shown.observe(slot,{childList:true,subtree:true});
+   reveal();
    if(answer&&typeof answer.then==='function')Promise.resolve(answer).then(release=>{if(!open.closed)open.release=release;else if(typeof release==='function')release();},()=>{});
    else open.release=answer;
    show(true);
