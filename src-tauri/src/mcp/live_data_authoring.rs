@@ -58,6 +58,13 @@ const OPEN_WORKSPACE_VERB: &str = "openWorkspace";
 // `storyId`.
 const SET_STATUS_VERB: &str = "setStatus";
 
+/// The pin verbs' args, shared by each flat verb and its `inbox.` name.
+const PIN_ARGS: &str = "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}";
+const PIN_MESSAGE_ARGS: &str = "{agentId: string, storyId?: string, messageId: number}";
+const REPLACE_PIN_ARGS: &str =
+    "{agentId: string, storyId?: string, messageId: number, replaces: number}";
+const REORDER_PINS_ARGS: &str = "{agentId: string, storyId?: string, messageIds: number[]}";
+
 /// The shipped ACTION-tier verb surface the contract
 /// documents, as a Rust source-of-truth table. Each `verb` string MUST equal a
 /// member of the TS `ACTION_VERBS`
@@ -328,36 +335,71 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
     ActionVerbDoc {
         verb: "pin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}",
+        args: PIN_ARGS,
         purpose: "Pin a message of the page's team into an agent thread's pin list, the strip that agent's chat overlay and full view share. The thread is the saved agent agentId plus storyId, as its session was launched (omit storyId for none). position 0 is first; omitted or past the end, it goes last; pinning a pinned message leaves it in place, and a preview replaces its preview. preview is what the folded pin shows (a short name, a headline value and unit, a status, a small chart, up to 3 key lines). A thread shows at most 3 pins. Requires inbox:write. Fires the pins topic and the agent-pins-changed event. An agent pins its own thread with the pin MCP tool. Resolves `{status:'pins', org, team, agentId, storyId, pins:[{messageId, position, pinnedBy, pinnedAtMs, preview?, previewAtMs?}], outcome:'pinned'|'updated'|'unchanged'}` or `{status:'invalid', message}` (unknown, archived or withdrawn message, a fourth pin, or a preview too large).",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "unpin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number}",
+        args: PIN_MESSAGE_ARGS,
         purpose: "Take a message out of an agent thread's pin list; the pins after it move up. The pin is kept aside, so restorePin can undo this. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "restorePin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number}",
+        args: PIN_MESSAGE_ARGS,
         purpose: "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). With replacing (the pin a replacePin put in its place), the Undo of that replace: the replacing pin goes in the same step, if it is still there. Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "replacePin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number, replaces: number}",
+        args: REPLACE_PIN_ARGS,
         purpose: "At the cap, pin a message of the page's team in place of the shown pin replaces, in one step: that pin is kept aside (restorePin with replacing undoes this) and the new pin takes its place, so nothing else moves. Requires inbox:write. Resolves the list as pin does, with outcome 'replaced'; `{status:'invalid', message}`, changing nothing, when replaces is no longer a shown pin (the list changed), the message is already pinned, or it is unknown, archived or withdrawn. An agent's pin tool still refuses a fourth pin.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "reorderPins",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageIds: number[]}",
+        args: REORDER_PINS_ARGS,
         purpose: "Put an agent thread's pins in this order. messageIds must name every live pin of the thread exactly once, else it resolves `{status:'invalid', message}` and nothing moves. Requires inbox:write. Resolves the list as pin does, with no outcome.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.pin",
+        tier: "metadata",
+        args: PIN_ARGS,
+        purpose: "The pin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.unpin",
+        tier: "metadata",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "The unpin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.restorePin",
+        tier: "metadata",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "The restorePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.replacePin",
+        tier: "metadata",
+        args: REPLACE_PIN_ARGS,
+        purpose: "The replacePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.reorderPins",
+        tier: "metadata",
+        args: REORDER_PINS_ARGS,
+        purpose: "The reorderPins verb under its resource namespace: the same verb, with the same args, grant and result.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
@@ -493,8 +535,9 @@ pub(crate) const READ_VERBS: &[&str] = &[
     "roles",
     "updates",
     "humanStatus",
-    // An agent thread's pin list (saved agent + story) in the page's team.
+    // An agent thread's pin list (saved agent + story) in the page's team, and its namespaced name.
     "pins",
+    "inbox.pins",
     "watchInbox",
     "watchAgentInbox",
     "watchAgentActivity",
