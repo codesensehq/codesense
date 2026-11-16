@@ -1150,7 +1150,7 @@
       });
       const change = open.change ? h("div", { class: "chg", tabindex: "-1", role: "status" }, open.change) : null;
       const error = open.error ? h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, open.error)) : null;
-      node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
+      node.replaceChildren(...[head, change, h("div", { class: "rows" }, ...rows), error, cancel].filter(Boolean));
       mark(open.current);
     }
     function after(was = false) {
