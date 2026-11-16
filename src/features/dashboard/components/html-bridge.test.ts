@@ -147,6 +147,7 @@ vi.mock("@/features/weft/lib/locate-agent", () => ({
   locateAgentByAgentId: vi.fn(() => ({ located: true })),
 }));
 
+import { threadOf } from "@/features/inbox/lib/chat-core";
 import {
   HTML_BRIDGE_ALLOWLIST,
   BridgeCommandNotAllowedError,
@@ -2036,12 +2037,10 @@ describe("agents read model verbs", () => {
     const triple = /assert_eq!\(\s*key\("([^"]*)",\s*"([^"]*)"\),\s*"([^"]*)"/g;
     let checked = 0;
     for (const [, agentId, storyId, expected] of rustSource.matchAll(triple)) {
-      // The host drops an `@suffix` from an agent id before keying; the page keys what it is given.
-      if (agentId.includes("@")) continue;
-      expect(pinsViewKey(team, { agentId, storyId })).toBe(expected);
+      expect(pinsViewKey(team, threadOf(agentId, storyId))).toBe(expected);
       checked++;
     }
-    expect(checked, "pins key fixtures found in live_hub/pins.rs").toBeGreaterThanOrEqual(3);
+    expect(checked, "pins key fixtures found in live_hub/pins.rs").toBeGreaterThanOrEqual(4);
   });
 
   it("pins then reads an agent thread's pin list in the doc's team", async () => {
