@@ -1037,6 +1037,37 @@ describe("kit.chat message text: an inline markdown subset", () => {
   });
 });
 
+describe("kit.chat initials", () => {
+  const KIT_SOURCE = join(KIT_DIR, "kit.js");
+  it("follow the same rule as kit.avatar's initials, punctuation included", () => {
+    const chat = /const initialsOf=(.*);\n/.exec(
+      readFileSync(join(KIT_DIR, "chat", "chat.js"), "utf8"),
+    )?.[1];
+    const kit = /function initials\(name\) \{[\s\S]*?\n {2}\}/.exec(
+      readFileSync(KIT_SOURCE, "utf8"),
+    )?.[0];
+    expect(chat, "initialsOf in chat/chat.js").toBeDefined();
+    expect(kit, "initials in kit.js").toBeDefined();
+    const chatInitials = new Function(`return ${chat}`)() as (name?: string) => string;
+    const kitInitials = new Function(`${kit}; return initials;`)() as (name?: string) => string;
+    for (const name of [
+      "Ada Lovelace",
+      "O'Brien-Smith (lead)",
+      "@dev-agent",
+      "(lead) builder",
+      "solo",
+      "---",
+      "!!!",
+      "",
+      undefined,
+      "Zoë Ångström",
+    ]) {
+      expect(chatInitials(name), String(name)).toBe(kitInitials(name));
+    }
+    expect(chatInitials("(lead) builder")).toBe("LB");
+  });
+});
+
 describe("kit.chat activity: the live lead's prose from onSessionText", () => {
   type Prose = { kind: "prose" | "final"; turn: string; key: string; text: string } | null;
   const running = (sessionId = "s1"): Row => ({ ...lead("running"), sessionId });
@@ -1153,6 +1184,29 @@ describe("kit.chat activity: the live lead's prose from onSessionText", () => {
     expect(activityRow(s.el)!.querySelector(".prose")).toBeNull();
     chat.unmount();
     expect(offs).toEqual(["s1", "s2"]);
+  });
+
+  it("two chats watching one session: tearing one down leaves the other its prose", async () => {
+    // The host's stream for a session holds while any chat subscribes to it.
+    const subs = new Map<string, Set<(text: Prose, error?: unknown) => void>>();
+    (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText = (
+      sessionId: string,
+      cb: (text: Prose, error?: unknown) => void,
+    ) => {
+      const set = subs.get(sessionId) ?? new Set();
+      subs.set(sessionId, set.add(cb));
+      return () => set.delete(cb);
+    };
+    const first = setup([running()]);
+    const second = setup([running()]);
+    const gone = mountOn(first, { activity: true });
+    mountOn(second, { activity: true });
+    await flush();
+    expect(subs.get("s1")!.size).toBe(2);
+    gone.unmount();
+    for (const cb of subs.get("s1")!) cb(prose("Still here."));
+    await flush();
+    expect(activityRow(second.el)!.querySelector(".prose")!.textContent).toBe("Still here.");
   });
 
   it("works without it: a refusal, a host without onSessionText, or no activity row shows today's row", async () => {
