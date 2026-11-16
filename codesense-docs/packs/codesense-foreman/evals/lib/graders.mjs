@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { agentId, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
+import { agentId, DOCS, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, guideKey, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -103,7 +103,17 @@ function launchForm(s, l, e, agent) {
   const out = [];
   if (l.target !== e.target) out.push(`launched with target ${l.target}, expected ${e.target}`);
   if (l.launched_by_arg !== s.config.self) out.push(`launched_by is ${l.launched_by_arg}, expected the Foreman's own ${s.config.self}`);
-  if (agentId(l.agent) !== agent) out.push(`launched ${l.agent ?? "no agent"}, expected ${agent}`);
+  // `agent` is an id any key of it matches, or `{ exactly }` for one key alone.
+  const ok = agent.exactly ? l.agent === agent.exactly : agentId(l.agent) === agent;
+  if (!ok) out.push(`launched ${l.agent ?? "no agent"}, expected ${agent.exactly ?? agent}`);
+  return out;
+}
+
+// The setup guide's launch: the docs team's guide by its key, in the docs team.
+function guideForm(s, l, e) {
+  const out = launchForm(s, l, e, { exactly: guideKey(s.config.runtime) });
+  if (l.org !== DOCS.org || l.team !== DOCS.team)
+    out.push(`launched in ${l.org}/${l.team}, expected ${DOCS.org}/${DOCS.team}`);
   return out;
 }
 
@@ -306,7 +316,7 @@ const graders = {
     const mine = launches(s);
     if (mine.length !== e.launches) return [...out, `launched ${mine.length} sessions, expected ${e.launches}`];
     const [l] = mine;
-    out.push(...launchForm(s, l, e, `guide-${s.config.runtime}`));
+    out.push(...guideForm(s, l, e));
     if (l.mode !== e.mode) out.push(`launched with mode ${l.mode}, expected ${e.mode}`);
     if (promptOf(l).trim().split(/\s+/)[0] !== e.command) out.push(`the launched session's prompt does not invoke ${e.command}`);
     return out;
@@ -337,7 +347,7 @@ const graders = {
     const launchCalls = foremanCalls(s, "open_workspace");
     mine.forEach((l, i) => {
       if (!looked(launchCalls[i]?.seq ?? 0)) out.push("launched without looking in list_sessions for a live setup session");
-      out.push(...launchForm(s, l, { target: "team-workspace" }, `guide-${s.config.runtime}`));
+      out.push(...guideForm(s, l, { target: "team-workspace" }));
       if (l.name !== "Setup") out.push(`launched with name ${l.name}, expected Setup`);
       if (l.mode !== "visible-unfocused") out.push(`launched with mode ${l.mode}, expected visible-unfocused`);
       const words = promptOf(l).trim().split(/\s+/);
