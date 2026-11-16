@@ -15,8 +15,9 @@ sprint:
 foreman:
   role: codesense-foreman
   runtime: claude
+  # The docs team's key, the only Foreman the launch grant allows.
   agents:
-    - foreman-claude
+    - codesense/docs/getting-started/foreman-claude
   guides:
     - guide-claude
   name: Foreman

@@ -24,7 +24,7 @@ pub struct Page {
 pub const PAGES: &[Page] = &[
     Page {
         path: "getting-started/content/foreman/index.html",
-        sha256: "ff94132069b6e78fe2bc269be5e79c5c1c09bf01dadb659a505dfebeb775c8f2",
+        sha256: "0292eef06711b13812203ca20f6baa36790d429958bbbc9cf43007241d42927c",
     },
     Page {
         path: "getting-started/content/guide/index.html",
@@ -37,9 +37,12 @@ pub const FOREMAN_KEY: &str = "codesense/docs/getting-started/foreman-claude";
 
 /// The agents a page holding the capability may launch: the Foreman and the setup guide, one
 /// guide agent per runtime. The grant is defence in depth beside the page's hash, so a page
-/// cannot start any other agent.
+/// cannot start any other agent. The Foreman is named by its key: a bare id resolves through
+/// the target team and the personal space first (`find_agent_for`), so it would run whatever
+/// agent a team defines under that name. The guide page launches its agents by bare id into
+/// the docs team itself.
 pub const AGENTS: &[&str] = &[
-    "foreman-claude",
+    FOREMAN_KEY,
     "guide-claude",
     "guide-codex",
     "guide-opencode",

@@ -15,7 +15,11 @@ The app lets a page open a `team-workspace` agent only when the page holds the `
 grant, which it never declares. The app mints it from the page's own bytes: the file must sit at
 its path in the placed docs checkout and hash to its entry in `PAGES`
 (`src-tauri/src/verbs/foreman_launch.rs`). A page edited by one byte, or a copy anywhere else,
-holds nothing. A page that holds it may launch only `foreman-claude` and `guide-claude`.
+holds nothing. A page that holds it may launch only the Foreman, by the docs team's key
+`codesense/docs/getting-started/foreman-claude`, and the setup guide's agents. The docs bundle
+ships that agent under `getting-started/config/agents/foreman-claude/` (`DOCS_BUNDLED` in
+`scripts/pack-build.mjs`), so a clean install can start it, and no team's own `foreman-claude`
+answers for it.
 
 | File                       | What it is                                                                |
 | -------------------------- | ------------------------------------------------------------------------- |

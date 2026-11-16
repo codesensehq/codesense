@@ -45,8 +45,9 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKS_ROOT = join(ROOT, "codesense-docs/packs");
 export const DOCS_ROOT = join(ROOT, "codesense-docs");
 // Packs whose files the docs bundle ships live: a team agent under `config/agents/`, the
-// content and the built skill copies under `content/`. The Foreman is not one of them.
-export const DOCS_BUNDLED = ["codesense-guide"];
+// content and the built skill copies under `content/`. The Foreman ships its agent only: its
+// page is built by `foreman-page.mjs`.
+export const DOCS_BUNDLED = ["codesense-guide", "codesense-foreman"];
 export const SCHEMA_PATH = join(
   ROOT,
   "codesense-docs/getting-started/content/generated/schemas/pack-yml.schema.json",
@@ -505,7 +506,8 @@ export function run(dirs, { check, force = false, docsRoot = DOCS_ROOT }) {
   for (const dir of dirs) {
     const name = relative(ROOT, dir) || dir;
     const { errors, written, legacy } = buildPack(dir, { check, force });
-    if (!errors.length && !legacy && DOCS_BUNDLED.includes(basename(dir))) {
+    // A legacy pack's own files are never rewritten, but the bundle still carries its agent.
+    if (!errors.length && DOCS_BUNDLED.includes(basename(dir))) {
       const docs = syncDocs(dir, parse(readFileSync(join(dir, "pack.yml"), "utf8")), {
         check,
         docsRoot,
