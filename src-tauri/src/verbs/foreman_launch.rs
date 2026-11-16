@@ -41,12 +41,7 @@ pub const FOREMAN_KEY: &str = "codesense/docs/getting-started/foreman-claude";
 /// the target team and the personal space first (`find_agent_for`), so it would run whatever
 /// agent a team defines under that name. The guide page launches its agents by bare id into
 /// the docs team itself.
-pub const AGENTS: &[&str] = &[
-    FOREMAN_KEY,
-    "guide-claude",
-    "guide-codex",
-    "guide-opencode",
-];
+pub const AGENTS: &[&str] = &[FOREMAN_KEY, "guide-claude", "guide-codex", "guide-opencode"];
 
 /// Whether a `team-workspace` open names an agent the page may launch. An open with no agent
 /// would run the team's default agent, so it is refused too.
@@ -260,6 +255,25 @@ mod tests {
         assert!(!agent_allowed(Some("")));
         // No agent would run the team's default agent.
         assert!(!agent_allowed(None));
+    }
+
+    #[test]
+    fn the_foreman_key_names_the_agent_the_docs_bundle_ships() {
+        let info = crate::context_repo::codesense_docs::bundle_info();
+        let key = crate::agents::AgentKey::parse(FOREMAN_KEY).expect("FOREMAN_KEY is an agent key");
+        assert_eq!(
+            (key.org.as_str(), key.team.as_str()),
+            (info.slug.as_str(), info.team.as_str()),
+            "FOREMAN_KEY names the docs bundle's team"
+        );
+        let agent: crate::agents::model::Agent = serde_yaml::from_str(include_str!(
+            "../../../codesense-docs/getting-started/config/agents/foreman-claude/agent.yaml"
+        ))
+        .expect("the docs bundle ships the Foreman agent");
+        agent
+            .validate()
+            .expect("the shipped Foreman agent is valid");
+        assert_eq!(agent.id, key.id);
     }
 
     #[test]
