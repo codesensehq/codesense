@@ -246,6 +246,19 @@ export function kitConfigKeys(kit, body) {
   return roots.flatMap(([at, value]) => (value === undefined ? [] : leaves(value, at))).sort();
 }
 
+/**
+ * Why `kitText` can't be the kit's own config, given the public one, or null. The public config
+ * passed as the kit's would record the public keys and check the config against itself.
+ */
+export function kitConfigProblem(kitText, publicText) {
+  if (kitText === publicText)
+    return "--kit-config is this folder's story-view.yml, not the kit's own";
+  const team = parse(kitText)?.team;
+  if (team === parse(publicText)?.team)
+    return `--kit-config's team "${team}" is the public config's: pass the kit's own story-view.yml`;
+  return null;
+}
+
 export function pageText(vendored) {
   const { body } = parseVendored(vendored);
   if (/<\/script|<!--/i.test(body))
@@ -371,11 +384,14 @@ function main(argv) {
       throw new Error(
         "usage: --vendor <built story-view.js> --kit-rev <n> --kit-config <the kit's own story-view.yml>",
       );
+    const kitText = readFileSync(kitConfig, "utf8");
+    const refused = kitConfigProblem(kitText, read(CONFIG));
+    if (refused) throw new Error(refused);
     // A kit build may arrive with a header of its own (a re-vendor of a vendored file).
     const raw = readFileSync(source, "utf8");
     const body = publicBuild(parseVendored(raw)?.body ?? raw);
     writeFileSync(join(ROOT, VENDORED), vendoredText(body, kitRev));
-    const keys = kitConfigKeys(parse(readFileSync(kitConfig, "utf8")), body);
+    const keys = kitConfigKeys(parse(kitText), body);
     writeFileSync(join(ROOT, CONFIG_KEYS), `${JSON.stringify(keys, null, 2)}\n`);
     writeFileSync(join(ROOT, PACK_YML), packWithKit(read(PACK_YML), kitRev, sha256(body)));
   } else if (mode !== "--write")
