@@ -663,17 +663,16 @@
   // ---- the first story: the guide ends its reply with `story: <id> · <path>` and the page opens it ----
   // The guide's verbs run in the docs team, which cannot open another team's story. The path is the absolute
   // one the guide wrote, `<orgRoot>/<team>/content/stories/<id>.md`, and the page opens it with no team; the
-  // host checks that it is a story file of the person's own synced teams, so the page only checks its shape
-  // and never accepts the docs team's. The viewer shows the story's page, or markdown and the reason when
-  // the team has no story template.
-  const STORY_LINE = /^story: ([A-Z][A-Z0-9]{1,9}-[0-9]{1,4}) · (\S+)$/m;
+  // host decides which roots are the person's own synced teams, so the page only checks the path's shape and
+  // takes the root as the person spelled it (spaces, accents and all). The viewer shows the story's page, or
+  // markdown and the reason when the team has no story template.
+  const STORY_LINE = /^story: ([A-Z][A-Z0-9]{1,9}-[0-9]{1,4}) · (\/.*\S)\s*$/m;
   function storyToOpen(text) {
     const line = STORY_LINE.exec(text);
     if (!line) return null;
     const [, id, path] = line;
-    const part = /^(?:\/[A-Za-z0-9._-]+)+\/([A-Za-z0-9][A-Za-z0-9._-]*)\/content\/stories\/([A-Z0-9-]+)\.md$/.exec(path);
-    if (!part || part[2] !== id || path.split('/').slice(1).some((seg) => seg === '' || seg === '.' || seg === '..')) return null;
-    if (part[1] === DOCS.team || path.includes('/orgs/codesense-docs/')) return null;
+    const shape = /^\/.+\/[^/]+\/content\/stories\/([A-Z0-9-]+)\.md$/.exec(path);
+    if (!shape || shape[1] !== id || path.split('/').slice(1).some((seg) => seg === '' || seg === '.' || seg === '..')) return null;
     return { path };
   }
   function openStories() {

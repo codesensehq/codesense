@@ -780,8 +780,10 @@ test("a story line the page can't trust opens nothing", async ({ page }) => {
     lead(4, `story: ACME-1 · /data/acme/.codesense/orgs/acme-context/web/content/notes/ACME-1.md`),
     lead(
       5,
-      `story: ACME-1 · /data/acme/.codesense/orgs/codesense-docs/getting-started/content/stories/ACME-1.md`,
+      `story: ACME-1 · /data/acme/.codesense/orgs/acme-context/web/content/stories/ACME-1.txt`,
     ),
+    lead(9, `story: ACME-1 · /data/acme/./orgs/acme-context/web/content/stories/ACME-1.md`),
+    lead(10, `story: ACME-1 · /data/acme//orgs/acme-context/web/content/stories/ACME-1.md`),
     // A relative path is not what the guide sends; Rust checks the root, the page only checks the shape.
     lead(8, `story: ACME-1 · orgs/acme-context/web/content/stories/ACME-1.md`),
     lead(6, `Created.\n  story: ACME-1 · ${STORY_PATH} and more`),
@@ -790,3 +792,28 @@ test("a story line the page can't trust opens nothing", async ({ page }) => {
   await expect.poll(async () => (await calls("markRead")).length).toBeGreaterThan(0);
   expect(await calls("openFile")).toHaveLength(0);
 });
+
+// Rust vets the root; the page only checks the shape, so any org root the person chose opens.
+const OPENABLE_ROOTS: [string, string][] = [
+  ["a space", "/data/ann/Code/Acme Context/web/content/stories/ACME-1.md"],
+  ["a non-ASCII letter", "/data/josé/.codesense/orgs/acme-context/web/content/stories/ACME-1.md"],
+  [
+    "a tilde",
+    "/data/ann/Library/Mobile Documents/com~apple~CloudDocs/acme/web/content/stories/ACME-1.md",
+  ],
+  ["an at sign", "/data/ann/@work/acme/web/content/stories/ACME-1.md"],
+  ["a plus", "/data/ann/c++/acme/web/content/stories/ACME-1.md"],
+  [
+    "a team named getting-started",
+    "/data/acme/.codesense/orgs/acme-context/getting-started/content/stories/ACME-1.md",
+  ],
+];
+
+for (const [name, path] of OPENABLE_ROOTS) {
+  test(`a story under an org root with ${name} opens`, async ({ page }) => {
+    const { live, calls } = await open(page);
+    await live([lead(2, `Created ACME-1.\nstory: ACME-1 · ${path}`)]);
+    await expect.poll(async () => (await calls("openFile")).length).toBe(1);
+    expect((await calls("openFile"))[0].args).toEqual({ path, newTab: true });
+  });
+}
