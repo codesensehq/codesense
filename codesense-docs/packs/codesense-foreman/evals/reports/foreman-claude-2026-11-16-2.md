@@ -10,7 +10,7 @@ budget_usd: 12
 complete: true
 reason: ""
 at: 2026-11-16T03:27:15.474Z
-cost_usd: 4.090940000000001
+cost_usd: 2.525485
 tokens: 3090504
 cases:
   answer-card:
