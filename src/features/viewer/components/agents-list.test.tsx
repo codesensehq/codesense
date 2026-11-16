@@ -21,6 +21,7 @@ import { NEW_WORKSPACE_TERMINAL_EVENT } from "../lib/new-workspace-terminal";
 
 let listResult: AgentSessionRow[] = [];
 let lateRoster: Promise<AgentSessionRow[]> | null = null;
+let lateRoles: Promise<{ roles: unknown[] }> | null = null;
 let runOutcomes: RunOutcomeRead[] = [];
 let rosterStatus: Record<string, string> = {};
 let rosterLookup: ((sid: string) => Promise<{ status: string } | null>) | null = null;
@@ -78,7 +79,7 @@ const sendInboxAsHuman = vi.fn(
 const markInboxMessageRead = vi.fn((..._args: unknown[]) => Promise.resolve());
 let rolesResult: { roles: unknown[] } = { roles: [] };
 let roleConfigs: Record<string, RoleConfig[]> = {};
-const agentReadRoles = vi.fn((_team: unknown) => Promise.resolve(rolesResult));
+const agentReadRoles = vi.fn((_team: unknown) => lateRoles ?? Promise.resolve(rolesResult));
 const releaseRole = vi.fn((..._args: unknown[]) => Promise.resolve(0));
 // Tauri events: a test can emit one to the listeners the pane registered.
 const { eventListeners } = vi.hoisted(() => ({
@@ -513,6 +514,7 @@ function storeMock(useStoreState: (sel: (s: unknown) => unknown) => unknown) {
 
 const { useEndedAgentPins } = await import("../hooks/use-ended-agent-pins");
 const { useStaleArrowFilterCleanup } = await import("../hooks/use-stale-arrow-filter");
+const { ROLE_READ_DEBOUNCE_MS } = await import("../hooks/use-role-holdings");
 const { DockSlotHost: NativeDockSlotHost } = await import("@/features/shell/slots/dock-slot-host");
 const { warmScopes } = await import("@/shared/lib/warm-scopes");
 const { useViewerStore: useViewerStoreMock } = await import("@/shared/stores/viewer-store");
@@ -783,6 +785,15 @@ function renderList(teamKey = "team-1") {
   return render(<DockSlotHost teamKey={teamKey} visible />);
 }
 
+// The list's useSettled re-renders every mounted row once, 800 ms after it shows. A test that counts
+// row renders runs its timers on a fake clock and lets that transition land before it takes its
+// baseline, so the real timer cannot fall inside the count on a slow run.
+const FAKE_TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
+const settleRows = () =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+
 // The pane's list is virtualized: jsdom has no layout, so the scroll area gets a height here and
 // every row gets a fixed one, so the rows a test expects are drawn. A test may shrink the area to
 // leave rows out of the drawn window.
@@ -867,6 +878,7 @@ beforeEach(() => {
   rosterLookup = null;
   listResult = [];
   lateRoster = null;
+  lateRoles = null;
   runOutcomes = [];
   publishProjectionOwners({
     sessions: null,
@@ -6040,14 +6052,19 @@ describe("the Agents pane, round two", () => {
       row({ handle: "a", sessionId: "sid-a" }),
       row({ handle: "b", sessionId: "sid-b" }),
     ];
-    renderList();
-    await waitFor(() => expect(rowOf("b")).not.toBeNull());
-    await act(async () => {});
-    const before = { a: rowRenders.get("sid-a") ?? 0, b: rowRenders.get("sid-b") ?? 0 };
-    act(() => hooked("sid-b"));
-    await waitFor(() => expect(rowOf("b").closest(".ag-row")).toHaveTextContent("Thinking"));
-    expect(rowRenders.get("sid-b")).toBeGreaterThan(before.b);
-    expect(rowRenders.get("sid-a")).toBe(before.a);
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS] });
+    try {
+      renderList();
+      await settleRows();
+      expect(rowOf("b")).not.toBeNull();
+      const before = { a: rowRenders.get("sid-a") ?? 0, b: rowRenders.get("sid-b") ?? 0 };
+      await act(async () => hooked("sid-b"));
+      expect(rowOf("b").closest(".ag-row")).toHaveTextContent("Thinking");
+      expect(rowRenders.get("sid-b")).toBeGreaterThan(before.b);
+      expect(rowRenders.get("sid-a")).toBe(before.a);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe("virtualized focus and motion", () => {
@@ -6515,25 +6532,41 @@ describe("the Agents pane, round three", () => {
         },
       ],
     };
-    renderList("acme:backend");
-    const holds = await screen.findByTestId("agent-holds");
-    await within(holds).findByRole("button", { name: "Queue role: Triage (role:triage)" });
-    await act(async () => {});
-    const before = rowRenders.get("sid-holder") ?? 0;
-    const reads = agentReadRoles.mock.calls.length;
-    const { AGENT_STATE_CHANGED_EVENT } = await import("@/tauri/events");
-    await act(async () => emitTauriEvent(AGENT_STATE_CHANGED_EVENT));
-    await waitFor(() => expect(agentReadRoles.mock.calls.length).toBeGreaterThan(reads));
-    await act(async () => {});
-    const chip = within(screen.getByTestId("agent-holds")).getByRole("button", {
-      name: "Queue role: Triage (role:triage)",
-    });
-    expect(chip).toHaveTextContent(/^Triage$/);
-    expect(chip.querySelector("img")).toHaveAttribute(
-      "src",
-      BUILTIN_FACE_SOURCE.resolve("builtin-chess:knight"),
-    );
-    expect(rowRenders.get("sid-holder")).toBe(before);
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS] });
+    try {
+      renderList("acme:backend");
+      await settleRows();
+      const holds = screen.getByTestId("agent-holds");
+      within(holds).getByRole("button", { name: "Queue role: Triage (role:triage)" });
+      const before = rowRenders.get("sid-holder") ?? 0;
+      const reads = agentReadRoles.mock.calls.length;
+      // The event starts a re-read after its debounce. Hold that read, so the render count is
+      // taken once the read has landed, and not before it.
+      let finish!: (read: { roles: unknown[] }) => void;
+      lateRoles = new Promise((resolve) => {
+        finish = resolve;
+      });
+      const { AGENT_STATE_CHANGED_EVENT } = await import("@/tauri/events");
+      await act(async () => {
+        emitTauriEvent(AGENT_STATE_CHANGED_EVENT);
+        await vi.advanceTimersByTimeAsync(ROLE_READ_DEBOUNCE_MS);
+      });
+      expect(agentReadRoles.mock.calls.length).toBeGreaterThan(reads);
+      await act(async () => {
+        finish(rolesResult);
+      });
+      const chip = within(screen.getByTestId("agent-holds")).getByRole("button", {
+        name: "Queue role: Triage (role:triage)",
+      });
+      expect(chip).toHaveTextContent(/^Triage$/);
+      expect(chip.querySelector("img")).toHaveAttribute(
+        "src",
+        BUILTIN_FACE_SOURCE.resolve("builtin-chess:knight"),
+      );
+      expect(rowRenders.get("sid-holder")).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("the quick view reads its agent's live row: a session that moved to an offline machine has no live terminal", async () => {
@@ -6918,19 +6951,23 @@ describe("the Agents pane, round three", () => {
     workspaces = { "team-1": [{ id: "ws-a" }], "acme:ops": [{ id: "ws-x" }] };
     terminalTabIndex = { "team-1": { "ws-a": [{ id: "t-a", sessionId: "sid-a" }] } };
     listResult = [row({ handle: "a", sessionId: "sid-a" })];
-    renderList();
-    await waitFor(() => expect(rowOf("a")).not.toBeNull());
-    await waitFor(() => expect(useAvatarPacksStore.getState().byTeam["team-1"]).toBeDefined());
-    await act(async () => {});
-    const before = rowRenders.get("sid-a") ?? 0;
-    const teamOneEntry = useAvatarPacksStore.getState().byTeam["team-1"];
-    await act(async () =>
-      resolveOps({ packs: [], warnings: [], default_pack: null, agent_avatars: {} }),
-    );
-    await waitFor(() => expect(useAvatarPacksStore.getState().byTeam["acme:ops"]).toBeDefined());
-    await act(async () => {});
-    expect(useAvatarPacksStore.getState().byTeam["team-1"]).toBe(teamOneEntry);
-    expect(rowRenders.get("sid-a")).toBe(before);
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS] });
+    try {
+      renderList();
+      await settleRows();
+      expect(rowOf("a")).not.toBeNull();
+      expect(useAvatarPacksStore.getState().byTeam["team-1"]).toBeDefined();
+      const before = rowRenders.get("sid-a") ?? 0;
+      const teamOneEntry = useAvatarPacksStore.getState().byTeam["team-1"];
+      await act(async () =>
+        resolveOps({ packs: [], warnings: [], default_pack: null, agent_avatars: {} }),
+      );
+      expect(useAvatarPacksStore.getState().byTeam["acme:ops"]).toBeDefined();
+      expect(useAvatarPacksStore.getState().byTeam["team-1"]).toBe(teamOneEntry);
+      expect(rowRenders.get("sid-a")).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
     avatarPacksListForTeam.mockImplementation((teamKey: string) =>
       Promise.resolve({ packs: [], warnings: [], default_pack: null, agent_avatars: {}, teamKey }),
     );
