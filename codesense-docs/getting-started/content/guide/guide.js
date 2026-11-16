@@ -661,18 +661,20 @@
   document.addEventListener('visibilitychange', markShownRead);
 
   // ---- the first story: the guide ends its reply with `story: <id> · <path>` and the page opens it ----
-  // The guide's verbs run in the docs team, which cannot open another team's story; the page can, with the
-  // person's own authority, and the viewer then shows the story's page, or markdown and the reason when the
-  // team has no story template. The path must be a story file of the person's own team, never the docs'.
+  // The guide's verbs run in the docs team, which cannot open another team's story. The path is the absolute
+  // one the guide wrote, `<orgRoot>/<team>/content/stories/<id>.md`, and the page opens it with no team; the
+  // host checks that it is a story file of the person's own synced teams, so the page only checks its shape
+  // and never accepts the docs team's. The viewer shows the story's page, or markdown and the reason when
+  // the team has no story template.
   const STORY_LINE = /^story: ([A-Z][A-Z0-9]{1,9}-[0-9]{1,4}) · (\S+)$/m;
   function storyToOpen(text) {
     const line = STORY_LINE.exec(text);
     if (!line) return null;
     const [, id, path] = line;
-    const part = /^((?:[A-Za-z0-9._-]+\/)+)([A-Za-z0-9][A-Za-z0-9._-]*)\/content\/stories\/([A-Z0-9-]+)\.md$/.exec(path);
-    if (!part || part[3] !== id || path.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) return null;
-    if (part[2] === DOCS.team || path.startsWith('orgs/codesense-docs/')) return null;
-    return { path, team: part[2] };
+    const part = /^(?:\/[A-Za-z0-9._-]+)+\/([A-Za-z0-9][A-Za-z0-9._-]*)\/content\/stories\/([A-Z0-9-]+)\.md$/.exec(path);
+    if (!part || part[2] !== id || path.split('/').slice(1).some((seg) => seg === '' || seg === '.' || seg === '..')) return null;
+    if (part[1] === DOCS.team || path.includes('/orgs/codesense-docs/')) return null;
+    return { path };
   }
   function openStories() {
     const chat = S.chat;
@@ -683,7 +685,7 @@
       const story = storyToOpen(row.text || '');
       if (!story) return;
       S.opened.add(row.messageId);
-      Promise.resolve(cs.invoke('openFile', { path: story.path, team: story.team, newTab: true })).catch(() => {
+      Promise.resolve(cs.invoke('openFile', { path: story.path, newTab: true })).catch(() => {
         // A refused open leaves the story in the person's team; the guide's reply already names its path.
       });
     });
