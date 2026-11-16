@@ -130,6 +130,41 @@ test("fixture: the shim records the foreman worktrees present at each call", asy
   }
 });
 
+test("fixture: git refuses -C, --git-dir and --work-tree outside the sandbox and runs nothing", async (t) => {
+  const outside = tmp(t);
+  spawnSync("git", ["init", "-q", "-b", "main", outside]);
+  const fx = await createFixture();
+  try {
+    const home = path.join(fx.root, "home");
+    const rel = path.relative(home, outside);
+    const made = path.join(outside, "made");
+    for (const pre of [
+      ["-C", outside],
+      ["-C", rel],
+      ["-C", "..", "-C", path.relative(fx.root, outside)],
+      ["-C", ".", "-C", rel],
+      [`--git-dir=${path.join(outside, ".git")}`],
+      ["--git-dir", path.join(outside, ".git")],
+      [`--work-tree=${outside}`],
+      ["--work-tree", outside],
+      ["-C", "..", "--git-dir", path.relative(fx.root, path.join(outside, ".git"))],
+    ]) {
+      const r = fx.git([...pre, "init", "-q", made]);
+      assert.equal(r.status, 128, pre.join(" "));
+      assert.match(r.stderr, /outside the eval sandbox/);
+      assert.ok(!existsSync(made), `${pre.join(" ")} ran nothing`);
+    }
+    // Inside the sandbox, the same options still run, and a subcommand's own -C is not a path.
+    fx.git(["worktree", "add", "-q", "-b", "foreman/x-ab12", "../foreman-x-ab12", "origin/main"]);
+    assert.equal(fx.git(["-C", "../foreman-x-ab12", "status"]).status, 0);
+    assert.equal(fx.git(["-C", fx.root, "-C", "home", "status"]).status, 0);
+    assert.equal(fx.git([`--git-dir=${path.join(home, ".git")}`, "status"]).status, 0);
+    assert.doesNotMatch(fx.git(["log", "-C", outside, "-1"]).stderr, /outside the eval sandbox/);
+  } finally {
+    fx.teardown();
+  }
+});
+
 test("fixture: git refuses a cwd outside the sandbox", async () => {
   const fx = await createFixture();
   try {

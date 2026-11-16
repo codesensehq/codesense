@@ -221,6 +221,22 @@ export const removeLiveFixtures = () => {
   live.clear();
 };
 
+// The directories git's own options name before the subcommand: each `-C` resolves against the
+// one before it, and `--git-dir`/`--work-tree` against the last.
+export function gitPaths(args, cwd) {
+  const dirs = [];
+  let dir = cwd;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-C") dirs.push((dir = path.resolve(dir, args[++i] ?? "")));
+    else if (a === "--git-dir" || a === "--work-tree") dirs.push(path.resolve(dir, args[++i] ?? ""));
+    else if (/^--(git-dir|work-tree)=/.test(a)) dirs.push(path.resolve(dir, a.slice(a.indexOf("=") + 1)));
+    else if (a === "-c") i++;
+    else if (!a.startsWith("-")) break;
+  }
+  return dirs;
+}
+
 // The fixture a case asks for.
 export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 
@@ -543,7 +559,8 @@ function build(root, opts) {
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
     git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
-      if (!within(cwd)) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${cwd}\n` };
+      const out = [cwd, ...gitPaths(args, cwd)].find((dir) => !within(dir));
+      if (out !== undefined) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${out}\n` };
       return git(args, cwd);
     },
     // A script from the worktree (the team's `stories/*.sh`), run with the sandbox env.
