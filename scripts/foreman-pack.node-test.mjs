@@ -100,6 +100,25 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   }
 });
 
+test("bridge_tools lists exactly the allowed codesense tools, each one the app serves", () => {
+  const allowed = allow
+    .filter((rule) => rule.startsWith("mcp__codesense__"))
+    .map((rule) => rule.slice("mcp__codesense__".length));
+  assert.deepEqual([...agent.mcp.bridge_tools].sort(), allowed.sort());
+  const served = new Set(
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../codesense-docs/getting-started/content/generated/mcp-tools.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ).families.flatMap((family) => family.tools),
+  );
+  for (const name of agent.mcp.bridge_tools) assert.ok(served.has(name), `${name} is served`);
+});
+
 test("the Foreman claims its mail on the codesense-foreman queue, never foreman", () => {
   assert.equal(agent.role, "codesense-foreman");
   assert.equal(agent.runtime, "claude");

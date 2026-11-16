@@ -77,6 +77,36 @@ args:
 env:
   MAX_MCP_OUTPUT_TOKENS: "8000"
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
+# With no list, every served bridge tool counts as effective; this records exactly the
+# bridge tools the allow list below lets the Foreman call.
+mcp:
+  bridge_tools:
+    - who_am_i
+    - read_messages
+    - session_read
+    - claim_role_messages
+    - ack_role_message
+    - codesense_overview
+    - describe_setup
+    - list_orgs_teams
+    - list_source_repos
+    - query_context
+    - read_content_file
+    - list_sessions
+    - session_usage
+    - inbox_list
+    - list_machines
+    - routine_list
+    - records_list
+    - agent_list
+    - get_story_format
+    - validate_story
+    - reply
+    - send_message
+    - signal_progress
+    - signal_done
+    - records_create
+    - open_workspace
 permissions:
   claude:
     # Anything not allowed below is refused, not asked.
