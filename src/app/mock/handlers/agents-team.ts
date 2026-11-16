@@ -563,7 +563,7 @@ function queued(): InboxDelivery {
  * later and then accepted, as a running Triage would.
  */
 export function agentTeamInboxHandlers(
-  emit: (event: string) => void,
+  emit: (event: string, payload?: unknown) => void,
   {
     simulate = false,
     sessions = [],
@@ -786,6 +786,11 @@ export function agentTeamInboxHandlers(
     }
     return ids;
   };
+  /** What the backend's `emit_inbox_changed` sends: the team and the messages the change touched. */
+  const inboxChanged = (messageIds: number[]) =>
+    emit("agent-inbox-changed", {
+      changes: [{ team: { org: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME }, messageIds }],
+    });
   const find = (args: Record<string, unknown>) =>
     rows.find((r) => r.messageId === Number(args.messageId));
   /** A running Triage picks a queued message up, then accepts it as work. */
@@ -798,7 +803,7 @@ export function agentTeamInboxHandlers(
         pickedUpAtMs: Date.now(),
         instance: "sess-notify-lead",
       };
-      emit("agent-inbox-changed");
+      inboxChanged([row.messageId]);
       setTimeout(() => {
         if (row.delivery?.state !== "reading") return;
         row.delivery = {
@@ -808,7 +813,7 @@ export function agentTeamInboxHandlers(
           disposition: "work",
           note: "On it.",
         };
-        emit("agent-inbox-changed");
+        inboxChanged([row.messageId]);
       }, 6000);
     }, 12000);
   };
@@ -936,6 +941,7 @@ export function agentTeamInboxHandlers(
         ...(note ? { note } : {}),
         updatedAtMs: Date.now(),
       };
+      // Not team-scoped, so a broad nudge with no `changes`, as the backend sends it.
       emit("agent-inbox-changed");
       return humanStatus;
     },
@@ -1030,7 +1036,7 @@ export function agentTeamInboxHandlers(
       const answered = rows.find((r) => r.messageId === row.inReplyTo && r.to === "human");
       if (answered) answered.unread = false;
       if (simulate && role && ROLE_INBOXES.has(role)) consumeLater(row);
-      emit("agent-inbox-changed");
+      inboxChanged([row.messageId, ...(answered ? [answered.messageId] : [])]);
       return { status: "sent", messageId };
     },
     list_inbox_messages: (args: Record<string, unknown>) => {
@@ -1051,43 +1057,49 @@ export function agentTeamInboxHandlers(
       const row = find(args);
       if (row && row.to === "human" && row.unread) {
         row.unread = false;
-        emit("agent-inbox-changed");
+        inboxChanged([row.messageId]);
       }
       return undefined;
     },
     mark_inbox_messages_read: (args: Record<string, unknown>) => {
       const ids = new Set(Array.isArray(args.messageIds) ? args.messageIds.map(Number) : []);
       let changed = 0;
+      const touched: number[] = [];
       for (const row of rows)
         if (ids.has(row.messageId) && row.to === "human" && row.unread) {
           row.unread = false;
           changed += 1;
+          touched.push(row.messageId);
         }
-      if (changed > 0) emit("agent-inbox-changed");
+      if (changed > 0) inboxChanged(touched);
       return changed;
     },
     mark_inbox_messages_unread: (args: Record<string, unknown>) => {
       const ids = new Set(Array.isArray(args.messageIds) ? args.messageIds.map(Number) : []);
       let changed = 0;
+      const touched: number[] = [];
       for (const row of rows)
         if (ids.has(row.messageId) && row.to === "human" && !row.unread) {
           row.unread = true;
           changed += 1;
+          touched.push(row.messageId);
         }
-      if (changed > 0) emit("agent-inbox-changed");
+      if (changed > 0) inboxChanged(touched);
       return changed;
     },
     mark_inbox_messages_archived: (args: Record<string, unknown>) => {
       const ids = new Set(Array.isArray(args.messageIds) ? args.messageIds.map(Number) : []);
       let changed = 0;
+      const touched: number[] = [];
       for (const row of rows) {
         if (ids.has(row.messageId) && row.to === "human" && !row.archivedAtMs) {
           row.archivedAtMs = Date.now();
           row.unread = false;
           changed += 1;
+          touched.push(row.messageId);
         }
       }
-      if (changed > 0) emit("agent-inbox-changed");
+      if (changed > 0) inboxChanged(touched);
       return changed;
     },
     unarchive_inbox_messages: (args: Record<string, unknown>) => {
@@ -1096,14 +1108,16 @@ export function agentTeamInboxHandlers(
         Array.isArray(args.restoreUnread) ? args.restoreUnread.map(Number) : [],
       );
       let changed = 0;
+      const touched: number[] = [];
       for (const row of rows) {
         if (ids.has(row.messageId) && row.to === "human" && row.archivedAtMs) {
           row.archivedAtMs = null;
           if (unread.has(row.messageId)) row.unread = true;
           changed += 1;
+          touched.push(row.messageId);
         }
       }
-      if (changed > 0) emit("agent-inbox-changed");
+      if (changed > 0) inboxChanged(touched);
       return changed;
     },
     withdraw_inbox_message: (args: Record<string, unknown>) => {
@@ -1120,7 +1134,7 @@ export function agentTeamInboxHandlers(
       } else {
         row.delivery = { ...delivery, state: "withdrawn", withdrawnAtMs: Date.now() };
       }
-      emit("agent-inbox-changed");
+      inboxChanged([row.messageId]);
       return { status: "withdrawn", withdrawnAtMs: row.delivery.withdrawnAtMs };
     },
     reply_as_human: (args: Record<string, unknown>) => {
@@ -1140,7 +1154,7 @@ export function agentTeamInboxHandlers(
         inReplyTo: parent.messageId,
         unread: true,
       });
-      emit("agent-inbox-changed");
+      inboxChanged([messageId]);
       return { status: "sent", messageId };
     },
     send_role_message_cmd: (args: Record<string, unknown>) => {
@@ -1162,7 +1176,7 @@ export function agentTeamInboxHandlers(
       };
       rows.push(row);
       if (simulate && ROLE_INBOXES.has(role)) consumeLater(row);
-      emit("agent-inbox-changed");
+      inboxChanged([messageId]);
       return { status: "sent", messageId, deliveryId: messageId };
     },
   };

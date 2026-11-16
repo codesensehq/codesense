@@ -78,7 +78,7 @@ function boot(rows: Row[], scope: Scope) {
     }),
     roles: vi.fn(async () => ({ roles: roleRows })),
     humanStatus: vi.fn(async () => ({ status: "online", note: "" })),
-    agents: vi.fn(async () => []),
+    agents: vi.fn(async (): Promise<unknown[]> => []),
     // Mia runs, so the composer can reply to her.
     subscribe: vi.fn(async (topic: string, { onChange }: { onChange: (s: unknown) => void }) => {
       const watchers = topic === "sessions" ? sessionWatchers : definitionWatchers;

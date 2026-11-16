@@ -338,12 +338,12 @@ impl InboxHost for FakeHost {
     async fn sessions(&self) -> Result<KnownSessions, String> {
         Ok(KnownSessions::new(self.sessions.lock().unwrap().clone()))
     }
-    fn inbox_changed(&self) {
+    fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         *self.changed.lock().unwrap() += 1;
     }
     fn inbox_event(&self, event: InboxEvent) {
         self.inbox_events.lock().unwrap().push(event);
-        self.inbox_changed();
+        self.inbox_changed(&[]);
     }
     fn mail_stored(&self, handle: &str) {
         self.stored_for.lock().unwrap().push(handle.to_string());
@@ -5955,4 +5955,89 @@ fn a_pin_thread_comes_from_the_registry_record_never_a_tab_tag() {
         registry_thread(&named),
         Some(("acme/api/backend".to_string(), Some("DEMO-1".to_string())))
     );
+}
+
+/// What each `agent-inbox-changed` emit puts on the wire: a team-scoped change names its
+/// teams and messages, a team-wide nudge names the team with no ids, and a change that isn't
+/// team-scoped (the human's status) is a broad nudge with no `changes` at all.
+#[test]
+fn every_inbox_changed_names_its_teams() {
+    use tauri::Listener;
+    let app = tauri::test::mock_app();
+    let heard = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let into = heard.clone();
+    app.listen_any(AGENT_INBOX_CHANGED_EVENT, move |event| {
+        into.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    let web = launch_team("web");
+    let ops = launch_team("ops");
+    emit_inbox_changed(app.handle(), &[(web.clone(), vec![3, 4])]);
+    emit_inbox_changed(
+        app.handle(),
+        &[(web.clone(), vec![]), (ops.clone(), vec![])],
+    );
+    emit_inbox_changed(app.handle(), &[]);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        vec![
+            serde_json::json!({"changes": [{"team": web, "messageIds": [3, 4]}]}),
+            serde_json::json!({"changes": [
+                {"team": web, "messageIds": []},
+                {"team": ops, "messageIds": []},
+            ]}),
+            serde_json::Value::Null,
+        ]
+    );
+}
+
+/// Every emit of the event goes through `emit_inbox_changed`, so a new emit site can't skip
+/// naming its teams: no other non-test source mentions the event, and the helper emits once.
+#[test]
+fn inbox_changed_is_emitted_only_by_the_helper() {
+    fn sources(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    sources(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    assert!(files.len() > 100, "the walk found the sources");
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        // Tests may listen for the event.
+        if name == "tests.rs" || name.ends_with("_tests.rs") || name == "tests" {
+            continue;
+        }
+        let code: String = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Whitespace out, so an emit split over lines still matches.
+        let flat: String = code.split_whitespace().collect();
+        let uses = flat.matches("AGENT_INBOX_CHANGED_EVENT").count()
+            + flat.matches("\"agent-inbox-changed\"").count();
+        if path.ends_with("commands/agent_inbox.rs") {
+            assert_eq!(
+                flat.matches(".emit(AGENT_INBOX_CHANGED_EVENT").count(),
+                1,
+                "the helper emits the event once"
+            );
+            // The const (its name and its literal) and the helper's emit.
+            assert_eq!(uses, 3, "nothing else in agent_inbox.rs names the event");
+        } else {
+            assert_eq!(uses, 0, "{} names the inbox-changed event", path.display());
+        }
+    }
 }

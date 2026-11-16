@@ -103,7 +103,10 @@ const BASE = "# Alpha\n\nFirst\n\nLast";
 let handlers: HandlerRegistry, appState: string, failWrites: boolean, teamSafe: boolean;
 let seed: FrameRecord, p: PaneDoc | undefined;
 let observeEditorChange: (() => void) | undefined;
-let beforeBoot: ((win: PaneDoc["win"]) => void) | undefined;
+type BootWindow = Parameters<
+  NonNullable<NonNullable<Parameters<typeof bootPaneDoc>[4]>["beforeScripts"]>
+>[0];
+let beforeBoot: ((win: BootWindow) => void) | undefined;
 let agentCommits: Map<string, string>;
 let sessionRows: Record<string, unknown>[], allowSend: boolean, sendResult: Record<string, unknown>;
 let contextQuery: (query: Record<string, unknown>) => unknown;

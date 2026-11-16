@@ -343,8 +343,8 @@ impl InboxHost for ScopedHost {
     fn projected_inbox(&self, team: &LaunchTeam) -> Option<Result<crate::commands::agent_inbox::InboxView, String>> {
         self.inner.projected_inbox(team)
     }
-    fn inbox_changed(&self) {
-        self.inner.inbox_changed();
+    fn inbox_changed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
+        self.inner.inbox_changed(changes);
     }
     fn inbox_event(&self, event: crate::live_hub::inbox_events::InboxEvent) {
         self.inner.inbox_event(event);

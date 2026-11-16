@@ -143,12 +143,12 @@ impl InboxHost for FakeHost {
             _ => None,
         }
     }
-    fn inbox_changed(&self) {
+    fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         *self.changed.lock().unwrap() += 1;
     }
     fn inbox_event(&self, event: crate::live_hub::inbox_events::InboxEvent) {
         self.events.lock().unwrap().push(event);
-        self.inbox_changed();
+        self.inbox_changed(&[]);
     }
     fn role_message_queued(&self, team: &LaunchTeam, role: &str, message_id: i64, _sender: &str) {
         self.queued

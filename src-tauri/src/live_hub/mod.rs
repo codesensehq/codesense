@@ -2093,6 +2093,21 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     // deltas published below are not news to them.
     // A retired team drops its counts row, so the counts comparison covers removals too.
     let notify_legacy = had_pending || hydrated || renamed || counts != counts_before;
+    // The notice names the teams a legacy reader must re-read: every team the projection holds
+    // after a hydration, a rename or a retry, else the teams whose counts moved. An empty
+    // list is a broad nudge, which no case here wants, so it only stands in if the counts rows
+    // name no team.
+    let notified_teams = if !notify_legacy {
+        Vec::new()
+    } else if had_pending || hydrated || renamed {
+        inbox.teams()
+    } else {
+        inbox::changed_count_teams(&counts_before, &counts)
+    };
+    let notified: Vec<(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)> = notified_teams
+        .into_iter()
+        .map(|team| (team, Vec::new()))
+        .collect();
     updates.extend(counts);
 
     // Publish the finished projection briefly under the model lock, then drop
@@ -2131,7 +2146,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     // Legacy readers must see the committed cache when their refresh starts.
     if committed.is_empty() {
         if notify_legacy {
-            host.inbox_changed();
+            host.inbox_changed(&notified);
         }
     } else {
         host.inbox_committed(&committed);
