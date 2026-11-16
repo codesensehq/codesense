@@ -2309,6 +2309,8 @@ export function HtmlViewer({
     )
       return;
     appliedHash.current = { node, url: viewerUrl, hash, consume: consumeHash.current };
+    // An explicit fragment positions the frame itself, so it wins over the restore on show.
+    holdScrollRef.current = false;
     const target = `${viewerUrl.split("#")[0]}${hash.startsWith("#") ? hash : `#${hash}`}`;
     // history.replaceState changes the frame URL without changing its src attribute.
     // A repeated src assignment is then a WebKit no-op; Location.href's setter
