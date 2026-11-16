@@ -268,7 +268,7 @@ fn mcp_and_ui_boundaries_use_the_shared_assertion_writers() {
         .next()
         .unwrap();
     assert!(body.contains("settle_assertion_row(&store, assertion_id, target)"));
-    assert!(include_str!("../mod.rs").contains("let flags = next_updates(&handle).await;"));
+    assert!(include_str!("../mod.rs").contains("let (flags, cause) = next_updates(&handle).await;"));
 }
 
 #[tokio::test]
