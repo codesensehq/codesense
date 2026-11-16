@@ -171,17 +171,20 @@ permissions:
       - Bash(sh stories/*.sh)
       - Bash(sh stories/*.sh *)
       - Bash(gh pr create --head foreman/* --title * --body *)
-      # Claude never matches a `../` file rule, so these are absolute globs (`//` is the root,
-      # live probe, 2026-11-16). They match a foreman-* directory anywhere, and Write creates
-      # missing parents, so Write can make a foreman-* dir anywhere: the loader roots are denied
-      # below for that reason, and `Edit(./**)` keeps home read-only (a deny beats an allow).
-      # The Foreman can still run a script it writes through `sh stories/*.sh`, and that script
-      # can write anywhere; the guardrail for that is review and protected main.
-      - Read(//**/foreman-*/**)
-      - Edit(//**/foreman-*/**)
-      - Write(//**/foreman-*/**)
-      - Read(//**/foreman-*.msg)
-      - Write(//**/foreman-*.msg)
+      # Claude never matches a `../` file rule, so these are absolute (`//` is the root, live
+      # probe, 2026-11-16). At launch CodeSense writes home's parent for `{{launch_parent}}`, so
+      # they reach only a foreman-* directory beside home; a launch folder whose parent holds a
+      # glob or rule character gets none of them. Inside a worktree, Write creates missing
+      # parents, and a worktree is a checkout that can hold its own `.claude/` or `.agents/`:
+      # the loader roots are denied below for that reason, and `Edit(./**)` keeps home
+      # read-only (a deny beats an allow). The Foreman can still run a script it writes through
+      # `sh stories/*.sh`, and that script can write anywhere; the guardrail for that is review
+      # and protected main.
+      - Read(//{{launch_parent}}/foreman-*/**)
+      - Edit(//{{launch_parent}}/foreman-*/**)
+      - Write(//{{launch_parent}}/foreman-*/**)
+      - Read(//{{launch_parent}}/foreman-*.msg)
+      - Write(//{{launch_parent}}/foreman-*.msg)
     deny:
       # Claude checks only `Edit(path)` denies for files, and they cover Edit, Write and
       # NotebookEdit; it ignores a `Write(path)` or `NotebookEdit(path)` deny and warns at startup.
@@ -264,4 +267,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 7
+revision: 8
