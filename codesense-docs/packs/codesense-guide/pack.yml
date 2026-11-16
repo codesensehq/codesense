@@ -10,6 +10,7 @@ requires:
     - { name: claude, optional: true }
     - { name: codex, optional: true }
     - { name: opencode, optional: true }
+  kit: { chat: 1 }
 parts:
   - { id: guide, kind: preset, includes: [ guide-claude, guide-codex, guide-opencode, guide-content, codesense-setup ], default: true }
   - { id: guide-claude, kind: agent, file: agents/guide-claude/agent.yaml, needs: [ guide-content, codesense-setup ] }
