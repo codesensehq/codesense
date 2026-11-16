@@ -276,6 +276,9 @@ async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do
     fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
     fake.launched_from("H3", "acme/default/claude-dev@4", Some("DEMO-2"));
     fake.launched_from("H4", "acme/default/claude-dev@4", None);
+    // The fake runs S1 and S2; the other story's session and the ad hoc one run too.
+    fake.tab("H3", "S3", "Third", true);
+    fake.tab("H4", "S4", "Fourth", true);
     let first = mail(&fake, "S1", "human", "first").await;
     let second = mail(&fake, "S2", "human", "second").await;
     let other_story = mail(&fake, "S3", "human", "other story").await;
