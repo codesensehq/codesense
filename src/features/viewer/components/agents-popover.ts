@@ -127,7 +127,8 @@ function focusAfterClose(
  * (focus back to the row), ⌘W with focus anywhere in it, an outside click or the row scrolling
  * away, and resized from the bottom-right grip by pointer or arrow keys, the size remembered under
  * `storageKey` on this Mac. The dialog spreads `closeProps`, which marks it as a row popup: it
- * closes on ⌘W, and no shortcut acts on the CLI or the workspaces behind it while it has focus.
+ * closes on ⌘W, and while it has focus only the global shortcuts that open on top of it and the
+ * CLI toggle fire; none else acts on the CLI or the workspaces behind it.
  */
 export function useRowPopover({
   anchor,

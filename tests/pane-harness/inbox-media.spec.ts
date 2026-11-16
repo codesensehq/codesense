@@ -388,7 +388,7 @@ test("lightbox lets the terminal shortcut bubble while Escape still closes it", 
     return saw;
   });
   expect(chordBubbled).toBe(true);
-  // The shortcut should hand focus to the host terminal textarea.
+  // The CLI is hidden here, so the shortcut reveals it and focuses the host terminal textarea.
   await expect(pane.page.getByRole("textbox", { name: "terminal", exact: true })).toBeFocused();
   await expect(dialog).toBeVisible();
 

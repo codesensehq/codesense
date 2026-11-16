@@ -81,9 +81,11 @@ export const SETTINGS_TAB_WORKSPACE_ALLOWED: ReadonlySet<string> = new Set([
  * The only actions that fire while focus is in a row popup of the Agents pane (the quick view, the
  * inbox chat). Every other shortcut is blocked there, so a key meant for the popup never opens,
  * closes, cycles, jumps, zooms or rearranges anything in the CLI, its tiles, the tray or the
- * workspaces behind it. These are global and change none of that: Settings, the command palette,
- * and the management tabs (Machines, Source Repos, Teams, context repos). Not the org and team
- * switchers, which change the team the tray and workspaces belong to.
+ * workspaces behind it. The global ones open on top and change none of that: Settings, the command
+ * palette, and the management tabs (Machines, Source Repos, Teams, context repos). Not the org and
+ * team switchers, which change the team the tray and workspaces belong to. The one CLI action allowed
+ * is the CLI toggle (Cmd-\ by default): the popup never uses that key, so it cannot change the
+ * CLI by accident, and it has to work from every focus.
  */
 export const ROW_POPUP_ALLOWED: ReadonlySet<string> = new Set([
   "settings.open",
@@ -92,6 +94,7 @@ export const ROW_POPUP_ALLOWED: ReadonlySet<string> = new Set([
   "nav.open-source-repos",
   "nav.open-teams",
   "nav.open-workspaces",
+  "viewer.toggle-terminal",
 ]);
 
 /**

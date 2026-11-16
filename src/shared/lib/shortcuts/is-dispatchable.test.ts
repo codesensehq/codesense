@@ -92,7 +92,7 @@ const state = (overrides: Partial<DispatchGateState> = {}): DispatchGateState =>
 
 const NO_WORKSPACE = { hasActiveWorkspace: false } as const;
 
-/** The global actions that open on top of a row popup and change nothing behind it. */
+/** The actions that fire in a row popup: global ones that open on top of it, and the CLI toggle. */
 const ALLOWED_IN_ROW_POPUP = [
   "settings.open",
   "nav.open-command-palette",
@@ -100,20 +100,27 @@ const ALLOWED_IN_ROW_POPUP = [
   "nav.open-source-repos",
   "nav.open-teams",
   "nav.open-workspaces",
+  "viewer.toggle-terminal",
 ];
 
 describe("isDispatchable", () => {
   describe("with focus in a row popup (the quick view or the inbox chat)", () => {
     const inPopup = () => state({ rowPopupFocused: true });
 
-    it("blocks every registered action but a short list of global ones", () => {
+    it("blocks every registered action but a short list", () => {
       expect([...ROW_POPUP_ALLOWED].sort()).toEqual([...ALLOWED_IN_ROW_POPUP].sort());
       for (const a of SHORTCUT_ACTIONS) {
         expect(isDispatchable(a, inPopup()), a.id).toBe(ALLOWED_IN_ROW_POPUP.includes(a.id));
-        if (ALLOWED_IN_ROW_POPUP.includes(a.id)) expect(a.scope, a.id).toBe("global");
+        if (ALLOWED_IN_ROW_POPUP.includes(a.id))
+          expect(a.scope, a.id).toBe(a.id === "viewer.toggle-terminal" ? "team" : "global");
       }
       // The same actions dispatch again once focus leaves the popup.
       for (const a of SHORTCUT_ACTIONS) expect(isDispatchable(a, state()), a.id).toBe(true);
+    });
+
+    it("keeps ⌘I (Toggle Agent Inbox) blocked: the rail it opens is a CLI change", () => {
+      expect(isDispatchable(registered("viewer.toggle-agent-inbox"), inPopup())).toBe(false);
+      expect(isDispatchable(registered("viewer.toggle-agent-inbox"), state())).toBe(true);
     });
 
     it("blocks ⌘[ / ⌘] back and forward and ⌘⇧[ / ⌘⇧] tab cycling", () => {

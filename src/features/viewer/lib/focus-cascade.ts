@@ -2,7 +2,6 @@
 import { currentContextNavigationRevision } from "@/shared/lib/context-navigation";
 import { recordContextChange } from "./context-switch";
 import {
-  activeForegroundTiles,
   getViewerState,
   type Workspace,
 } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
@@ -11,6 +10,7 @@ import { getActiveTeamKey } from "@/shared/lib/team-key";
 import { isTerminalPopupFocused } from "@/shared/lib/focus-utils";
 import { queryShown } from "@/shared/lib/warm-scopes";
 import { cliHostRoot } from "./cli-host";
+import { useTerminalSectionRegistry } from "./terminal-section-registry";
 import { isTerminalColumnShown } from "./terminal-column";
 import {
   pickMruResumeTarget,
@@ -459,30 +459,34 @@ export function toggleTerminalWithFocus(teamKey: string): void {
 }
 
 /**
- * SV-PBF-184: the configured terminal shortcut reveals and focuses the existing
- * CLI when invoked from non-CLI focus, and retains the ordinary toggle-to-hide
- * when focus is already inside the CLI host. With the terminal shown and no
- * foreground tile (the empty state) there is nothing to focus, so it hides.
- * Divider clicks keep the plain toggle behavior via
- * {@link toggleTerminalWithFocus}; this helper is only for the keyboard
- * shortcut so focus intent is respected.
+ * The configured terminal shortcut (Cmd-\) as a plain toggle from any focus.
+ * From focus inside the terminal section (the CLI host or the Agents pane, which hide
+ * together) it is {@link toggleTerminalWithFocus} (hide, then the focus cascade). From
+ * anywhere else (a right-pane chat, an HTML document frame, an editor, Settings, a
+ * title-bar popup) a shown CLI hides and focus stays where it was;
+ * a hidden CLI is revealed in the last terminal mode and its active terminal is
+ * focused. Divider clicks keep {@link toggleTerminalWithFocus}; this helper is only
+ * for the keyboard shortcut and the menu item, which share the registry action.
  */
 export function revealOrToggleTerminal(teamKey: string): void {
   const active = typeof document === "undefined" ? null : document.activeElement;
   const host = cliHostRoot();
-  if (active instanceof HTMLElement && host && host.contains(active)) {
+  // The Agents pane shares the terminal section: hiding the CLI unmounts it, so focus in it
+  // is CLI focus and goes through the focus cascade, never to the page body.
+  if (
+    active instanceof HTMLElement &&
+    (useTerminalSectionRegistry.getState().section?.contains(active) ||
+      (host && host.contains(active)))
+  ) {
     toggleTerminalWithFocus(teamKey);
     return;
   }
   const state = getViewerState();
-  const shown = isTerminalColumnShown(state);
-  if (shown && activeForegroundTiles(state, teamKey).length === 0) {
-    // Nothing in the CLI to focus (the empty state): the shortcut hides it. Focus is
-    // outside the CLI, so it stays where it is (no cascade to steal a doc's caret).
+  if (isTerminalColumnShown(state)) {
     state.setLayoutMode("viewer");
     return;
   }
-  if (!shown) state.revealTerminalInPlace(teamKey);
+  state.setLayoutMode(state.lastTerminalMode);
   focusActiveWorkspaceTerminal(teamKey);
 }
 

@@ -2606,6 +2606,68 @@ it("forwards both inbox chords from the focused pane and toggles on Shift-Comman
   expect(p.sent.filter((m) => m.type === "codesense:shortcut").every((m) => !m.action)).toBe(true);
 });
 
+describe("Command-backslash toggles the CLI from the Inbox chat", () => {
+  const teamKey = `${ORG}:${TEAM}`;
+  let cli: HTMLElement;
+  let terminal: HTMLTextAreaElement;
+
+  beforeEach(() => {
+    // A foreground tile: without one the empty-state rule hides a shown CLI by itself.
+    useViewerStore.setState({
+      workspaces: { [teamKey]: [{ id: "inbox-focus", kind: "story" } as never] },
+      activeWorkspace: { [teamKey]: "inbox-focus" },
+      lastTerminalMode: "shared",
+    });
+    cli = document.createElement("div");
+    cli.dataset.xtermHost = "";
+    cli.innerHTML =
+      '<div data-pane-id="inbox-focus"><div class="xterm"><textarea></textarea></div></div>';
+    document.body.append(cli);
+    terminal = cli.querySelector("textarea")!;
+  });
+  afterEach(() => {
+    cli.remove();
+    useViewerStore.setState({ workspaces: {}, activeWorkspace: {} });
+  });
+
+  const press = (target: Element) =>
+    fireEvent.keyDown(target, { key: "\\", code: "Backslash", metaKey: true });
+
+  it.each(["draft", "log"] as const)(
+    "hides a visible CLI from the %s and keeps the draft",
+    async (where) => {
+      setPreview(true);
+      const p = await openInbox();
+      await openThread(p);
+      useViewerStore.setState({ layoutMode: "shared", terminalVisible: true });
+      const draft = el(p, "draft") as HTMLTextAreaElement;
+      draft.value = "keep this draft";
+      const target = el(p, where);
+      target.setAttribute("tabindex", "-1");
+      target.focus();
+      press(target);
+      await waitFor(() => expect(useViewerStore.getState().layoutMode).toBe("viewer"));
+      expect(draft.value).toBe("keep this draft");
+    },
+  );
+
+  it.each(["draft", "log"] as const)(
+    "reveals a hidden CLI from the %s and focuses its terminal",
+    async (where) => {
+      setPreview(true);
+      const p = await openInbox();
+      await openThread(p);
+      useViewerStore.setState({ layoutMode: "viewer", terminalVisible: false });
+      const target = el(p, where);
+      target.setAttribute("tabindex", "-1");
+      target.focus();
+      press(target);
+      await waitFor(() => expect(useViewerStore.getState().layoutMode).toBe("shared"));
+      await waitFor(() => expect(document.activeElement).toBe(terminal));
+    },
+  );
+});
+
 it.each([
   [639, "stack"],
   [640, "split"],

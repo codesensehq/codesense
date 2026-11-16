@@ -218,11 +218,12 @@
           defaults.
         </p>
         <p>
-          The <strong>Toggle Terminal</strong> chord is focus-aware: from another view it reveals
-          the existing CLI and focuses it, even when the terminal is already visible; from the CLI
-          itself it hides the terminal. With no workspace open there's nothing to focus, so it
-          hides the terminal. Rebinding keeps the same behavior, and the divider handle still
-          toggles normally.
+          The <strong>Toggle Terminal</strong> chord toggles the CLI from any focus: the Inbox chat,
+          a document, an editor, the Agents pane or the CLI itself. With the CLI visible it hides
+          it. Focus stays where it was, except in the Agents pane, which hides with the CLI; there
+          focus moves to the viewer, and an open chat keeps its draft. With the CLI hidden it
+          reveals it in your last terminal mode and focuses the terminal. Rebinding keeps the same
+          behavior, and the divider handle still toggles normally.
         </p>
 
         <figure class="hero" aria-labelledby="hero-cap">

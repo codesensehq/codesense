@@ -464,9 +464,8 @@ const shortcutActions: readonly ShortcutAction[] = [
       // state (last workspace closed): it needs a team, not a focused workspace.
       const { teamKey } = getActiveWorkspaceContext();
       if (teamKey === NO_TEAM_SENTINEL) return;
-      // SV-PBF-184: from non-CLI focus reveal/focus the existing CLI; from CLI focus
-      // keep the ordinary toggle-to-hide. An empty CLI has nothing to focus, so it
-      // hides (SV-GHI-2). Divider clicks use toggleTerminalWithFocus.
+      // A plain toggle from any focus: a shown CLI hides, a hidden one is revealed and
+      // focused. Divider clicks use toggleTerminalWithFocus.
       revealOrToggleTerminal(teamKey);
     },
   },

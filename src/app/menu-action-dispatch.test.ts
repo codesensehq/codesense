@@ -102,14 +102,18 @@ describe("dispatchMenuAction", () => {
       for (const id of ["viewer.cycle-workspace-next", "viewer.new-terminal-tab", "act.workspace"])
         dispatchMenuAction(id);
       dispatchMenuAction("act.team");
-      dispatchMenuAction("viewer.toggle-terminal");
       dispatchMenuAction("act.global");
       expect(h.runCycleWorkspace).not.toHaveBeenCalled();
       expect(h.runNewTerminalTab).not.toHaveBeenCalled();
       expect(h.runWorkspace).not.toHaveBeenCalled();
       expect(h.runTeam).not.toHaveBeenCalled();
-      expect(h.runToggleTerminal).not.toHaveBeenCalled();
       expect(h.runGlobal).not.toHaveBeenCalled();
+    });
+
+    it("the Toggle Terminal accelerator still toggles the CLI", () => {
+      focusPopup();
+      dispatchMenuAction("viewer.toggle-terminal");
+      expect(h.runToggleTerminal).toHaveBeenCalledOnce();
     });
 
     it("Settings, which opens over it and changes nothing behind it, still opens", () => {

@@ -14,6 +14,8 @@ import { SlotDashboardHost } from "../../../src/features/shell/slots/slot-dashbo
 import { FullscreenOverlayShell } from "../../../src/features/viewer/components/fullscreen-overlay-shell";
 import { flushAll } from "../../../src/features/dashboard/lib/frame-lifecycle";
 import { useOrgStore } from "../../../src/shared/stores/org-store";
+import { useViewerStore } from "../../../src/shared/stores/viewer-store";
+import { getActiveTeamKey } from "../../../src/shared/lib/team-key";
 import { requestFrameFocus } from "../../../src/features/dashboard/lib/frame-lifecycle";
 import {
   DOCK_FRAME_PANEL_ID,
@@ -91,6 +93,18 @@ function Host() {
         ),
       setTeam: (org: string, team: string) =>
         useOrgStore.setState({ activeOrgSlug: org, activeTeamName: team }),
+      layoutMode: () => useViewerStore.getState().layoutMode,
+      // A foreground tile on the host's terminal, so the CLI has something to show: without
+      // one the empty state hides a shown CLI by itself and a toggle test proves nothing.
+      seedForegroundTile: (layoutMode: "shared" | "viewer") => {
+        const teamKey = getActiveTeamKey();
+        useViewerStore.setState({
+          workspaces: { [teamKey]: [{ id: "terminal", kind: "story" } as never] },
+          activeWorkspace: { [teamKey]: "terminal" },
+          lastTerminalMode: "shared",
+        });
+        useViewerStore.getState().setLayoutMode(layoutMode);
+      },
       reparent: async () => {
         await flushAll(300);
         setSection((current) => (current === "a" ? "b" : "a"));
