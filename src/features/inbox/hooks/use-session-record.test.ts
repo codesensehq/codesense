@@ -1,7 +1,38 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, it } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
-import { formatCost, modelLabel } from "./use-session-record";
+import { SESSION_RECORD_EVENTS } from "@/features/dashboard/lib/live-hub";
+
+const mocks = vi.hoisted(() => ({
+  handlers: new Map<string, (e: { payload: unknown }) => void>(),
+  sessionRecord: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (event: string, cb: (e: { payload: unknown }) => void) => {
+    mocks.handlers.set(event, cb);
+    return () => mocks.handlers.delete(event);
+  }),
+}));
+vi.mock("@/tauri/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/tauri/commands")>()),
+  sessionRecord: mocks.sessionRecord,
+}));
+
+import { formatCost, modelLabel, useSessionRecord } from "./use-session-record";
+
+describe("the record's events", () => {
+  it("reads the record again on each event in the shared list", async () => {
+    mocks.sessionRecord.mockResolvedValue({ sessionIds: ["s1"] });
+    renderHook(() => useSessionRecord("h", "s1"));
+    await waitFor(() => expect(mocks.handlers.size).toBe(SESSION_RECORD_EVENTS.length));
+    await waitFor(() => expect(mocks.sessionRecord).toHaveBeenCalledTimes(1));
+    for (const [i, event] of SESSION_RECORD_EVENTS.entries()) {
+      mocks.handlers.get(event)!({ payload: { sessionId: "s1", sessionIds: ["s1"] } });
+      await waitFor(() => expect(mocks.sessionRecord).toHaveBeenCalledTimes(i + 2));
+    }
+  });
+});
 
 describe("the record line's words", () => {
   it("says a model as people do, and any other id as it is", () => {

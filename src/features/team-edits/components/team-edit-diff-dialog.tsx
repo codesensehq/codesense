@@ -134,7 +134,7 @@ function sideNote(side: Side | null, which: "team" | "workspace"): string | null
       : "This workspace no longer has the file.";
   if ("binary" in side) return BINARY_NOTE;
   if ("error" in side)
-    return `Couldn't read the ${which === "team" ? "team's" : "workspace's"} copy: ${side.error}`;
+    return `Couldn\u2019t read the ${which === "team" ? "team\u2019s" : "workspace\u2019s"} copy: ${side.error}`;
   return null;
 }
 
@@ -240,7 +240,8 @@ export function TeamEditDiffDialog({
             >
               {teamLabel} <span className="font-normal text-muted-foreground">→</span> {mineLabel}
             </div>
-          ) : markdownMode === "side-by-side" || pages ? null : (
+          ) : markdownMode === "side-by-side" || pages || raster ? null : (
+            // A raster image's Source mode is one line spanning the body, so it has no columns to label.
             <div
               className="grid flex-none grid-cols-2 border-b border-border text-[11.5px] font-semibold"
               data-testid="team-edit-diff-sides"
