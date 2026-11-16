@@ -7,12 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team`,
-/// the Foreman hand-back's `send_role_message` and the git-access and clone steps' three (a tab,
-/// its output, the clone verb). The same list as `scripts/guide-pack.node-test.mjs`; a later
-/// phase edits both.
-const PHASE_1: [&str; 30] = [
+/// Phase 1: DESIGN §3.3's 23 tools plus the product step's two epic-repo verbs, `set_active_team`,
+/// the Foreman hand-back's `send_role_message` (with `list_sessions` to find its team) and the
+/// git-access and clone steps' three (a tab, its output, the clone verb). The same list as
+/// `scripts/guide-pack.node-test.mjs`; a later phase edits both.
+const PHASE_1: [&str; 31] = [
     "who_am_i",
+    "list_sessions",
     "read_messages",
     "codesense_overview",
     "describe_setup",
@@ -161,7 +162,6 @@ fn the_claude_guide_allows_phase_1_and_the_always_on_tools_and_refuses_the_rest(
         .collect();
     expected.insert("Skill(codesense-setup)".to_string());
     assert_eq!(allow, expected);
-    assert_eq!(permissions["deny"], serde_json::json!([]));
     // Whatever the allow list misses is refused, not asked.
     assert_eq!(permissions["defaultMode"], "dontAsk");
     assert!(has_pair(
@@ -169,10 +169,44 @@ fn the_claude_guide_allows_phase_1_and_the_always_on_tools_and_refuses_the_rest(
         "--disallowedTools",
         "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"
     ));
-    // Claude can't take a bridge allowlist: its server lists every tool, and `dontAsk`
-    // with the allow list above is the restriction.
-    assert_eq!(resolved.launch.bridge_tools, None);
-    assert!(resolved.launch.effective_bridge_tools.is_empty());
+    // Claude enforces the bridge allowlist (#147): the agent's list plus the always-on tools
+    // are what it can call, and every other served tool is denied by name.
+    let wanted: BTreeSet<String> = PHASE_1.into_iter().map(str::to_string).collect();
+    assert_eq!(phase_1_declared(&resolved), wanted);
+    let always_on = crate::agents::permissions::always_on_bridge_tools(AgentCli::Claude);
+    let mut kept = phase_1_served();
+    kept.extend(always_on.iter().cloned());
+    let served: BTreeSet<String> = crate::mcp::handler::CodesenseHandler::served_tool_router()
+        .list_all()
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let effective: BTreeSet<String> = resolved
+        .launch
+        .effective_bridge_tools
+        .iter()
+        .cloned()
+        .collect();
+    assert_eq!(
+        effective,
+        kept.intersection(&served).cloned().collect::<BTreeSet<_>>()
+    );
+    let deny: BTreeSet<String> = permissions["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule.as_str().unwrap().to_string())
+        .collect();
+    let rule = |name: &str| format!("mcp__codesense__{name}");
+    // The deny set is every served tool outside phase 1 and the always-on set, by name: the agent
+    // declares no denies of its own.
+    let expected: BTreeSet<String> = served.difference(&kept).map(|name| rule(name)).collect();
+    assert_eq!(deny, expected);
+    // `open_workspace`, which the page does for the guide, is one of them.
+    let outside = "open_workspace";
+    assert!(served.contains(outside), "{outside} is served");
+    assert!(!kept.contains(outside), "{outside} is outside phase 1");
+    assert!(deny.contains(&rule(outside)), "{outside} is denied");
 }
 
 #[test]

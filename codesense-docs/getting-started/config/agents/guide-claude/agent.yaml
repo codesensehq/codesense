@@ -49,4 +49,37 @@ permissions:
       - mcp__codesense__set_epic_repos
       - mcp__codesense__read_epic_repos
       - mcp__codesense__set_active_team
+mcp:
+  bridge_tools:
+    - who_am_i
+    - list_sessions
+    - read_messages
+    - codesense_overview
+    - describe_setup
+    - query_context
+    - read_content_file
+    - list_source_repos
+    - records_list
+    - probe_environment
+    - reply
+    - send_message
+    - send_role_message
+    - signal_progress
+    - signal_done
+    - create_local_organization
+    - attach_context_repository
+    - create_team
+    - add_source_repo
+    - attach_source_repo_path
+    - run_in_terminal_tab
+    - open_terminal_tab
+    - read_terminal_tab
+    - clone_repo
+    - records_create
+    - records_set_fields
+    - create_content_file
+    - validate_story
+    - set_epic_repos
+    - read_epic_repos
+    - set_active_team
 revision: 1
