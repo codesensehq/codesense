@@ -2091,6 +2091,32 @@ pub fn launch_stories<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> HashMap<S
         .unwrap_or_default()
 }
 
+/// The other sessions the registry lists on the thread of the one launched under `handle`, by
+/// launch handle ([`crate::commands::agent_inbox::thread_peers`]):
+/// a session has ended when the session list says it exited or crashed, the seat rule the
+/// thread read uses. When the list can't be read every listed session counts as a live seat, so
+/// none of them is summed. Empty when the registry is not running.
+pub async fn thread_peers(app: &tauri::AppHandle, handle: &str) -> agent_record::ThreadPeers {
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    use tauri::Manager;
+    let rows = match app.try_state::<DashboardLaunchState>() {
+        Some(launch) => DashboardLaunchState::snapshot(&launch),
+        None => return Default::default(),
+    };
+    let listed = Result::unwrap_or_default(crate::mcp::session_list::read_session_list(app, None).await);
+    let ended: std::collections::HashSet<String> = Iterator::collect(Iterator::map(
+        Iterator::filter(listed.iter(), |row| {
+            row.state == crate::mcp::session_list::SessionState::Exited || row.crashed
+        }),
+        |row| std::string::String::clone(&row.handle),
+    ));
+    crate::commands::agent_inbox::thread_peers(
+        &rows,
+        |h| std::collections::HashSet::contains(&ended, h),
+        handle,
+    )
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use codesense_pty_core::protocol::UsageSpoolRecord;

@@ -12,7 +12,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -62,11 +64,17 @@ export const ANSWERED_CARD = {
 // skill's `foreman-handback` block names (a test ties the two together).
 export const SETUP_STEPS = ["team", "source-repos", "git-access"];
 export const stepDone = (ledger, step) => ledger.some((r) => r.step === step && r.state === "done");
+// The docs team, where the setup guide ships and runs, and the guide's key there: a bare id would
+// resolve in the Foreman's own team once it re-homes.
+export const DOCS = { org: "codesense/docs", team: "getting-started" };
+export const guideKey = (runtime) => `${DOCS.org}/${DOCS.team}/guide-${runtime}`;
 // The setup hand-off's launch form (foreman.md); the stubs and tests share it.
 export const SETUP_LAUNCH = {
   target: "team-workspace",
+  org: DOCS.org,
+  team: DOCS.team,
   name: "Setup",
-  agent: `guide-${CONFIG.runtime}`,
+  agent: guideKey(CONFIG.runtime),
   initial_prompt: "/codesense-setup",
   mode: "visible-unfocused",
 };
@@ -197,7 +205,9 @@ Run both from the story's worktree:
 //   no_repos: list_source_repos shows no repo, even in a user team.
 //   guide: "complete" or {stop_after: n}: the scripted guide stub runs when the Foreman launches a
 //     guide-* session with a /codesense-setup prompt; it stops after n steps and sends nothing.
-const KEYS = ["git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+//   foreman_team: "docs" (default) or "user": the team the Foreman runs in, the user team once it
+//     has re-homed. The guide hands back to that team's queue, and the Foreman claims from it.
+const KEYS = ["foreman_team", "git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -264,6 +274,7 @@ export async function createFixture(options = {}) {
     noRepos: options.no_repos === true,
     ledger: options.ledger ?? [],
     guide: options.guide,
+    foremanTeam: options.foreman_team === "user" ? { org: CONFIG.team, team: CONFIG.team } : DOCS,
   };
   const root = mkdtempSync(path.join(os.tmpdir(), `foreman-eval-${process.pid}-`));
   try {
@@ -299,6 +310,16 @@ function build(root, opts) {
     CODESENSE_TAB_SESSION_ID: CONFIG.self,
   };
   const git = (args, cwd = home) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
+  // The agent's shell reports its real path (on macOS the temp dir sits under /private).
+  const realRoot = realpathSync(root);
+  const within = (dir) => {
+    try {
+      const real = realpathSync(dir);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch {
+      return false;
+    }
+  };
   const gitOk = (args, cwd) => {
     const r = git(args, cwd);
     if (r.status !== 0) throw new Error(`fixture git ${args.join(" ")}: ${r.stderr}`);
@@ -412,9 +433,11 @@ function build(root, opts) {
       ledger.push({ step, state: "done" });
     }
     if (doing.length < todo.length) return;
-    // Launched by another session, the setup skill hands back before it ends.
-    const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, text: HANDBACK_TEXT });
-    roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, from: session.id, kind: "setup-done", claimed: false });
+    // Launched by another session, the setup skill hands back before it ends, to the team its
+    // launcher (the Foreman) runs in.
+    const team = { ...opts.foremanTeam };
+    const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, team, text: HANDBACK_TEXT });
+    roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, team, from: session.id, kind: "setup-done", claimed: false });
     nextCall(session.id, "signal_done", { status: "success" });
   };
 
@@ -467,7 +490,9 @@ function build(root, opts) {
           : [{ org: "codesense/docs", team: "getting-started", synced: true }, { org: CONFIG.team, team: CONFIG.team, synced: true }];
       if (tool === "list_source_repos") return { repos: opts.storyTeam === "docs" || opts.noRepos ? [] : [{ org: CONFIG.team, team: CONFIG.team, repo: "acme/demo" }] };
       if (tool === "claim_role_messages") {
-        const mine = roleMessages.filter((m) => m.role === record.args.role && !m.claimed);
+        // A claim reads the caller's own team: mail sent to another team's queue stays there.
+        const here = (m) => m.team.org === opts.foremanTeam.org && m.team.team === opts.foremanTeam.team;
+        const mine = roleMessages.filter((m) => m.role === record.args.role && here(m) && !m.claimed);
         for (const m of mine) m.claimed = true;
         return { deliveries: mine.map((m, i) => ({ deliveryId: i + 1, messageId: m.seq, role: m.role, claimToken: `claim-${m.seq}`, text: HANDBACK_TEXT, from: m.from })) };
       }
@@ -486,6 +511,12 @@ function build(root, opts) {
       if (tool === "read_content_file" && opts.storyTeam === "scripted" && record.args.path === SKILL_PATH) return { text: SKILL };
       if (tool === "read_content_file" && record.args.path === GIT_ACCESS_PATH)
         return opts.gitAccess === "none" ? { error: "File not found" } : { text: GIT_ACCESS[opts.gitAccess] };
+      // Home is a checkout of the team's content: any other team path reads from it.
+      if (tool === "read_content_file") {
+        const file = path.resolve(home, String(record.args.path ?? ""));
+        const inside = file.startsWith(home + path.sep);
+        return inside && existsSync(file) && statSync(file).isFile() ? { text: readFileSync(file, "utf8") } : { error: "File not found" };
+      }
       if (tool === "who_am_i") return { handle: CONFIG.self, sessionId: CONFIG.self };
       if (tool === "agent_list") return { agents: [{ id: CONFIG.sprintLeadAgent }, { id: "story-lead-claude" }, { id: `guide-${CONFIG.runtime}` }] };
       if (tool === "get_story_format") return { text: "Frontmatter: type, status, sprint. Then Purpose and Acceptance Criteria." };
@@ -497,8 +528,9 @@ function build(root, opts) {
     },
     gh: (args, cwd = home) => spawnSync("gh", args, { cwd, env, encoding: "utf8" }),
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
-    git(args, cwd) {
+    git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
+      if (!within(cwd)) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${cwd}\n` };
       return git(args, cwd);
     },
     // A script from the worktree (the team's `stories/*.sh`), run with the sandbox env.

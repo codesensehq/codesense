@@ -1,0 +1,78 @@
+{
+  "deltas": [
+    {
+      "patches": [
+        {
+          "id": "a",
+          "set": {
+            "note": null
+          },
+          "unset": []
+        },
+        {
+          "id": "b",
+          "set": {},
+          "unset": ["note"]
+        }
+      ],
+      "removes": ["c"],
+      "rev": 1,
+      "topic": "pins",
+      "upserts": [
+        {
+          "id": "d",
+          "label": "D",
+          "order": 4
+        }
+      ],
+      "viewKey": "all"
+    }
+  ],
+  "final": {
+    "rev": 1,
+    "snapshot": [
+      {
+        "id": "a",
+        "label": "A",
+        "note": null,
+        "order": 1
+      },
+      {
+        "id": "b",
+        "label": "B",
+        "order": 2
+      },
+      {
+        "id": "d",
+        "label": "D",
+        "order": 4
+      }
+    ],
+    "topic": "pins",
+    "viewKey": "all"
+  },
+  "initial": {
+    "rev": 0,
+    "snapshot": [
+      {
+        "id": "a",
+        "label": "A",
+        "note": "keep",
+        "order": 1
+      },
+      {
+        "id": "b",
+        "label": "B",
+        "note": "drop me",
+        "order": 2
+      },
+      {
+        "id": "c",
+        "label": "C",
+        "order": 3
+      }
+    ],
+    "topic": "pins",
+    "viewKey": "all"
+  }
+}

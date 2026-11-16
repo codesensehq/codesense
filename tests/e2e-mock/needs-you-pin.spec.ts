@@ -97,6 +97,14 @@ async function boot(page: Page) {
                   pinnedAtMs: Date.now(),
                   preview: null,
                   previewAtMs: null,
+                  // What the pins read says the message is: the snapshot.
+                  message: {
+                    from: "lead",
+                    createdAtMs: now - 60_000,
+                    text: html,
+                    contentType: "html",
+                    summary,
+                  },
                 });
               const team = (args?.team ?? {}) as { org?: string; team?: string };
               return Promise.resolve({

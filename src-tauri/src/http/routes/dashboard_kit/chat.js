@@ -1024,7 +1024,7 @@
     return svg;
   }
   function createPinReplace({ onPin, state, live, list, nameOf, titleOf, ownOf, idOf, copy, render, pinNow }) {
-    let open = null, marked = null, focusWant = false;
+    let open = null, marked = null, focusWant = false, reveal = false;
     const el = () => open && open.node;
     const mark = (id) => {
       if (id === marked) return;
@@ -1043,6 +1043,7 @@
       open = { ...pinChooserOpen(pins), item, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
       open.node.addEventListener("keydown", onKey);
       focusWant = true;
+      reveal = true;
     }
     function sync() {
       if (!open) return;
@@ -1181,6 +1182,10 @@
       if (!open || !open.node.isConnected) return;
       const had = was || within();
       paint();
+      if (reveal) {
+        reveal = false;
+        if (typeof open.node.scrollIntoView === "function") open.node.scrollIntoView({ block: "nearest" });
+      }
       if (!had && !focusWant) return;
       focusWant = false;
       const target = open.room ? el().querySelector(".room-pin") : open.current !== null ? rowEl(open.current) : el().querySelector(".chg");
@@ -1352,10 +1357,11 @@
       }
     }
     for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id);
+    const keep = new Set(nodes);
+    for (const child of [...parent.childNodes]) if (!keep.has(child)) child.remove();
     nodes.forEach((node, index) => {
       if (parent.childNodes[index] !== node) parent.insertBefore(node, parent.childNodes[index] || null);
     });
-    while (parent.childNodes.length > nodes.length) parent.lastChild.remove();
   }
   var storyTarget = (storyId, leadRole) => ({
     rows: (sessions) => leadRowsOf(sessions, storyId, leadRole),
@@ -1436,17 +1442,23 @@
       return pinChange(item, "pin");
     }
     const threadRow = (id) => thread.find((row) => row.messageId === id);
+    const pinMessage = (pin2) => {
+      const row = threadRow(pin2.messageId);
+      if (row) return { said: row, who: row.fromName || row.from || "" };
+      const m = pin2.message;
+      return m ? { said: m, who: pinName(m.from) } : null;
+    };
     const pinTitleOfPin = (pin2) => {
       const named = typeof onPin.title === "function" && onPin.title(pin2);
       if (named) return named;
       if (pin2.preview && pin2.preview.shortName) return pin2.preview.shortName;
-      const row = threadRow(pin2.messageId);
-      return row ? pinTitleOf(row, row.fromName || row.from || "") : String(pin2.messageId);
+      const m = pinMessage(pin2);
+      return m ? pinTitleOf(m.said, m.who) : String(pin2.messageId);
     };
     const chooserId = (mid) => `${ids.status}-pin-chooser-${mid}`;
     const replacer = onPin && onPin.replace ? createPinReplace({ onPin, state: pinState, live: pinLive, list: pinList, nameOf: pinName, titleOf: pinTitleOfPin, ownOf: (pin2) => {
-      const row = threadRow(pin2.messageId);
-      return row && row.contentType === "html" ? "name" : "quote";
+      const m = pinMessage(pin2);
+      return m && m.said.contentType === "html" ? "name" : "quote";
     }, idOf: chooserId, copy: pinCopy, render: () => render(), pinNow: (item) => pinChange(item, "pin") }) : null;
     function pinParts(item) {
       if (!onPin || item.id === void 0 || item.id === null) return null;
@@ -1550,6 +1562,7 @@
       if (!open) return;
       htmlOpen.delete(id);
       open.closed = true;
+      if (open.shown) open.shown.disconnect();
       open.slot.remove();
       if (typeof open.release === "function") open.release();
     };
@@ -1587,6 +1600,14 @@
           return;
         }
         htmlOpen.set(item.id, open);
+        const reveal = () => {
+          if (!slot.isConnected) return;
+          const l = log.getBoundingClientRect(), r = slot.getBoundingClientRect(), below = r.bottom - l.bottom;
+          if (below > 0) log.scrollTop += Math.min(below, r.top - l.top);
+        };
+        open.shown = new MutationObserver(reveal);
+        open.shown.observe(slot, { childList: true, subtree: true });
+        reveal();
         if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
           if (!open.closed) open.release = release;
           else if (typeof release === "function") release();

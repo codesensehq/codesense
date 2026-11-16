@@ -600,6 +600,8 @@ declare namespace CodesenseSdk {
     pinnedBy: string;
     pinnedAtMs?: number;
     preview?: { shortName?: string; value?: string; status?: "on-track" | "running" | "needs-you" | "not-updating"; [key: string]: unknown };
+    /** What the pinned message says, from the pins read: a pin of a message outside the chat's thread (another seat's) is named by it. */
+    message?: { from: string; createdAtMs: number; text: string; contentType?: string; summary?: string };
     [key: string]: unknown;
   }
   /** What a layout or header callback sees. */

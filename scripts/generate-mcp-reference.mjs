@@ -23,6 +23,7 @@ import {
   REFRESH_COMMAND,
   allowStaleExport as switchedOn,
   diskGate,
+  driftInheritedFromMain,
   exportsUntouchedSinceMain,
   inheritedNotice,
 } from "./lib/sealed-export.mjs";
@@ -643,10 +644,17 @@ export function generateReference(
     if (check && allowStaleExport) {
       try {
         const exports = [SEAL, OUTPUT, ...PROFILES.map(payloadPath)];
-        untouched = exportsUntouchedSinceMain(
-          root,
-          inputDriftOnly ? exports : [...exports, ...nonRustManifestInputs(root)],
-        );
+        untouched =
+          exportsUntouchedSinceMain(
+            root,
+            inputDriftOnly ? exports : [...exports, ...nonRustManifestInputs(root)],
+          ) ||
+          (inputDriftOnly &&
+            driftInheritedFromMain(root, [
+              ...drift.changedInputs,
+              ...drift.addedInputs,
+              ...drift.removedInputs,
+            ]));
       } catch {}
     }
     if (!untouched) throw new Error(message);

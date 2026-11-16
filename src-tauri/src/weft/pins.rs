@@ -20,6 +20,9 @@ pub const PIN_CAP: usize = 3;
 /// The largest preview, as stored JSON.
 const PREVIEW_MAX_BYTES: usize = 4096;
 
+/// The most characters of a pinned message's text that its pin carries.
+pub const PINNED_TEXT_MAX_CHARS: usize = 2000;
+
 /// The thread a pin list belongs to: the saved agent id (without a revision) and the story id (empty when the
 /// session was launched with no story).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -29,10 +32,18 @@ pub struct ThreadKey {
     pub story_id: String,
 }
 
+/// The saved agent an agent id or launch stamp names: the id before `@` (a new revision of it
+/// continues its threads), trimmed. The one rule for a thread's agent: [`ThreadKey::new`], the
+/// session record's thread and the registry's thread all key by it.
+pub fn saved_agent(agent: &str) -> &str {
+    str::trim(Option::unwrap_or(Iterator::next(&mut str::split(agent, '@')), agent))
+}
+
 impl ThreadKey {
+    /// A thread is a saved agent and a story; no story is `""`, one thread per saved agent
+    /// whose sessions are the ones the roster lists (the thread read's rule).
     pub fn new(agent_id: &str, story_id: Option<&str>) -> WvWriteResult<Self> {
-        // The saved agent is the id before `@`: a new revision of it continues its threads.
-        let agent_id = agent_id.split('@').next().unwrap_or(agent_id).trim();
+        let agent_id = saved_agent(agent_id);
         if str::is_empty(agent_id) {
             return Err(invalid("a pin thread needs a saved agent id"));
         }
@@ -180,6 +191,23 @@ pub struct Pin {
     /// When the preview was last sent, so a pin that stops updating can say since when.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_at_ms: Option<i64>,
+    /// What its message says, so every seat of the thread names the pin the same way,
+    /// whether or not the message is in that seat's own mail.
+    pub message: PinnedMessage,
+}
+
+/// A pinned message as its pin names it: who sent it and when, how it renders, the sender's
+/// one-line summary and the first [`PINNED_TEXT_MAX_CHARS`] characters of its text.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedMessage {
+    pub from: String,
+    pub created_at_ms: i64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// What a pin or unpin call did.
@@ -574,25 +602,41 @@ pub fn pins_reorder(
     Ok(())
 }
 
-/// `thread`'s shown pins (live, at most [`PIN_CAP`]) in list order, numbered from 0.
+/// `thread`'s shown pins (live, at most [`PIN_CAP`]) in list order, numbered from 0, each
+/// with what its message says.
 pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin>> {
     let conn = WeftStore::conn(store)?;
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT p.message_id, p.pinned_by, p.created_at, p.preview, p.preview_at \
-         FROM wv_pins p WHERE p.agent_id = ?1 AND p.story_id = ?2 \
-         AND p.removed_at IS NULL AND {LIVE} \
-         ORDER BY p.position, p.id LIMIT ?3"
-    ))?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT p.message_id, p.pinned_by, p.created_at, p.preview, p.preview_at, \
+         m.sender, m.created_at, substr(m.text, 1, ?4), m.content_type, m.summary \
+         FROM wv_pins p JOIN wv_inbox m ON m.id = p.message_id \
+         WHERE p.agent_id = ?1 AND p.story_id = ?2 AND p.removed_at IS NULL \
+         AND m.archived_at IS NULL AND m.withdrawn_at IS NULL \
+         ORDER BY p.position, p.id LIMIT ?3",
+    )?;
     let rows = stmt
         .query_map(
-            params![thread.agent_id, thread.story_id, PIN_CAP as i64],
+            params![
+                thread.agent_id,
+                thread.story_id,
+                PIN_CAP as i64,
+                PINNED_TEXT_MAX_CHARS as i64
+            ],
             |r| {
+                let message = PinnedMessage {
+                    from: r.get(5)?,
+                    created_at_ms: r.get(6)?,
+                    text: r.get(7)?,
+                    content_type: r.get(8)?,
+                    summary: r.get(9)?,
+                };
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, i64>(2)?,
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    message,
                 ))
             },
         )?
@@ -601,13 +645,16 @@ pub fn pins_list(store: &WeftStore, thread: &ThreadKey) -> WvWriteResult<Vec<Pin
         .into_iter()
         .enumerate()
         .map(
-            |(position, (message_id, pinned_by, pinned_at_ms, preview, preview_at_ms))| Pin {
-                message_id,
-                position: position as u32,
-                pinned_by,
-                pinned_at_ms,
-                preview: preview.and_then(|json| Result::ok(serde_json::from_str(&json))),
-                preview_at_ms,
+            |(position, (message_id, pinned_by, pinned_at_ms, preview, preview_at_ms, message))| {
+                Pin {
+                    message_id,
+                    position: position as u32,
+                    pinned_by,
+                    pinned_at_ms,
+                    preview: preview.and_then(|json| Result::ok(serde_json::from_str(&json))),
+                    preview_at_ms,
+                    message,
+                }
             },
         )
         .collect())

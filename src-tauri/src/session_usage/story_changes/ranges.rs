@@ -371,7 +371,6 @@ mod tests {
 
     #[tokio::test]
     async fn cache_reuses_second_included_page_without_another_adapter_read() {
-        use crate::attribution::testing::{logged_calls, logging_binary};
         let (home, _) = crate::session_usage::tests::store();
         let repo = tempfile::tempdir().unwrap();
         git(repo.path(), &["init", "-q", "-b", "main"]);
@@ -391,18 +390,25 @@ mod tests {
             ..Default::default()
         };
         let params: Params = serde_json::from_value(json!({"storyId":"SV-29","include":["ranges"]})).unwrap();
-        let log = home.path().join("adapter-await.log");
-        logging_binary(&home.path().join("bin/git-ai"), &log, "exit 0");
         let first = page(home.path(), &params, &CallerScope::Human, &facts).await.unwrap();
         assert_eq!(first.0[0].ranges_basis.as_deref(), Some("exact"));
-        assert_eq!(logged_calls(&log).len(), 1, "cold page must read the real attribution adapter");
+        let cold_reads = || crate::attribution::why_line::cold_reads(repo.path());
+        assert_eq!(
+            cold_reads(),
+            1,
+            "cold page must read the real attribution adapter"
+        );
         let cache = home.path().join("caches/why-line.sqlite3");
         let rows: i64 = rusqlite::Connection::open(&cache).unwrap()
             .query_row("SELECT count(*) FROM file_ranges", [], |row| row.get(0)).unwrap();
         assert_eq!(rows, 1);
         let second = page(home.path(), &params, &CallerScope::Human, &facts).await.unwrap();
         assert_eq!(serde_json::to_value(&second).unwrap(), serde_json::to_value(&first).unwrap());
-        assert_eq!(logged_calls(&log).len(), 1, "same-page cache hit must skip another real adapter read");
+        assert_eq!(
+            cold_reads(),
+            1,
+            "same-page cache hit must skip another real adapter read"
+        );
     }
 
     struct RetryFixture {

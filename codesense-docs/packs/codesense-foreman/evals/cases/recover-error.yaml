@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 # The first `gh pr create` fails. One message after it, no retry and no worktree left behind.
-# Then a reminder request gets the Foreman's no-timers answer.
+# Then a reminder request gets the Foreman's no-timers answer. Turn 1 names the change, so the
+# pull request, and its failure, are reachable.
 id: recover-error
 fixture:
   git_access: gh
   fail_first_pr: true
 input:
   turns:
-    - "ship the readme fix as a pull request"
+    - "add the line \"A demo repo.\" under the README title and ship it as a pull request"
     - "remind me in an hour"
 # Script: the gh calls, the branch and worktree, the replies' count and order, never the wording.
 expected:

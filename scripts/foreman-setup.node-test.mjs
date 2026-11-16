@@ -11,6 +11,9 @@ const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
 const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS } =
   await lib("fixture");
 const { loadExtraCases, grade } = await lib("graders");
+const { parseCard } = await import(
+  new URL("../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js", import.meta.url)
+);
 
 const extra = loadExtraCases();
 const caseOf = (id) => extra.find((c) => c.id === id);
@@ -46,10 +49,10 @@ const red = async (id, wrong, reason) => {
   assert.match(result.failures.join("\n"), reason);
 };
 const green = async (id, run) => assert.deepEqual((await play(id, run)).failures, [], id);
+// The one card format the page renders as buttons: the question, then a last `Options:` line.
 const card = (extra = {}) => ({
   kind: "needs-you",
-  text: "Set up now?",
-  options: ["Set up now", "Not now"],
+  text: "Set up now?\nOptions: `Set up now`, `Not now`",
   ...extra,
 });
 
@@ -70,7 +73,19 @@ test("setup-offer: one card, never two, never a launch", async () => {
   );
   await red(
     "setup-offer",
-    ({ fx, turns }) => (fx.human(turns[0]), fx.tool(F, "reply", card({ options: ["Yes", "No"] }))),
+    ({ fx, turns }) => (
+      fx.human(turns[0]),
+      fx.tool(F, "reply", card({ text: "Set up now?\nOptions: `Yes`, `No`" }))
+    ),
+    /options are not Set up now and Not now/,
+  );
+  // An `options` argument no tool has, with no `Options:` line: the page shows text and a reply box.
+  await red(
+    "setup-offer",
+    ({ fx, turns }) => (
+      fx.human(turns[0]),
+      fx.tool(F, "reply", card({ text: "Set up now?", options: ["Set up now", "Not now"] }))
+    ),
     /options are not Set up now and Not now/,
   );
   await red(
@@ -196,7 +211,21 @@ test("setup-stopped: the ledger is read in the asking turn, and one reply comes"
 
 test("launch form: the guide, the visible-unfocused mode, the Foreman's own handle and a /codesense-setup prompt", async () => {
   const id = "setup-handback";
-  await red(id, launchWith({ ...LAUNCH, agent: "builtin/claude" }), /expected guide-claude/);
+  await red(
+    id,
+    launchWith({ ...LAUNCH, agent: "builtin/claude" }),
+    /expected codesense\/docs\/getting-started\/guide-claude/,
+  );
+  await red(
+    id,
+    launchWith({ ...LAUNCH, agent: "guide-claude" }),
+    /expected codesense\/docs\/getting-started\/guide-claude/,
+  );
+  await red(
+    id,
+    launchWith({ ...LAUNCH, team: "acme" }),
+    /expected codesense\/docs\/getting-started/,
+  );
   await red(id, launchWith({ ...LAUNCH, mode: "focused" }), /expected visible-unfocused/);
   await red(id, launchWith({ ...LAUNCH, name: "Onboarding" }), /expected Setup/);
   await red(id, launchWith({ ...LAUNCH, launched_by: "someone" }), /launched_by is someone/);
@@ -334,4 +363,78 @@ test("the setup skill's hand-back block and the guide stub agree", () => {
     "the message goes before signal_done",
   );
   assert.ok(block.includes("Guide handoff:") === false, "the block is the hand-back only");
+});
+
+test("foreman.md teaches the one card format the page renders as buttons", () => {
+  const spec = readFileSync(
+    new URL("../codesense-docs/packs/codesense-foreman/foreman.md", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(spec, /Set up now · Not now|Create · Change · Not now/);
+  // Review bdd32a: each card line, copied literally from the spec, is one the page parses: no
+  // outer backticks around it, so it starts `Options:`.
+  const lines = [
+    ...spec.matchAll(/(?<!`)Options: (?:`[^`]+`(?:, )?)+(?:\. My pick: [^.;)]*)?/g),
+  ].map((m) => m[0]);
+  assert.deepEqual(
+    lines.map((line) => parseCard(`Question?\n${line}`)?.options),
+    [
+      ["A", "B"],
+      ["Create", "Change", "Not now"],
+      ["Set up now", "Not now"],
+    ],
+    lines.join("\n"),
+  );
+  assert.equal(parseCard(`Question?\n${lines[0]}`).pick, "A");
+  assert.doesNotMatch(spec, /`Options:/, "no card line is wrapped in backticks");
+  assert.match(spec, /why not lower down/);
+  assert.match(spec, /your pick/);
+});
+
+test("the hand-back goes to the team the launching Foreman runs in, which the guide can look up", () => {
+  const skill = readFileSync(
+    new URL("../codesense-docs/packs/codesense-guide/commands/codesense-setup.md", import.meta.url),
+    "utf8",
+  );
+  const block = /<!-- foreman-handback -->([\s\S]*?)<!-- \/foreman-handback -->/.exec(skill)?.[1];
+  assert.match(block, /`launchedBy`/);
+  assert.match(block, /`list_sessions`/);
+  assert.match(block, /`team`/);
+  for (const runtime of ["claude", "codex", "opencode"]) {
+    const agent = readFileSync(
+      new URL(
+        `../codesense-docs/packs/codesense-guide/agents/guide-${runtime}/agent.yaml`,
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.match(agent, /^\s+- (?:mcp__codesense__)?list_sessions$/m, runtime);
+  }
+});
+
+test("setup-rerun, re-homed: the guide hands back to the Foreman's team and the Foreman claims it there", async () => {
+  const caseDef = caseOf("setup-rerun");
+  assert.equal(caseDef.fixture.foreman_team, "user");
+  assert.equal(caseDef.expected.hand_back, "claimed");
+  const claimed = ({ fx, turns }) => (
+    launchWith()({ fx, turns }),
+    fx.tool(F, "claim_role_messages", { role: HANDBACK_ROLE }),
+    fx.tool(F, "ack_role_message", { deliveryId: 1 }),
+    fx.say("Set up: team, source-repos, git-access.")
+  );
+  await green("setup-rerun", claimed);
+  await withFixture(caseDef, async (fx) => {
+    launchWith()({ fx, turns: caseDef.input.turns });
+    const [sent] = fx.state().calls.filter((c) => c.tool === "send_role_message");
+    assert.deepEqual(sent.args.team, { org: CONFIG.team, team: CONFIG.team });
+  });
+  // The same guide in a docs-team fixture hands back to the docs team, where that Foreman runs.
+  await withFixture(
+    { ...caseDef, fixture: { ...caseDef.fixture, foreman_team: "docs" } },
+    async (fx) => {
+      launchWith()({ fx, turns: caseDef.input.turns });
+      const [sent] = fx.state().calls.filter((c) => c.tool === "send_role_message");
+      assert.deepEqual(sent.args.team, { org: "codesense/docs", team: "getting-started" });
+    },
+  );
 });

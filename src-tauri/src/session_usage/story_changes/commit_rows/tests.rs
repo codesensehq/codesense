@@ -2,7 +2,7 @@
 //! The story-commits kind: a story's lines are a fold of per-commit rows, and a commit is read once.
 use super::*;
 use crate::attribution::git_ai::tests::git;
-use crate::attribution::testing::{logged_calls, logging_binary};
+use crate::attribution::testing::logging_binary;
 use crate::session_usage::story_changes::line_share::tests::{add, annotate, cases, facts, fixture, head};
 use crate::session_usage::story_changes::{commit_line_reads, git_walks};
 
@@ -276,7 +276,6 @@ async fn a_backfill_drains_across_restarts_without_recounting() {
     let store = open(home.path());
     assert_eq!(folded(&store, "s").lines, Share::Lines(Lines::of(&[("claude", 8)], 0, 0)));
     assert_eq!(commit_line_reads(home.path()), 4);
-    assert_eq!(logged_calls(&log).len(), 4, "one blame per commit, however many passes");
     let stored: i64 = lock(&store)
         .conn
         .query_row("SELECT count(*) FROM contribution WHERE nums LIKE '%background%' OR reasons LIKE '%too large%'", [], |r| r.get(0))

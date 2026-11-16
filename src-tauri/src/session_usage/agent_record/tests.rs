@@ -36,7 +36,7 @@ fn launched(dir: &Path, cli: AgentCli, handle: &str, model: &str, run: Option<&s
 }
 
 fn half(dir: &Path, handle: &str) -> UsageHalf {
-    usage_half(dir, handle, HashMap::new(), &CallerScope::Human).unwrap()
+    usage_half(dir, handle, HashMap::new(), &ThreadPeers::default(), &CallerScope::Human).unwrap()
 }
 
 /// What `session_usage` answers for the same session.
@@ -167,9 +167,9 @@ fn some_unpriced_models_give_the_priced_sum_and_name_the_rest() {
 fn an_unknown_or_empty_handle_is_refused() {
     let (dir, _store) = store();
     let scope = CallerScope::Human;
-    let unknown = usage_half(dir.path(), "nobody", HashMap::new(), &scope);
+    let unknown = usage_half(dir.path(), "nobody", HashMap::new(), &ThreadPeers::default(), &scope);
     assert!(unknown.err().unwrap().contains("unknown session"));
-    let empty = usage_half(dir.path(), "  ", HashMap::new(), &scope);
+    let empty = usage_half(dir.path(), "  ", HashMap::new(), &ThreadPeers::default(), &scope);
     assert!(empty.err().unwrap().contains("handle must not be empty"));
 }
 
@@ -178,7 +178,14 @@ async fn a_record_read_moves_its_counter_even_when_the_handle_is_refused() {
     let (dir, _store) = store();
     let before = crate::shared::invoke_stats::metric_total("session_record.read");
     let params = Params { handle: "nobody".into() };
-    let refused = read(dir.path(), &params, HashMap::new(), &CallerScope::Human).await;
+    let refused = read(
+        dir.path(),
+        &params,
+        HashMap::new(),
+        &ThreadPeers::default(),
+        &CallerScope::Human,
+    )
+    .await;
     assert!(refused.err().unwrap().contains("unknown session"));
     assert!(crate::shared::invoke_stats::metric_total("session_record.read") > before);
 }
@@ -254,6 +261,72 @@ fn a_handoff_chain_sums_its_sessions_and_leaves_other_agents_and_stories_out() {
 }
 
 #[test]
+fn a_story_chain_sums_its_ended_predecessors_and_never_a_concurrent_seat() {
+    let (dir, _store) = store();
+    chain_session(dir.path(), "dev-1", "dev@3", "STORY-A", AT, 100);
+    chain_session(dir.path(), "dev-2", "dev@3", "STORY-A", AT + 1_000, 200);
+    chain_session(dir.path(), "dev-3", "dev@4", "STORY-A", AT + 2_000, 400);
+    // dev-2 runs beside dev-3 (a live seat, by its tab session); dev-1 has ended.
+    let peers = ThreadPeers {
+        counted: vec!["dev-1".to_owned()],
+        seats: vec!["tab-dev-2".to_owned()],
+    };
+    let seat = usage_half(dir.path(), "dev-3", HashMap::new(), &peers, &CallerScope::Human).unwrap();
+    let record = assemble("dev-3", &seat, None, None);
+    assert_eq!(record["chain"], json!(["tab-dev-1", "tab-dev-3"]));
+    assert_eq!(record["tokens"]["input"], 500);
+    // Once dev-2 has ended, the chain sums it too.
+    let ended = ThreadPeers {
+        counted: vec!["dev-1".to_owned(), "dev-2".to_owned()],
+        seats: vec![],
+    };
+    let after = usage_half(dir.path(), "dev-3", HashMap::new(), &ended, &CallerScope::Human).unwrap();
+    let record = assemble("dev-3", &after, None, None);
+    assert_eq!(record["chain"], json!(["tab-dev-1", "tab-dev-2", "tab-dev-3"]));
+    assert_eq!(record["tokens"]["input"], 700);
+}
+
+#[test]
+fn a_seat_relaunched_under_an_ended_predecessors_handle_leaves_that_predecessor_in() {
+    let (dir, _store) = store();
+    // dev-seat ended as tab-old; a new session took the same handle (tab-new) and runs beside
+    // dev-3. The live seat is told apart by its tab session, not its handle.
+    let mut store = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    for (session, at, input) in [("tab-old", AT, 100), ("tab-new", AT + 1_000, 200)] {
+        let mut record = SessionRecord::new(session.to_owned());
+        record.handle = Some("dev-seat".into());
+        record.agent = Some("dev@3".into());
+        record.story_id = Some("STORY-A".into());
+        record.cli = Some(AgentCli::Claude.to_string());
+        record.model = Some("claude-sonnet-5-5".into());
+        record.recorded_at_ms = at;
+        store.write_session_record(&record).unwrap();
+        let call = event(
+            &format!("e-{session}"),
+            session,
+            "claude-sonnet-5-5",
+            at,
+            Tokens {
+                input,
+                output: 10,
+                ..Default::default()
+            },
+        );
+        store.ingest(&[call]).unwrap();
+    }
+    drop(store);
+    chain_session(dir.path(), "dev-3", "dev@4", "STORY-A", AT + 2_000, 400);
+    let peers = ThreadPeers {
+        counted: vec![],
+        seats: vec!["tab-new".to_owned()],
+    };
+    let seat = usage_half(dir.path(), "dev-3", HashMap::new(), &peers, &CallerScope::Human).unwrap();
+    let record = assemble("dev-3", &seat, None, None);
+    assert_eq!(record["chain"], json!(["tab-old", "tab-dev-3"]));
+    assert_eq!(record["tokens"]["input"], 500);
+}
+
+#[test]
 fn a_chain_reads_the_files_of_every_session_in_it() {
     let (dir, _store) = store();
     chain_session(dir.path(), "dev-1", "dev", "STORY-A", AT, 100);
@@ -272,6 +345,98 @@ fn a_chain_reads_the_files_of_every_session_in_it() {
             {"path": "a.rs", "commits": ["c1", "c2"]},
             {"path": "b.rs", "commits": ["c2"]},
         ])
+    );
+}
+
+/// A session of the saved agent `agent` with no story, recorded at `at` with one priced call.
+fn no_story_session(dir: &Path, handle: &str, agent: &str, at: i64, input: u64) {
+    let mut store = UsageStore::open(&dir.join("usage.sqlite")).unwrap();
+    let mut record = SessionRecord::new(format!("tab-{handle}"));
+    record.handle = Some(handle.into());
+    record.agent = Some(agent.into());
+    record.cli = Some(AgentCli::Claude.to_string());
+    record.model = Some("claude-sonnet-5-5".into());
+    record.recorded_at_ms = at;
+    store.write_session_record(&record).unwrap();
+    let call = event(
+        &format!("e-{handle}"),
+        &format!("tab-{handle}"),
+        "claude-sonnet-5-5",
+        at,
+        Tokens {
+            input,
+            output: 10,
+            ..Default::default()
+        },
+    );
+    store.ingest(&[call]).unwrap();
+}
+
+#[test]
+fn a_no_story_session_sums_the_listed_no_story_sessions_of_its_saved_agent() {
+    let (dir, _store) = store();
+    // The no-story thread is the saved agent's listed sessions (the thread read's rule): dev-a
+    // and dev-c are listed beside dev-b; dev-old is not listed any more.
+    no_story_session(dir.path(), "dev-old", "dev@2", AT - 5_000, 4_000);
+    no_story_session(dir.path(), "dev-a", "dev@3", AT, 100);
+    no_story_session(dir.path(), "dev-b", "dev@3", AT + 1_000, 200);
+    no_story_session(dir.path(), "dev-c", "dev@4", AT + 2_000, 400);
+    // Another saved agent with no story, and this one on a story, are other threads.
+    no_story_session(dir.path(), "qa-1", "qa@1", AT + 500, 1_000);
+    chain_session(dir.path(), "dev-story", "dev@3", "STORY-A", AT + 700, 2_000);
+    let peers = ThreadPeers {
+        counted: vec![
+            "dev-c".to_owned(),
+            "dev-a".to_owned(),
+            "qa-1".to_owned(),
+            "dev-story".to_owned(),
+        ],
+        seats: vec![],
+    };
+    let listed = usage_half(
+        dir.path(),
+        "dev-b",
+        HashMap::new(),
+        &peers,
+        &CallerScope::Human,
+    )
+    .unwrap();
+    let record = assemble("dev-b", &listed, None, None);
+    // The listed ones of its thread, oldest first, then the session asked about.
+    assert_eq!(record["chain"], json!(["tab-dev-a", "tab-dev-c", "tab-dev-b"]));
+    assert_eq!(record["tokens"]["input"], 700);
+    // With none listed beside it, it is its own chain.
+    let alone = half(dir.path(), "dev-b");
+    assert_eq!(assemble("dev-b", &alone, None, None)["chain"], json!(["tab-dev-b"]));
+}
+
+#[test]
+fn a_blank_story_is_no_story_so_its_thread_is_the_listed_one() {
+    let (dir, _store) = store();
+    // A record stored with a blank story (a launch's meta.story of "") is a no-story session: it
+    // takes no chain of every blank-story session, only the listed ones.
+    chain_session(dir.path(), "dev-x", "dev@3", " ", AT, 100);
+    chain_session(dir.path(), "dev-y", "dev@3", "", AT + 1_000, 200);
+    chain_session(dir.path(), "dev-z", "dev@3", "", AT + 2_000, 400);
+    let alone = half(dir.path(), "dev-z");
+    assert_eq!(
+        assemble("dev-z", &alone, None, None)["chain"],
+        json!(["tab-dev-z"])
+    );
+    let listed = usage_half(
+        dir.path(),
+        "dev-z",
+        HashMap::new(),
+        &ThreadPeers {
+            counted: vec!["dev-y".to_owned()],
+            seats: vec![],
+        },
+        &CallerScope::Human,
+    )
+    .unwrap();
+    assert_eq!(
+        assemble("dev-z", &listed, None, None)["chain"],
+        json!(["tab-dev-y", "tab-dev-z"])
     );
 }
 

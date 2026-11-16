@@ -64,6 +64,7 @@ pub fn rows(
                     "pinnedAtMs": pin.pinned_at_ms,
                     "preview": pin.preview,
                     "previewAtMs": pin.preview_at_ms,
+                    "message": pin.message,
                     "org": team.org,
                     "team": team.team,
                     "agentId": thread.agent_id,
@@ -191,6 +192,13 @@ mod tests {
             pinned_at_ms: 1,
             preview: None,
             preview_at_ms: None,
+            message: crate::weft::pins::PinnedMessage {
+                from: "dev".into(),
+                created_at_ms: 1,
+                text: format!("message {message_id}"),
+                content_type: None,
+                summary: None,
+            },
         };
         let mut previewed = pin(3, 1);
         previewed.preview = Some(crate::weft::pins::PinPreview {
@@ -202,6 +210,7 @@ mod tests {
         assert_eq!(rows[0].1["preview"], Value::Null);
         assert_eq!(rows[1].1["preview"]["value"], "48 passed");
         assert_eq!(rows[1].1["previewAtMs"], 2);
+        assert_eq!(rows[0].1["message"]["text"], "message 7");
         assert!(rows
             .iter()
             .all(|(scope, _)| scope.as_deref() == Some(key.as_str())));

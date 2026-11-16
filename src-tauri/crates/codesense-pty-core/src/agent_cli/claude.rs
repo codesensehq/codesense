@@ -319,6 +319,11 @@ impl AgentCliAdapter for Claude {
         &PROBE
     }
 
+    /// Its permission rules deny each left-out bridge tool; it has no enabled-tool list.
+    fn denies_unlisted_bridge_tools(&self) -> bool {
+        true
+    }
+
     /// The observer and the inbox waiter ride the launch's settings, after the user's
     /// own handlers.
     fn prepare(&self, launch: &mut Prepare<'_>) -> Result<(), &'static str> {

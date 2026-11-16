@@ -7,7 +7,6 @@ import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-t
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
   closeAgentInboxRailToTerminal,
@@ -23,10 +22,12 @@ import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
 import { goToSession, openStory } from "../actions";
+import { threadOf } from "../lib/chat-core";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { usePersonPins } from "../hooks/use-person-pins";
@@ -84,12 +85,14 @@ export function ChatOverlay({
   const roster = useAgentListProjectionStore((s) => s.sessions);
   const row = roster?.find((r) => r.sessionId === sessionId) ?? null;
   const sessions = useInboxSessions();
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it (its pins and its mail): the launch's agent, else the one its tab says it runs. It is
-  // known before any mail is read, so a successor opens on its predecessor's mail.
+  // The thread is the saved agent and story the session was launched with, keyed by the one
+  // thread rule the engine keys it by (its pins and its mail): the launch's agent, else the one
+  // its tab says it runs. It is known before any mail is read, so a successor opens on its
+  // predecessor's mail.
   const launched = sessions?.find((s) => s.handle === row?.handle) ?? null;
-  const pinAgent = launched?.agent ?? agentKeyOfRevision(row?.agentRevision);
-  const pinStory = row?.story ?? launched?.story ?? null;
+  const pinThread = threadOf(launched?.agent ?? row?.agentRevision, row?.story ?? launched?.story);
+  const pinAgent = pinThread.agentId || null;
+  const pinStory = pinThread.storyId || null;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
   // useForemanThread), the same pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);
@@ -121,7 +124,11 @@ export function ChatOverlay({
   // Queued or Delivered on what you send here, by the kit's rule: each message's own
   // messageDelivery row where the host pushes it, else the lead's sessions() row.
   const lead = sessions?.find((s) => s.handle === handle) ?? null;
-  const thread = useForemanThread(foreman && handle ? handle : null, conversation);
+  const { thread, setupLive } = useForemanThread(foreman && handle ? handle : null, conversation);
+  // While the page's hosted setup runs, its messages and cards are the full view's: the overlay
+  // says so once, with Open full view. A published session that has since ended is not running.
+  const setupRunning =
+    foreman && setupLive.some((h) => roster?.some((r) => r.handle === h && r.alive) ?? false);
   const pinTeam = foreman ? FOREMAN_TEAM : (team ?? home);
   const delivery = useMessageDelivery(team ?? home);
   const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
@@ -226,24 +233,27 @@ export function ChatOverlay({
     retry: retryPins,
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
-  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
-  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too),
-  // else the rest of its mail (a lead's or a role's), in the Foreman's pin team.
+  // A pin's message as the thread holds it: for the Foreman, its merged thread (earlier
+  // sessions' mail too), else the rest of its mail, in the pin team.
   const pinnedMessage = (id: number) =>
     foreman
       ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
         messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
         null)
       : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
-  const pinTitle = (id: number) => {
-    const m = pinnedMessage(id);
-    return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
+  // What a pin's message says: the thread's own row, else what the pins read says it is (a
+  // concurrent seat's mail, which this seat's thread leaves out).
+  const saidOf = (p: AgentPin) => pinnedMessage(p.messageId) ?? p.message;
+  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
+  const pinTitle = (p: AgentPin) => {
+    const m = saidOf(p);
+    return pinTitleOf(m, labelOf(dir, m.from));
   };
   // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
   const ownCard = (p: AgentPin): OwnPinCard | null => {
-    const m = pinnedMessage(p.messageId);
-    if (p.preview || !m) return null;
-    const who = senderOf(m);
+    if (p.preview) return null;
+    const m = saidOf(p);
+    const who = labelOf(dir, m.from);
     const at = formatClock(m.createdAtMs);
     if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
     const pinnedBy = whoPinned(p.pinnedBy, (from) => labelOf(dir, from));
@@ -265,7 +275,7 @@ export function ChatOverlay({
     apply,
     sender: senderOf,
     labelOf: (from) => labelOf(dir, from),
-    titleOf: (p) => p.preview?.shortName || pinTitle(p.messageId),
+    titleOf: (p) => p.preview?.shortName || pinTitle(p),
     ownOf: (p) => ownCard(p)?.kind ?? null,
     onShowPins: () => {
       const first = pins[0];
@@ -472,7 +482,7 @@ export function ChatOverlay({
                 }}
                 pin={p}
                 shape={pinShape}
-                title={pinTitle(p.messageId)}
+                title={pinTitle(p)}
                 own={ownCard(p)}
                 fresh={personPins?.fresh === p.messageId}
                 replacing={personPins?.replacing === p.messageId}
@@ -487,15 +497,15 @@ export function ChatOverlay({
           <section
             className="ibx-ov-sheet"
             data-in-place={sheetInPlace ? "true" : "false"}
-            aria-label={opened.preview?.shortName || pinTitle(opened.messageId)}
+            aria-label={opened.preview?.shortName || pinTitle(opened)}
           >
             <div className="ibx-ov-sheet-h">
-              <b>{opened.preview?.shortName || pinTitle(opened.messageId)}</b>
+              <b>{opened.preview?.shortName || pinTitle(opened)}</b>
               <span className="ibx-ov-sp" />
               <button
                 type="button"
                 className="ibx-ov-btn"
-                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened.messageId)}`}
+                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened)}`}
                 onClick={closePin}
               >
                 <Ico icon={X} sm />
@@ -504,11 +514,31 @@ export function ChatOverlay({
             <div className="ibx-ov-sheet-b">
               {openedMessage ? (
                 <MessageBody m={openedMessage} liveDashboards />
+              ) : opened.message && pinTeam ? (
+                // A concurrent seat's message: what the pins read says, an HTML one live.
+                <InboxMessageContent
+                  text={opened.message.text}
+                  contentType={opened.message.contentType}
+                  live={
+                    opened.message.contentType === "html"
+                      ? { team: pinTeam, messageId: opened.messageId, sender: opened.message.from }
+                      : null
+                  }
+                />
               ) : (
                 <span className="ibx-ov-gone">This view is no longer in the thread.</span>
               )}
             </div>
           </section>
+        )}
+        {setupRunning && (
+          <div className="ibx-ov-setup" role="status" data-testid="chat-overlay-setup">
+            <b>Setup is running</b>
+            <span aria-hidden>·</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={openForeman}>
+              Open full view
+            </button>
+          </div>
         )}
         {error && data && (
           <StaleNotice error={error} onRetry={() => void reload()} what="the chat" />

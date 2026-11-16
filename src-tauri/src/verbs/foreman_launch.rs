@@ -24,23 +24,24 @@ pub struct Page {
 pub const PAGES: &[Page] = &[
     Page {
         path: "getting-started/content/foreman/index.html",
-        sha256: "ff94132069b6e78fe2bc269be5e79c5c1c09bf01dadb659a505dfebeb775c8f2",
+        sha256: "3c917d340b2af2fed2234b821482203c3e8a99f7efa78c63e8ba00af0e0bf4e8",
     },
     Page {
         path: "getting-started/content/guide/index.html",
-        sha256: "f3cac1364f73772daae6bee91e533866513482214ccd0fa20864dcdcf337cacd",
+        sha256: "fb6165d2c34836f87280fe21fd3101e50f6a69d8fcfcf56d15af629e3c5e6cd8",
     },
 ];
 
+/// The Foreman the docs bundle ships, by its docs-team key.
+pub const FOREMAN_KEY: &str = "codesense/docs/getting-started/foreman-claude";
+
 /// The agents a page holding the capability may launch: the Foreman and the setup guide, one
 /// guide agent per runtime. The grant is defence in depth beside the page's hash, so a page
-/// cannot start any other agent.
-pub const AGENTS: &[&str] = &[
-    "foreman-claude",
-    "guide-claude",
-    "guide-codex",
-    "guide-opencode",
-];
+/// cannot start any other agent. The Foreman is named by its key: a bare id resolves through
+/// the target team and the personal space first (`find_agent_for`), so it would run whatever
+/// agent a team defines under that name. The guide page launches its agents by bare id into
+/// the docs team itself.
+pub const AGENTS: &[&str] = &[FOREMAN_KEY, "guide-claude", "guide-codex", "guide-opencode"];
 
 /// Whether a `team-workspace` open names an agent the page may launch. An open with no agent
 /// would run the team's default agent, so it is refused too.
@@ -65,6 +66,20 @@ pub(crate) fn shipped_at(path: &str) -> std::path::PathBuf {
 /// The grant a freshly minted frame holds, given the placed docs root.
 pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
     grant_in(PAGES, docs_root, document_path)
+}
+
+/// The setup guide's place in the docs checkout. Its pin is looked up in the page list by this
+/// path, so the guide's hash lives in one place.
+pub const GUIDE_PAGE: &str = "getting-started/content/guide/index.html";
+
+/// Whether the document is the pinned setup guide: the page list's entry for [`GUIDE_PAGE`],
+/// at its place under `docs_root`, with that entry's bytes. Read and hashed on every
+/// call. Production passes [`PAGES`].
+pub fn is_guide_page_in(pages: &[Page], docs_root: &Path, document_path: &str) -> bool {
+    pages
+        .iter()
+        .filter(|page| page.path == GUIDE_PAGE)
+        .any(|guide| grant_in(std::slice::from_ref(guide), docs_root, document_path).is_some())
 }
 
 /// The document must sit at a page's path under `docs_root`, reached through plain segments
@@ -238,7 +253,13 @@ mod tests {
 
     #[test]
     fn only_the_foreman_and_the_setup_guide_may_be_launched() {
-        assert!(agent_allowed(Some("foreman-claude")));
+        // The Foreman by the docs team's key only: a bare id resolves through the target team
+        // and the personal space first, so it could start any agent a team names so.
+        assert!(agent_allowed(Some(FOREMAN_KEY)));
+        assert_eq!(FOREMAN_KEY, "codesense/docs/getting-started/foreman-claude");
+        assert!(!agent_allowed(Some("foreman-claude")));
+        assert!(!agent_allowed(Some("acme/web/foreman-claude")));
+        assert!(!agent_allowed(Some("codesense/docs/other/foreman-claude")));
         for guide in ["guide-claude", "guide-codex", "guide-opencode"] {
             assert!(agent_allowed(Some(guide)), "{guide}");
         }
@@ -248,6 +269,25 @@ mod tests {
         assert!(!agent_allowed(Some("")));
         // No agent would run the team's default agent.
         assert!(!agent_allowed(None));
+    }
+
+    #[test]
+    fn the_foreman_key_names_the_agent_the_docs_bundle_ships() {
+        let info = crate::context_repo::codesense_docs::bundle_info();
+        let key = crate::agents::AgentKey::parse(FOREMAN_KEY).expect("FOREMAN_KEY is an agent key");
+        assert_eq!(
+            (key.org.as_str(), key.team.as_str()),
+            (info.slug.as_str(), info.team.as_str()),
+            "FOREMAN_KEY names the docs bundle's team"
+        );
+        let agent: crate::agents::model::Agent = serde_yaml::from_str(include_str!(
+            "../../../codesense-docs/getting-started/config/agents/foreman-claude/agent.yaml"
+        ))
+        .expect("the docs bundle ships the Foreman agent");
+        agent
+            .validate()
+            .expect("the shipped Foreman agent is valid");
+        assert_eq!(agent.id, key.id);
     }
 
     #[test]
@@ -304,5 +344,41 @@ mod tests {
     #[test]
     fn it_is_not_in_the_grantable_vocabulary() {
         assert!(!super::super::capabilities::known(CAPABILITY));
+    }
+
+    #[test]
+    fn only_the_pinned_guide_bytes_at_its_place_are_the_guide() {
+        let guide = |body: &[u8]| {
+            let hash: &'static str =
+                Box::leak(format!("{:x}", Sha256::digest(body)).into_boxed_str());
+            vec![Page {
+                path: GUIDE_PAGE,
+                sha256: hash,
+            }]
+        };
+        let (_dir, docs, _) = placed(BODY);
+        let at = docs.join(GUIDE_PAGE);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(&at, b"guide").unwrap();
+        assert!(is_guide_page_in(
+            &guide(b"guide"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        // One byte off the pin, or no guide in the page list, is not the guide.
+        assert!(!is_guide_page_in(
+            &guide(b"guid"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        assert!(!is_guide_page_in(&pages(), &docs, &at.to_string_lossy()));
+        // The Foreman page holds its own pin and is not the guide.
+        let foreman = docs.join(PAGE);
+        assert!(grant_in(&pages(), &docs, &foreman.to_string_lossy()).is_some());
+        assert!(!is_guide_page_in(
+            &pages(),
+            &docs,
+            &foreman.to_string_lossy()
+        ));
     }
 }

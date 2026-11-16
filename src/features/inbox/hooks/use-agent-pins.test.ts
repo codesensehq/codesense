@@ -27,6 +27,7 @@ const pin = (messageId: number, position: number): AgentPin => ({
   position,
   pinnedBy: "lead",
   pinnedAtMs: 1,
+  message: { from: "lead", createdAtMs: 1, text: `m${messageId}` },
 });
 const answer = (pins: AgentPin[]) => ({
   status: "pins",

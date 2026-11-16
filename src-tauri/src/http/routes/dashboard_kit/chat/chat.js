@@ -67,8 +67,10 @@ function reconcile(parent,cache,items){
   if(old&&old.sig===item.sig)nodes.push(old.node);else{const node=item.make();cache.set(item.id,{sig:item.sig,node});nodes.push(node);}
  }
  for(const id of [...cache.keys()])if(!seen.has(id))cache.delete(id);
+ // Stale children go first, so a node that keeps its place is not moved past them (moving an iframe reloads it).
+ const keep=new Set(nodes);
+ for(const child of [...parent.childNodes])if(!keep.has(child))child.remove();
  nodes.forEach((node,index)=>{if(parent.childNodes[index]!==node)parent.insertBefore(node,parent.childNodes[index]||null);});
- while(parent.childNodes.length>nodes.length)parent.lastChild.remove();
 }
 export const storyTarget=(storyId,leadRole)=>({
  rows:sessions=>leadRowsOf(sessions,storyId,leadRole),
@@ -140,9 +142,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // onPin.replace: at the cap, Pin… opens a chooser of which pin to replace, under the message (pin-replace.js). A pin is named as the page's pins name it (onPin.title), else by its
  // preview's name, else as its message; one with no preview is the person's own, drawn as a quote or, for an HTML message, a dashboard.
  const threadRow=id=>thread.find(row=>row.messageId===id);
- const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const row=threadRow(pin.messageId);return row?pinTitleOf(row,row.fromName||row.from||''):String(pin.messageId);};
+ // A pin's message: the thread's row, else what the pins read says it is (another seat's mail, which this thread leaves out).
+ const pinMessage=pin=>{const row=threadRow(pin.messageId);if(row)return{said:row,who:row.fromName||row.from||''};const m=pin.message;return m?{said:m,who:pinName(m.from)}:null;};
+ const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const m=pinMessage(pin);return m?pinTitleOf(m.said,m.who):String(pin.messageId);};
  const chooserId=mid=>`${ids.status}-pin-chooser-${mid}`;
- const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const row=threadRow(pin.messageId);return row&&row.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
+ const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const m=pinMessage(pin);return m&&m.said.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
  // A message's Pin, its tag and its note; the signature changes when any of them does, so the bubble is rebuilt only then.
  function pinParts(item){
   if(!onPin||item.id===undefined||item.id===null)return null;
@@ -205,7 +209,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // the thread or unmount releases it (a release that arrives after Close runs as it arrives). An open that throws leaves the bubble closed. The toggle changes the bubble in place, so a repaint
  // that changes nothing keeps an open frame, and a bubble rebuilt for another reason (a pin) is updated around its body (keepOpen): an iframe that leaves the page reloads.
  const htmlOpen=new Map();
- const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;open.slot.remove();if(typeof open.release==='function')open.release();};
+ const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;if(open.shown)open.shown.disconnect();open.slot.remove();if(typeof open.release==='function')open.release();};
  const keepOpen=(id,fresh)=>{
   const open=htmlOpen.get(id),old=open&&open.slot.isConnected?open.slot.closest('.msg'):null,body=old&&old.querySelector(':scope > .body'),freshBody=fresh.querySelector(':scope > .body');
   if(!body||!freshBody)return fresh;
@@ -227,6 +231,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    let answer;
    try{answer=html.open({messageId:item.id,title,contentType:'html'},slot);}catch{slot.remove();return;}
    htmlOpen.set(item.id,open);
+   // What the page draws into the slot is brought into the log's view, within the log only: Open on the newest message must not draw below the fold. A page fills the slot at
+   // once and its frame arrives later, inside what it drew, so the slot is watched while it is open (released with it).
+   const reveal=()=>{if(!slot.isConnected)return;const l=log.getBoundingClientRect(),r=slot.getBoundingClientRect(),below=r.bottom-l.bottom;if(below>0)log.scrollTop+=Math.min(below,r.top-l.top);};
+   open.shown=new MutationObserver(reveal);
+   open.shown.observe(slot,{childList:true,subtree:true});
+   reveal();
    if(answer&&typeof answer.then==='function')Promise.resolve(answer).then(release=>{if(!open.closed)open.release=release;else if(typeof release==='function')release();},()=>{});
    else open.release=answer;
    show(true);

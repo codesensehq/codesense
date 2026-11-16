@@ -17,7 +17,7 @@ function ownGlyph(kind){const svg=document.createElementNS(GLYPH_NS,'svg'),path=
  * ownOf(pin) is how a pin with no preview is drawn ('quote'|'name'), idOf(mid) is the chooser's element id, and pinNow(item) pins a message with the room a pin that left made.
  */
 export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idOf,copy,render,pinNow}){
- let open=null,marked=null,focusWant=false;
+ let open=null,marked=null,focusWant=false,reveal=false;
  const el=()=>open&&open.node;
  const mark=id=>{if(id===marked)return;marked=id;if(typeof onPin.mark==='function')onPin.mark(id);};
  const close=refocus=>{if(!open)return;if(refocus)state.refocus=open.item.id;open=null;mark(null);};
@@ -26,7 +26,7 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   state.note=null;
   open={...pinChooserOpen(pins),item,node:h('div',{class:'pin-chooser',id:idOf(item.id),role:'group','aria-labelledby':idOf(item.id)+'-h'})};
   open.node.addEventListener('keydown',onKey);
-  focusWant=true;
+  focusWant=true;reveal=true;
  }
  // The chooser follows the live list: it says what changed, and the row the person was on stops being current if it left. If the agent pinned this message, it closes.
  function sync(){
@@ -126,6 +126,8 @@ export function createPinReplace({onPin,state,live,list,nameOf,titleOf,ownOf,idO
   if(!open||!open.node.isConnected)return;
   const had=was||within();
   paint();
+  // A chooser opened under the newest message can sit below the log's fold: it comes into view once, as it opens, and a repaint leaves the reader where they are.
+  if(reveal){reveal=false;if(typeof open.node.scrollIntoView==='function')open.node.scrollIntoView({block:'nearest'});}
   if(!had&&!focusWant)return;
   focusWant=false;
   const target=open.room?el().querySelector('.room-pin'):open.current!==null?rowEl(open.current):el().querySelector('.chg');

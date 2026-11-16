@@ -1797,6 +1797,8 @@ pub fn register_managed_clone_worktree_watch<R: tauri::Runtime>(
     let handler: DispatchHandler = {
         let app = app.clone();
         Arc::new(move |_event_path: &Path| {
+            // A worktree was added or removed: the clones' kept worktree lists are stale.
+            crate::commands::worktree_probe::invalidate_clones();
             crate::commands::worktree::emit_worktree_changed(&app);
         })
     };

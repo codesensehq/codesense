@@ -2382,8 +2382,13 @@ fn the_retired_preview_has_no_writer_exception() {
 /// external-crate constructors and parsers: none has a body in this app-source
 /// graph, so none reaches a write primitive. A rise means the resolver lost track
 /// of something: run with `X1_PRINT_UNRESOLVED=1` and read the list. The ceiling
-/// is a growth tripwire; raise it only after reviewing every added site.
-const MAX_UNRESOLVED_PATHS: usize = 277;
+/// is a growth tripwire; raise it only after reviewing every added site. 278: the
+/// shared-read handoff map in `commands/worktree_probe.rs` adds one `HashMap::new()`.
+/// 279: the live hub's bounded memory, measured by CI. The new constructor calls are
+/// `HashMap::new()` and `AtomicU64::new(..)` in `DashboardStreamHub` (dashboard_stream/hub.rs)
+/// and the derived `DeltaLog::default()` in `subscribe_window` (live_hub/projection.rs), which
+/// replaced a `VecDeque::new()`. None has a body here, so none reaches a write primitive.
+const MAX_UNRESOLVED_PATHS: usize = 279;
 /// The most method calls that several crate types define and that resolve to
 /// none of them, because the caller names none of those types (`.name()`, `.id()`
 /// on a value whose type is inferred). This is the walk's main blind spot; the
@@ -2400,7 +2405,34 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
 /// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
 /// of which calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_501;
+/// The metrics-db timer and the bounded, shared worktree reads add 24 more method calls in
+/// `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and `commands/worktree.rs`; none
+/// reaches a sink. The Claude bridge tool list adds 7 more (per-launch denies in
+/// `agents/permissions.rs`, per-caller instructions in `mcp/handler.rs`), none a write.
+/// The inbox-changed helper and its team list add three more: `changes.is_empty()` in
+/// `emit_inbox_changed` (agent_inbox.rs), `.ok()` in `changed_count_teams`
+/// (live_hub/inbox.rs) and `committed.is_empty()` in `live_hub/mod.rs`. None calls a write
+/// primitive.
+/// The live hub's field patches and held views: CI's census measured +10. The candidates,
+/// new calls on ambiguous names, are `projections.hold(..)` in `subscribe_held` (live_hub/mod.rs),
+/// `agent_definitions::prepare_held` and `configuration::prepare_held`; `.release(..)` in
+/// `live_hub_release` and `.deliver(..)` in `publish` (live_hub/mod.rs); `.as_str()` on the
+/// row id and changed fields in `WireDelta::from` (live_hub/projection.rs) and on the window
+/// label in `agent_definitions_prepare`; and `.is_empty()` and `.retain(..)` in
+/// `TopicRegistry::release` and `release_owner` (live_hub/projection.rs). Their targets are
+/// the in-memory `TopicRegistry` and std collections and strings; none calls a write primitive.
+/// The live hub's bounded memory: CI's census measured +6. The candidates, new calls on
+/// ambiguous names, are `.read(..)` in `LiveHub::snapshot` (live_hub/mod.rs); `.push(..)`,
+/// `.clear()`, `.since(..)` on the delta logs and `.contains(..)` on the followed-view set in
+/// `watched_in` (live_hub/projection.rs); and `.bound()` in `DashboardStreamHub`
+/// (dashboard_stream/hub.rs), whose sequence counter is the unambiguous `next_seq`. Their
+/// targets are the in-memory `TopicRegistry`, its delta logs and sets, an atomic counter and
+/// two maps; none calls a write primitive.
+/// Its review fixes add 6 more, as CI measured: the per-topic hold map's `.get(..)`,
+/// `.get_mut(..)`, `.remove(..)` and `.retain(..)` in `TopicRegistry::release`,
+/// `release_owner` and `hold_count`, and `.is_ok_and(..)` on the two map locks in
+/// `DashboardStreamHub`. All of them are std map and lock calls; none calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_557;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

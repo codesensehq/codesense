@@ -1164,6 +1164,19 @@ export interface AgentPin {
   preview?: AgentPinPreview;
   /** When the preview was last sent, so a pin that stops updating can say since when. */
   previewAtMs?: number;
+  /** What its message says, so every seat of the thread names the pin, its own mail or not. */
+  message: AgentPinMessage;
+}
+
+/** A pinned message as its pin names it: its sender (a handle) and time, how it renders, its
+ *  one-line summary and the start of its text (at most 2,000 characters). Mirror of Rust
+ *  `PinnedMessage`. */
+export interface AgentPinMessage {
+  from: string;
+  createdAtMs: number;
+  text: string;
+  contentType?: MessageContentType | null;
+  summary?: string | null;
 }
 
 /** An agent thread's pins in one team's store after a read or write; `outcome` is set for
@@ -10212,7 +10225,7 @@ export function liveHubSubscribe(
   topic: string,
   viewKey: string,
   sinceRev?: number,
-  options?: { subscriptionId?: string; window?: [number, number] },
+  options?: { subscriptionId?: string; window?: [number, number]; frameId?: string },
 ) {
   return invoke<import("@/features/dashboard/lib/live-hub").HubReply>("live_hub_subscribe", {
     topic,
@@ -10332,6 +10345,13 @@ export const liveHubWindow = (subscriptionId: string, window: [number, number]) 
   });
 export const liveHubUnsubscribe = (subscriptionId: string, paused?: boolean) =>
   invoke<void>("live_hub_unsubscribe", { subscriptionId, paused });
+/** This window no longer caches the view: the hub stops sending its deltas here. A release
+ *  older than the window's latest read of the view (its hold `generation`) keeps that hold. */
+export const liveHubRelease = (topic: string, viewKey: string, generation: number) =>
+  invoke<void>("live_hub_release", { topic, viewKey, generation });
+/** Drops the holds a previous page in this window left; resolves with the last hold
+ *  generation issued, so holds up to it are gone. */
+export const liveHubReleaseOwner = () => invoke<number>("live_hub_release_owner");
 
 export const liveHubViewKey = (origin: string, token: string) =>
   invoke<string>("live_hub_view_key", { origin, token });

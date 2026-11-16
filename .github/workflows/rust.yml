@@ -230,7 +230,11 @@ jobs:
       - name: Upload test archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: rust-macos-tests-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # One name per part for the whole run, not per attempt: re-running only the failed
+          # shards starts a new attempt and still finds both archives, and a re-run part
+          # replaces its own.
+          name: rust-macos-tests-${{ matrix.part }}-${{ github.run_id }}
+          overwrite: true
           path: |
             ${{ runner.temp }}/nextest-archive-${{ matrix.part }}.tar.zst
             ${{ runner.temp }}/test-runtime.tar
@@ -320,11 +324,17 @@ jobs:
       - name: Download test archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: rust-macos-tests-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: rust-macos-tests-*-${{ github.run_id }}
           merge-multiple: true
           path: ${{ runner.temp }}/rust-macos-tests
       - name: Restore test runtime files
         run: tar -xf "$RUNNER_TEMP/rust-macos-tests/test-runtime.tar"
+      - name: Build the emulator worker
+        # session-server's activity tests rebuild the worker in each test process. The pinned Bun
+        # they compile with is not in the archive, so on a fresh runner several processes fetched
+        # it at once, each replacing the binary another was running (macOS kills that process).
+        # One build first leaves Bun in place, and theirs only recompile.
+        run: pnpm run build:emulator
       - name: Test macOS crates
         id: test
         # Each archive is extracted into the checkout, so the target directory is where the build
@@ -370,10 +380,11 @@ jobs:
 
   rust-macos:
     name: Rust (macOS arm64)
-    # The one macOS result: green only when the build and every test shard are. It runs exactly
-    # when the build job does (the same if), so a skipped build reports a skip here.
+    # The one macOS result: green only when the build and every test shard are. It runs when the
+    # build job does (the same if), so a skipped build reports a skip here, and also when the run
+    # is cancelled (always() in place of !cancelled()), so a cancelled run reports red, not skipped.
     needs: [changes, rust-macos-build, rust-macos-test]
-    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
+    if: ${{ always() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

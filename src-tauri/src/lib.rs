@@ -908,6 +908,7 @@ pub fn run() {
                     std::env::var_os("PATH").as_deref(),
                     attribution::install::Trigger::Startup,
                 );
+                attribution::metrics_db::start(&home);
                 attribution::watcher::start(app.handle(), home);
             }
 
@@ -1310,6 +1311,8 @@ pub fn run() {
             live_hub::live_hub_window,
             live_hub::live_hub_view_key,
             live_hub::live_hub_unsubscribe,
+            live_hub::live_hub_release,
+            live_hub::live_hub_release_owner,
             commands::agent_read_model::agent_read_sessions,
             commands::agent_read_model::agent_read_agent,
             commands::agent_read_model::agent_dismiss_context_suggestion,

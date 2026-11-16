@@ -171,7 +171,11 @@ fn only_agent_state_events_are_activity_causes() {
     ] {
         assert_eq!(event_cause(event), CAUSE_ACTIVITY, "{event}");
     }
-    for event in ["sessions-waiter-changed", "machines-changed", "mcp:agent-done"] {
+    for event in [
+        "sessions-waiter-changed",
+        "machines-changed",
+        "mcp:agent-done",
+    ] {
         assert_eq!(event_cause(event), CAUSE_OTHER, "{event}");
     }
 }
@@ -221,27 +225,33 @@ fn rebuilds_are_counted_and_only_activity_rebuilds_count_as_activity_only() {
 #[test]
 fn projection_metrics_include_message_delivery_and_change_with_deltas() {
     let mut registry = TopicRegistry::default();
-    let (entries, subscriptions, topics) = registry.metrics_snapshot();
-    assert_eq!((entries, subscriptions), (0, 0));
-    let delivery = topics
+    let metrics = registry.metrics_snapshot();
+    assert_eq!((metrics.log_entries, metrics.subscriptions), (0, 0));
+    let delivery = metrics
+        .topics
         .iter()
         .find(|(topic, _, _)| topic == "messageDelivery")
         .unwrap();
     assert_eq!(delivery.1, 0);
+    let row = |n: u64| vec![(Some("row-1".into()), json!({"id":"row-1", "n": n}))];
     registry
-        .replace_view(
-            "messageDelivery",
-            "all",
-            vec![(Some("row-1".into()), json!({"id":"row-1"}))],
-        )
+        .replace_view("messageDelivery", "all", row(0))
         .unwrap();
-    let (entries, _, topics) = registry.metrics_snapshot();
-    assert_eq!(entries, 1);
-    let delivery = topics
+    let metrics = registry.metrics_snapshot();
+    assert_eq!(metrics.log_entries, 0, "nobody watches the view");
+    let delivery = metrics
+        .topics
         .iter()
         .find(|(topic, _, _)| topic == "messageDelivery")
         .unwrap();
-    assert_eq!((delivery.1, delivery.2), (1, 1));
+    assert_eq!((delivery.1, delivery.2), (1, 0));
+    registry.hold("messageDelivery", "all", "main");
+    registry
+        .replace_view("messageDelivery", "all", row(1))
+        .unwrap();
+    let metrics = registry.metrics_snapshot();
+    assert_eq!(metrics.log_entries, 1);
+    assert!(metrics.log_bytes > 0);
 }
 
 #[test]
@@ -259,7 +269,13 @@ fn the_projection_gauges_count_entries_views_and_fold_ui_topics() {
     let gauges: std::collections::BTreeMap<_, _> = projection_gauges(&model).into_iter().collect();
     assert_eq!(gauges["live_hub.views.ui"], 2);
     assert_eq!(gauges["live_hub.views.messageDelivery"], 1);
-    assert_eq!(gauges["live_hub.delta_log_entries"], 1);
+    assert_eq!(
+        gauges["live_hub.delta_log_entries"], 0,
+        "nobody watches the view"
+    );
+    assert_eq!(gauges["live_hub.delta_log_bytes"], 0);
+    assert_eq!(gauges["live_hub.subscription_log_entries"], 0);
+    assert_eq!(gauges["live_hub.inbox_messages"], 0);
     assert_eq!(gauges["live_hub.subscriptions"], 0);
     assert_eq!(gauges["live_hub.agent_views"], 1);
     assert!(!gauges.keys().any(|name| name.contains("ui:")));
@@ -277,22 +293,22 @@ fn publish_counts_delta_bytes_per_topic_but_not_inbox_and_folds_ui_topics() {
     let seen = emitted.clone();
     app.listen("codesense:delta", move |event| {
         let delta: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
-        seen.lock()
-            .unwrap()
-            .push((delta["topic"].as_str().unwrap().to_owned(), event.payload().len()));
+        seen.lock().unwrap().push((
+            delta["topic"].as_str().unwrap().to_owned(),
+            event.payload().len(),
+        ));
     });
     let hub = app.state::<LiveHub>();
     let mut deltas = Vec::new();
-    for (topic, key) in [("messageDelivery", "all"), ("ui:x", "team:a"), ("inbox", "all")] {
+    for (topic, key) in [
+        ("messageDelivery", "all"),
+        ("ui:x", "team:a"),
+        ("inbox", "all"),
+    ] {
         let rows = vec![(Some(key.to_owned()), json!({"id": "r1"}))];
-        deltas.extend(
-            hub.model
-                .lock()
-                .unwrap()
-                .projections
-                .replace_view(topic, key, rows)
-                .unwrap(),
-        );
+        let mut model = hub.model.lock().unwrap();
+        model.projections.hold(topic, key, "main");
+        deltas.extend(model.projections.replace_view(topic, key, rows).unwrap());
     }
     let names = [
         "live_hub.delta.bytes.messageDelivery",
@@ -305,7 +321,10 @@ fn publish_counts_delta_bytes_per_topic_but_not_inbox_and_folds_ui_topics() {
     let after = names.map(metric_total);
     assert!(after[0] > before[0], "messageDelivery bytes move");
     assert!(after[1] > before[1], "ui topics count under one name");
-    assert_eq!(after[2], before[2], "inbox deltas are not emitted or counted");
+    assert_eq!(
+        after[2], before[2],
+        "inbox deltas are not emitted or counted"
+    );
     assert_eq!(after[3], before[3], "no per-ui-topic name");
     let emitted = emitted.lock().unwrap();
     let topics: Vec<_> = emitted.iter().map(|(topic, _)| topic.as_str()).collect();
@@ -551,6 +570,8 @@ fn failed_cached_activity_does_not_invent_a_running_session() {
 fn registry_retains_view_deltas_and_falls_back_after_retention() {
     let mut registry = TopicRegistry::default();
     registry.snapshot("sessions", "team:a").unwrap();
+    // A window holds the view, so its deltas are kept for replay.
+    registry.hold("sessions", "team:a", "main");
     for i in 0..300 {
         registry
             .replace(
@@ -981,7 +1002,11 @@ impl crate::commands::agent_inbox::InboxHost for FootprintHost {
     fn display_name(&self, _: &str) -> Option<String> {
         None
     }
-    fn inbox_changed(&self) {}
+    fn inbox_changed(
+        &self,
+        _changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
+    ) {
+    }
     fn inbox_committed(
         &self,
         changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
@@ -2430,4 +2455,809 @@ async fn hub_readers_proceed_while_inbox_prep_runs_off_lock() {
         .messages
         .iter()
         .any(|m| m.message_id == new_id && m.text == "new"));
+}
+
+/// A hub on the mock runtime, for the publish tests.
+fn hub_app() -> tauri::App<tauri::test::MockRuntime> {
+    use super::*;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(super::LiveHub::default());
+    app
+}
+
+/// Every `codesense:delta` payload `app` emits from now on.
+fn emitted_deltas(
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+    use super::*;
+    let emitted = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let seen = emitted.clone();
+    app.listen("codesense:delta", move |event| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    emitted
+}
+
+/// The default read a window's LiveHub makes of (topic, key), holding it for `owner`.
+fn read_held(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    topic: &str,
+    key: &str,
+    owner: &str,
+) -> super::Held<SubscriptionReply> {
+    use super::*;
+    super::subscribe_held(
+        app.handle(),
+        topic,
+        key,
+        None,
+        None,
+        None,
+        Some(owner),
+        None,
+    )
+    .unwrap()
+}
+
+fn hold_count(app: &tauri::App<tauri::test::MockRuntime>, topic: &str, key: &str) -> usize {
+    use super::*;
+    app.state::<super::LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .hold_count(topic, key)
+}
+
+#[test]
+fn status_only_change_emits_a_delta_under_1kb() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let app = hub_app();
+    let hub = app.state::<LiveHub>();
+    let session = |i: usize, state: &str| {
+        (
+            None,
+            json!({"id": format!("s{i:02}"), "state": state, "detail": "x".repeat(2048)}),
+        )
+    };
+    let rows = |running: Option<usize>| -> Vec<_> {
+        (0..22)
+            .map(|i| {
+                session(
+                    i,
+                    if running == Some(i) {
+                        "running"
+                    } else {
+                        "idle"
+                    },
+                )
+            })
+            .collect()
+    };
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .replace("sessions", rows(None), None)
+        .unwrap();
+    // Held, so the gate cannot pass this vacuously by sending nothing.
+    read_held(&app, "sessions", "all", "main");
+    let emitted = emitted_deltas(&app);
+    let before = metric_total("live_hub.delta.bytes.sessions");
+    let deltas = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .replace("sessions", rows(Some(3)), None)
+        .unwrap();
+    publish(app.handle(), deltas);
+    let moved = metric_total("live_hub.delta.bytes.sessions") - before;
+    let emitted = emitted.lock().unwrap();
+    assert_eq!(emitted.len(), 1, "the held view hears the change");
+    assert!(
+        moved > 0 && moved < 1024,
+        "{moved} bytes for one status change"
+    );
+    assert_eq!(
+        emitted[0]["patches"],
+        json!([{"id": "s03", "set": {"state": "running"}, "unset": []}])
+    );
+    assert_eq!(emitted[0]["upserts"], json!([]));
+    // The hub keeps full rows: a snapshot and a replay of the same change carry the whole row.
+    let replay = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .subscribe("sessions", "all", Some(0))
+        .unwrap();
+    assert_eq!(
+        replay.deltas.unwrap()[0].upserts[0]["detail"],
+        json!("x".repeat(2048))
+    );
+    drop(emitted);
+
+    // The golden the host LiveHub replays: a field set to null, a dropped field, an arrival
+    // and a remove, in one delta. A small topic keeps it readable.
+    let pin = |id: &str, order: u64, note: Option<serde_json::Value>| {
+        let mut row = json!({"id": id, "label": id.to_uppercase(), "order": order});
+        if let Some(note) = note {
+            row["note"] = note;
+        }
+        (None, row)
+    };
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .replace(
+            "pins",
+            vec![
+                pin("a", 1, Some(json!("keep"))),
+                pin("b", 2, Some(json!("drop me"))),
+                pin("c", 3, None),
+            ],
+            None,
+        )
+        .unwrap();
+    let initial = read_held(&app, "pins", "all", "main").view;
+    let emitted = emitted_deltas(&app);
+    let deltas = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .replace(
+            "pins",
+            vec![
+                pin("a", 1, Some(serde_json::Value::Null)),
+                pin("b", 2, None),
+                pin("d", 4, None),
+            ],
+            None,
+        )
+        .unwrap();
+    publish(app.handle(), deltas);
+    let wire = emitted.lock().unwrap().clone();
+    assert_eq!(
+        wire[0]["patches"],
+        json!([
+            {"id": "a", "set": {"note": null}, "unset": []},
+            {"id": "b", "set": {}, "unset": ["note"]}
+        ])
+    );
+    assert_eq!(
+        wire[0]["upserts"],
+        json!([{"id": "d", "label": "D", "order": 4}])
+    );
+    assert_eq!(wire[0]["removes"], json!(["c"]));
+    let trace = json!({
+        "initial": initial,
+        "deltas": wire,
+        "final": hub.snapshot("all", "pins").unwrap(),
+    });
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../src/features/dashboard/lib/delta-patch-trace.json");
+    if std::env::var_os("UPDATE_DELTA_PATCH_TRACE").is_some() {
+        std::fs::write(
+            &fixture,
+            serde_json::to_string_pretty(&trace).unwrap() + "\n",
+        )
+        .unwrap();
+    } else {
+        let expected: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&fixture).unwrap()).unwrap();
+        assert_eq!(
+            trace, expected,
+            "the host replays the hub's real patch wire"
+        );
+    }
+}
+
+#[test]
+fn publish_skips_views_no_reader_holds_including_message_delivery() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let app = hub_app();
+    let hub = app.state::<LiveHub>();
+    let emitted = emitted_deltas(&app);
+    let change = |id: &str| {
+        hub.model
+            .lock()
+            .unwrap()
+            .projections
+            .replace_view(
+                "messageDelivery",
+                "team:acme/dev",
+                vec![(Some("team:acme/dev".to_owned()), json!({"id": id}))],
+            )
+            .unwrap()
+    };
+    let unheld = metric_total("live_hub.delta.unheld");
+    publish(app.handle(), change("m1"));
+    assert!(emitted.lock().unwrap().is_empty(), "nobody holds the view");
+    assert!(metric_total("live_hub.delta.unheld") > unheld);
+
+    // A scoped subscription hears its own subscription deltas, not the webview's cache feed.
+    super::subscribe(
+        app.handle(),
+        "messageDelivery",
+        "team:acme/dev",
+        None,
+        Some("page:delivery"),
+        None,
+    )
+    .unwrap();
+    publish(app.handle(), change("m2"));
+    assert!(emitted.lock().unwrap().is_empty());
+
+    read_held(&app, "messageDelivery", "team:acme/dev", "main");
+    publish(app.handle(), change("m3"));
+    let emitted = emitted.lock().unwrap();
+    assert_eq!(emitted.len(), 1, "a held view hears its changes");
+    assert_eq!(emitted[0]["topic"], "messageDelivery");
+}
+
+#[tokio::test]
+async fn hydration_sends_no_delivery_rows_without_a_holder() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    use crate::weft::{inbox as ledger, WeftStore};
+    let (app, host) = delivery_hub(&["active"]);
+    let store = WeftStore::open(host.path("active")).unwrap();
+    for text in ["one", "two"] {
+        ledger::inbox_insert(&store, "human", "H2", text, None, None, None, None, None).unwrap();
+    }
+    let hub = app.state::<LiveHub>();
+    let hub: &LiveHub = &hub;
+    // A page read the delivery view and let it go: the hub keeps it, and nobody holds it.
+    assert!(delivery_rows(hub, "active").is_empty());
+    let emitted = emitted_deltas(&app);
+    let unheld = metric_total("live_hub.delta.unheld");
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(delivery_rows(hub, "active").len(), 2);
+    assert!(
+        hub.snapshot("team:acme/active", "messageDelivery")
+            .unwrap()
+            .rev
+            > 0,
+        "hydration changed the view"
+    );
+    assert!(emitted
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|delta| delta["topic"] != "messageDelivery"));
+    assert!(metric_total("live_hub.delta.unheld") > unheld);
+}
+
+#[test]
+fn holds_are_idempotent_per_owner() {
+    use super::*;
+    let app = hub_app();
+    let first = read_held(&app, "pins", "all", "main").hold.unwrap();
+    let second = read_held(&app, "pins", "all", "main").hold.unwrap();
+    assert!(second > first);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "a re-read does not stack"
+    );
+    let release = |generation| {
+        app.state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .release("pins", "all", "main", generation)
+    };
+    release(first);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "a late release keeps the newer hold"
+    );
+    release(second);
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+    // A scoped subscription takes no hold.
+    super::subscribe(app.handle(), "pins", "all", None, Some("page:pins"), None).unwrap();
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+    assert!(app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .is_watched("pins", "all"));
+}
+
+#[test]
+fn drop_window_releases_default_view_holds() {
+    use super::*;
+    let app = hub_app();
+    for owner in ["main", "other"] {
+        read_held(&app, "pins", "all", owner);
+    }
+    read_held(&app, "pins", "team:acme/dev", "main");
+    assert_eq!(hold_count(&app, "pins", "all"), 2);
+    drop_window(app.handle(), "main");
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "another window's hold survives"
+    );
+    assert_eq!(hold_count(&app, "pins", "team:acme/dev"), 0);
+    drop_window(app.handle(), "other");
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+}
+
+#[test]
+fn reload_releases_the_owners_holds() {
+    use super::*;
+    let app = hub_app();
+    read_held(&app, "pins", "all", "main");
+    let last = read_held(&app, "sessions", "all", "main").hold.unwrap();
+    read_held(&app, "pins", "all", "other");
+    let through = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .release_owner("main");
+    assert!(
+        through > last,
+        "every hold the reloaded page took is at or before the mark"
+    );
+    assert_eq!(hold_count(&app, "sessions", "all"), 0);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "another window's hold survives"
+    );
+}
+
+/// One `sessions` row admitted by `key`.
+fn scoped_row(key: &str, id: &str, n: usize) -> (Option<String>, serde_json::Value) {
+    (Some(key.to_owned()), json!({"id": id, "n": n}))
+}
+
+#[test]
+fn unsubscribed_view_keeps_no_delta_log() {
+    let mut registry = TopicRegistry::default();
+    registry.snapshot("sessions", "all").unwrap();
+    for n in 0..10_000 {
+        registry
+            .patch(
+                "sessions",
+                vec![scoped_row("team:x/1", "s1", n)],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(registry.view_log("sessions", "all"), Some((0, 0)));
+    assert_eq!(registry.metrics_snapshot().log_entries, 0);
+}
+
+#[test]
+fn held_default_view_keeps_replay() {
+    let mut registry = TopicRegistry::default();
+    let first = registry.snapshot("sessions", "all").unwrap();
+    registry.hold("sessions", "all", "main");
+    for n in 0..3 {
+        registry
+            .patch(
+                "sessions",
+                vec![scoped_row("team:x/1", "s1", n)],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    let replay = registry
+        .subscribe("sessions", "all", Some(first.rev))
+        .unwrap();
+    assert!(replay.snapshot.is_none());
+    assert_eq!(replay.deltas.unwrap().len(), 3);
+}
+
+#[test]
+fn subscribed_logs_stay_under_byte_cap() {
+    let mut registry = TopicRegistry::default();
+    registry
+        .subscribe_window("main:page:sessions", "sessions", "all", None, None)
+        .unwrap();
+    let body = "x".repeat(64 * 1024);
+    for n in 0..1_000 {
+        registry
+            .patch(
+                "sessions",
+                vec![(None, json!({"id": "s1", "n": n, "body": body}))],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    for (entries, bytes) in [
+        registry.view_log("sessions", "all").unwrap(),
+        registry.subscription_log("main:page:sessions").unwrap(),
+    ] {
+        assert!(entries > 0, "a watched view keeps a log");
+        assert!(entries <= RETAINED_DELTAS);
+        assert!(bytes <= LOG_BYTE_CAP, "{bytes} bytes over the cap");
+    }
+}
+
+#[test]
+fn message_delivery_view_without_subscriber_keeps_no_log() {
+    let mut registry = TopicRegistry::default();
+    registry
+        .snapshot("messageDelivery", "team:acme/dev")
+        .unwrap();
+    for n in 0..300 {
+        registry
+            .patch_view(
+                "messageDelivery",
+                vec![(
+                    Some("team:acme/dev".into()),
+                    json!({"id": "delivery:acme/dev/1", "n": n}),
+                )],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        registry.view_log("messageDelivery", "team:acme/dev"),
+        Some((0, 0))
+    );
+}
+
+#[test]
+fn gapped_or_unsubscribed_replay_returns_snapshot() {
+    let mut registry = TopicRegistry::default();
+    // Nobody watches the view, so a replay has no log to read.
+    let first = registry.snapshot("sessions", "team:x/1").unwrap();
+    for n in 0..3 {
+        registry
+            .patch(
+                "sessions",
+                vec![scoped_row("team:x/1", "s1", n)],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    let replay = registry
+        .subscribe("sessions", "team:x/1", Some(first.rev))
+        .unwrap();
+    assert!(replay.snapshot.is_some() && replay.deltas.is_none());
+    // A subscriber past its log resyncs by snapshot.
+    let sub = registry
+        .subscribe_window("main:page:x2", "sessions", "team:x/2", None, None)
+        .unwrap();
+    for n in 0..=RETAINED_DELTAS {
+        registry
+            .patch(
+                "sessions",
+                vec![scoped_row("team:x/2", "s2", n)],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    let gapped = registry
+        .subscribe_window("main:page:x2", "sessions", "team:x/2", Some(sub.rev), None)
+        .unwrap();
+    assert!(gapped.snapshot.is_some() && gapped.deltas.is_none());
+    // Changes made while nobody watched leave a gap a later log cannot paper over.
+    let held = registry.snapshot("sessions", "team:x/3").unwrap();
+    registry.hold("sessions", "team:x/3", "main");
+    registry
+        .patch(
+            "sessions",
+            vec![scoped_row("team:x/3", "s3", 0)],
+            vec![],
+            None,
+        )
+        .unwrap();
+    let seen = registry.snapshot("sessions", "team:x/3").unwrap().rev;
+    registry.release_owner("main");
+    registry
+        .patch(
+            "sessions",
+            vec![scoped_row("team:x/3", "s3", 1)],
+            vec![],
+            None,
+        )
+        .unwrap();
+    registry.hold("sessions", "team:x/3", "main");
+    registry
+        .patch(
+            "sessions",
+            vec![scoped_row("team:x/3", "s3", 2)],
+            vec![],
+            None,
+        )
+        .unwrap();
+    assert!(seen > held.rev);
+    let late = registry
+        .subscribe("sessions", "team:x/3", Some(seen))
+        .unwrap();
+    assert!(
+        late.snapshot.is_some(),
+        "the unwatched change is not in the log, so the reader resyncs"
+    );
+}
+
+#[test]
+fn a_recreated_view_keeps_its_rev_rising() {
+    let mut registry = TopicRegistry::default();
+    registry.snapshot("sessions", "team:x/1").unwrap();
+    for n in 0..3 {
+        registry
+            .patch(
+                "sessions",
+                vec![scoped_row("team:x/1", "s1", n)],
+                vec![],
+                None,
+            )
+            .unwrap();
+    }
+    let old = registry.snapshot("sessions", "team:x/1").unwrap().rev;
+    registry.remove_view("sessions", "team:x/1");
+    let again = registry.snapshot("sessions", "team:x/1").unwrap();
+    assert!(
+        again.rev > old,
+        "a host holding rev {old} must not take the new view's deltas as its next"
+    );
+    let delta = registry
+        .patch(
+            "sessions",
+            vec![scoped_row("team:x/1", "s1", 9)],
+            vec![],
+            None,
+        )
+        .unwrap();
+    assert!(delta.is_empty(), "no subscription, so nothing is delivered");
+    assert!(registry.snapshot("sessions", "team:x/1").unwrap().rev > again.rev);
+    // An evicted page-created topic keeps the rule when it comes back.
+    registry.snapshot("ui:x", "a").unwrap();
+    registry.remove_view("ui:x", "a");
+    for sweep in 1..=SWEEP_IDLE_SWEEPS + 1 {
+        registry.sweep_unwatched(sweep);
+    }
+    assert!(registry.snapshot("ui:x", "a").unwrap().rev > 0);
+}
+
+/// The hub's retained-size gauges by name.
+fn gauges(app: &tauri::App<tauri::test::MockRuntime>) -> std::collections::BTreeMap<String, usize> {
+    use super::*;
+    projection_gauges(&app.state::<LiveHub>().model.lock().unwrap())
+        .into_iter()
+        .collect()
+}
+
+fn has_view(app: &tauri::App<tauri::test::MockRuntime>, topic: &str, key: &str) -> bool {
+    use super::*;
+    app.state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .has_view(topic, key)
+}
+
+/// A scoped subscription `id` of (topic, key), owned by `owner` and opened by `frame`.
+fn subscribe_scoped(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    id: &str,
+    topic: &str,
+    key: &str,
+    owner: &str,
+    frame: &str,
+) {
+    use super::*;
+    super::subscribe(app.handle(), topic, key, None, Some(id), None).unwrap();
+    let hub = app.state::<LiveHub>();
+    let mut model = hub.model.lock().unwrap();
+    model.projections.set_owner(id, owner);
+    model.projections.set_frame(id, frame);
+}
+
+#[test]
+fn released_agent_list_keys_return_to_baseline() {
+    use super::*;
+    let app = hub_app();
+    let baseline = gauges(&app);
+    let mut sweep_no = 0;
+    for round in 0..3 {
+        for n in 0..1_000 {
+            let id = format!("main:page:{round}:{n}");
+            super::subscribe(
+                app.handle(),
+                "agentList",
+                &format!("team:x/{n}"),
+                None,
+                Some(&id),
+                None,
+            )
+            .unwrap();
+            super::unsubscribe(app.handle(), &id, false);
+        }
+        assert!(gauges(&app)["live_hub.agent_views"] >= 1_000);
+        for _ in 0..=projection::SWEEP_IDLE_SWEEPS {
+            sweep_no += 1;
+            super::sweep(app.handle(), sweep_no);
+        }
+        let after = gauges(&app);
+        assert_eq!(
+            after["live_hub.agent_views"],
+            baseline["live_hub.agent_views"]
+        );
+        assert_eq!(
+            after["live_hub.views.agentList"],
+            baseline["live_hub.views.agentList"]
+        );
+    }
+}
+
+#[test]
+fn the_sweep_keeps_pinned_watched_and_pins_views() {
+    use super::*;
+    let app = hub_app();
+    let hub = app.state::<LiveHub>();
+    for (topic, key) in projection::PINNED {
+        hub.snapshot(key, topic).unwrap();
+    }
+    subscribe_scoped(&app, "main:page:1", "sessions", "team:x/1", "main", "f1");
+    read_held(&app, "sessions", "team:x/2", "main");
+    super::subscribe(app.handle(), "sessions", "team:x/3", None, None, None).unwrap();
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .snapshot("pins", "team:x/4")
+        .unwrap();
+    for sweep_no in 1..=projection::SWEEP_IDLE_SWEEPS + 1 {
+        super::sweep(app.handle(), sweep_no);
+    }
+    for (topic, key) in projection::PINNED {
+        assert!(has_view(&app, topic, key), "{topic}:{key} is pinned");
+    }
+    assert!(
+        has_view(&app, "sessions", "team:x/1"),
+        "a subscriber follows it"
+    );
+    assert!(has_view(&app, "sessions", "team:x/2"), "a window holds it");
+    assert!(!has_view(&app, "sessions", "team:x/3"), "nobody reads it");
+    assert!(
+        has_view(&app, "pins", "team:x/4"),
+        "pins views leave through drop_unwatched_pins"
+    );
+}
+
+#[test]
+fn sweep_evicts_after_window_drop() {
+    use super::*;
+    let app = hub_app();
+    read_held(&app, "sessions", "team:x/1", "w");
+    let mut sweep_no = 0;
+    for _ in 0..=projection::SWEEP_IDLE_SWEEPS {
+        sweep_no += 1;
+        super::sweep(app.handle(), sweep_no);
+    }
+    assert!(has_view(&app, "sessions", "team:x/1"), "w still holds it");
+    drop_window(app.handle(), "w");
+    for _ in 0..=projection::SWEEP_IDLE_SWEEPS {
+        sweep_no += 1;
+        super::sweep(app.handle(), sweep_no);
+    }
+    assert!(!has_view(&app, "sessions", "team:x/1"));
+}
+
+#[test]
+fn last_view_of_ui_topic_drops_topic() {
+    let mut registry = TopicRegistry::default();
+    let ui_topics = |registry: &TopicRegistry| {
+        registry
+            .metrics_snapshot()
+            .topics
+            .into_iter()
+            .filter(|(topic, _, _)| topic == "ui:x")
+            .count()
+    };
+    registry.snapshot("ui:x", "a").unwrap();
+    registry.snapshot("ui:x", "b").unwrap();
+    registry.hold("ui:x", "a", "main");
+    let mut sweep_no = 0;
+    for _ in 0..=SWEEP_IDLE_SWEEPS {
+        sweep_no += 1;
+        registry.sweep_unwatched(sweep_no);
+    }
+    assert!(registry.has_view("ui:x", "a"));
+    assert!(!registry.has_view("ui:x", "b"));
+    assert_eq!(ui_topics(&registry), 1);
+    registry.release_owner("main");
+    for _ in 0..=SWEEP_IDLE_SWEEPS {
+        sweep_no += 1;
+        registry.sweep_unwatched(sweep_no);
+    }
+    assert_eq!(ui_topics(&registry), 0, "the topic goes with its last view");
+}
+
+#[test]
+fn release_frame_drops_frame_tagged_subscriptions() {
+    use super::*;
+    let app = hub_app();
+    for (id, frame) in [
+        ("main:f1:a", "f1"),
+        ("main:f1:b", "f1"),
+        ("main:f2:a", "f2"),
+    ] {
+        subscribe_scoped(&app, id, "sessions", "all", "main", frame);
+    }
+    super::drop_frame(app.handle(), "f1");
+    let hub = app.state::<LiveHub>();
+    let model = hub.model.lock().unwrap();
+    assert!(model.projections.subscription_view("main:f1:a").is_none());
+    assert!(model.projections.subscription_view("main:f1:b").is_none());
+    assert!(
+        model.projections.subscription_view("main:f2:a").is_some(),
+        "another frame in the same window keeps its subscription"
+    );
+}
+
+#[test]
+fn hub_retention_returns_to_baseline_after_sessions_exit() {
+    use super::*;
+    let app = hub_app();
+    // Warm-up: the pinned views the app always reads.
+    for (topic, key) in projection::PINNED {
+        app.state::<LiveHub>().snapshot(key, topic).unwrap();
+    }
+    let warm = gauges(&app);
+    for name in [
+        "live_hub.delta_log_bytes",
+        "live_hub.subscription_log_entries",
+        "live_hub.inbox_messages",
+    ] {
+        assert!(warm.contains_key(name), "{name} is reported");
+    }
+    let keys: Vec<_> = (0..20).map(|n| format!("team:x/{n}")).collect();
+    for (n, key) in keys.iter().enumerate() {
+        read_held(&app, "sessions", key, "w");
+        subscribe_scoped(&app, &format!("w:page:{n}"), "sessions", key, "w", "frame");
+    }
+    for round in 0..500 {
+        let rows = keys
+            .iter()
+            .enumerate()
+            .map(|(n, key)| scoped_row(key, &format!("s{n}"), round))
+            .collect();
+        app.state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .patch("sessions", rows, vec![], None)
+            .unwrap();
+    }
+    let busy = gauges(&app);
+    assert!(busy["live_hub.delta_log_bytes"] > 0);
+    assert!(busy["live_hub.subscription_log_entries"] > 0);
+    drop_window(app.handle(), "w");
+    for sweep_no in 1..=projection::SWEEP_IDLE_SWEEPS + 1 {
+        super::sweep(app.handle(), sweep_no);
+    }
+    assert_eq!(gauges(&app), warm);
 }

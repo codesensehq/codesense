@@ -75,6 +75,9 @@ const OFF_MERGE_GROUPS = {
   jobs: ["rust-macos-build", "rust-macos"],
   term: "github.event_name != 'merge_group'",
 };
+// rust.yml's macOS result job may lead with always() in place of the path filter's !cancelled(),
+// so a cancelled run reports red rather than skipped. Only that job: it runs no build or tests.
+const RESULT_ALWAYS = { file: "rust.yml", job: "rust-macos", term: "always()" };
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -251,7 +254,14 @@ export function workflowPolicy(text, file = "") {
         file === RUST_PATH_FILTER.file &&
         RUST_PATH_FILTER.jobs.includes(name) &&
         needs.includes(RUST_PATH_FILTER.job) &&
-        RUST_PATH_FILTER.terms.every((term, i) => terms[i] === term);
+        RUST_PATH_FILTER.terms.every(
+          (term, i) =>
+            terms[i] === term ||
+            (i === 0 &&
+              file === RESULT_ALWAYS.file &&
+              name === RESULT_ALWAYS.job &&
+              terms[i] === RESULT_ALWAYS.term),
+        );
       if (pathFiltered) {
         let rest = terms.slice(RUST_PATH_FILTER.terms.length);
         if (

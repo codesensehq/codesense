@@ -18,15 +18,18 @@ import { test } from "node:test";
 import Ajv2020 from "ajv/dist/2020.js";
 import { parse } from "yaml";
 import {
+  DOCS_BUNDLED,
   ROOT,
   SCHEMA_PATH,
   TARGET_PATHS,
   buildPack,
+  docsMapping,
   listPackFiles,
   parseArgs,
   run as runPacks,
   schemaErrors,
   skillCopies,
+  syncDocs,
 } from "./pack-build.mjs";
 
 const FIXTURES = join(ROOT, "scripts/fixtures/packs");
@@ -487,4 +490,39 @@ test("a leftover temporary name from a crashed run is a named error, then the bu
     assert.deepEqual(buildPack(dir).errors, []);
     assert.deepEqual(buildPack(dir, { check: true }).errors, []);
   });
+});
+
+test("the docs bundle ships the Foreman agent, and only the agent", () => {
+  const pack = join(ROOT, "codesense-docs/packs/codesense-foreman");
+  const manifest = yaml(join(pack, "pack.yml"));
+  const agent = "getting-started/config/agents/foreman-claude/agent.yaml";
+  assert.ok(DOCS_BUNDLED.includes("codesense-foreman"));
+  // The agent alone: the page is built by `foreman-page.mjs`, never copied a second time.
+  assert.deepEqual(
+    docsMapping(pack, manifest).map((pair) => pair.to),
+    [agent],
+  );
+  assert.deepEqual(
+    readFileSync(join(ROOT, "codesense-docs", agent)),
+    readFileSync(join(pack, "agents/foreman-claude/agent.yaml")),
+  );
+  assert.deepEqual(syncDocs(pack, manifest, { check: true }).errors, []);
+  const dir = mkdtempSync(join(tmpdir(), "foreman-docs-"));
+  try {
+    cpSync(join(ROOT, "codesense-docs/getting-started"), join(dir, "getting-started"), {
+      recursive: true,
+    });
+    writeFileSync(join(dir, agent), `${readFileSync(join(dir, agent), "utf8")}# edited\n`);
+    assert.deepEqual(syncDocs(pack, manifest, { check: true, docsRoot: dir }).errors, [
+      `docs drift: ${agent} differs from agents/foreman-claude/agent.yaml`,
+    ]);
+    rmSync(join(dir, agent));
+    assert.deepEqual(syncDocs(pack, manifest, { check: true, docsRoot: dir }).errors, [
+      `docs drift: ${agent} is missing (copy of agents/foreman-claude/agent.yaml)`,
+    ]);
+    // `pack-build --check` runs the same check over the bundle and fails the build.
+    assert.equal(runPacks([pack], { check: true, docsRoot: dir }), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -2126,6 +2126,89 @@ describe("kit.chat onPin: the person pins a message", () => {
       expect(toggleOf(t.el)!.getAttribute("aria-expanded")).toBe("false");
     });
 
+    it("brings an opened message's slot into the log's view once the page draws into it", async () => {
+      const s = setup([lead("idle")], [html]);
+      let opened: HTMLElement | null = null;
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            opened = slot;
+            // Filled at once, as a page's embed does (a loading node, empty until the host answers).
+            slot.append(document.createElement("div"));
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      const log = s.el.querySelector<HTMLElement>(".log")!;
+      // jsdom has no layout: the log is 0..500, and what it holds below its fold is at 480..720.
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 100,
+          width: 100,
+          height: bottom - top,
+          x: 0,
+          y: top,
+        }) as DOMRect;
+      log.getBoundingClientRect = () => rect(0, 500);
+      toggleOf(s.el)!.click();
+      const slot = opened!;
+      slot.getBoundingClientRect = () => rect(480 - log.scrollTop, 720 - log.scrollTop);
+      // The page fills the slot at once with its loading node; its frame arrives in it later.
+      await flush();
+      slot.firstElementChild!.append(document.createElement("iframe"));
+      await flush();
+      // Scrolled within the log by what was below the fold, and never past the slot's top.
+      expect(log.scrollTop).toBe(220);
+    });
+
+    it("keeps an open message's frame in place when an earlier row leaves the thread", async () => {
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const earlier = {
+        messageId: 8,
+        from: "lead-1",
+        to: "human",
+        text: "An earlier line.",
+        createdAtMs: T0 - 1000,
+      };
+      const thread: Row[] = [earlier, html];
+      const s = setup([lead("idle")], thread);
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="8"]')).toBeNull();
+      // Moving an iframe reloads it: the earlier row goes, the open bubble stays where it is.
+      expect(left).toBe(0);
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+    });
+
     it("releases an open message when the chat unmounts", async () => {
       const release = vi.fn();
       const s = setup([lead("idle")], [html]);
@@ -2211,6 +2294,7 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     pinnedBy: string;
     pinnedAtMs?: number;
     preview?: { shortName?: string; value?: string; status?: string };
+    message?: { from: string; createdAtMs: number; text: string };
   };
   const at = (h: number, m: number) => new Date(2026, 10, 12, h, m).getTime();
   const clock = (ms: number) =>
@@ -2288,12 +2372,43 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
 
+  it("names a pin of a message outside the thread (a concurrent seat's) by what the pins read says", async () => {
+    const theirs: Pin = {
+      messageId: 77,
+      pinnedBy: "lead-2",
+      pinnedAtMs: at(14, 2),
+      message: { from: "lead-2", createdAtMs: at(14, 1), text: "Tests pass. The rest is cleanup." },
+    };
+    const { pinOf, choice } = await mountReplace([QA, TESTS, theirs]);
+    pinOf(5).click();
+    await flush();
+    expect(choice(77).querySelector(".t")!.textContent).toBe("Tests pass.");
+  });
+
   it('a chooser with no change line and no error draws neither: no "null" text', async () => {
     const { pinOf, chooser } = await mountReplace();
     pinOf(5).click();
     await flush();
     expect(chooser()!.textContent).not.toMatch(/\bnull\b/);
     for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
+  });
+
+  it("the chooser opens in view: it scrolls to the nearest edge once, not on every repaint", async () => {
+    const scrolled = vi.fn(function (this: Element, _opts?: ScrollIntoViewOptions) {});
+    const before = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      const { pinOf, chooser, agentSets } = await mountReplace();
+      pinOf(5).click();
+      await flush();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(chooser());
+      expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest" });
+      await agentSets([...FULL]);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = before;
+    }
   });
 
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {

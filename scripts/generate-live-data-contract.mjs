@@ -9,6 +9,7 @@ import {
   REFRESH_COMMAND,
   allowStaleExport as switchedOn,
   diskGate,
+  driftInheritedFromMain,
   exportsUntouchedSinceMain,
   inheritedNotice,
 } from "./lib/sealed-export.mjs";
@@ -75,15 +76,22 @@ export function checkContract(root = ROOT, { allowStaleExport = false, warn = co
   const missing = !existsSync(resolve(root, manifest)) || !existsSync(resolve(root, output));
   const stored = missing ? null : JSON.parse(readFileSync(resolve(root, manifest), "utf8"));
   const payloadDrift = missing || stored.outputSha256 !== hash(readFileSync(resolve(root, output)));
-  const inputDrift =
-    !missing && JSON.stringify(stored.inputs) !== JSON.stringify(contractInputs(root));
+  const inputs = missing ? {} : contractInputs(root);
+  const inputDrift = !missing && JSON.stringify(stored.inputs) !== JSON.stringify(inputs);
   if (!payloadDrift && !inputDrift) return;
   const what = missing
     ? "missing sealed export"
     : payloadDrift
       ? "payload changed"
       : "source inputs changed";
-  const untouched = allowStaleExport && exportsUntouchedSinceMain(root, [manifest, output]);
+  const drifted = payloadDrift
+    ? []
+    : [...new Set([...Object.keys(stored.inputs), ...Object.keys(inputs)])].filter(
+        (path) => stored.inputs[path] !== inputs[path],
+      );
+  const untouched =
+    allowStaleExport &&
+    (exportsUntouchedSinceMain(root, [manifest, output]) || driftInheritedFromMain(root, drifted));
   if (untouched)
     return warn(payloadDrift ? inheritedNotice(root, message(what)) : `NOTICE: ${message(what)}`);
   throw new Error(message(what));

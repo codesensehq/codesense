@@ -1,0 +1,51 @@
+step_format: 1
+id: source-repos
+title: Add your source repos
+summary: >-
+  Tracks the repos your team works in, and binds a folder on this Mac when you already have a
+  clone. Cloning a repo is a separate step.
+needs: [team]
+probe:
+  - id: repos
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields: { org: "orgs[].slug", team: "orgs[].teams[].name", attachment: "orgs[].teams[].sourceRepos[].attachment" }
+    map: { attached: done, missing: partial, unattached: done, none: missing, unreadable: unknown }
+ask:
+  text: >-
+    **Add these repos?** I'll add each one to your team's list of source repos. That only
+    records that the team uses it. If you already have a clone on this Mac, I can bind that
+    folder instead. Nothing is committed or pushed: the change waits in your context repo's
+    folder for you to review and commit.
+  options:
+    - { label: Add them, act: add-source-repo }
+    - { label: Bind my clone, act: attach-source-repo-path }
+    - { label: Not now, act: none }
+  free_text: true
+inputs:
+  repo: { pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", label: A repo as owner/name, shareable: true }
+  path: { pattern: "^/[^\\n]{1,400}$", label: The clone's folder on this Mac }
+act:
+  - id: add-source-repo
+    consent: local-write
+    what: add each listed repo to your team
+    where: your team in the context repo; nothing is cloned
+    why: so stories and agents can name these repos
+    verb:
+      tool: add_source_repo
+      args: { org: "{{probe.repos.org}}", team: "{{probe.repos.team}}", url: "{{repo}}" }
+    repeat: 10
+  - id: attach-source-repo-path
+    consent: local-write
+    what: bind your clone to the team's repo
+    where: the folder you name on this Mac
+    why: so worktrees and terminals find the code
+    verb:
+      tool: attach_source_repo_path
+      args: { org: "{{probe.repos.org}}", team: "{{probe.repos.team}}", repo: "{{repo}}", path: "{{path}}" }
+verify: { probe: repos, expect: done }
+record:
+  scope: team
+  fields: { created: "source repo {{repo}}" }
+  secret: never
+undo: Remove the repo from your team's list under Source repos; nothing on disk is touched.

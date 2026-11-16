@@ -4234,6 +4234,57 @@ Shared story
 }
 
 #[tokio::test]
+async fn team_workspace_preflight_admits_the_placed_docs_team_and_refuses_another_org() {
+    use crate::context_repo::caller_scope::{self, tests::AppFixture};
+    let f = AppFixture::new();
+    f.session("own-workspace", Some("child"));
+    let principal = Principal::from(1u64);
+    let docs = crate::context_repo::codesense_docs::bundle_info();
+    crate::context_repo::codesense_docs::ensure_placed(
+        &f.fixture.home,
+        &principal,
+        include_bytes!("../../../resources/codesense-docs.tar.gz"),
+    )
+    .unwrap();
+    let scope = caller_scope::for_session(f.app.handle(), Some("own-workspace"), None).await;
+    // An agent of a user org (a re-homed Foreman) opens the setup guide in the placed docs
+    // team, by the guide's docs-team key.
+    team_workspace_preflight(f.app.handle(), &scope, Some(&docs.slug), Some(&docs.team))
+        .await
+        .unwrap();
+    let guide = format!("{}/{}/guide-claude", docs.slug, docs.team);
+    let key = crate::agents::launch::find_agent_for(
+        &f.fixture.home,
+        &principal,
+        &guide,
+        Some((&docs.slug, &docs.team)),
+        &scope,
+    )
+    .unwrap();
+    assert_eq!(key.to_string(), guide);
+    // Another org that is not the docs stays refused.
+    let other = f.fixture.home.join("users/1/orgs/globex/ctx");
+    std::fs::create_dir_all(other.join("ops/content")).unwrap();
+    std::fs::write(
+        other.join("org.yml"),
+        "slug: globex/ctx\ndisplay_name: Other\ncreated_at: \"2026-01-01T00:00:00Z\"\n",
+    )
+    .unwrap();
+    std::fs::write(other.join("teams.yml"), "teams:\n  - name: ops\n").unwrap();
+    assert_eq!(
+        team_workspace_preflight(f.app.handle(), &scope, Some("globex/ctx"), Some("ops"))
+            .await
+            .unwrap_err(),
+        caller_scope::MISSING
+    );
+    assert!(
+        team_workspace_preflight(f.app.handle(), &scope, Some("globex/ctx"), None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn team_workspace_preflight_and_open_default_to_recorded_child_across_active_orgs() {
     use crate::context_repo::caller_scope::{self, tests::AppFixture, CallerScope};
     use tauri::Manager;
@@ -4274,7 +4325,7 @@ async fn team_workspace_preflight_and_open_default_to_recorded_child_across_acti
                 team_name: "parent".into(),
             });
         for requested in [None, Some("child")] {
-            let context = team_workspace_preflight(f.app.handle(), &scope, requested)
+            let context = team_workspace_preflight(f.app.handle(), &scope, None, requested)
                 .await
                 .unwrap();
             assert_eq!(context.org_slug, "acme/ctx");
@@ -4294,13 +4345,13 @@ async fn team_workspace_preflight_and_open_default_to_recorded_child_across_acti
             );
         }
         assert_eq!(
-            team_workspace_preflight(f.app.handle(), &scope, Some("acme/ctx:parent"))
+            team_workspace_preflight(f.app.handle(), &scope, None, Some("acme/ctx:parent"))
                 .await
                 .unwrap_err(),
             caller_scope::MISSING
         );
         assert_eq!(
-            team_workspace_preflight(f.app.handle(), &scope, Some("acme/ctx:missing"))
+            team_workspace_preflight(f.app.handle(), &scope, None, Some("acme/ctx:missing"))
                 .await
                 .unwrap_err(),
             caller_scope::MISSING
@@ -4313,7 +4364,7 @@ async fn team_workspace_preflight_and_open_default_to_recorded_child_across_acti
             team_name: "parent".into(),
         });
     assert_eq!(
-        team_workspace_preflight(f.app.handle(), &CallerScope::Human, None)
+        team_workspace_preflight(f.app.handle(), &CallerScope::Human, None, None)
             .await
             .unwrap()
             .team_name

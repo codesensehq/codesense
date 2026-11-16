@@ -4,7 +4,9 @@ import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import {
+  LIVE_HIDDEN_THROTTLE_MS,
   LiveHub,
+  MAX_UNHELD_VIEWS,
   liveHub,
   orderedRows,
   paneViewKey,
@@ -16,6 +18,7 @@ import { webviewPerfCounts } from "@/shared/lib/webview-perf-counters";
 import runReviewFixture from "../../../../tests/fixtures/run-review.json";
 import configurationFixture from "./configuration-writer-trace.json";
 import prefsFixture from "./prefs-writer-trace.json";
+import patchTrace from "./delta-patch-trace.json";
 const scopedRaceFrames = [
   ...runReviewFixture,
   ...prefsFixture.initial,
@@ -284,6 +287,28 @@ beforeEach(() => {
 afterEach(() => {
   hub.dispose();
   vi.useRealTimers();
+});
+it("tags a scoped read with its frame's id", async () => {
+  hub.dispose();
+  const read = vi.fn(async (..._args: unknown[]) => ({
+    topic: "machineStats",
+    viewKey: "all",
+    rev: 1,
+    snapshot: [{ id: "local" }],
+  }));
+  hub = new LiveHub({
+    read,
+    unsubscribe: async () => {},
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_key, state) => state,
+  });
+  const frame = hub.attach("frame-7", "all", vi.fn(), true, true);
+  await frame.subscribe("machineStats");
+  expect(read.mock.calls[0][3]).toEqual(
+    expect.objectContaining({ subscriptionId: expect.any(String), frameId: "frame-7" }),
+  );
+  frame.dispose();
 });
 it("releases machineStats when hidden or disposed and catches up on show", async () => {
   hub.dispose();
@@ -2838,6 +2863,303 @@ it("a frame disposed after the hub was disposed releases nothing the next lifeti
     expect(internals(local).views.has(key)).toBe(true);
     stop();
     expect(internals(local).views.has(key)).toBe(false);
+  } finally {
+    local.dispose();
+  }
+});
+
+it.each([
+  ["before", [[], [7]]],
+  ["after", [[7], []]],
+])(
+  "keeps a held team-wide inbox change team-wide when named ids land %s it",
+  async (_order, ids) => {
+    const post = vi.fn();
+    const frame = hub.attach("inbox", "all", post, true);
+    await vi.advanceTimersByTimeAsync(0);
+    const team = { org: "acme", team: "backend" };
+    frame.visible(false);
+    post.mockClear();
+    for (const messageIds of ids)
+      events.get("agent-inbox-changed")!({ payload: { changes: [{ team, messageIds }] } });
+    frame.visible(true);
+    expect(inboxChanges(post)).toEqual([
+      { type: "codesense:inbox-changed", changes: [{ team, messageIds: [] }] },
+    ]);
+  },
+);
+
+// Field patches from the host, and the host holds that mirror the cache.
+const SESSIONS = JSON.stringify(["sessions", "all"]);
+const hubDeltas = (post: ReturnType<typeof vi.fn>) =>
+  post.mock.calls.map(([m]) => m).filter((m) => m.type === "codesense:delta");
+const sessionsHub = () =>
+  retentionHub({
+    read: async (topic, viewKey) => ({ topic, viewKey, rev: 1, snapshot: sessionRows() }),
+  });
+/** A hub whose reads take a host hold, as `live_hub_subscribe` does, recording releases.
+ *  Generations only grow, from `issued` on. */
+function holdingHub(overrides: Partial<ConstructorParameters<typeof LiveHub>[0]> = {}, issued = 0) {
+  let generation = issued;
+  const read = vi.fn(async (topic: string, viewKey: string) => ({
+    topic,
+    viewKey,
+    rev: 1,
+    snapshot: [{ id: "r1" }],
+    hold: ++generation,
+  }));
+  const release = vi.fn(async (_topic: string, _viewKey: string, _generation: number) => {});
+  const releaseOwner = vi.fn(async () => generation);
+  const local = retentionHub({ read, release, releaseOwner, ...overrides });
+  return { local, read, release, releaseOwner };
+}
+
+it("applies a field patch to the cached row and posts full rows on the visible path, the hidden fold and to watchers", async () => {
+  const local = sessionsHub();
+  try {
+    const visible = vi.fn();
+    const hidden = vi.fn();
+    const shown = local.attach("shown", "all", visible, true);
+    const away = local.attach("away", "all", hidden, true, false, undefined, { badge: "live" });
+    await shown.subscribe("sessions");
+    await away.subscribe("sessions");
+    away.visible(false);
+    const watched = vi.fn();
+    const stop = local.watch("sessions", "all", watched);
+    await vi.advanceTimersByTimeAsync(0);
+    visible.mockClear();
+    hidden.mockClear();
+    const seeded = internals(local).views.get(SESSIONS)!.snapshot;
+    local.receive({
+      topic: "sessions",
+      viewKey: "all",
+      rev: 2,
+      upserts: [],
+      patches: [{ id: "a", set: { status: "working" }, unset: ["handle"] }],
+      removes: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hubDeltas(visible)).toEqual([
+      {
+        type: "codesense:delta",
+        topic: "sessions",
+        viewKey: "all",
+        rev: 2,
+        upserts: [{ id: "a", status: "working" }],
+        removes: [],
+      },
+    ]);
+    local.receive({
+      topic: "sessions",
+      viewKey: "all",
+      rev: 3,
+      upserts: [{ id: "d", handle: "d", status: "idle" }],
+      patches: [{ id: "b", set: { status: null }, unset: [] }],
+      removes: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const b = { id: "b", handle: "b", status: null };
+    const d = { id: "d", handle: "d", status: "idle" };
+    expect(hubDeltas(visible).at(-1)).toMatchObject({ rev: 3, upserts: [d, b] });
+    expect(watched).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rev: 3 }),
+      expect.objectContaining({ upserts: [d, b] }),
+    );
+    await vi.advanceTimersByTimeAsync(LIVE_HIDDEN_THROTTLE_MS);
+    expect(hubDeltas(hidden)).toEqual([
+      expect.objectContaining({
+        rev: 3,
+        baseRev: 1,
+        upserts: [{ id: "a", status: "working" }, d, b],
+      }),
+    ]);
+    for (const post of [visible, hidden])
+      expect(hubDeltas(post).every((m) => !("patches" in m))).toBe(true);
+    expect(internals(local).views.get(SESSIONS)!.snapshot).toEqual([
+      { id: "a", status: "working" },
+      b,
+      { id: "c", handle: "c", status: "idle" },
+      d,
+    ]);
+    // The seeded rows are frozen: the patch built new rows rather than writing into them.
+    expect(seeded.find((row) => row.id === "a")).toEqual({ id: "a", handle: "a", status: "idle" });
+    stop();
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a patch with no cached base view, or naming a row the view lacks, resyncs and never guesses", async () => {
+  const local = sessionsHub();
+  try {
+    const post = vi.fn();
+    const frame = local.attach("page", "all", post, true);
+    await frame.subscribe("sessions");
+    await vi.advanceTimersByTimeAsync(0);
+    const patch = (rev: number, id: string): HubDelta => ({
+      topic: "sessions",
+      viewKey: "all",
+      rev,
+      upserts: [],
+      patches: [{ id, set: { status: "working" }, unset: [] }],
+      removes: [],
+    });
+    for (const delta of [patch(2, "missing"), patch(3, "a")]) {
+      post.mockClear();
+      local.receive(delta);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(internals(local).views.has(SESSIONS)).toBe(false);
+      expect(post.mock.calls.map(([m]) => m)).toEqual([
+        { type: "codesense:resync", topic: "sessions", viewKey: "all" },
+      ]);
+    }
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a patch that arrives while its view is read applies after the seed", async () => {
+  let reply!: () => void;
+  const local = retentionHub({
+    read: (topic, viewKey) =>
+      new Promise((resolve) => {
+        reply = () => resolve({ topic, viewKey, rev: 1, snapshot: sessionRows() });
+      }),
+  });
+  try {
+    const read = local.snapshot("sessions", "all");
+    await vi.advanceTimersByTimeAsync(0);
+    local.receive({
+      topic: "sessions",
+      viewKey: "all",
+      rev: 2,
+      upserts: [],
+      patches: [{ id: "a", set: { status: "working" }, unset: [] }],
+      removes: [],
+    });
+    reply();
+    const view = await read;
+    expect(view.rev).toBe(2);
+    expect(view.snapshot.find((row) => row.id === "a")).toEqual({
+      id: "a",
+      handle: "a",
+      status: "working",
+    });
+  } finally {
+    local.dispose();
+  }
+});
+
+it("replaying the host's golden patch trace yields the rows the host holds", async () => {
+  const local = retentionHub({ read: async () => patchTrace.initial as HubSnapshot });
+  try {
+    const watched = vi.fn();
+    const stop = local.watch("pins", "all", watched);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const delta of patchTrace.deltas) local.receive(delta as unknown as HubDelta);
+    await vi.advanceTimersByTimeAsync(0);
+    const [view, change] = watched.mock.calls.at(-1)!;
+    expect(view).toEqual(patchTrace.final);
+    expect(change.upserts).toEqual(
+      expect.arrayContaining(
+        patchTrace.final.snapshot.filter((row) => ["a", "b", "d"].includes(row.id)),
+      ),
+    );
+    stop();
+  } finally {
+    local.dispose();
+  }
+});
+
+it("releases a host hold only when its view leaves the cache, never on a gap or resync", async () => {
+  const { local, release } = holdingHub();
+  try {
+    const frame = local.attach("page", "all", () => {}, true);
+    await frame.subscribe("sessions");
+    local.receive({ topic: "sessions", viewKey: "all", rev: 9, upserts: [], removes: [] });
+    expect(internals(local).views.has(SESSIONS)).toBe(false);
+    await local.resync("sessions", "all");
+    expect(release).not.toHaveBeenCalled();
+    frame.dispose();
+    // The latest read's hold: a late release of the first would be a no-op on the host.
+    expect(release.mock.calls).toEqual([["sessions", "all", 2]]);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("an unheld view the LRU drops releases its host hold, and its next read holds it again", async () => {
+  const { local, read, release } = holdingHub();
+  try {
+    for (let i = 0; i <= MAX_UNHELD_VIEWS; i++)
+      await local.snapshot("messageDelivery", `team:o/t${i}`);
+    expect(release.mock.calls).toEqual([["messageDelivery", "team:o/t0", 1]]);
+    read.mockClear();
+    await local.snapshot("messageDelivery", "team:o/t0");
+    expect(read).toHaveBeenCalledTimes(1);
+    // That read pushed the next oldest out, then this one's own hold goes with its eviction.
+    for (let i = 0; i < MAX_UNHELD_VIEWS; i++)
+      await local.snapshot("messageDelivery", `team:o/n${i}`);
+    expect(release).toHaveBeenCalledWith("messageDelivery", "team:o/t0", MAX_UNHELD_VIEWS + 2);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("start drops an earlier page's holds before the first read, and forgets views seeded under them", async () => {
+  let finish!: (through: number) => void;
+  const releaseOwner = vi.fn(() => new Promise<number>((resolve) => (finish = resolve)));
+  const { local, read } = holdingHub({ releaseOwner }, 5);
+  try {
+    const seeded = JSON.stringify(["agentDefinitions", "native"]);
+    const seed = (hold: number) =>
+      local.seed({ topic: "agentDefinitions", viewKey: "native", rev: hold, snapshot: [], hold });
+    // A prepare that resolved before the hub started holds under the page's earlier holds.
+    seed(3);
+    const first = local.snapshot("sessions", "all");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(releaseOwner).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    finish(5);
+    await first;
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(internals(local).views.has(seeded)).toBe(false);
+    // A prepare from before the release that lands after it is not cached either.
+    seed(4);
+    expect(internals(local).views.has(seeded)).toBe(false);
+    seed(6);
+    expect(internals(local).views.has(seeded)).toBe(true);
+  } finally {
+    local.dispose();
+  }
+});
+
+it("keeps the host's hold generation out of the views frames read", async () => {
+  const { local } = holdingHub();
+  try {
+    const frame = local.attach("page", "all", () => {}, true);
+    const reply = await frame.subscribe("sessions");
+    expect(reply).not.toHaveProperty("hold");
+    local.seed({ topic: "agentDefinitions", viewKey: "all", rev: 1, snapshot: [], hold: 9 });
+    expect(await frame.subscribe("agentDefinitions")).not.toHaveProperty("hold");
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a gap on an unheld view drops it from the cache and releases its host hold", async () => {
+  const { local, release } = holdingHub();
+  try {
+    await local.snapshot("messageDelivery", "team:o/a");
+    local.receive({
+      topic: "messageDelivery",
+      viewKey: "team:o/a",
+      rev: 9,
+      upserts: [],
+      removes: [],
+    });
+    expect(internals(local).views.has(JSON.stringify(["messageDelivery", "team:o/a"]))).toBe(false);
+    expect(release.mock.calls).toEqual([["messageDelivery", "team:o/a", 1]]);
   } finally {
     local.dispose();
   }

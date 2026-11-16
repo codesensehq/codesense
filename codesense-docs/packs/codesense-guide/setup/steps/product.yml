@@ -1,0 +1,81 @@
+step_format: 1
+id: product
+title: Name your product
+summary: >-
+  Until CodeSense has products of its own, a product is one epic in your team that lists its
+  repos, plus a row in the setup log. The step file switches to the product tool when it ships.
+needs: [team]
+probe:
+  - id: teams
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs }, "orgs[].teams[].archived": false }
+    yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot", team: "orgs[].teams[].name" }
+    map: { found: done, none: missing, unreadable: unknown }
+  - id: product
+    check:
+      tool: records_list
+      org: "{{probe.teams.org}}"
+      team: "{{probe.teams.team}}"
+      collection: setup-ledger
+    pick: { "rows[].fields.step": product, "rows[].fields.state": done }
+    map: { found: done, none: missing, unreadable: unknown }
+  # The ledger row is written after verify, so verify also reads the epic itself. A new session
+  # doesn't know the product's name yet; this probe then reads none, and the row above decides.
+  - id: epic
+    check:
+      tool: read_epic_repos
+      epicFilePath: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
+    map: { found: done, none: missing, unreadable: missing }
+ask:
+  text: >-
+    **What's the product called?** I'll switch CodeSense to your team, create one epic with that name in it, list the
+    repos you told me about on it, and note it in the setup log. Nothing is committed or
+    pushed: the new files wait in your context repo's folder for you to review and commit.
+  options:
+    - { label: Create it, act: create-epic }
+    - { label: Not now, act: none }
+  free_text: true
+inputs:
+  product: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", label: "Product name, a lowercase name", shareable: true }
+  repos:
+    pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    label: Its repos, each as owner/name
+    list: true
+    shareable: true
+act:
+  - id: create-epic
+    consent: local-write
+    what: switch CodeSense to your team, create the product's epic and list its repos on it
+    where: your team's content folder in the context repo
+    why: so stories can be planned under the product and name the repos they touch
+    verb:
+      tool: set_active_team
+      args: { org: "{{probe.teams.org}}", team: "{{probe.teams.team}}" }
+    then: [write-epic, set-epic-repos]
+  - id: write-epic
+    consent: local-write
+    what: create the product's epic
+    where: your team's content folder in the context repo
+    why: so stories can be planned under the product
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
+        content: "---\ntype: epic\ntitle: {{product}}\nstatus: in-progress\n---\n# {{product}}\n"
+        onCollision: fail
+  - id: set-epic-repos
+    consent: local-write
+    what: list the product's repos on its epic
+    where: the epic's README in your team
+    why: so a workspace opened on the epic assembles those repos
+    verb:
+      tool: set_epic_repos
+      args:
+        epicFilePath: "{{probe.teams.org_root}}/{{probe.teams.team}}/content/{{product}}/README.md"
+        repos: "{{repos}}"
+verify: { probe: [product, epic], expect: done }
+record:
+  scope: team
+  fields: { created: "product {{product}}, one epic" }
+  secret: never
+undo: Delete the epic's folder from your team's content and its row from the setup log.

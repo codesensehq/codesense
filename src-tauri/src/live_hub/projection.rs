@@ -4,6 +4,26 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const RETAINED_DELTAS: usize = 256;
+/// A delta log's approximate size cap, on top of [`RETAINED_DELTAS`].
+pub const LOG_BYTE_CAP: usize = 2 * 1024 * 1024;
+/// A view nobody watches is evicted once it has gone unread for more than this many sweeps.
+pub const SWEEP_IDLE_SWEEPS: u64 = 2;
+/// The views the hub's own readers use on every rebuild: never evicted.
+pub const PINNED: [(&str, &str); 3] = [
+    ("sessions", "all"),
+    ("agentList", "all"),
+    ("agentList", "all|status"),
+];
+/// Whether the sweep may evict a view of `topic`: a view whose rows the projection rebuilds on
+/// the next read. Every other topic's views are owned by a module that removes them itself
+/// (pins leave through `drop_unwatched_pins`).
+fn swept(topic: &str) -> bool {
+    topic.starts_with("ui:")
+        || matches!(
+            topic,
+            "sessions" | "inbox" | "messageDelivery" | "storyTotals" | "machineStats" | "agentList"
+        )
+}
 pub const PAGE_SIZE: usize = 200;
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,6 +60,104 @@ pub struct Delta {
     pub base_rev: Option<u64>,
     #[serde(skip)]
     arrivals: BTreeSet<String>,
+    /// For each upserted row the view already held, the top-level fields it set or dropped.
+    /// Only the `codesense:delta` emit reads it ([`WireDelta`]); every other reader sees full rows.
+    #[serde(skip)]
+    changed: BTreeMap<String, Changed>,
+}
+/// The top-level fields an updated row set (changed or added) and dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Changed {
+    pub set: Vec<String>,
+    pub unset: Vec<String>,
+}
+/// The fields `next` sets or drops against `prior`, when both are objects.
+fn changed_fields(prior: &Value, next: &Value) -> Option<Changed> {
+    let (Value::Object(prior), Value::Object(next)) = (prior, next) else {
+        return None;
+    };
+    Some(Changed {
+        set: next
+            .iter()
+            .filter(|(field, value)| prior.get(*field) != Some(*value))
+            .map(|(field, _)| field.clone())
+            .collect(),
+        unset: prior
+            .keys()
+            .filter(|field| !next.contains_key(*field))
+            .cloned()
+            .collect(),
+    })
+}
+/// Topics whose default read is one page, so a reader may not hold a changed row's base.
+pub(crate) fn paged(topic: &str) -> bool {
+    matches!(topic, "inbox" | "records" | "files" | "stories")
+}
+/// One updated row on the wire: the fields it set, with their values, and the ones it dropped.
+/// Not RFC 7386 merge-patch: rows carry real `null`s, so a dropped field is named in `unset`.
+#[derive(Clone, Debug, Serialize)]
+pub struct RowPatch<'a> {
+    pub id: &'a str,
+    pub set: BTreeMap<&'a str, &'a Value>,
+    pub unset: &'a [String],
+}
+/// How a [`Delta`] goes out on `codesense:delta` to the host `LiveHub`: a row the view already
+/// held goes as a [`RowPatch`] and an arrival as a full row. The host rebuilds full rows before
+/// any page sees them, so subscription deltas, replies, replay and the page SDK keep full rows.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireDelta<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<&'a Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'a str>,
+    pub topic: &'a str,
+    pub view_key: &'a str,
+    pub rev: u64,
+    pub upserts: Vec<&'a Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<RowPatch<'a>>,
+    pub removes: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+}
+impl<'a> From<&'a Delta> for WireDelta<'a> {
+    fn from(delta: &'a Delta) -> Self {
+        let mut upserts = Vec::new();
+        let mut patches = Vec::new();
+        for row in &delta.upserts {
+            let id = row["id"].as_str().unwrap_or_default();
+            match delta.changed.get(id) {
+                Some(changed) if !paged(&delta.topic) => patches.push(RowPatch {
+                    id,
+                    set: changed
+                        .set
+                        .iter()
+                        .map(|field| (field.as_str(), &row[field.as_str()]))
+                        .collect(),
+                    unset: &changed.unset,
+                }),
+                _ => upserts.push(row),
+            }
+        }
+        Self {
+            actor: delta.actor.as_ref(),
+            cursor: delta.cursor.as_ref(),
+            kind: delta.kind.as_deref(),
+            topic: &delta.topic,
+            view_key: &delta.view_key,
+            rev: delta.rev,
+            upserts,
+            patches,
+            removes: &delta.removes,
+            request_id: delta.request_id.as_deref(),
+            total: delta.total,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +174,15 @@ pub struct SubscriptionReply {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
+/// A view handed to the webview with the generation of the hold it took ([`TopicRegistry::hold`]),
+/// which the webview passes back to `live_hub_release`.
+#[derive(Clone, Debug, Serialize)]
+pub struct Held<T> {
+    #[serde(flatten)]
+    pub view: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<u64>,
+}
 impl From<Snapshot> for SubscriptionReply {
     fn from(s: Snapshot) -> Self {
         Self {
@@ -69,11 +196,74 @@ impl From<Snapshot> for SubscriptionReply {
         }
     }
 }
+/// The approximate in-memory size of `value`, walked rather than serialized.
+fn value_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(text) => text.len() + 2,
+        Value::Array(items) => 2 + items.iter().map(value_bytes).sum::<usize>(),
+        Value::Object(fields) => {
+            2 + fields
+                .iter()
+                .map(|(field, value)| field.len() + 3 + value_bytes(value))
+                .sum::<usize>()
+        }
+        _ => 8,
+    }
+}
+fn delta_bytes(delta: &Delta) -> usize {
+    64 + delta.upserts.iter().map(value_bytes).sum::<usize>()
+        + delta.removes.iter().map(|id| id.len() + 3).sum::<usize>()
+        + delta.actor.as_ref().map_or(0, value_bytes)
+}
+/// Retained deltas, oldest first, capped by [`RETAINED_DELTAS`] and [`LOG_BYTE_CAP`]. The byte
+/// count is kept as each delta comes and goes, so the cap and the gauges never reserialize.
+#[derive(Default)]
+struct DeltaLog {
+    deltas: VecDeque<(usize, Delta)>,
+    bytes: usize,
+}
+impl DeltaLog {
+    fn push(&mut self, delta: Delta) {
+        let size = delta_bytes(&delta);
+        self.bytes += size;
+        self.deltas.push_back((size, delta));
+        while self.deltas.len() > RETAINED_DELTAS || self.bytes > LOG_BYTE_CAP {
+            let Some((size, _)) = self.deltas.pop_front() else {
+                break;
+            };
+            self.bytes -= size;
+        }
+    }
+    fn clear(&mut self) {
+        self.deltas.clear();
+        self.bytes = 0;
+    }
+    fn len(&self) -> usize {
+        self.deltas.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.deltas.is_empty()
+    }
+    fn front(&self) -> Option<&Delta> {
+        self.deltas.front().map(|(_, delta)| delta)
+    }
+    fn since(&self, rev: u64) -> Vec<Delta> {
+        self.deltas
+            .iter()
+            .map(|(_, delta)| delta)
+            .filter(|delta| delta.rev > rev)
+            .cloned()
+            .collect()
+    }
+}
 #[derive(Default)]
 struct View {
     rev: u64,
     rows: BTreeMap<String, Value>,
-    log: VecDeque<Delta>,
+    /// Kept only while the view is watched, so it never has a gap.
+    log: DeltaLog,
+    /// The sweep a reader last read the view in.
+    last_read: u64,
 }
 impl View {
     fn commit(
@@ -84,6 +274,7 @@ impl View {
         removes: Vec<String>,
         request_id: Option<String>,
         arrivals: BTreeSet<String>,
+        changed: BTreeMap<String, Changed>,
     ) -> Option<Delta> {
         if upserts.is_empty() && removes.is_empty() {
             return None;
@@ -102,11 +293,8 @@ impl View {
             total: None,
             base_rev: None,
             arrivals,
+            changed,
         };
-        self.log.push_back(delta.clone());
-        if self.log.len() > RETAINED_DELTAS {
-            self.log.pop_front();
-        }
         Some(delta)
     }
 }
@@ -114,6 +302,11 @@ pub struct CachedProjection {
     topic: String,
     rows: BTreeMap<String, (Option<String>, Value)>,
     views: BTreeMap<String, View>,
+    /// Above every revision a removed view reached: a recreated view starts here, so a host
+    /// holding the old view never takes the new view's deltas as its next.
+    rev_floor: u64,
+    /// The registry's latest sweep, stamped on a view as it is created.
+    sweep: u64,
 }
 impl Default for CachedProjection {
     fn default() -> Self {
@@ -135,6 +328,8 @@ impl CachedProjection {
             topic: topic.into(),
             rows: BTreeMap::new(),
             views: BTreeMap::new(),
+            rev_floor: 0,
+            sweep: 0,
         }
     }
     fn filtered(&self, key: &str) -> BTreeMap<String, Value> {
@@ -189,10 +384,17 @@ impl CachedProjection {
             self.views.insert(
                 key.into(),
                 View {
+                    rev: self.rev_floor,
                     rows,
+                    last_read: self.sweep,
                     ..Default::default()
                 },
             );
+        }
+    }
+    fn remove_view(&mut self, key: &str) {
+        if let Some(view) = self.views.remove(key) {
+            self.rev_floor = self.rev_floor.max(view.rev + 1);
         }
     }
     fn replace_view(&mut self, key: &str, rows: Vec<(Option<String>, Value)>) -> Option<Delta> {
@@ -208,10 +410,20 @@ impl CachedProjection {
             .filter(|id| !view.rows.contains_key(*id))
             .cloned()
             .collect();
+        let mut changed = BTreeMap::new();
         let upserts = next
             .iter()
             .filter(|(id, row)| view.rows.get(*id) != Some(*row))
-            .map(|(_, row)| row.clone())
+            .map(|(id, row)| {
+                if let Some(fields) = view
+                    .rows
+                    .get(id)
+                    .and_then(|prior| changed_fields(prior, row))
+                {
+                    changed.insert(id.clone(), fields);
+                }
+                row.clone()
+            })
             .collect();
         let removes = view
             .rows
@@ -220,7 +432,7 @@ impl CachedProjection {
             .cloned()
             .collect();
         view.rows = next;
-        view.commit(&self.topic, key, upserts, removes, None, arrivals)
+        view.commit(&self.topic, key, upserts, removes, None, arrivals, changed)
     }
     fn replay(&mut self, key: &str, since: Option<u64>) -> Option<Vec<Delta>> {
         self.ensure_view(key);
@@ -231,7 +443,7 @@ impl CachedProjection {
         {
             return None;
         }
-        Some(view.log.iter().filter(|d| d.rev > since).cloned().collect())
+        Some(view.log.since(since))
     }
     fn patch(
         &mut self,
@@ -259,6 +471,7 @@ impl CachedProjection {
         for (key, view) in &mut self.views {
             let mut upserts = Vec::new();
             let mut removes = Vec::new();
+            let mut changed = BTreeMap::new();
             for id in &affected {
                 let next = self
                     .rows
@@ -267,7 +480,11 @@ impl CachedProjection {
                     .map(|(_, row)| row);
                 match next {
                     Some(row) if view.rows.get(id) != Some(row) => {
-                        view.rows.insert(id.clone(), row.clone());
+                        if let Some(prior) = view.rows.insert(id.clone(), row.clone()) {
+                            if let Some(fields) = changed_fields(&prior, row) {
+                                changed.insert(id.clone(), fields);
+                            }
+                        }
                         upserts.push(row.clone());
                     }
                     None if view.rows.remove(id).is_some() => removes.push(id.clone()),
@@ -281,6 +498,7 @@ impl CachedProjection {
                 removes,
                 request_id.clone(),
                 arrivals.clone(),
+                changed,
             ) {
                 deltas.push(delta);
             }
@@ -322,15 +540,37 @@ struct Subscription {
     topic: String,
     key: String,
     owner: Option<String>,
+    /// The frame that opened it, so releasing the frame drops it.
+    frame: Option<String>,
     window: Option<[usize; 2]>,
     loaded: BTreeMap<String, Value>,
     total: usize,
     rev: u64,
-    log: VecDeque<Delta>,
+    log: DeltaLog,
 }
 pub struct TopicRegistry {
     topics: BTreeMap<String, CachedProjection>,
     subscriptions: BTreeMap<String, Subscription>,
+    /// The views a webview holds a cached copy of: (topic, view key) → owner window label → the
+    /// generation of its latest hold. The hold count is the number of owners.
+    held: BTreeMap<String, BTreeMap<String, BTreeMap<String, u64>>>,
+    /// The last hold generation issued; every hold takes a new one.
+    hold_generation: u64,
+    /// The latest [`TopicRegistry::sweep_unwatched`] run.
+    sweep: u64,
+    /// Above every revision a dropped `ui:` topic's views reached, for the topic's return.
+    rev_floor: u64,
+}
+/// Retained projection sizes, for the perf gauges.
+pub struct ProjectionMetrics {
+    /// Deltas in view logs.
+    pub log_entries: usize,
+    /// Approximate bytes in view and subscription logs.
+    pub log_bytes: usize,
+    pub subscription_log_entries: usize,
+    pub subscriptions: usize,
+    /// Each topic's view count and view-log entries.
+    pub topics: Vec<(String, usize, usize)>,
 }
 impl Default for TopicRegistry {
     fn default() -> Self {
@@ -358,27 +598,67 @@ impl Default for TopicRegistry {
             .map(|t| (t.into(), CachedProjection::new(t)))
             .collect(),
             subscriptions: BTreeMap::new(),
+            held: BTreeMap::new(),
+            hold_generation: 0,
+            sweep: 0,
+            rev_floor: 0,
         }
     }
 }
 impl TopicRegistry {
     /// Current retained projection sizes, grouped by topic for perf diagnostics.
-    pub fn metrics_snapshot(&self) -> (usize, usize, Vec<(String, usize, usize)>) {
-        let mut topics = self.topics.iter().map(|(name, projection)| {
-            let views = projection.views.len();
-            let entries = projection.views.values().map(|view| view.log.len()).sum();
-            (name.clone(), views, entries)
-        }).collect::<Vec<_>>();
+    pub fn metrics_snapshot(&self) -> ProjectionMetrics {
+        let mut topics = self
+            .topics
+            .iter()
+            .map(|(name, projection)| {
+                let views = projection.views.len();
+                let entries = projection.views.values().map(|view| view.log.len()).sum();
+                (name.clone(), views, entries)
+            })
+            .collect::<Vec<_>>();
         topics.sort_by(|a, b| a.0.cmp(&b.0));
-        let total_entries = topics.iter().map(|(_, _, entries)| entries).sum();
-        (total_entries, self.subscriptions.len(), topics)
+        let view_bytes: usize = self
+            .topics
+            .values()
+            .flat_map(|projection| projection.views.values())
+            .map(|view| view.log.bytes)
+            .sum();
+        let subscription_bytes: usize = self.subscriptions.values().map(|s| s.log.bytes).sum();
+        ProjectionMetrics {
+            log_entries: topics.iter().map(|(_, _, entries)| entries).sum(),
+            log_bytes: view_bytes + subscription_bytes,
+            subscription_log_entries: self.subscriptions.values().map(|s| s.log.len()).sum(),
+            subscriptions: self.subscriptions.len(),
+            topics,
+        }
+    }
+    /// The entries and approximate bytes of (topic, key)'s delta log, if the view exists.
+    pub fn view_log(&self, topic: &str, key: &str) -> Option<(usize, usize)> {
+        let view = self.topics.get(topic)?.views.get(key)?;
+        Some((view.log.len(), view.log.bytes))
+    }
+    /// The entries and approximate bytes of subscription `id`'s delta log.
+    pub fn subscription_log(&self, id: &str) -> Option<(usize, usize)> {
+        let s = self.subscriptions.get(id)?;
+        Some((s.log.len(), s.log.bytes))
+    }
+    pub fn has_view(&self, topic: &str, key: &str) -> bool {
+        self.topics
+            .get(topic)
+            .is_some_and(|projection| projection.views.contains_key(key))
     }
 
     fn topic(&mut self, topic: &str) -> Result<&mut CachedProjection, String> {
         if topic.starts_with("ui:") && topic.len() > 3 {
+            let (rev_floor, sweep) = (self.rev_floor, self.sweep);
             self.topics
                 .entry(topic.into())
-                .or_insert_with(|| CachedProjection::new(topic));
+                .or_insert_with(|| CachedProjection {
+                    rev_floor,
+                    sweep,
+                    ..CachedProjection::new(topic)
+                });
         }
         self.topics
             .get_mut(topic)
@@ -390,11 +670,41 @@ impl TopicRegistry {
         key: &str,
         rows: Vec<(Option<String>, Value)>,
     ) -> Result<Vec<Delta>, String> {
-        Ok(self
+        let deltas: Vec<_> = self
             .topic(topic)?
             .replace_view(key, rows)
             .into_iter()
-            .collect())
+            .collect();
+        self.log(&deltas);
+        Ok(deltas)
+    }
+    /// Keep `deltas` in their views' logs while someone watches the view. An unwatched view's
+    /// change clears its log, so a later log never skips the change.
+    fn log(&mut self, deltas: &[Delta]) {
+        if deltas.is_empty() {
+            return;
+        }
+        let watched: Vec<bool> = {
+            let followed = followed(&self.subscriptions);
+            deltas
+                .iter()
+                .map(|delta| self.watched_in(&followed, &delta.topic, &delta.view_key))
+                .collect()
+        };
+        for (delta, watched) in deltas.iter().zip(watched) {
+            let Some(view) = self
+                .topics
+                .get_mut(&delta.topic)
+                .and_then(|projection| projection.views.get_mut(&delta.view_key))
+            else {
+                continue;
+            };
+            if watched {
+                view.log.push(delta.clone());
+            } else {
+                view.log.clear();
+            }
+        }
     }
     pub fn replace_records(
         &mut self,
@@ -408,24 +718,37 @@ impl TopicRegistry {
             .into_iter()
             .map(|row| (Some(key.to_owned()), row))
             .collect();
-        let mut deltas = self.replace_view("records", key, scoped)?;
+        let mut deltas: Vec<_> = self
+            .topic("records")?
+            .replace_view(key, scoped)
+            .into_iter()
+            .collect();
         for delta in &mut deltas {
             delta.actor = actor.clone();
             delta.kind = kind.clone();
             delta.request_id = request_id.clone();
-            if let Some(saved) = self
-                .topic("records")?
-                .views
-                .get_mut(key)
-                .and_then(|v| v.log.back_mut())
-            {
-                *saved = delta.clone();
-            }
         }
+        self.log(&deltas);
         Ok(deltas)
     }
     pub fn snapshot(&mut self, topic: &str, key: &str) -> Result<Snapshot, String> {
         Ok(self.topic(topic)?.snapshot(key))
+    }
+    /// [`Self::snapshot`] for a reader outside the hub: the read keeps the view from the sweep.
+    pub fn read(&mut self, topic: &str, key: &str) -> Result<Snapshot, String> {
+        let snapshot = self.snapshot(topic, key)?;
+        self.touch(topic, key);
+        Ok(snapshot)
+    }
+    fn touch(&mut self, topic: &str, key: &str) {
+        let sweep = self.sweep;
+        if let Some(view) = self
+            .topics
+            .get_mut(topic)
+            .and_then(|projection| projection.views.get_mut(key))
+        {
+            view.last_read = sweep;
+        }
     }
     pub fn subscribe(
         &mut self,
@@ -433,6 +756,8 @@ impl TopicRegistry {
         key: &str,
         since: Option<u64>,
     ) -> Result<SubscriptionReply, String> {
+        self.topic(topic)?.ensure_view(key);
+        self.touch(topic, key);
         let p = self.topic(topic)?;
         if let Some(deltas) = p.replay(key, since) {
             return Ok(SubscriptionReply {
@@ -446,7 +771,7 @@ impl TopicRegistry {
             });
         }
         let mut snapshot = p.snapshot(key);
-        if matches!(topic, "inbox" | "records" | "files" | "stories") {
+        if paged(topic) {
             let total = snapshot.snapshot.len();
             snapshot.snapshot.truncate(PAGE_SIZE);
             snapshot.cursor = cursor_for(&snapshot.snapshot, &p.ordered(key), topic, None);
@@ -460,7 +785,9 @@ impl TopicRegistry {
         rows: Vec<(Option<String>, Value)>,
         request_id: Option<String>,
     ) -> Result<Vec<Delta>, String> {
-        Ok(self.topic(topic)?.replace(rows, request_id))
+        let deltas = self.topic(topic)?.replace(rows, request_id);
+        self.log(&deltas);
+        Ok(deltas)
     }
     pub(super) fn has_subscription(&self, topic: &str, key: &str) -> bool {
         self.subscriptions
@@ -483,6 +810,7 @@ impl TopicRegistry {
         let p = self.topic(topic)?;
         let full = p.snapshot(key);
         let retained = p.replay(key, since).is_some();
+        self.touch(topic, key);
         if let (Some(s), Some(since)) = (self.subscriptions.get(id), since) {
             let covered = since == s.rev
                 || s.log
@@ -500,18 +828,14 @@ impl TopicRegistry {
                     view_key: key.into(),
                     rev: s.rev,
                     snapshot: None,
-                    deltas: Some(s.log.iter().filter(|d| d.rev > since).cloned().collect()),
+                    deltas: Some(s.log.since(since)),
                     total: Some(s.total),
                     cursor: None,
                 });
             }
         }
         let total = full.snapshot.len();
-        let selected = select(
-            &full.snapshot,
-            window,
-            matches!(topic, "inbox" | "records" | "files" | "stories"),
-        );
+        let selected = select(&full.snapshot, window, paged(topic));
         let cursor = cursor_for(&selected, &full.snapshot, topic, window);
         let loaded = selected
             .iter()
@@ -523,11 +847,12 @@ impl TopicRegistry {
                 topic: topic.into(),
                 key: key.into(),
                 owner: None,
+                frame: None,
                 window,
                 loaded,
                 total,
                 rev: full.rev,
-                log: VecDeque::new(),
+                log: DeltaLog::default(),
             },
         );
         Ok(SubscriptionReply {
@@ -536,8 +861,7 @@ impl TopicRegistry {
             rev: full.rev,
             snapshot: Some(selected),
             deltas: None,
-            total: (window.is_some() || matches!(topic, "inbox" | "records" | "files" | "stories"))
-                .then_some(total),
+            total: (window.is_some() || paged(topic)).then_some(total),
             cursor,
         })
     }
@@ -636,8 +960,55 @@ impl TopicRegistry {
     }
     pub fn remove_view(&mut self, topic: &str, key: &str) {
         if let Some(projection) = self.topics.get_mut(topic) {
-            projection.views.remove(key);
+            projection.remove_view(key);
         }
+    }
+    /// Evict the views nobody watches and nobody has read for more than [`SWEEP_IDLE_SWEEPS`]
+    /// sweeps, on the topics `swept` allows, except the [`PINNED`] ones; drop a `ui:` topic
+    /// with its last view; and clear the logs of the unwatched views that stay on those topics.
+    /// Returns the evicted (topic, view key)s.
+    pub fn sweep_unwatched(&mut self, sweep_no: u64) -> Vec<(String, String)> {
+        self.sweep = sweep_no;
+        let mut idle = Vec::new();
+        let mut unwatched = Vec::new();
+        let followed = followed(&self.subscriptions);
+        for (topic, projection) in self.topics.iter().filter(|(topic, _)| swept(topic)) {
+            for (key, view) in &projection.views {
+                if self.watched_in(&followed, topic, key) {
+                    continue;
+                }
+                if sweep_no.saturating_sub(view.last_read) > SWEEP_IDLE_SWEEPS
+                    && !PINNED.contains(&(topic.as_str(), key.as_str()))
+                {
+                    idle.push((topic.clone(), key.clone()));
+                } else if !view.log.is_empty() {
+                    unwatched.push((topic.clone(), key.clone()));
+                }
+            }
+        }
+        drop(followed);
+        for (topic, key) in &unwatched {
+            if let Some(view) = self
+                .topics
+                .get_mut(topic)
+                .and_then(|projection| projection.views.get_mut(key))
+            {
+                view.log.clear();
+            }
+        }
+        for (topic, key) in &idle {
+            self.remove_view(topic, key);
+        }
+        let rev_floor = &mut self.rev_floor;
+        self.topics.retain(|topic, projection| {
+            projection.sweep = sweep_no;
+            let gone = topic.starts_with("ui:") && projection.views.is_empty();
+            if gone {
+                *rev_floor = (*rev_floor).max(projection.rev_floor);
+            }
+            !gone
+        });
+        idle
     }
     pub fn has_subscribers(&self, topic: &str) -> bool {
         self.subscriptions.values().any(|s| s.topic == topic)
@@ -646,6 +1017,19 @@ impl TopicRegistry {
         if let Some(subscription) = self.subscriptions.get_mut(id) {
             subscription.owner = Some(owner.into());
         }
+    }
+    pub fn set_frame(&mut self, id: &str, frame: &str) {
+        if let Some(subscription) = self.subscriptions.get_mut(id) {
+            subscription.frame = Some(frame.into());
+        }
+    }
+    /// The subscriptions `frame` opened.
+    pub fn frame_subscriptions(&self, frame: &str) -> Vec<String> {
+        self.subscriptions
+            .iter()
+            .filter(|(_, s)| s.frame.as_deref() == Some(frame))
+            .map(|(id, _)| id.clone())
+            .collect()
     }
     /// Drop the subscriptions `owner` holds; the (topic, view key) each of them followed.
     pub fn drop_owner(&mut self, owner: &str) -> Vec<(String, String)> {
@@ -663,6 +1047,64 @@ impl TopicRegistry {
         self.subscriptions
             .values()
             .any(|s| s.topic == topic && s.key == key)
+    }
+    /// `owner` holds a cached copy of (topic, key), so its deltas must reach it. Holding it
+    /// again is the same hold under a new generation: the count does not stack.
+    pub fn hold(&mut self, topic: &str, key: &str, owner: &str) -> u64 {
+        self.hold_generation += 1;
+        self.held
+            .entry(topic.to_owned())
+            .or_default()
+            .entry(key.to_owned())
+            .or_default()
+            .insert(owner.to_owned(), self.hold_generation);
+        self.hold_generation
+    }
+    /// Drop `owner`'s hold on (topic, key) taken at `generation` or before. A release older
+    /// than the owner's latest hold is late, and keeps the newer hold.
+    pub fn release(&mut self, topic: &str, key: &str, owner: &str, generation: u64) {
+        let Some(keys) = self.held.get_mut(topic) else {
+            return;
+        };
+        let Some(owners) = keys.get_mut(key) else {
+            return;
+        };
+        if owners.get(owner).is_some_and(|held| *held <= generation) {
+            owners.remove(owner);
+        }
+        if owners.is_empty() {
+            keys.remove(key);
+        }
+        if keys.is_empty() {
+            self.held.remove(topic);
+        }
+    }
+    /// Drop every hold `owner` has (its window closed or its page reloaded). Returns the last
+    /// generation issued: every hold the owner took up to it is gone.
+    pub fn release_owner(&mut self, owner: &str) -> u64 {
+        self.held.retain(|_, keys| {
+            keys.retain(|_, owners| {
+                owners.remove(owner);
+                !owners.is_empty()
+            });
+            !keys.is_empty()
+        });
+        self.hold_generation
+    }
+    /// How many owners hold (topic, key).
+    pub fn hold_count(&self, topic: &str, key: &str) -> usize {
+        self.held
+            .get(topic)
+            .and_then(|keys| keys.get(key))
+            .map_or(0, |owners| owners.len())
+    }
+    /// Whether anyone reads (topic, key): an owner holds it or a scoped subscription follows it.
+    pub fn is_watched(&self, topic: &str, key: &str) -> bool {
+        self.hold_count(topic, key) > 0 || self.has_view_subscribers(topic, key)
+    }
+    /// [`Self::is_watched`] against the views `followed` names, built once for many lookups.
+    fn watched_in(&self, followed: &BTreeSet<(&str, &str)>, topic: &str, key: &str) -> bool {
+        self.hold_count(topic, key) > 0 || followed.contains(&(topic, key))
     }
     /// The topic and view key subscription `id` follows.
     pub fn subscription_view(&self, id: &str) -> Option<(String, String)> {
@@ -711,6 +1153,7 @@ impl TopicRegistry {
                     total: Some(view.rows.len()),
                     base_rev: None,
                     arrivals: BTreeSet::new(),
+                    changed: BTreeMap::new(),
                 },
             ));
         }
@@ -723,7 +1166,9 @@ impl TopicRegistry {
         removes: Vec<String>,
         request_id: Option<String>,
     ) -> Result<Vec<Delta>, String> {
-        Ok(self.topic(topic)?.patch(rows, removes, request_id))
+        let deltas = self.topic(topic)?.patch(rows, removes, request_id);
+        self.log(&deltas);
+        Ok(deltas)
     }
     pub fn patch(
         &mut self,
@@ -733,6 +1178,7 @@ impl TopicRegistry {
         request_id: Option<String>,
     ) -> Result<Vec<(String, Delta)>, String> {
         let deltas = self.topic(topic)?.patch(rows, removes, request_id);
+        self.log(&deltas);
         Ok(self.deliver(&deltas))
     }
     pub fn deliver(&mut self, deltas: &[Delta]) -> Vec<(String, Delta)> {
@@ -753,16 +1199,20 @@ impl TopicRegistry {
                     || delta.total != Some(old_total)
                 {
                     s.rev = full.rev;
-                    s.log.push_back(delta.clone());
-                    if s.log.len() > RETAINED_DELTAS {
-                        s.log.pop_front();
-                    }
+                    s.log.push(delta.clone());
                     out.push((id.clone(), delta));
                 }
             }
         }
         out
     }
+}
+/// The (topic, view key)s some scoped subscription follows.
+fn followed(subscriptions: &BTreeMap<String, Subscription>) -> BTreeSet<(&str, &str)> {
+    subscriptions
+        .values()
+        .map(|s| (s.topic.as_str(), s.key.as_str()))
+        .collect()
 }
 fn select(rows: &[Value], window: Option<[usize; 2]>, paged: bool) -> Vec<Value> {
     let [from, to] = window.unwrap_or([0, if paged { PAGE_SIZE } else { rows.len() }]);
@@ -860,6 +1310,7 @@ fn update_subscription(
         total: Some(s.total),
         base_rev: Some(s.rev),
         arrivals: BTreeSet::new(),
+        changed: BTreeMap::new(),
     }
 }
 

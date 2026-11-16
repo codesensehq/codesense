@@ -7,7 +7,8 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { agentId, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, sha256, SKILL_PATH } from "./fixture.mjs";
+import { parseCard } from "../../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
+import { agentId, DOCS, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, guideKey, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
 
@@ -103,7 +104,17 @@ function launchForm(s, l, e, agent) {
   const out = [];
   if (l.target !== e.target) out.push(`launched with target ${l.target}, expected ${e.target}`);
   if (l.launched_by_arg !== s.config.self) out.push(`launched_by is ${l.launched_by_arg}, expected the Foreman's own ${s.config.self}`);
-  if (agentId(l.agent) !== agent) out.push(`launched ${l.agent ?? "no agent"}, expected ${agent}`);
+  // `agent` is an id any key of it matches, or `{ exactly }` for one key alone.
+  const ok = agent.exactly ? l.agent === agent.exactly : agentId(l.agent) === agent;
+  if (!ok) out.push(`launched ${l.agent ?? "no agent"}, expected ${agent.exactly ?? agent}`);
+  return out;
+}
+
+// The setup guide's launch: the docs team's guide by its key, in the docs team.
+function guideForm(s, l, e) {
+  const out = launchForm(s, l, e, { exactly: guideKey(s.config.runtime) });
+  if (l.org !== DOCS.org || l.team !== DOCS.team)
+    out.push(`launched in ${l.org}/${l.team}, expected ${DOCS.org}/${DOCS.team}`);
   return out;
 }
 
@@ -306,7 +317,7 @@ const graders = {
     const mine = launches(s);
     if (mine.length !== e.launches) return [...out, `launched ${mine.length} sessions, expected ${e.launches}`];
     const [l] = mine;
-    out.push(...launchForm(s, l, e, `guide-${s.config.runtime}`));
+    out.push(...guideForm(s, l, e));
     if (l.mode !== e.mode) out.push(`launched with mode ${l.mode}, expected ${e.mode}`);
     if (promptOf(l).trim().split(/\s+/)[0] !== e.command) out.push(`the launched session's prompt does not invoke ${e.command}`);
     return out;
@@ -321,9 +332,10 @@ const graders = {
     // Cards the Foreman raised: a send of kind needs-you.
     const cards = foremanCalls(s).filter((c) => SENDS.includes(c.tool) && c.args.kind === "needs-you");
     if (cards.length !== e.offer_cards) out.push(`${cards.length} needs-you cards raised, expected ${e.offer_cards}`);
+    // The page renders buttons from the text's last `Options:` line only (the kit's parseCard); no tool has an options field.
     for (const c of cards) {
-      const labels = JSON.stringify(c.args.options ?? []);
-      if (!/Set up now/.test(labels) || !/Not now/.test(labels)) out.push("the offer card's options are not Set up now and Not now");
+      const labels = c.args.card ?? [];
+      if (!labels.includes("Set up now") || !labels.includes("Not now")) out.push("the offer card's options are not Set up now and Not now");
     }
     const ledgerWrites = foremanCalls(s, "records_create").filter((c) => c.args.collection === "setup-ledger");
     if (e.ledger_write) {
@@ -337,7 +349,7 @@ const graders = {
     const launchCalls = foremanCalls(s, "open_workspace");
     mine.forEach((l, i) => {
       if (!looked(launchCalls[i]?.seq ?? 0)) out.push("launched without looking in list_sessions for a live setup session");
-      out.push(...launchForm(s, l, { target: "team-workspace" }, `guide-${s.config.runtime}`));
+      out.push(...guideForm(s, l, { target: "team-workspace" }));
       if (l.name !== "Setup") out.push(`launched with name ${l.name}, expected Setup`);
       if (l.mode !== "visible-unfocused") out.push(`launched with mode ${l.mode}, expected visible-unfocused`);
       const words = promptOf(l).trim().split(/\s+/);
@@ -427,10 +439,16 @@ const graders = {
 
 // What a script grader may see: the state with every message text removed.
 const withoutText = ({ text: _text, ...rest }) => rest;
+// A send keeps its card's buttons: the options of the text's last `Options:` line, read by the
+// kit's parseCard rule (the page's), or null. That is structure the page reads, not wording.
+const cardOf = (args) => {
+  const options = typeof args.text === "string" ? (parseCard(args.text)?.options ?? null) : null;
+  return { ...withoutText(args), ...(options ? { card: options } : {}) };
+};
 export const scriptView = (state) => ({
   ...state,
   replies: state.replies.map(withoutText),
-  calls: state.calls.map((c) => ({ ...c, args: withoutText(c.args ?? {}) })),
+  calls: state.calls.map((c) => ({ ...c, args: cardOf(c.args ?? {}) })),
   sessions: state.sessions.map(withoutText),
 });
 
