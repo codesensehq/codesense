@@ -2398,8 +2398,9 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// exceptions or slack.
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
-/// primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_496;
+/// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
+/// of which calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_501;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

@@ -347,6 +347,16 @@
       ],
       "type": "string"
     },
+    "skill_allowlist": {
+      "description": "The skills a launch offers, by name. Omitted means every skill the\nworkspace has. A list turns off, for the launch, every other skill its\nstartup places or the workspace's `.claude/skills/` holds, where its runtime\nenforces that (`enforces_skill_allowlist`); personal and plugin skills stay\non. A `skills` key is not this field: it stays in `extra`, unenforced.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "startup": {
       "description": "Ordered content-relative paths, stored normalized by every save. Kept as\nwritten on read so one bad hand edit is a typed validation error, not\nan unreadable definition.",
       "items": {

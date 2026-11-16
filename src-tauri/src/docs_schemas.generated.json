@@ -387,6 +387,16 @@
           ],
           "type": "string"
         },
+        "skill_allowlist": {
+          "description": "The skills a launch offers, by name. Omitted means every skill the\nworkspace has. A list turns off, for the launch, every other skill its\nstartup places or the workspace's `.claude/skills/` holds, where its runtime\nenforces that (`enforces_skill_allowlist`); personal and plugin skills stay\non. A `skills` key is not this field: it stays in `extra`, unenforced.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "startup": {
           "description": "Ordered content-relative paths, stored normalized by every save. Kept as\nwritten on read so one bad hand edit is a typed validation error, not\nan unreadable definition.",
           "items": {
@@ -480,7 +490,6 @@
               ]
             }
           },
-          "required": [],
           "type": "object"
         },
         "FileEntry": {
@@ -520,7 +529,6 @@
               ]
             }
           },
-          "required": [],
           "type": "object"
         },
         "McpRequirement": {
@@ -998,7 +1006,6 @@
               "type": "array"
             }
           },
-          "required": [],
           "type": "object"
         },
         "Setting": {
@@ -1314,7 +1321,6 @@
               "type": "array"
             }
           },
-          "required": [],
           "type": "object"
         },
         "LockRoutine": {
@@ -2390,13 +2396,13 @@
   },
   "sources": {
     "src-tauri/crates/codesense-host-proto/src/agent_cli.rs": "347a6af97cd7ffa3206fc00c7972bbb89a04e954f679269182674f86a4c54ef5",
-    "src-tauri/src/agents/adapter.rs": "9c87d245a9241b26a7dc88a8e8f40c751b1bad25ea9329553f96417d2cd09ce5",
-    "src-tauri/src/agents/adapter/claude.rs": "c0e51ea77711367b7d9a2cfb4b949e96fa5b1abb1c68a1750e12866fad28012a",
-    "src-tauri/src/agents/adapter/codex.rs": "3dcbdd6f22c0c5a6e529131fb3508d34743b5aede6e4ed9ef592cb7cf8bf23c9",
-    "src-tauri/src/agents/adapter/hermes.rs": "57ab631465858736dec7c392fe17715712788032122e339ccd73111a88fcd19f",
-    "src-tauri/src/agents/adapter/opencode.rs": "d6b219c6af1261275a1bcc5d3892e7e0eeb1b911f221c5984552ce12f4333f0f",
+    "src-tauri/src/agents/adapter.rs": "483884ec73f6ee8503865ff81573dd695b674c65b1eb93a5c96fde725b0d8311",
+    "src-tauri/src/agents/adapter/claude.rs": "59d0f15f0b3a5fd562f3cedc52898ba834f67e680ed745294e57d5bf29a81332",
+    "src-tauri/src/agents/adapter/codex.rs": "cd69dd05bb20827e1fcddfb0f43770560db24234bf0521d9a95bf6989ed36925",
+    "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",
+    "src-tauri/src/agents/adapter/opencode.rs": "a02d792f572e4a8c0aa7506713b85ae4749bd0258c0c9d4710ba03f239d358a1",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
-    "src-tauri/src/agents/model.rs": "e6bda3a39850fa241c4345dafffecbc8db2667ff8e3346dc91eead6d52887721",
+    "src-tauri/src/agents/model.rs": "52a191a23c0d9324db9c6e41bb8af42eeafa1581492b5eb9b66d8b5d7a0710d6",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",
