@@ -267,9 +267,9 @@ test("fixture: an inherited GIT_DIR (as in a git hook) never reaches the real re
   }
 });
 
-test("fixture: no temp path has a foreman-* part, so the pack's worktree rules never match it", async () => {
-  // `//**/foreman-*/**` matches a foreman-* directory anywhere: a sandbox under one would open
-  // home, HOME, the gh shim and origin to the agent's edits.
+test("fixture: no temp path has a foreman-* part, so the sandbox never looks like a worktree", async () => {
+  // The guidance lets the Foreman edit inside a foreman-* worktree: a sandbox under a foreman-*
+  // directory would put home, HOME, the gh shim and origin inside one.
   const fx = await createFixture({ handoff: true });
   try {
     const parts = (p) => p.split(path.sep);
@@ -818,6 +818,17 @@ test("recover-error: red on a retry by pr create or by gh api, and on a leftover
   redFor(
     await play(recover({ before: [addWt], attempt: (fx) => prCreate(fx) }), "recover-error"),
     /worktree was left behind/,
+  );
+});
+
+test("recover-error: red when the Foreman edits home, even after a clean worktree run", async () => {
+  const editHome = (fx) => fx.write(path.join(fx.root, "home", "README.md"), "# fixed\n");
+  redFor(
+    await play(
+      recover({ before: [addWt, editHome], attempt: (fx) => prCreate(fx), after: [removeWt] }),
+      "recover-error",
+    ),
+    /home worktree changed/,
   );
 });
 

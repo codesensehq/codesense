@@ -106,6 +106,10 @@ test("the file tools are allowed plainly, with no path rule and no bridge tool l
   for (const rule of [...allow, ...deny]) {
     assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(/.test(rule), `${rule} fences a path`);
   }
+  // A bare file tool in deny would fence every file.
+  for (const rule of deny) {
+    assert.ok(!/^(Read|Edit|Write|NotebookEdit)$/.test(rule), `${rule} is denied outright`);
+  }
   assert.equal(agent.mcp?.bridge_tools, undefined, "no bridge tool list");
 });
 
@@ -113,7 +117,9 @@ test("the spec says where to edit: a foreman-* worktree, never home, agent confi
   const work = spec.split("## Where you work")[1].split("\n## ")[0];
   for (const phrase of [
     "only fast-forwards",
-    "Edit only in a new worktree `../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
+    "Edit only in a new worktree `../<wt>`",
+    "`<wt>` is `foreman-<slug>-<4 hex>`",
+    "outside it, only `../<wt>.msg`",
     "never edit agent config",
     ".claude",
     ".agents",
@@ -392,7 +398,7 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "stories live in a team",
     "offer setup",
     "Options: `Create`, `Change`, `Not now`",
-    "`git remote`",
+    "Run `git remote`",
     "`git worktree list`",
     "`story-create`",
     "`stories/next-id.sh`",
@@ -483,6 +489,7 @@ test("sprint leads: look for a live one on any machine, then launch the team's s
   for (const phrase of [
     "Start sprint <n>",
     "`list_sessions`",
+    "a live session in that team",
     "Sprint <n>",
     "launched_by:<your handle>",
     'target:"team-workspace"',
