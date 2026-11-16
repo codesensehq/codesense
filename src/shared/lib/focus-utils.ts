@@ -16,8 +16,9 @@ export type PaneType = "file" | "terminal" | "scratch-note";
 export const TERMINAL_POPUP_ATTR = "data-terminal-popup";
 
 /** Marks a row popup of the Agents pane (the quick view and the inbox chat). It closes itself on
- *  ⌘W, and while focus is inside one no shortcut acts on the CLI, its tiles, the tray or the
- *  workspaces behind it (see `isDispatchable`): only a short list of global ones that open on top. */
+ *  ⌘W, and while focus is inside one only a short list of shortcuts fires (see `isDispatchable`):
+ *  the global ones that open on top of it, and the CLI toggle. None else touches the CLI, its tiles,
+ *  the tray or the workspaces behind it. */
 export const ROW_POPUP_ATTR = "data-row-popup";
 
 /** True when keyboard focus is inside a row popup (the quick view or the inbox chat). */

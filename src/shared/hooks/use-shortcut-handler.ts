@@ -34,9 +34,9 @@ import { NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
  * screen around it) the gate dispatches the team actions outside
  * `SETTINGS_TAB_BLOCKED` and the terminal-section workspace actions in
  * `SETTINGS_TAB_WORKSPACE_ALLOWED`; the document-only ones stay skipped.
- * Behind the full-screen inbox, of the team and workspace actions only its
- * toggle, ⌘\ and ⌘B get through. Global actions (⌘,, switch-org, etc.)
- * always dispatch, on the Settings tab and behind the inbox alike. See
+ * With focus in an Agents row popup only `ROW_POPUP_ALLOWED` dispatches: the global
+ * actions that open on top of it, and ⌘\ (the CLI toggle). Global actions (⌘,,
+ * switch-org, etc.) always dispatch, on the Settings tab alike. See
  * `isDispatchable`, which the native menu shares.
  *
  * Bubble phase (not capture) so that in-tree handlers that call
