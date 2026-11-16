@@ -89,7 +89,8 @@ export function useScrollSnapshot(opts: {
               hidden = true;
             } else if (hidden) {
               hidden = false;
-              el.scrollTop = lastRef.current;
+              // Only when the engine dropped the offset: an anchor jump made since wins.
+              if (el.scrollTop === 0) el.scrollTop = lastRef.current;
             }
           })
         : null;
@@ -106,6 +107,6 @@ export function useScrollSnapshot(opts: {
   // The team was hidden and is shown again (not a first mount): the engine reset the offset.
   useFocusWhenShown(useOwningScope(), !!viewKey && ready, () => {
     const el = getElRef.current();
-    if (el) el.scrollTop = lastRef.current;
+    if (el && el.scrollTop === 0) el.scrollTop = lastRef.current;
   });
 }
