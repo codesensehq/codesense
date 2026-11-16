@@ -38,6 +38,7 @@ vi.mock("@/shared/lib/team-key", async (importOriginal) => ({
 }));
 
 import { dispatchMenuAction } from "@/app/menu-action-dispatch";
+import { toggleTerminalWithFocus } from "@/features/viewer/lib/focus-cascade";
 import { isTerminalColumnShown } from "@/features/viewer/lib/terminal-column";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { HtmlViewer, type FrameShortcutHandler } from "./html-viewer";
@@ -164,6 +165,18 @@ describe.each(SURFACES)("Cmd-\\ with focus in the $name", ({ props }) => {
     expect(cliShown()).toBe(true);
     nextPress();
     press();
+    expect(cliShown()).toBe(false);
+  });
+
+  it("after the CLI is opened by hand, one press from the frame hides it", async () => {
+    await mountFrame();
+    // A divider click opens the CLI; then the person clicks back into the frame.
+    act(() => toggleTerminalWithFocus("acme:default"));
+    expect(cliShown()).toBe(true);
+    act(() => document.querySelector("iframe")!.focus());
+    nextPress();
+    frameHalf(CMD_BACKSLASH);
+    menuHalf(TOGGLE);
     expect(cliShown()).toBe(false);
   });
 
