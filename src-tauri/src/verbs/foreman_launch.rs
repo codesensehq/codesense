@@ -68,6 +68,14 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
     grant_in(PAGES, docs_root, document_path)
 }
 
+/// Whether bytes the viewer is about to serve to a frame holding the capability are still a
+/// bundled page. The grant is hashed at mint, but the viewer re-reads the page on every load, so
+/// a page edited while its tab is open would otherwise reload holding the grant.
+pub fn still_granted(bytes: &[u8]) -> bool {
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    PAGES.iter().any(|page| page.sha256 == digest)
+}
+
 /// The document must sit at a page's path under `docs_root`, reached through plain segments
 /// with no link or `..` below the root (a link could alias another file, and the viewer
 /// re-resolves the path on every request), and carry that page's bytes. The path is checked

@@ -476,6 +476,15 @@ async fn serve_frame_file(
         let contents = tokio::fs::read(&real)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if registered
+            && frame
+                .effective_grant
+                .iter()
+                .any(|cap| cap == crate::verbs::foreman_launch::CAPABILITY)
+            && !crate::verbs::foreman_launch::still_granted(&contents)
+        {
+            return Err(StatusCode::FORBIDDEN);
+        }
         let body = if registered {
             prepend_initial_theme(
                 frame_html_body(frame, &contents, &first_paint(&contents)),
