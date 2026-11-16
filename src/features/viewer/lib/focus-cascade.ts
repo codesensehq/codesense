@@ -9,7 +9,7 @@ import { supersedes, type FocusIntent, type Presence } from "./cli-workspace/act
 import { getActiveTeamKey } from "@/shared/lib/team-key";
 import { isTerminalPopupFocused } from "@/shared/lib/focus-utils";
 import { queryShown } from "@/shared/lib/warm-scopes";
-import { cliHostRoot } from "./cli-host";
+import { cliHostRoot, TERMINAL_SECTION_SELECTOR } from "./cli-host";
 import { isTerminalColumnShown } from "./terminal-column";
 import {
   pickMruResumeTarget,
@@ -459,9 +459,10 @@ export function toggleTerminalWithFocus(teamKey: string): void {
 
 /**
  * The configured terminal shortcut (Cmd-\) as a plain toggle from any focus.
- * From focus inside the CLI host it is {@link toggleTerminalWithFocus} (hide, then
- * the focus cascade). From anywhere else (a right-pane chat, an HTML document frame,
- * an editor, Settings, a row popup) a shown CLI hides and focus stays where it was;
+ * From focus inside the terminal section (the CLI host or the Agents pane, which hide
+ * together) it is {@link toggleTerminalWithFocus} (hide, then the focus cascade). From
+ * anywhere else (a right-pane chat, an HTML document frame, an editor, Settings, a
+ * title-bar popup) a shown CLI hides and focus stays where it was;
  * a hidden CLI is revealed in the last terminal mode and its active terminal is
  * focused. Divider clicks keep {@link toggleTerminalWithFocus}; this helper is only
  * for the keyboard shortcut and the menu item, which share the registry action.
@@ -469,7 +470,12 @@ export function toggleTerminalWithFocus(teamKey: string): void {
 export function revealOrToggleTerminal(teamKey: string): void {
   const active = typeof document === "undefined" ? null : document.activeElement;
   const host = cliHostRoot();
-  if (active instanceof HTMLElement && host && host.contains(active)) {
+  // The Agents pane shares the terminal section: hiding the CLI unmounts it, so focus in it
+  // is CLI focus and goes through the focus cascade, never to the page body.
+  if (
+    active instanceof HTMLElement &&
+    (active.closest(TERMINAL_SECTION_SELECTOR) || (host && host.contains(active)))
+  ) {
     toggleTerminalWithFocus(teamKey);
     return;
   }

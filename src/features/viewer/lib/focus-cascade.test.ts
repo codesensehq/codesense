@@ -837,6 +837,18 @@ describe("revealOrToggleTerminal", () => {
     expect(document.activeElement?.id).toBe("outside");
   });
 
+  it("from focus in the Agents pane (the terminal section) hides the CLI through the focus cascade", () => {
+    state.layoutMode = "shared";
+    state.terminalVisible = true;
+    state.workspaces["acme:default"] = [{ id: "ws-a", kind: "story" }];
+    document.body.innerHTML = `<div data-viewer-content tabindex="-1" id="viewer"></div><div data-terminal-section><div id="agents" tabindex="0"></div><div data-xterm-host></div></div>`;
+    document.getElementById("agents")!.focus();
+    revealOrToggleTerminal("acme:default");
+    raf.flush();
+    expect(setLayoutMode).toHaveBeenCalledWith("viewer");
+    expect(document.activeElement?.id).toBe("viewer");
+  });
+
   it("from non-CLI focus reveals a hidden terminal in the last terminal mode", () => {
     state.layoutMode = "viewer";
     state.terminalVisible = false;

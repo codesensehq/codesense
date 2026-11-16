@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act, screen } from "@testing-library/react";
 
 import { SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
@@ -665,6 +665,9 @@ describe("⌘\\ toggles the CLI from any focus", () => {
     seedForegroundTile();
     useViewerStore.setState({ lastTerminalMode: "shared" });
   });
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
 
   describe.each(TARGETS)("with focus in $name", ({ mount }) => {
     it("hides a visible CLI and leaves focus and the selection where they were", () => {
@@ -693,7 +696,6 @@ describe("⌘\\ toggles the CLI from any focus", () => {
         const after = window.getSelection()!.getRangeAt(0);
         expect([after.startContainer, after.startOffset, after.endOffset]).toEqual([text, 2, 5]);
       }
-      document.body.innerHTML = "";
     });
 
     it("reveals a hidden CLI and focuses its terminal", async () => {
@@ -710,11 +712,12 @@ describe("⌘\\ toggles the CLI from any focus", () => {
       expect(layout()).toBe("shared");
       await nextFrame();
       expect(document.activeElement).toBe(screen.getByTestId("terminal"));
-      document.body.innerHTML = "";
     });
   });
 
-  describe("with focus in an Agents row popup chat", () => {
+  // A row popup drawn outside the Agents pane (the title-bar host agent menu), so it does not
+  // unmount with the CLI. Popups inside the pane are covered by the workbench seam test.
+  describe("with focus in a title-bar agent menu popup", () => {
     function mountPopup() {
       const popup = document.createElement("div");
       popup.setAttribute(ROW_POPUP_ATTR, "");
@@ -738,7 +741,6 @@ describe("⌘\\ toggles the CLI from any focus", () => {
       expect(document.activeElement).toBe(draft);
       expect(draft.value).toBe("popup draft");
       expect(document.body.contains(popup)).toBe(true);
-      document.body.innerHTML = "";
     });
 
     it("reveals a hidden CLI and focuses its terminal; the popup stays open with its draft", async () => {
@@ -757,7 +759,6 @@ describe("⌘\\ toggles the CLI from any focus", () => {
       expect(document.activeElement).toBe(screen.getByTestId("terminal"));
       expect(draft.value).toBe("popup draft");
       expect(document.body.contains(popup)).toBe(true);
-      document.body.innerHTML = "";
     });
   });
 
@@ -851,6 +852,9 @@ describe("⌘I (Toggle Agent Inbox) across focus contexts", () => {
   beforeEach(() => {
     seedForegroundTile();
   });
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
 
   it.each(TARGETS.slice(0, 2))("fires from $name", ({ mount }) => {
     const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
@@ -862,7 +866,6 @@ describe("⌘I (Toggle Agent Inbox) across focus contexts", () => {
       expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       restore();
-      document.body.innerHTML = "";
     }
   });
 
@@ -884,21 +887,23 @@ describe("⌘I (Toggle Agent Inbox) across focus contexts", () => {
     }
   });
 
-  it.each(TARGETS.slice(2))("is left to the editor's own Mod-i in $name", ({ mount }) => {
-    const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
-    try {
-      render(<Harness />);
-      const target = mount();
-      act(() => target.focus());
-      // The editor's keymap handles Mod-i (italic, selectParentSyntax) and prevents the default.
-      target.addEventListener("keydown", (e) => e.preventDefault());
-      cmdI(target);
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      restore();
-      document.body.innerHTML = "";
-    }
-  });
+  it.each(TARGETS.slice(2))(
+    "leaves a Mod-i the editor prevents to the editor in $name",
+    ({ mount }) => {
+      const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
+      try {
+        render(<Harness />);
+        const target = mount();
+        act(() => target.focus());
+        // Stands in for the editor keymap, which handles Mod-i (italic) and prevents the default.
+        target.addEventListener("keydown", (e) => e.preventDefault());
+        cmdI(target);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    },
+  );
 
   it("stays blocked in an Agents row popup", () => {
     const { spy, restore } = spyAction("viewer.toggle-agent-inbox");
@@ -914,14 +919,22 @@ describe("⌘I (Toggle Agent Inbox) across focus contexts", () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       restore();
-      document.body.innerHTML = "";
     }
   });
 
-  it("is a no-op unless the active tab is a running agent", () => {
-    render(<Harness />);
-    const before = JSON.stringify(useAgentInboxRailStore.getState().bySession);
-    cmdI(document.body);
-    expect(JSON.stringify(useAgentInboxRailStore.getState().bySession)).toBe(before);
+  it("runs but changes nothing unless the active tab is a running agent", () => {
+    const action = SHORTCUT_ACTIONS.find((x) => x.id === "viewer.toggle-agent-inbox")!;
+    const original = action.run;
+    const ran = vi.fn(original);
+    (action as { run: () => void }).run = ran;
+    try {
+      render(<Harness />);
+      const before = JSON.stringify(useAgentInboxRailStore.getState().bySession);
+      cmdI(document.body);
+      expect(ran).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(useAgentInboxRailStore.getState().bySession)).toBe(before);
+    } finally {
+      (action as { run: () => void }).run = original;
+    }
   });
 });

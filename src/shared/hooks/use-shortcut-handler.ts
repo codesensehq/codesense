@@ -36,8 +36,8 @@ import { NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
  * `SETTINGS_TAB_WORKSPACE_ALLOWED`; the document-only ones stay skipped.
  * With focus in an Agents row popup only `ROW_POPUP_ALLOWED` dispatches: the global
  * actions that open on top of it, and ⌘\ (the CLI toggle). Global actions (⌘,,
- * switch-org, etc.) always dispatch, on the Settings tab alike. See
- * `isDispatchable`, which the native menu shares.
+ * switch-org, etc.) dispatch on the Settings tab too; in a row popup only those in
+ * `ROW_POPUP_ALLOWED` do. See `isDispatchable`, which the native menu shares.
  *
  * Bubble phase (not capture) so that in-tree handlers that call
  * `stopPropagation()` — notably the Settings capture field while

@@ -500,6 +500,43 @@ describe("Workbench: one CLI, one divider, one tray, one drag context", () => {
     expect(column.style.display).toBe("none");
   });
 
+  describe("⌘\\ with focus in the Agents pane, which hides with the CLI", () => {
+    const toggle = SHORTCUT_ACTIONS.find((a) => a.id === "viewer.toggle-terminal")!;
+    const dockRoot = () => q("[data-testid='agents-dock'] .cs-agents")!;
+
+    it.each(["a pane control", "a row popup chat"])(
+      "hides the CLI from %s and does not strand focus on the page body",
+      async (where) => {
+        seed({ rightPaneOpen: false });
+        await mount();
+        // The team views are stand-ins here, so give the focus cascade its viewer to land in.
+        const viewer = document.createElement("div");
+        viewer.setAttribute("data-viewer-content", "");
+        viewer.tabIndex = -1;
+        document.body.append(viewer);
+        let target: HTMLElement;
+        if (where === "a pane control") {
+          target = q("[data-testid='agents-launch']")!;
+        } else {
+          const popup = document.createElement("div");
+          popup.setAttribute("data-row-popup", "");
+          popup.innerHTML = "<textarea>chat draft</textarea>";
+          dockRoot().append(popup);
+          target = popup.querySelector("textarea")!;
+        }
+        act(() => target.focus());
+        expect(document.activeElement).toBe(target);
+        act(() => toggle.run());
+        await act(async () => {
+          await new Promise((r) => requestAnimationFrame(r));
+        });
+        expect(useViewerStore.getState().layoutMode).toBe("viewer");
+        expect(q("[data-testid='agents-dock']")).toBeNull();
+        expect(document.activeElement).toBe(viewer);
+      },
+    );
+  });
+
   it("Cmd+1..9 jumps to the pill at that place in the active team's tray", async () => {
     seed();
     await mount();
