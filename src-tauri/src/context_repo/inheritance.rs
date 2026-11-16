@@ -890,6 +890,14 @@ impl TeamView {
         let source_root = if path.starts_with(&root) {
             Some(root.clone())
         } else {
+            // Another org's private space has no org.yml of its own to say so.
+            if matches!(
+                super::scratch_space::scratch_location(&path),
+                Some(super::scratch_space::ScratchLocation::Org(slug))
+                    if !slug.eq_ignore_ascii_case(&self.org)
+            ) {
+                return Err(missing());
+            }
             let start = if memo.rows_are_files {
                 path.parent()
             } else {
@@ -898,7 +906,13 @@ impl TeamView {
             match start.and_then(|d| memo.source_dir(d)) {
                 Some(source) => {
                     let slug = memo.slug(&source).ok_or_else(missing)?;
-                    (self.org == slug).then_some(source)
+                    if self.org == slug {
+                        Some(source)
+                    } else if is_placed_docs(memo, &source, &slug) {
+                        None
+                    } else {
+                        return Err(missing());
+                    }
                 }
                 None => None,
             }
@@ -977,6 +991,16 @@ impl TeamView {
             implicit_companion,
         })
     }
+}
+
+/// The one other org a team caller reads: the bundled docs, at the profile's
+/// placed docs root and under the bundle's slug. Neither alone is enough.
+fn is_placed_docs(memo: &mut ScopeMemo, source: &Path, slug: &str) -> bool {
+    use super::codesense_docs::{bundle_info, docs_root};
+    slug == bundle_info().slug
+        && profile_namespace(source).is_some_and(|(home, principal)| {
+            memo.real_dir(&docs_root(&home, &principal)) == Some(source)
+        })
 }
 
 type ViewKey = (PathBuf, String, String);
