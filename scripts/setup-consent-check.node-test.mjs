@@ -288,6 +288,15 @@ test("a correct Foreman hand-back, last and before signal_done, passes", () => {
   assert.equal(calls, 3);
 });
 
+// A Foreman that re-homed holds its role in the user team: the hand-back goes to the team its row
+// lists (the guide's `launchedBy`, found in `list_sessions`), not the docs team.
+test("a re-homed Foreman's hand-back goes to the team its session row lists", () => {
+  assert.deepEqual(checkConsent(load("handback-rehomed")).errors, []);
+  assert.deepEqual(checkConsent(load("handback-rehomed-docs-failing")).errors, [
+    "turn 11: send_role_message is not the Foreman hand-back: team is not acme / web",
+  ]);
+});
+
 test("each rule on send_role_message has its own failing fixture", () => {
   const bad = "send_role_message is not the Foreman hand-back:";
   const cases = {
@@ -366,6 +375,7 @@ test("after the hand-back or signal_done nothing acts, but reads may follow", ()
 // verb or a write the check refuses after the hand-back, so a new acting tool can't slip by.
 const NOT_ACTING = [
   "who_am_i",
+  "list_sessions",
   "read_messages",
   "codesense_overview",
   "describe_setup",
@@ -482,6 +492,8 @@ test("the fixtures hold no home path or token-shaped text", () => {
     "handback",
     "handback-wrong-role-failing",
     "handback-wrong-team-failing",
+    "handback-rehomed",
+    "handback-rehomed-docs-failing",
     "handback-other-text-failing",
     "handback-reply-to-failing",
     "handback-attach-file-failing",

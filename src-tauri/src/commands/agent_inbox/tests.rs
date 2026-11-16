@@ -5874,7 +5874,7 @@ fn media_message(fake: &FakeHost, team: &str, attachment: crate::media::Attachme
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let store = WeftStore::open(path).unwrap();
     let id =
-        inbox::inbox_insert(&store, "agent-1", HUMAN, "", None, None, None, None, None).unwrap();
+        inbox::inbox_insert(&store, "agent-1", HUMAN, "hi", None, None, None, None, None).unwrap();
     inbox::inbox_set_attachments(&store, id, &[attachment]).unwrap();
     id
 }
@@ -5970,6 +5970,52 @@ fn a_pin_thread_comes_from_the_registry_record_never_a_tab_tag() {
         registry_thread(&named),
         Some(("acme/api/backend".to_string(), Some("DEMO-1".to_string())))
     );
+    // No story is one rule, as `ThreadKey::new` keys it: an empty story is none.
+    let mut blank = named.clone();
+    blank.meta.story = Some("  ".into());
+    assert_eq!(
+        registry_thread(&blank),
+        Some(("acme/api/backend".to_string(), None))
+    );
+}
+
+#[test]
+fn a_no_story_thread_is_the_listed_no_story_sessions_of_its_saved_agent() {
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    let state = DashboardLaunchState::new(8);
+    for handle in ["dev-a", "dev-b", "dev-c", "dev-story", "qa-1", "bare"] {
+        state.register(handle, &format!("sess-{handle}"), Some("codesense"));
+    }
+    let mut rows = state.snapshot();
+    for row in &mut rows {
+        row.agent_revision = match row.handle.as_str() {
+            "dev-a" | "dev-story" => Some("acme/api/dev@3".into()),
+            "dev-b" | "dev-c" => Some("acme/api/dev@4".into()),
+            "qa-1" => Some("acme/api/qa@1".into()),
+            _ => None,
+        };
+        if row.handle == "dev-story" {
+            row.meta.story = Some("DEMO-1".into());
+        }
+    }
+    // dev-a has ended; dev-b and dev-c are live seats (the thread read's seat rule).
+    let ended = |handle: &str| handle == "dev-a";
+    // A live seat's thread is its own and the ended ones: another live seat is left out, as the
+    // thread read leaves its conversation out, so nothing is counted twice.
+    assert_eq!(
+        no_story_peers(&rows, ended, "dev-b"),
+        vec!["dev-a".to_string()]
+    );
+    // An ended session is no seat: every listed session of its thread is its thread.
+    let mut after = no_story_peers(&rows, ended, "dev-a");
+    after.sort();
+    assert_eq!(after, vec!["dev-b".to_string(), "dev-c".to_string()]);
+    // A session on a story, or with no saved agent, has no listed no-story thread.
+    assert_eq!(
+        no_story_peers(&rows, ended, "dev-story"),
+        Vec::<String>::new()
+    );
+    assert_eq!(no_story_peers(&rows, ended, "bare"), Vec::<String>::new());
 }
 
 /// What each `agent-inbox-changed` emit puts on the wire: a team-scoped change names its

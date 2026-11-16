@@ -724,7 +724,22 @@ async fn read_with(
     let refs = session.git_refs.clone();
     let cache_key = cache::key(home, story, scope, &refs, &session.git_key);
     let (git, planned, git_part) = match cache::get(&cache_key).await {
-        Some(half) => half,
+        Some(half) => {
+            let live = Iterator::any(&mut <[Value]>::iter(&half.0.worktrees), |tree| {
+                Option::and_then(serde_json::Value::get(tree, "state"), serde_json::Value::as_str)
+                    == Some("live")
+            });
+            if live {
+                let (home, story) = (std::path::Path::to_path_buf(home), str::to_owned(story));
+                let worktrees = std::vec::Vec::clone(&half.0.worktrees);
+                let _ = crate::commands::await_blocking("story_changes.tips", move || {
+                    sight_live_worktrees(&home, &story, &worktrees);
+                    Ok(())
+                })
+                .await;
+            }
+            half
+        }
         None => {
             if git::cancelled(&cancel) {
                 return Err("cancelled".into());
@@ -742,7 +757,14 @@ async fn read_with(
                 cancel.clone(),
             )
             .await?;
-            if !git::cancelled(&cancel) {
+            // A half whose trail fetch was in play is not kept: the next read retries the fetch
+            // or reads the history it brought. A spent fetch stays spent until origin's head
+            // moves (which the stamp sees), so that half is kept.
+            let keep = match std::collections::BTreeMap::get(&git.unavailable, "historyFetch") {
+                Some(reason) => *reason == crate::attribution::history::FETCH_SPENT,
+                None => !trail_needs_fetch(&git),
+            };
+            if !git::cancelled(&cancel) && keep {
                 cache::put(cache_key, &git, &planned, &git_part).await;
             }
             (git, planned, git_part)
@@ -1257,7 +1279,12 @@ async fn git_facts(
                     Err(reason) => fetch_reason = Some(reason),
                 }
             }
-            if !std::vec::Vec::is_empty(&complete) || fetch_reason.is_some() {
+            // A spent fetch brought nothing new: only a fetch that ran is read again.
+            if !std::vec::Vec::is_empty(&complete)
+                || Option::is_some_and(fetch_reason, |reason| {
+                    reason != crate::attribution::history::FETCH_SPENT
+                })
+            {
                 git = collect()?;
             }
             // Still missing at origin's current head: the next open reads locally until it moves.
@@ -1568,6 +1595,33 @@ pub(crate) fn story_is_done(home: &Path, story: &str, scope: &CallerScope) -> bo
     Result::ok(UsageStore::open(&home.join("usage.sqlite")))
         .and_then(|store| git::story_source(home, &store, story.trim(), scope))
         .is_some_and(|source| git::source_is_done(&source.path))
+}
+
+/// Forget the story reads kept for `home`: a history refresh forgot the fetches they found
+/// spent, so the next read may fetch again.
+pub(crate) fn forget_kept(home: &Path) {
+    cache::forget_home(home);
+}
+
+/// A kept half or walk skips the walk that records a moved story tip, so a hit sights each live
+/// worktree it read (written only when the tip changed; never waits for the writer).
+fn sight_live_worktrees(home: &Path, story: &str, worktrees: &[Value]) {
+    for tree in worktrees {
+        let field = |name: &str| {
+            Option::and_then(serde_json::Value::get(tree, name), serde_json::Value::as_str)
+        };
+        if field("state") != Some("live") {
+            continue;
+        }
+        if let Some(path) = field("path") {
+            crate::install::story_tips::sight_root(
+                home,
+                story,
+                std::path::Path::new(path),
+                crate::install::story_tips::Wait::Never,
+            );
+        }
+    }
 }
 
 /// A landed story's trail opened without its history: the merge scan stopped at the shallow

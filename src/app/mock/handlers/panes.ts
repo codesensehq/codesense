@@ -272,6 +272,9 @@ export function paneHandlers(
       subscriptions.delete(String(args.subscriptionId));
       sources.release(String(args.subscriptionId));
     },
+    // The mock sends every view's deltas, as if the window held them all.
+    live_hub_release: () => undefined,
+    live_hub_release_owner: () => 0,
     // The dev server is the mock's HTTP API: panes load from it on `/pane/…`.
     get_http_api_port: () => Number(window.location.port) || 80,
     mint_frame: async ({ args }) => {

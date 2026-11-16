@@ -64,3 +64,32 @@ it("keeps the newer hub snapshot when a later explicit prepare returns an older 
     useAgentsStore.getState().rows!.find((row) => row.key.endsWith("/unused-live"))!.name,
   ).toBe("Saved without any session");
 });
+
+it("hiding the catalog hands its prepare's hold to the hub, which releases the latest one on eviction", async () => {
+  const { before } = JSON.parse(
+    readFileSync("tests/fixtures/agent-definitions-save.json", "utf8"),
+  ) as { before: HubSnapshot };
+  const release = vi.fn(async (_topic: string, _viewKey: string, _generation: number) => {});
+  hub = new LiveHub({
+    read: async () => before,
+    release,
+    listen: async () => () => {},
+    readUi: async () => ({}),
+    writeUi: async (_, state) => state,
+  });
+  vi.spyOn(liveHub, "seed").mockImplementation((view) => hub.seed(view));
+  vi.spyOn(liveHub, "snapshot").mockImplementation((...args) => hub.snapshot(...args));
+  vi.spyOn(liveHub, "attach").mockImplementation((...args) => hub.attach(...args));
+  vi.spyOn(liveHub, "resync").mockImplementation((...args) => hub.resync(...args));
+  vi.mocked(agentDefinitionsPrepare).mockResolvedValue({ ...before, hold: 1 });
+  showAgentDefinitions(true);
+  await vi.waitFor(() => expect(useAgentsStore.getState().rows?.length).toBeGreaterThan(0));
+  vi.mocked(agentDefinitionsPrepare).mockResolvedValue({ ...before, hold: 2 });
+  const seeded = vi.mocked(liveHub.seed).mock.calls.length;
+  showAgentDefinitions(false);
+  await vi.waitFor(() => expect(vi.mocked(liveHub.seed).mock.calls.length).toBe(seeded + 1));
+  expect(release).not.toHaveBeenCalled();
+  // The catalog's frame was its last holder: the view leaves the cache with the latest hold.
+  resetAgentDefinitions();
+  expect(release.mock.calls).toEqual([["agentDefinitions", before.viewKey, 2]]);
+});

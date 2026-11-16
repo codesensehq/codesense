@@ -7,7 +7,6 @@ import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-t
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
   closeAgentInboxRailToTerminal,
@@ -27,6 +26,7 @@ import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tau
 
 import type { ConversationMessage } from "../api";
 import { goToSession, openStory } from "../actions";
+import { threadOf } from "../lib/chat-core";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { usePersonPins } from "../hooks/use-person-pins";
@@ -84,12 +84,14 @@ export function ChatOverlay({
   const roster = useAgentListProjectionStore((s) => s.sessions);
   const row = roster?.find((r) => r.sessionId === sessionId) ?? null;
   const sessions = useInboxSessions();
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it (its pins and its mail): the launch's agent, else the one its tab says it runs. It is
-  // known before any mail is read, so a successor opens on its predecessor's mail.
+  // The thread is the saved agent and story the session was launched with, keyed by the one
+  // thread rule the engine keys it by (its pins and its mail): the launch's agent, else the one
+  // its tab says it runs. It is known before any mail is read, so a successor opens on its
+  // predecessor's mail.
   const launched = sessions?.find((s) => s.handle === row?.handle) ?? null;
-  const pinAgent = launched?.agent ?? agentKeyOfRevision(row?.agentRevision);
-  const pinStory = row?.story ?? launched?.story ?? null;
+  const pinThread = threadOf(launched?.agent ?? row?.agentRevision, row?.story ?? launched?.story);
+  const pinAgent = pinThread.agentId || null;
+  const pinStory = pinThread.storyId || null;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
   // useForemanThread), the same pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);

@@ -7,7 +7,7 @@ The agent (`foreman.md`, `agents/`, `variants.yml`, `pack.yml`) and the page the
 ## The page
 
 `getting-started/content/foreman/index.html` is one self-contained file: a vendored build of the
-story view kit with its config inlined, a `story-view:foreman` meta and the capabilities it
+story view kit with its config inlined, a `story-view:foreman` meta with the value `launcher` and the capabilities it
 declares (`sessions:read inbox:read:team inbox:write context:read launch machines:read`). It loads
 no sibling script or style, so its hash covers everything it runs.
 
@@ -15,7 +15,12 @@ The app lets a page open a `team-workspace` agent only when the page holds the `
 grant, which it never declares. The app mints it from the page's own bytes: the file must sit at
 its path in the placed docs checkout and hash to its entry in `PAGES`
 (`src-tauri/src/verbs/foreman_launch.rs`). A page edited by one byte, or a copy anywhere else,
-holds nothing. A page that holds it may launch only `foreman-claude` and `guide-claude`.
+holds nothing. The kit's other Foreman pages, which carry no `launcher` value, hand a launch to
+this page's tab instead of asking for one. A page that holds it may launch only the Foreman, by the docs team's key
+`codesense/docs/getting-started/foreman-claude`, and the setup guide's agents. The docs bundle
+ships that agent under `getting-started/config/agents/foreman-claude/` (`DOCS_BUNDLED` in
+`scripts/pack-build.mjs`), so a clean install can start it, and no team's own `foreman-claude`
+answers for it.
 
 | File                       | What it is                                                                |
 | -------------------------- | ------------------------------------------------------------------------- |
@@ -33,6 +38,12 @@ holds nothing. A page that holds it may launch only `foreman-claude` and `guide-
   hash or `kit_rev`;
 - the config baked into the kit differs from `story-view.yml`, the config has a budget or point
   key or a team's id;
+- the config lacks a key the Foreman page can read: a key `vendor/config-keys.json` records (every
+  leaf of the kit's own config under `foreman`, `timers` and the `blocks:` entries of the blocks the
+  Foreman page mounts, written by `--vendor`), or a `config.foreman.*` or `config.timers.*` chain,
+  or a mounted block's `title` or `empty`, that the vendored build names directly. The record
+  covers the keys the kit reads through a local name, which no scan of the build sees; the file
+  must exist;
 - the vendored kit keeps a comment other than its config markers, or names a tracker story id, a
   local path, a path in the kit's own repository or a source file's hash;
 - the page is not exactly the template with the vendored build inlined;
@@ -46,25 +57,31 @@ holds nothing. A page that holds it may launch only `foreman-claude` and `guide-
 
 The kit is built in its own repository, from a merged commit, with the public config.
 
-1. In a checkout of the kit at the commit you are vendoring, copy this folder's `story-view.yml`
-   over the kit's `story-view.yml` (in a scratch copy, never committed there), run
-   `node build.mjs`, and run the kit's tests and `node check.mjs` on that build. `check.mjs`
-   compares the kit's dashboard manifest with its team value, so point that value at the public
-   config's `team` for the run.
+1. Bring this folder's `story-view.yml` up to the kit's at the commit you are vendoring: every
+   `foreman.*` and `timers.*` key the kit's config has, and the `blocks:` entries of the blocks its
+   Foreman page mounts, with public values (product ids only; no team's ids, names or story ids).
+   Then, in a scratch copy of the kit at that commit (never committed there), copy this folder's
+   `story-view.yml` over the kit's, run `node build.mjs`, and run the kit's tests and
+   `node check.mjs` on that build. `check.mjs` compares the kit's dashboard manifest with its team
+   value, so point that value at the public config's `team` for the run. Step 2 records the kit's
+   own keys, and step 3's check fails on any this config lacks, so a key the kit added since the
+   last vendor can't be dropped silently.
 2. In a worktree of this repository:
 
    ```sh
-   node scripts/foreman-page.mjs --vendor <the built story-view.js> --kit-rev <n>
+   node scripts/foreman-page.mjs --vendor <the built story-view.js> --kit-rev <n> \
+     --kit-config <the kit's own story-view.yml at that commit>
    ```
 
    This drops the build's comments (they describe the kit's own source tree; a parser finds them,
    and the step fails if the code changed), writes `vendor/story-view.js` with
-   its header, updates the `kit:` block in `pack.yml`, rebuilds the page and writes the page's new
+   its header, writes `vendor/config-keys.json` from the kit's own config, updates the `kit:` block
+   in `pack.yml`, rebuilds the page and writes the page's new
    hash into its `PAGES` entry. `<n>` is the kit's `template` number from its config; raise it when
    the kit's own changelog says its page contract changed. `--write` alone rebuilds the page from
    the vendored file.
 3. Run `pnpm check:foreman-page` and `node --test scripts/foreman-page.node-test.mjs`. Commit the
-   vendored file, `pack.yml`, the page and `foreman_launch.rs` together. A change to the page's
+   vendored file, `vendor/config-keys.json`, `pack.yml`, the page and `foreman_launch.rs` together. A change to the page's
    declared capabilities is an edit to `CAPABILITIES` in `scripts/foreman-page.mjs`, then `--write`.
 4. Record which kit commit went public, and its `kit_rev`, in the kit's own changelog. The pull
    request here names neither the kit's repository nor its commit.

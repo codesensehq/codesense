@@ -19,6 +19,7 @@ permissions:
     allow:
       - Skill(codesense-setup)
       - mcp__codesense__who_am_i
+      - mcp__codesense__list_sessions
       - mcp__codesense__read_messages
       - mcp__codesense__codesense_overview
       - mcp__codesense__describe_setup

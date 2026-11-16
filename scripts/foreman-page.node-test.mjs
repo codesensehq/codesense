@@ -7,12 +7,13 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import { PINNED_PAGES } from "./check-api-skew.mjs";
 import { buildTree } from "./build-codesense-docs.mjs";
 import {
   CAPABILITIES,
   CONFIG,
+  CONFIG_KEYS,
   DOCS_ROOT,
   FILES,
   LAUNCH_RS,
@@ -21,6 +22,9 @@ import {
   VENDORED,
   bakedConfig,
   comments,
+  configReads,
+  kitConfigKeys,
+  kitConfigProblem,
   launchPages,
   pageText,
   parseVendored,
@@ -73,7 +77,8 @@ test("the page is one self-contained file: no sibling script, style or link", ()
     html.slice(0, html.indexOf("<script>")) + html.slice(html.lastIndexOf("</script>"));
   assert.ok(!/@import|url\(\s*['"]?(?!data:)/i.test(outside));
   assert.equal(html.match(/<script\b/gi).length, 1);
-  assert.match(html, /<meta name="story-view:foreman" content="">/);
+  // The launcher value: the kit's other Foreman pages hand a launch to this one.
+  assert.match(html, /<meta name="story-view:foreman" content="launcher">/);
 });
 
 test("the page declares the capabilities it calls, machines:read for the setup read, never foreman.launch", () => {
@@ -89,7 +94,8 @@ test("the page declares the capabilities it calls, machines:read for the setup r
 test("the public config names the Foreman and its guide and no team, budget or point key", () => {
   const config = parse(readFileSync(join(ROOT, CONFIG), "utf8"));
   assert.equal(config.foreman.role, "codesense-foreman");
-  assert.deepEqual(config.foreman.agents, ["foreman-claude"]);
+  // The docs team's key, the only Foreman the launch grant allows (`foreman_launch.rs`).
+  assert.deepEqual(config.foreman.agents, ["codesense/docs/getting-started/foreman-claude"]);
   assert.deepEqual(config.foreman.guides, ["guide-claude"]);
   assert.equal(config.team, config.foreman.docs.team);
   assert.ok(!/point|envelope|budget|\$/i.test(Object.keys(config).join(" ")));
@@ -143,7 +149,7 @@ test("a pack.yml that records another hash or kit-rev fails", () => {
     reports(check(root), "kit sha256");
   });
   scratch((change, root) => {
-    change(PACK_YML, (text) => text.replace("kit_rev: 1", "kit_rev: 2"));
+    change(PACK_YML, (text) => text.replace(/kit_rev: \d+/, "kit_rev: 99"));
     reports(check(root), "kit_rev");
   });
 });
@@ -242,6 +248,7 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
     ["const s='see AB-CD-27';\n", "tracker story id"],
     ["const s='dashboards/x/y.js';\n", "path in the kit's repository"],
     ["const s='design/AB-1/mockups.html';\n", "path in the kit's repository"],
+    ["const s='dashboards/agent-pages/../x.js';\n", "path in the kit's repository"],
     [`const s='sha256:${"b".repeat(64)}';\n`, "source file's hash"],
   ];
   for (const [line, message] of cases)
@@ -249,11 +256,16 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
       change(VENDORED, (text) => `${text}${line}`);
       reports(check(root), message);
     });
-  // A team's own design file, built from an id at run time, is the kit's job, not a leak.
-  scratch((change, root) => {
-    change(VENDORED, (text) => `${text}const s=\`design/\${id}/qa/trace.md\`;\n`);
-    assert.ok(!check(root).some((problem) => problem.includes("repository")));
-  });
+  // A team's own design file, built from an id at run time, is the kit's job, not a leak, and
+  // so is a team's agent page in its content.
+  for (const line of [
+    "const s=`design/${id}/qa/trace.md`;\n",
+    "const s='dashboards/agent-pages/foreman.html';\n",
+  ])
+    scratch((change, root) => {
+      change(VENDORED, (text) => `${text}${line}`);
+      assert.ok(!check(root).some((problem) => problem.includes("repository")));
+    });
 });
 
 test("a kit that names a local path fails; a script-ending sequence is refused", () => {
@@ -264,4 +276,111 @@ test("a kit that names a local path fails; a script-ending sequence is refused",
   const body =
     "// kit\n/* CONFIG:begin */\nconst CONFIG={};\n/* CONFIG:end */\nconst s='</script>';\n";
   assert.throws(() => pageText(vendoredText(body, 1)), /inline script/);
+});
+
+test("the config reads are every config.foreman chain and the Foreman template's block entries", () => {
+  const body = [
+    "const life=config.foreman.lifecycle;const m=config.foreman.models.cheaper;",
+    "setTimeout(f,config.timers.noReplyMs);",
+    'const FOREMAN_TEMPLATE=`<div data-block="identity"></div><div data-block="foreman-panel"></div>`;',
+    "copy.blocks['foreman-panel'].views[name];copy.blocks.identity.roles;",
+    // A block the Foreman page doesn't mount, and the generic block copy, are not its reads.
+    "copy.blocks['sprint-stories'].title;COPY.blocks.failed;",
+  ].join("\n");
+  assert.deepEqual(configReads(body), [
+    "blocks.foreman-panel.empty",
+    "blocks.foreman-panel.title",
+    "blocks.foreman-panel.views",
+    "blocks.identity.empty",
+    "blocks.identity.roles",
+    "blocks.identity.title",
+    "foreman.lifecycle",
+    "foreman.models.cheaper",
+    "timers.noReplyMs",
+  ]);
+});
+
+test("a config that lacks a foreman key or block entry the vendored kit reads fails", () => {
+  const shipped = configReads(parseVendored(readFileSync(join(ROOT, VENDORED), "utf8")).body);
+  // The shipped kit is the page tasks 8-19 built: its lifecycle, models and blocks are all read.
+  for (const path of [
+    "foreman.lifecycle.settleMs",
+    "foreman.models.cheaper",
+    "blocks.foreman-panel.views",
+  ])
+    assert.ok(shipped.includes(path), path);
+  for (const [drop, path] of [
+    [(config) => delete config.foreman.lifecycle, "foreman.lifecycle"],
+    [(config) => delete config.foreman.models.cheaper, "foreman.models.cheaper"],
+    [(config) => delete config.foreman.spendSessions, "foreman.spendSessions"],
+    [(config) => delete config.timers.noReplyMs, "timers.noReplyMs"],
+    [(config) => delete config.blocks["foreman-panel"].views, "blocks.foreman-panel.views"],
+    [(config) => delete config.blocks.identity, "blocks.identity.title"],
+  ])
+    scratch((change, root) => {
+      change(CONFIG, (text) => {
+        const config = parse(text);
+        drop(config);
+        return stringify(config);
+      });
+      reports(check(root), `no "${path}", which the vendored kit reads`);
+    });
+});
+
+test("a config that lacks a key the kit's own config has, read through an alias or not, fails", () => {
+  // The kit reads most of its copy through a local name (`const panel=copy.blocks[…]`), which no
+  // scan of the build sees; the keys recorded from the kit's own config at --vendor catch them.
+  const recorded = JSON.parse(readFileSync(join(ROOT, CONFIG_KEYS), "utf8"));
+  for (const path of ["blocks.foreman-panel.views.waiting.reply", "blocks.chat.unavailable"])
+    assert.ok(recorded.includes(path), path);
+  for (const [drop, path] of [
+    [
+      (config) => delete config.blocks["foreman-panel"].views.waiting.reply,
+      "blocks.foreman-panel.views.waiting.reply",
+    ],
+    [(config) => delete config.blocks.chat.unavailable, "blocks.chat.unavailable"],
+    [(config) => delete config.foreman.lifecycle.leaseMs, "foreman.lifecycle.leaseMs"],
+  ])
+    scratch((change, root) => {
+      change(CONFIG, (text) => {
+        const config = parse(text);
+        drop(config);
+        return stringify(config);
+      });
+      reports(check(root), `no "${path}", which the vendored kit reads`);
+    });
+  // A missing record fails too: a vendor that wrote none would check nothing.
+  scratch((change, root) => {
+    rmSync(join(root, CONFIG_KEYS));
+    reports(check(root), `${CONFIG_KEYS}: missing`);
+  });
+});
+
+test("the recorded keys are the kit config's leaves under foreman, timers and the Foreman page's blocks", () => {
+  const kit = {
+    foreman: { lifecycle: { settleMs: 1 }, agents: ["a"] },
+    timers: { slowMs: 1 },
+    steward: { role: "x" },
+    blocks: { identity: { title: "I", roles: { lead: "L" } }, "sprint-stories": { title: "S" } },
+  };
+  const body = 'const FOREMAN_TEMPLATE=`<div data-block="identity"></div>`;';
+  assert.deepEqual(kitConfigKeys(kit, body), [
+    "blocks.identity.roles.lead",
+    "blocks.identity.title",
+    "foreman.agents",
+    "foreman.lifecycle.settleMs",
+    "timers.slowMs",
+  ]);
+});
+
+test("--vendor refuses the public config as the kit's own: the record would check the config against itself", () => {
+  const pub = readFileSync(join(ROOT, CONFIG), "utf8");
+  const kit = pub.replace(/^team: .*$/m, "team: some-team");
+  assert.match(kitConfigProblem(pub, pub), /is this folder's story-view\.yml/);
+  assert.match(kitConfigProblem(`${pub}\n`, pub), /team "getting-started"/);
+  assert.match(
+    kitConfigProblem(pub.replace(/^# .*\n/gm, ""), pub),
+    /team "getting-started" is the public config's/,
+  );
+  assert.equal(kitConfigProblem(kit, pub), null);
 });

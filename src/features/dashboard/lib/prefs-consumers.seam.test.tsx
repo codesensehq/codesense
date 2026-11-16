@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, fireEvent } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { LiveHub, type HubDelta, type HubSnapshot } from "./live-hub";
+import { LiveHub, patchedRow, type HubDelta, type HubSnapshot } from "./live-hub";
 const api = vi.hoisted(() => ({
   prepare: vi.fn(),
   save: vi.fn(async (_raw: string, _patch?: boolean) => {}),
@@ -112,6 +112,8 @@ function advance(events = trace.deltas) {
       const rows = new Map(before.snapshot.map((row) => [row.id, row]));
       for (const id of delta.removes) rows.delete(id);
       for (const row of delta.upserts) rows.set(row.id, row);
+      for (const patch of delta.patches ?? [])
+        rows.set(patch.id, patchedRow(rows.get(patch.id)!, patch));
       views.set(delta.viewKey, { ...before, rev: delta.rev, snapshot: [...rows.values()] });
     }
     deliver(event);

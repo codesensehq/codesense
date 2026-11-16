@@ -16,6 +16,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
 import { VERB_REGISTRY } from "../lib/verb-registry.generated";
+import { threadOf } from "@/features/inbox/lib/chat-core";
 import { liveHub, type HubFrame } from "../lib/live-hub";
 import { openMessageTab } from "@/features/weft/components/inbox-message-dashboard";
 import { buildMessageViewerUrl, HTML_FRAME_ALLOW } from "@/shared/lib/viewer-file-type";
@@ -235,10 +236,10 @@ async function subscriptionView(
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
     if (!prepare) {
-      // The host's view key for the thread (`live_hub::pins::view_key` and
-      // `ThreadKey::new`): the saved agent is the id before `@`.
-      const agent = agentId.split("@")[0].trim();
-      return { viewKey: `pins:${team.org}/${team.team}:${agent}:${storyId?.trim() ?? ""}` };
+      // The host's view key for the thread (`live_hub::pins::view_key`), keyed by the one
+      // thread rule (`threadOf`, as `ThreadKey::new` keys it).
+      const thread = threadOf(agentId, storyId);
+      return { viewKey: `pins:${team.org}/${team.team}:${thread.agentId}:${thread.storyId}` };
     }
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
@@ -386,7 +387,11 @@ const TEAM_WORKSPACE_MODES = ["headed", "visible-unfocused", "headless"] as cons
  * A refusal (a missing worktree, a bad model) comes back as the launch's own `status:"invalid"`
  * result so the page can match its message; only a malformed call throws.
  */
-async function openTeamWorkspace(a: Record<string, unknown>, target: Record<string, unknown>) {
+async function openTeamWorkspace(
+  a: Record<string, unknown>,
+  target: Record<string, unknown>,
+  ctx: BridgeContext | undefined,
+) {
   if ("profile" in target || "packId" in target) {
     throw new Error(
       "invalid: openWorkspace launches an agent; pass { agent }, not profile or packId",
@@ -402,6 +407,15 @@ async function openTeamWorkspace(a: Record<string, unknown>, target: Record<stri
   if (target.createWorktree !== undefined && typeof target.createWorktree !== "boolean") {
     throw new Error("openWorkspace: createWorktree, if present, must be a boolean");
   }
+  const team = text(target.team, "team");
+  const org = text(target.org, "org");
+  // A named team must be one the page is admitted to, as for openLauncher.
+  if (
+    (team !== undefined || org !== undefined) &&
+    !pageAdmittedTeams(ctx).some((t) => t.org === org && t.team === team)
+  ) {
+    throw new Error(`openWorkspace: unknown or unadmitted team ${org}:${team}`);
+  }
   const mode = a.mode;
   if (mode !== undefined && !TEAM_WORKSPACE_MODES.some((m) => m === mode)) {
     throw new Error(
@@ -413,8 +427,8 @@ async function openTeamWorkspace(a: Record<string, unknown>, target: Record<stri
     name,
     worktree: text(target.worktree, "worktree"),
     createWorktree: target.createWorktree,
-    team: text(target.team, "team"),
-    org: text(target.org, "org"),
+    team,
+    org,
     agent: text(a.agent, "agent"),
     model: text(a.model, "model"),
     role: text(a.role, "role"),
@@ -423,7 +437,6 @@ async function openTeamWorkspace(a: Record<string, unknown>, target: Record<stri
   });
 }
 
-/** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
 /** The `sessionId` a session-text call names. */
 function textSessionId(args: unknown, verb: string): string {
   const a = argObject(args, verb);
@@ -432,6 +445,7 @@ function textSessionId(args: unknown, verb: string): string {
   return a.sessionId;
 }
 
+/** Architecture: the teams this page is admitted to (non-archived, and only its own team under a team-scope grant). */
 function pageAdmittedTeams(ctx: BridgeContext | undefined): InboxTeam[] {
   const grant = ctx?.frameGrant ?? ctx?.frame?.grant;
   return useOrgStore
@@ -2004,7 +2018,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         throw new Error("openWorkspace: reviewPrompt is only supported for branch targets");
       }
       if (target.kind === "team-workspace") {
-        return openTeamWorkspace(a, target as Record<string, unknown>);
+        return openTeamWorkspace(a, target as Record<string, unknown>, ctx);
       }
       // SW-GW-9 (AC-2): `initialPrompt` is STORY-ONLY. A non-story target has no agent
       // to seed at call time — `dir` is a bare CLI shell, `epic` returns no sessionId

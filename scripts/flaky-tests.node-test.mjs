@@ -211,6 +211,18 @@ test("readReports merges one test flaky on several platforms", (t) => {
   assert.deepEqual(readReports(path.join(dir, "absent")), []);
 });
 
+test("readReports names a sharded platform without its shard", (t) => {
+  const dir = tmp(t);
+  for (const artifact of ["rust-macos-shard-1-junit-7-1", "rust-macos-shard-3-junit-7-1"]) {
+    fs.mkdirSync(path.join(dir, artifact));
+    fs.writeFileSync(path.join(dir, artifact, "junit.xml"), junit);
+  }
+  assert.deepEqual(
+    readReports(dir).map((t) => t.platforms),
+    [["rust-macos"], ["rust-macos"]],
+  );
+});
+
 // A gh stub over an in-memory issue list; every call is recorded.
 function stubGh(issues) {
   const calls = [];

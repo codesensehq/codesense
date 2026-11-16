@@ -58,6 +58,8 @@ export function connectConfiguration(
           principal,
           topic === "profile" ? org! : undefined,
         );
+        // Seeded even once disposed: the hub then owns the host's hold and releases it.
+        hub.seed(view);
         if (disposed) return;
         const apply = (snapshot: HubSnapshot) => {
           if (disposed || !shown) return;
@@ -65,7 +67,6 @@ export function connectConfiguration(
             useDashboardProfileStore.setState({ profile: profileFromView(snapshot) });
           else applyWorkspaceConfig(workspaceConfigFromView(snapshot));
         };
-        hub.seed(view);
         const frame = hub.attach(
           `native:configuration:${topic}:${owner}`,
           view.viewKey,

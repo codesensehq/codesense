@@ -1144,9 +1144,12 @@ pub(crate) async fn open_workspace_call(
 pub(crate) async fn team_workspace_preflight<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     scope: &crate::context_repo::caller_scope::CallerScope,
+    org: Option<&str>,
     requested: Option<&str>,
 ) -> Result<super::route_to_context::ActiveContext, String> {
     let context = scope.context(app).await?;
+    // The team the open lands in, as `open_workspace_call_for` picks it: the named org and
+    // team, each defaulting to the caller's own.
     let selected = requested
         .and_then(super::dashboard_launch::launch_team_from_key)
         .or_else(|| {
@@ -1154,7 +1157,7 @@ pub(crate) async fn team_workspace_preflight<R: tauri::Runtime>(
                 .team_name
                 .as_ref()
                 .map(|team| super::dashboard_launch::LaunchTeam {
-                    org: context.org_slug.clone(),
+                    org: org.map_or_else(|| context.org_slug.clone(), str::to_owned),
                     team: requested.unwrap_or(team).into(),
                 })
         })

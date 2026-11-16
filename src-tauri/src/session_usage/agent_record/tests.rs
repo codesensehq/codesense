@@ -36,7 +36,7 @@ fn launched(dir: &Path, cli: AgentCli, handle: &str, model: &str, run: Option<&s
 }
 
 fn half(dir: &Path, handle: &str) -> UsageHalf {
-    usage_half(dir, handle, HashMap::new(), &CallerScope::Human).unwrap()
+    usage_half(dir, handle, HashMap::new(), &[], &CallerScope::Human).unwrap()
 }
 
 /// What `session_usage` answers for the same session.
@@ -167,9 +167,9 @@ fn some_unpriced_models_give_the_priced_sum_and_name_the_rest() {
 fn an_unknown_or_empty_handle_is_refused() {
     let (dir, _store) = store();
     let scope = CallerScope::Human;
-    let unknown = usage_half(dir.path(), "nobody", HashMap::new(), &scope);
+    let unknown = usage_half(dir.path(), "nobody", HashMap::new(), &[], &scope);
     assert!(unknown.err().unwrap().contains("unknown session"));
-    let empty = usage_half(dir.path(), "  ", HashMap::new(), &scope);
+    let empty = usage_half(dir.path(), "  ", HashMap::new(), &[], &scope);
     assert!(empty.err().unwrap().contains("handle must not be empty"));
 }
 
@@ -178,7 +178,14 @@ async fn a_record_read_moves_its_counter_even_when_the_handle_is_refused() {
     let (dir, _store) = store();
     let before = crate::shared::invoke_stats::metric_total("session_record.read");
     let params = Params { handle: "nobody".into() };
-    let refused = read(dir.path(), &params, HashMap::new(), &CallerScope::Human).await;
+    let refused = read(
+        dir.path(),
+        &params,
+        HashMap::new(),
+        &[],
+        &CallerScope::Human,
+    )
+    .await;
     assert!(refused.err().unwrap().contains("unknown session"));
     assert!(crate::shared::invoke_stats::metric_total("session_record.read") > before);
 }
@@ -272,6 +279,92 @@ fn a_chain_reads_the_files_of_every_session_in_it() {
             {"path": "a.rs", "commits": ["c1", "c2"]},
             {"path": "b.rs", "commits": ["c2"]},
         ])
+    );
+}
+
+/// A session of the saved agent `agent` with no story, recorded at `at` with one priced call.
+fn no_story_session(dir: &Path, handle: &str, agent: &str, at: i64, input: u64) {
+    let mut store = UsageStore::open(&dir.join("usage.sqlite")).unwrap();
+    let mut record = SessionRecord::new(format!("tab-{handle}"));
+    record.handle = Some(handle.into());
+    record.agent = Some(agent.into());
+    record.cli = Some(AgentCli::Claude.to_string());
+    record.model = Some("claude-sonnet-5-5".into());
+    record.recorded_at_ms = at;
+    store.write_session_record(&record).unwrap();
+    let call = event(
+        &format!("e-{handle}"),
+        &format!("tab-{handle}"),
+        "claude-sonnet-5-5",
+        at,
+        Tokens {
+            input,
+            output: 10,
+            ..Default::default()
+        },
+    );
+    store.ingest(&[call]).unwrap();
+}
+
+#[test]
+fn a_no_story_session_sums_the_listed_no_story_sessions_of_its_saved_agent() {
+    let (dir, _store) = store();
+    // The no-story thread is the saved agent's listed sessions (the thread read's rule): dev-a
+    // and dev-c are listed beside dev-b; dev-old is not listed any more.
+    no_story_session(dir.path(), "dev-old", "dev@2", AT - 5_000, 4_000);
+    no_story_session(dir.path(), "dev-a", "dev@3", AT, 100);
+    no_story_session(dir.path(), "dev-b", "dev@3", AT + 1_000, 200);
+    no_story_session(dir.path(), "dev-c", "dev@4", AT + 2_000, 400);
+    // Another saved agent with no story, and this one on a story, are other threads.
+    no_story_session(dir.path(), "qa-1", "qa@1", AT + 500, 1_000);
+    chain_session(dir.path(), "dev-story", "dev@3", "STORY-A", AT + 700, 2_000);
+    let peers = [
+        "dev-c".to_owned(),
+        "dev-a".to_owned(),
+        "qa-1".to_owned(),
+        "dev-story".to_owned(),
+    ];
+    let listed = usage_half(
+        dir.path(),
+        "dev-b",
+        HashMap::new(),
+        &peers,
+        &CallerScope::Human,
+    )
+    .unwrap();
+    let record = assemble("dev-b", &listed, None, None);
+    // The listed ones of its thread, oldest first, then the session asked about.
+    assert_eq!(record["chain"], json!(["tab-dev-a", "tab-dev-c", "tab-dev-b"]));
+    assert_eq!(record["tokens"]["input"], 700);
+    // With none listed beside it, it is its own chain.
+    let alone = half(dir.path(), "dev-b");
+    assert_eq!(assemble("dev-b", &alone, None, None)["chain"], json!(["tab-dev-b"]));
+}
+
+#[test]
+fn a_blank_story_is_no_story_so_its_thread_is_the_listed_one() {
+    let (dir, _store) = store();
+    // A record stored with a blank story (a launch's meta.story of "") is a no-story session: it
+    // takes no chain of every blank-story session, only the listed ones.
+    chain_session(dir.path(), "dev-x", "dev@3", " ", AT, 100);
+    chain_session(dir.path(), "dev-y", "dev@3", "", AT + 1_000, 200);
+    chain_session(dir.path(), "dev-z", "dev@3", "", AT + 2_000, 400);
+    let alone = half(dir.path(), "dev-z");
+    assert_eq!(
+        assemble("dev-z", &alone, None, None)["chain"],
+        json!(["tab-dev-z"])
+    );
+    let listed = usage_half(
+        dir.path(),
+        "dev-z",
+        HashMap::new(),
+        &["dev-y".to_owned()],
+        &CallerScope::Human,
+    )
+    .unwrap();
+    assert_eq!(
+        assemble("dev-z", &listed, None, None)["chain"],
+        json!(["tab-dev-y", "tab-dev-z"])
     );
 }
 

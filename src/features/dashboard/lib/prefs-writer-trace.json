@@ -28,20 +28,19 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "[\"viewer\",\"settings\",\"editorLineWrap\"]",
+            "set": {
+              "value": "on"
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 2,
         "topic": "prefs",
-        "upserts": [
-          {
-            "id": "[\"viewer\",\"settings\",\"editorLineWrap\"]",
-            "path": [
-              "viewer",
-              "settings",
-              "editorLineWrap"
-            ],
-            "value": "on"
-          }
-        ],
+        "upserts": [],
         "viewKey": "prefs:global"
       }
     },
@@ -117,18 +116,19 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "[\"dashboardPolicy\",\"preset\"]",
+            "set": {
+              "value": "team-safe"
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 2,
         "topic": "prefs",
         "upserts": [
-          {
-            "id": "[\"dashboardPolicy\",\"preset\"]",
-            "path": [
-              "dashboardPolicy",
-              "preset"
-            ],
-            "value": "team-safe"
-          },
           {
             "id": "[\"dashboardPolicy\",\"switches\",\"confirmTeamSendAsYou\"]",
             "path": [
@@ -226,6 +226,29 @@
     {
       "event": "codesense:delta",
       "payload": {
+        "patches": [
+          {
+            "id": "[\"viewer\",\"activeWorkspace\",\"acme:dev\"]",
+            "set": {
+              "value": "second"
+            },
+            "unset": []
+          },
+          {
+            "id": "[\"viewer\",\"workspaces\",\"acme:dev\"]",
+            "set": {
+              "value": [
+                {
+                  "cwd": "/second",
+                  "id": "second",
+                  "kind": "story",
+                  "status": "ready"
+                }
+              ]
+            },
+            "unset": []
+          }
+        ],
         "removes": [],
         "rev": 3,
         "topic": "prefs",
@@ -238,31 +261,6 @@
               "confirmMessageDestructive"
             ],
             "value": true
-          },
-          {
-            "id": "[\"viewer\",\"activeWorkspace\",\"acme:dev\"]",
-            "path": [
-              "viewer",
-              "activeWorkspace",
-              "acme:dev"
-            ],
-            "value": "second"
-          },
-          {
-            "id": "[\"viewer\",\"workspaces\",\"acme:dev\"]",
-            "path": [
-              "viewer",
-              "workspaces",
-              "acme:dev"
-            ],
-            "value": [
-              {
-                "cwd": "/second",
-                "id": "second",
-                "kind": "story",
-                "status": "ready"
-              }
-            ]
           }
         ],
         "viewKey": "prefs:42:native"
@@ -376,20 +374,19 @@
       {
         "event": "codesense:delta",
         "payload": {
+          "patches": [
+            {
+              "id": "[\"viewer\",\"settings\",\"editorLineWrap\"]",
+              "set": {
+                "value": "off"
+              },
+              "unset": []
+            }
+          ],
           "removes": [],
           "rev": 260,
           "topic": "prefs",
-          "upserts": [
-            {
-              "id": "[\"viewer\",\"settings\",\"editorLineWrap\"]",
-              "path": [
-                "viewer",
-                "settings",
-                "editorLineWrap"
-              ],
-              "value": "off"
-            }
-          ],
+          "upserts": [],
           "viewKey": "prefs:global"
         }
       },
