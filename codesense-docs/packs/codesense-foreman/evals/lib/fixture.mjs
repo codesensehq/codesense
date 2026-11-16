@@ -222,7 +222,9 @@ export const removeLiveFixtures = () => {
 };
 
 // The directories git's own options name before the subcommand: each `-C` resolves against the
-// one before it, and `--git-dir`/`--work-tree` against the last.
+// one before it, and `--git-dir`/`--work-tree` against the last. Any other option there is
+// `refused`: one this doesn't know may take a value that would read as the subcommand and hide a
+// later path.
 export function gitPaths(args, cwd) {
   const dirs = [];
   let dir = cwd;
@@ -232,9 +234,11 @@ export function gitPaths(args, cwd) {
     else if (a === "--git-dir" || a === "--work-tree") dirs.push(path.resolve(dir, args[++i] ?? ""));
     else if (/^--(git-dir|work-tree)=/.test(a)) dirs.push(path.resolve(dir, a.slice(a.indexOf("=") + 1)));
     else if (a === "-c") i++;
-    else if (!a.startsWith("-")) break;
+    else if (a === "--no-pager") continue;
+    else if (a.startsWith("-")) return { dirs, refused: a };
+    else break;
   }
-  return dirs;
+  return { dirs, refused: null };
 }
 
 // The fixture a case asks for.
@@ -559,7 +563,9 @@ function build(root, opts) {
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
     git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
-      const out = [cwd, ...gitPaths(args, cwd)].find((dir) => !within(dir));
+      const { dirs, refused } = gitPaths(args, cwd);
+      if (refused) return { status: 128, stdout: "", stderr: `fatal: git ${refused} is not allowed in the eval sandbox\n` };
+      const out = [cwd, ...dirs].find((dir) => !within(dir));
       if (out !== undefined) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${out}\n` };
       return git(args, cwd);
     },
