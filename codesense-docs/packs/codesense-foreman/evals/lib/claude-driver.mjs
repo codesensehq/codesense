@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The real model driver: headless `claude -p`, launched as the Foreman's agent.yaml launches it
 // (its root prompt, permissions, env and `--add-dir`), in the fixture's home. Each case turn is
-// one `claude -p` on the same session. What the agent does reaches the fixture live, so one
+// one `claude -p` on the same session, delivered as the page chat delivers it: the person's
+// text is inbox mail, and the prompt is CodeSense's idle inbox notice. What the agent does reaches the fixture live, so one
 // sequence orders it all:
 // - MCP calls go to a host in this process (`codesense`, and `github` for a GitHub MCP case),
 //   which logs each through `fx.tool` and answers from the sandbox profile.
@@ -99,9 +100,10 @@ const readBody = (req) =>
   });
 
 // The MCP host: Streamable HTTP with plain JSON responses, one path per server.
-async function startHost(fx, { github }) {
+async function startHost(fx, { github, inbox }) {
   const servers = { codesense: { tools: TOOLS, name: (n) => n }, ...(github ? { github: { tools: GITHUB_TOOLS, name: (n) => `mcp__github__${n}` } } : {}) };
   const errors = [];
+  let sent = 8000;
   const answer = (server, msg) => {
     const { method, params = {} } = msg;
     if (method === "initialize")
@@ -117,6 +119,9 @@ async function startHost(fx, { github }) {
         return { content: [{ type: "text", text: `eval host error: ${e.message}` }], isError: true };
       }
       if (server.key === "github") result = { number: 1, html_url: "https://example.test/acme/demo/pull/1" };
+      // The person's mail, each message once; a send gets the real tool's answer.
+      else if (params.name === "read_messages") result = { messages: inbox.splice(0) };
+      else if (["reply", "send_message"].includes(params.name)) result = { status: "sent", messageId: (sent += 1) };
       return { content: [{ type: "text", text: JSON.stringify(result ?? { ok: true }) }], ...(result?.error ? { isError: true } : {}) };
     }
     return undefined;
@@ -211,8 +216,11 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
     const shimDir = path.join(fx.root, "eval-bin");
     mkdirSync(shimDir, { recursive: true });
     writeFileSync(path.join(shimDir, "git"), shim(realGit), { mode: 0o755 });
-    const host = await startHost(fx, { github: caseDef.fixture?.git_access === "github-mcp" });
+    // The person's unread mail. Ids sit clear of the fixture's card ids.
+    const inbox = [];
+    const host = await startHost(fx, { github: caseDef.fixture?.git_access === "github-mcp", inbox });
     const session = randomUUID();
+    const self = fx.config.self;
     const settings = { permissions: agent.permissions.claude, env: { ...agent.env, HOME: fx.env.HOME } };
     const env = {
       ...Object.fromEntries(Object.entries(fx.env).filter(([k]) => !OUTER.test(k))),
@@ -233,6 +241,8 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
         const cap = Math.min(runCapUsd, budgetLeft) - cost;
         if (!(cap > 0)) throw fail(`budget: no spend left for turn ${i + 1}`);
         fx.human(text);
+        inbox.push({ messageId: 7001 + i, from: "human", fromName: "You", text });
+        const notice = `[inbox t${i + 1}] You have 1 new message. Call read_messages with session_id ${self}.`;
         const args = [
           "-p",
           "--output-format",
@@ -247,7 +257,7 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
           "--max-budget-usd",
           String(Number(cap.toFixed(4))),
           ...(i === 0 ? ["--session-id", session] : ["--resume", session]),
-          text,
+          notice,
         ];
         const turn = await runTurn({ bin, args, cwd: path.join(fx.root, "home"), env, timeoutMs, transcript });
         const result = turn.lines.findLast((l) => l.type === "result");

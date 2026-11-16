@@ -1435,7 +1435,10 @@ test("claude driver: launches with the agent's own prompt, permissions and model
   assert.deepEqual(settings.permissions, agent.permissions.claude);
   assert.equal(settings.env.HOME, fx.env.HOME, "the agent's shell keeps the sandbox HOME");
   assert.equal(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
-  assert.equal(argv.at(-1), turnsOf("onboard-repo")[0]);
+  assert.equal(
+    argv.at(-1),
+    `[inbox t1] You have 1 new message. Call read_messages with session_id ${CONFIG.self}.`,
+  );
   assert.equal(path.basename(cwd), "home");
   assert.ok(env.PATH.startsWith(path.join(fx.root, "eval-bin")), "the git shim is first on PATH");
   assert.equal(env.CLAUDECODE, null, "a nested CLI does not inherit the outer session's markers");
@@ -1479,6 +1482,37 @@ test("claude driver: every turn is played, MCP and git calls are captured in ord
     caseDef.input.turns,
   );
   assert.equal(grade(caseDef, state).pass, true);
+});
+
+test("claude driver: each turn arrives as the person's inbox mail, read once with read_messages", async (t) => {
+  const { fake, state, error } = await drive(t, "answer-card", [
+    {
+      ...ok(),
+      steps: [
+        { tool: "read_messages" },
+        { tool: "read_messages" },
+        { tool: "reply", args: { message_id: 7001, text: "x" } },
+      ],
+    },
+    { ...ok(), steps: [{ tool: "read_messages" }] },
+  ]);
+  assert.equal(error, undefined);
+  const [first, again, sent, second] = fake.answers().map((a) => JSON.parse(a.content[0].text));
+  const [one, two] = turnsOf("answer-card");
+  assert.deepEqual(first.messages, [
+    { messageId: 7001, from: "human", fromName: "You", text: one },
+  ]);
+  assert.deepEqual(again.messages, [], "mail is returned once");
+  assert.equal(sent.status, "sent");
+  assert.deepEqual(
+    second.messages.map((m) => [m.messageId, m.text]),
+    [[7002, two]],
+  );
+  assert.match(fake.invocations()[1].argv.at(-1), /^\[inbox t2\] You have 1 new message\./);
+  assert.deepEqual(
+    state.replies.map((r) => r.turn),
+    [1],
+  );
 });
 
 test("claude driver: state reads are answered from the sandbox profile, tools carry the real schemas", async (t) => {
