@@ -3,24 +3,25 @@
 //!
 //! The daemon records every agent session event in `metrics-db` and only ever deletes rows older
 //! than a year, and it never shrinks the file. CodeSense never uploads those rows (git-ai
-//! telemetry is off), so nothing marks them delivered and the file grows by about a gigabyte a
-//! day. [`prune`] drops rows past [`RETENTION_SECS`] and returns the freed pages to the
-//! filesystem.
+//! telemetry is off), so nothing marks them delivered and the file grows by about 0.25-0.3 GB a
+//! day (measured on one machine: 5.3 GB over 18 days, most of it session events). [`prune`] drops
+//! rows past [`RETENTION_SECS`] and returns the freed pages to the filesystem.
 //!
 //! **What the window costs.** The rows are not only telemetry: git-ai's post-commit attribution
 //! recovery reads the SessionEvents back (it matches a changed file's mtime to an event within a
 //! few seconds, to recover AI attribution for lines whose checkpoint was missed). An agent edit
 //! with a missed checkpoint that is committed more than [`RETENTION_SECS`] later has no event left
-//! to match, and its lines fall back to unknown. Three days keeps the file near 0.7 GB; a longer
-//! window recovers older commits at about 0.25 GB a day. The window is this one constant.
+//! to match, and its lines fall back to unknown. Three days keeps the file at about 0.7-0.9 GB; each
+//! extra day recovers older commits for about 0.25-0.3 GB. The window is this one constant.
 //!
 //! **What it costs the daemon.** The daemon's own connection waits about five seconds for the
 //! write lock and then drops the batch it was storing. A prune holds that lock for each delete
 //! batch, and the one-time rebuild that turns on incremental vacuum holds it for the whole
 //! rebuild (tens of seconds on a large file). So a sweep runs only when the db is idle (no new
 //! row over [`IDLE_WINDOW`]), from a timer that starts after the app does, never on an agent
-//! launch; it pauses between batches; and a lock it cannot get ends the run without a stamp, so
-//! the next tick tries again.
+//! launch; it pauses between batches; it checks again, before compacting, that no row has arrived
+//! since the idle check and skips the rebuild if one has; and a lock it cannot get, or a row that
+//! arrived, ends the run without a stamp, so the next tick tries again.
 
 use super::managed::Managed;
 use rusqlite::{Connection, OpenFlags};
@@ -48,17 +49,21 @@ const MIN_FREE_PAGES: i64 = 256;
 pub(crate) struct Pruned {
     pub deleted: usize,
     pub compacted: bool,
-    /// The daemon held the lock before the run finished, so rows past the window may remain.
+    /// The run was cut short: the daemon held the lock, or a row arrived after the idle check
+    /// and the compaction was skipped. Rows past the window, or free pages, may remain.
     pub stopped_busy: bool,
 }
 
 /// Delete the rows older than `keep_secs` before `now`, resting `pause` between batches, then
-/// compact the file if a quarter of it is free. A missing db is not an error.
+/// compact the file if a quarter of it is free. `idle_id` is the newest row id the idle check
+/// saw: if the newest id has moved by the time compaction would start, the compaction is skipped
+/// (the rebuild holds the write lock for its whole length). A missing db is not an error.
 pub(crate) fn prune(
     db: &Path,
     now: u64,
     keep_secs: u64,
     pause: Duration,
+    idle_id: Option<i64>,
 ) -> rusqlite::Result<Pruned> {
     if !db.is_file() {
         return Ok(Pruned::default());
@@ -90,6 +95,10 @@ pub(crate) fn prune(
             Err(error) => return Err(error),
         }
         std::thread::sleep(pause);
+    }
+    if idle_id.is_some() && newest_id(db).ok() != idle_id {
+        pruned.stopped_busy = true;
+        return Ok(pruned);
     }
     match compact(&conn) {
         Ok(done) => pruned.compacted = done,
@@ -141,13 +150,12 @@ fn newest_id(db: &Path) -> rusqlite::Result<i64> {
     })
 }
 
-/// Whether no row was stored over `window`. `wait` is the sleep, so a test can store a row in it.
-pub(crate) fn is_idle(db: &Path, window: Duration, wait: impl FnOnce(Duration)) -> bool {
-    let Ok(before) = newest_id(db) else {
-        return false;
-    };
+/// The newest row id if no row was stored over `window`, else `None`. `wait` is the sleep, so a
+/// test can store a row in it.
+pub(crate) fn idle_id(db: &Path, window: Duration, wait: impl FnOnce(Duration)) -> Option<i64> {
+    let before = newest_id(db).ok()?;
     wait(window);
-    newest_id(db).is_ok_and(|after| after == before)
+    newest_id(db).ok().filter(|after| *after == before)
 }
 
 /// Where git-ai keeps the metrics-db under a managed home.
@@ -181,7 +189,7 @@ pub(crate) fn tick(
     managed_root: &Path,
     git_ai_home: &Path,
     now: u64,
-    idle: impl FnOnce(&Path) -> bool,
+    idle: impl FnOnce(&Path) -> Option<i64>,
     pause: Duration,
 ) -> Tick {
     let db = db_path(git_ai_home);
@@ -195,10 +203,10 @@ pub(crate) fn tick(
     if !due(last, now) {
         return Tick::NotDue;
     }
-    if !idle(&db) {
+    let Some(seen) = idle(&db) else {
         return Tick::NotIdle;
-    }
-    let result = prune(&db, now, RETENTION_SECS, pause);
+    };
+    let result = prune(&db, now, RETENTION_SECS, pause, Some(seen));
     if !matches!(&result, Ok(pruned) if pruned.stopped_busy) {
         let _ = std::fs::write(&stamp, now.to_string());
     }
@@ -229,7 +237,7 @@ pub(crate) fn start(codesense_home: &Path) {
                         managed.root(),
                         &managed.git_ai_home(),
                         now_secs(),
-                        |db| is_idle(db, IDLE_WINDOW, std::thread::sleep),
+                        |db| idle_id(db, IDLE_WINDOW, std::thread::sleep),
                         BATCH_PAUSE,
                     )
                 }));
