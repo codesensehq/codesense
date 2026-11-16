@@ -38,7 +38,22 @@ fn absolute_parent_paths_validate_and_read_only_shared_content() {
         );
         let result = read(shared).await.unwrap();
         assert_eq!(result["text"], "parent-shared.md-bytes");
-        assert_eq!(read(other_file).await.unwrap()["text"], "other-org-content");
+        // Another org's file reads as missing, so the error says nothing about
+        // whether it exists.
+        assert_eq!(
+            read(other_file).await.unwrap_err(),
+            read(other.join("parent/content/absent.md"))
+                .await
+                .unwrap_err()
+        );
+        assert_eq!(
+            read(other.join("parent/content/absent.md"))
+                .await
+                .unwrap_err(),
+            read(f.fixture.path("parent", "content/missing.md"))
+                .await
+                .unwrap_err()
+        );
         assert_eq!(
             read(f.fixture.path("sibling", "content/secret.md"))
                 .await

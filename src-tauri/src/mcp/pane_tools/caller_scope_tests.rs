@@ -81,7 +81,7 @@ fn pane_fallback_precedence_runs_after_caller_filtering() {
     assert_eq!(own[0].title, "Private Inbox");
 }
 #[test]
-fn other_org_same_named_team_keeps_manifest_and_still_gates_real_owner_aliases() {
+fn other_org_same_named_team_is_refused_and_own_manifest_aliases_follow_the_real_owner() {
     use crate::context_repo::caller_scope::{tests::Fixture, CallerScope};
     let f = Fixture::new();
     let me = Principal::from(1u64);
@@ -100,31 +100,37 @@ fn other_org_same_named_team_keeps_manifest_and_still_gates_real_owner_aliases()
         "<title>HTML fallback</title>",
     )
     .unwrap();
-    let manifest = root.join("parent/panes/pane-manifest.yaml");
-    std::fs::write(&manifest, "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Other org report\n    icon: chart-bar\n").unwrap();
-    let read = |scope: &CallerScope| {
-        let ToolEnvelope::Ok(listing) = list_for(&f.home, &me, org, "parent", scope).unwrap()
-        else {
+    std::fs::write(root.join("parent/panes/pane-manifest.yaml"), "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Other org report\n    icon: chart-bar\n").unwrap();
+    let read = |org: &str, team: &str, scope: &CallerScope| {
+        let ToolEnvelope::Ok(listing) = list_for(&f.home, &me, org, team, scope).unwrap() else {
             panic!("listing refused");
         };
-        listing
-            .panes
-            .into_iter()
-            .find(|pane| pane.id == "report")
-            .unwrap()
+        listing.panes.into_iter().find(|pane| pane.id == "report")
     };
-    let expected = read(&CallerScope::Human);
-    assert_eq!(expected.title, "Other org report");
-    assert_eq!(read(&f.scope), expected);
+    assert_eq!(
+        read(org, "parent", &CallerScope::Human).unwrap().title,
+        "Other org report"
+    );
+    // A team agent reads only its own org, even where a team shares its ancestor's name.
+    assert_eq!(read(org, "parent", &f.scope), None);
+    // In the agent's own team a manifest is read, but not one aliasing another
+    // team's unshared file: the real owner decides.
+    f.write("child", "panes/report.html", "<title>HTML fallback</title>");
+    f.write("child", "panes/pane-manifest.yaml", "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Own manifest title\n");
+    assert_eq!(
+        read("acme/ctx", "child", &f.scope).unwrap().title,
+        "Own manifest title"
+    );
     #[cfg(unix)]
     {
+        let manifest = f.path("child", "panes/pane-manifest.yaml");
         let hidden = f.write("parent", "config/private-manifest.yaml", "version: 1\npanes:\n  - id: report\n    html: report.html\n    title: Hidden parent title\n");
         std::fs::remove_file(&manifest).unwrap();
         std::os::unix::fs::symlink(&hidden, &manifest).unwrap();
-        let denied = read(&f.scope);
+        let denied = read("acme/ctx", "child", &f.scope).unwrap();
         assert_eq!(denied.title, "HTML fallback");
         std::fs::remove_file(&manifest).unwrap();
-        assert_eq!(denied, read(&f.scope));
+        assert_eq!(Some(denied), read("acme/ctx", "child", &f.scope));
     }
     assert!(f
         .scope
