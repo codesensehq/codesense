@@ -187,11 +187,11 @@ permissions:
       # NotebookEdit; it ignores a `Write(path)` or `NotebookEdit(path)` deny and warns at startup.
       # The home worktree is read-only: it only fast-forwards.
       - Edit(./**)
-      # Every loader root of CodeSense and each runtime, plus git internals; nothing else. These
-      # are defence in depth against a direct edit only. The roots: CodeSense's agent configs and
-      # their legacy routines dir (the Foreman's own rules and routines among them), agent
-      # account homes, and each runtime's skills, commands and home. A pack test reads them from
-      # the source, so a new root fails CI.
+      # Every agent-config loader root of CodeSense and each runtime, plus git internals; defence
+      # in depth against a direct edit only. The roots: CodeSense's agent configs and their legacy
+      # routines dir (the Foreman's own rules and routines among them), agent account homes, and
+      # each runtime's skills, commands and home. A pack test reads them from the source, so a
+      # new root fails CI.
       - Edit(//**/.git)
       - Edit(//**/.git/**)
       - Edit(//**/.claude/**)
