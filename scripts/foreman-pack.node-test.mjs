@@ -218,6 +218,30 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
   }
 });
 
+test("no foreman-* path inside an agent-config tree is writable, in three layouts", () => {
+  // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
+  // any agent's skills; the agent-config trees are denied for that reason.
+  const userHome = "/Users/someone";
+  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
+    const root = path.dirname(home);
+    for (const target of [
+      path.join(root, "repo/.agents/skills/foreman-x/SKILL.md"),
+      path.join(userHome, ".codex/skills/foreman-x/SKILL.md"),
+      path.join(userHome, ".claude/skills/foreman-x/SKILL.md"),
+      path.join(root, "foreman-fix-docs-9f2a/.claude/settings.json"),
+    ]) {
+      assert.equal(writeDenied(home, target), true, `${home}: ${target} is denied`);
+      for (const tool of ["Edit", "Write"])
+        assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+    }
+    assert.equal(
+      writeAllowed(home, path.join(root, "foreman-fix-docs-9f2a/stories/a.md")),
+      true,
+      "a normal worktree file is still allowed",
+    );
+  }
+});
+
 test("no file rule starts with ../ and no Write or NotebookEdit deny remains", () => {
   for (const rule of [...allow, ...deny]) {
     assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(\.\.\//.test(rule), `${rule} never matches`);

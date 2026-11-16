@@ -172,8 +172,11 @@ permissions:
       - Bash(sh stories/*.sh *)
       - Bash(gh pr create --head foreman/* --title * --body *)
       # Claude never matches a `../` file rule, so these are absolute globs (`//` is the root,
-      # live probe, 2026-11-16). They match a foreman-* directory anywhere; `Edit(./**)` below
-      # still keeps home read-only, since a deny beats an allow.
+      # live probe, 2026-11-16). They match a foreman-* directory anywhere, and Write creates
+      # missing parents, so Write can make a foreman-* dir anywhere: the agent-config trees are
+      # denied below for that reason, and `Edit(./**)` keeps home read-only (a deny beats an
+      # allow). The Foreman can run a script it writes through `sh stories/*.sh`; the guardrail
+      # for that is review and protected main.
       - Read(//**/foreman-*/**)
       - Edit(//**/foreman-*/**)
       - Write(//**/foreman-*/**)
@@ -187,6 +190,11 @@ permissions:
       # No git internals in a foreman-* worktree.
       - Edit(//**/foreman-*/.git)
       - Edit(//**/foreman-*/.git/**)
+      # No agent's skills, settings or instructions, in a worktree or anywhere else: another
+      # agent loads them on its own.
+      - Edit(//**/.claude/**)
+      - Edit(//**/.agents/**)
+      - Edit(//**/.codex/**)
       # Nothing between the worktree and its one allowed subcommand, nothing after the
       # pushed branch or the removed worktree, nothing more on a new worktree. (A trailing
       # ` *` needs one more word (live probe, 2026-11-13), so these end in one extra ` *`.)
@@ -248,4 +256,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 4
+revision: 5
