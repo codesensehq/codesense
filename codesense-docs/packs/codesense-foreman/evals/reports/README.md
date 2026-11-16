@@ -11,19 +11,19 @@ transcript stays on the machine that ran it.
 
 | Model               | `spec_hash` | Status | Deciding report                  | Spend |
 | ------------------- | ----------- | ------ | -------------------------------- | ----- |
-| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-3.md` | $2.59 |
-| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-4.md` | $1.18 |
+| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-6.md` | $2.59 |
+| `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-5.md` | $1.22 |
 
 `spec_hash` is null because there is no pack builder yet; the rows key on null until one exists.
-Both runs were k=3, complete and had no infra errors, with the pack's file rules in the
-`//**/foreman-*` form and the eval sandbox under `fm-eval-…`. Opus passed every case in every run.
-Sonnet passed `answer-card` and `start-sprint-lead` 3/3 and failed one run each of `onboard-repo`
-and `recover-error`; in both, the Foreman answered in plain text and never called `reply`.
+Both runs were k=3, complete and had no infra errors. The Foreman had plain `Read`, `Edit` and
+`Write` allows and no file rule: its instructions, not rules, say where it edits. Opus passed every
+case in every run. Sonnet passed `onboard-repo` and `start-sprint-lead` 3/3, failed `answer-card`
+run 1 and failed `recover-error` in all three runs.
 
 ## Permission refusals
 
-No run had a permission refusal of any kind, so none of an Edit or Write in the worktree. Each
-transcript's `result` lines carry Claude's `permission_denials`; the count per run is:
+No run had a permission refusal of any kind. Each transcript's `result` lines carry Claude's
+`permission_denials`; the count per run is:
 
 ```sh
 for f in "$FOREMAN_EVAL_LOGS"/*.jsonl; do
@@ -33,17 +33,25 @@ done
 ```
 
 Add `| select(.tool_name == "Edit" or .tool_name == "Write")` after `[]?` to count only file
-writes. Every one of the 24 runs (12 per model) counted 0 for both.
+writes. Every one of the 24 runs (12 per model, 3 per case) counted 0 for both.
 
 ## Fails
 
-| Report                           | Case            | Run | Cause                                                                                                                                              |
-| -------------------------------- | --------------- | --- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `foreman-claude-2026-11-16-4.md` | `recover-error` | 1   | Wrote the README and commit message in the worktree, committed, pushed and hit the injected `gh` failure, but said so in plain text: no `reply` in either turn |
-| `foreman-claude-2026-11-16-4.md` | `onboard-repo`  | 3   | Launched the setup session correctly, then answered in plain text: no `reply` in turn 1, caught by the floor-wide reply check                       |
+| Report                           | Case            | Run     | Cause                                                                                                                                                       |
+| -------------------------------- | --------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `foreman-claude-2026-11-16-5.md` | `recover-error` | 1, 2, 3 | Edited the README in the worktree, committed, pushed, hit the injected `gh` failure and replied, but kept the worktree for a retry: no `git worktree remove` |
+| `foreman-claude-2026-11-16-5.md` | `answer-card`   | 1       | Sent an empty `reply`, then explained the card in plain text: no `reply` in turn 2                                                                          |
 
-These are model failures, not pack ones. The floor-wide check that every turn sends a `reply` is
-new in these runs; before it, `onboard-repo` run 3 would have passed on the script grade.
+These are model failures, not permission ones. Opus removed the worktree after the `gh` failure in
+every run. The `answer-card` fail is the plain-text-without-`reply` failure the earlier Sonnet run
+also had.
+
+## Earlier passes and fails (file rules in the `//**/foreman-*` form)
+
+`foreman-claude-2026-11-16-3.md` (Opus) passed every case. `foreman-claude-2026-11-16-4.md`
+(Sonnet) failed `recover-error` run 1 and `onboard-repo` run 3, both by answering in plain text with
+no `reply`. Neither had a permission refusal. No `-4.md` run left a worktree
+behind: the same grader check passed in all three `recover-error` runs.
 
 ## Earlier fails (before the rule fix)
 
