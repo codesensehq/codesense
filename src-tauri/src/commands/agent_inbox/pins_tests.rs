@@ -86,6 +86,16 @@ async fn the_person_pins_unpins_and_reorders_and_each_change_fires_once() {
     .await;
     assert_eq!(listed(&reordered), vec![a, b]);
     assert_eq!(outcome(&reordered), None);
+    // The order it already has: the list comes back as it was and nothing fires.
+    let same = human(
+        &fake,
+        story,
+        PinOp::Reorder {
+            message_ids: vec![a, b],
+        },
+    )
+    .await;
+    assert_eq!(listed(&same), vec![a, b]);
     let again = human(
         &fake,
         story,
@@ -102,7 +112,7 @@ async fn the_person_pins_unpins_and_reorders_and_each_change_fires_once() {
     let unpinned = human(&fake, story, PinOp::Unpin { message_id: a }).await;
     assert_eq!(outcome(&unpinned), Some(PinOutcome::Unpinned));
     assert_eq!(listed(&unpinned), vec![b]);
-    // pin, pin, reorder, unpin: an unchanged pin and the read fire nothing.
+    // pin, pin, reorder, unpin: an unchanged pin, an unchanged reorder and the read fire nothing.
     let events = fake.pin_events();
     assert_eq!(events.len(), 4, "{events:?}");
     assert!(events

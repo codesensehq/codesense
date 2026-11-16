@@ -36,11 +36,21 @@ impl PinViews {
     }
 }
 
+/// A key part with `%` and `:` percent-encoded, so no part can run into the next. Ids that
+/// carry neither (every id today: `/` and `@` stay as they are) keep their key. The page's
+/// `pinsViewKey` (`html-bridge.ts`) writes the same key.
+fn key_part(part: &str) -> String {
+    part.replace('%', "%25").replace(':', "%3A")
+}
+
 /// The view key of `thread`'s list in `team`'s store.
 pub fn view_key(team: &LaunchTeam, thread: &ThreadKey) -> String {
     format!(
         "pins:{}/{}:{}:{}",
-        team.org, team.team, thread.agent_id, thread.story_id
+        key_part(&team.org),
+        key_part(&team.team),
+        key_part(&thread.agent_id),
+        key_part(&thread.story_id)
     )
 }
 
@@ -174,6 +184,26 @@ mod tests {
         assert!(!views.drop_view(a), "forgetting twice finds nothing");
         assert_eq!(views.0.lock().unwrap().len(), 1);
         assert!(views.drop_view(b));
+    }
+
+    #[test]
+    fn a_part_with_a_colon_cannot_collide_with_its_neighbour() {
+        let team = LaunchTeam {
+            org: "acme".into(),
+            team: "core".into(),
+        };
+        // The same two keys `html-bridge.test.ts` asserts for the page.
+        let key = |agent: &str, story: &str| {
+            view_key(&team, &ThreadKey::new(agent, Some(story)).unwrap())
+        };
+        assert_eq!(key("a:b", "c"), "pins:acme/core:a%3Ab:c");
+        assert_eq!(key("a", "b:c"), "pins:acme/core:a:b%3Ac");
+        assert_eq!(key("100%", "x"), "pins:acme/core:100%25:x");
+        // Ids with `/` and `@` are as they were.
+        assert_eq!(
+            key("acme/core/dev@x", "S-1"),
+            "pins:acme/core:acme/core/dev:S-1"
+        );
     }
 
     #[test]

@@ -236,10 +236,9 @@ async function subscriptionView(
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
     if (!prepare) {
-      // The host's view key for the thread (`live_hub::pins::view_key`), keyed by the one
-      // thread rule (`threadOf`, as `ThreadKey::new` keys it).
-      const thread = threadOf(agentId, storyId);
-      return { viewKey: `pins:${team.org}/${team.team}:${thread.agentId}:${thread.storyId}` };
+      // The host's view key for the thread, keyed by the one thread rule (`threadOf`, as
+      // `ThreadKey::new` keys it).
+      return { viewKey: pinsViewKey(team, threadOf(agentId, storyId)) };
     }
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
@@ -600,6 +599,16 @@ const frameSender = (ctx: BridgeContext | undefined): [string] | [] =>
   ctx?.message?.sender ? [ctx.message.sender] : [];
 
 /** The agent thread a pins call names: a saved agent id and an optional story id. */
+/** A key part with `%` and `:` percent-encoded, as the host's `live_hub::pins::key_part` does. */
+const keyPart = (part: string) => part.replace(/%/g, "%25").replace(/:/g, "%3A");
+
+/** The host's view key for a pinned thread (`live_hub::pins::view_key`). */
+export const pinsViewKey = (
+  team: { org: string; team: string },
+  thread: { agentId: string; storyId: string },
+): string =>
+  `pins:${keyPart(team.org)}/${keyPart(team.team)}:${keyPart(thread.agentId)}:${keyPart(thread.storyId)}`;
+
 function pinThread(
   a: Record<string, unknown>,
   verb: string,

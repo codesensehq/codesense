@@ -151,6 +151,7 @@ import {
   HTML_BRIDGE_ALLOWLIST,
   BridgeCommandNotAllowedError,
   runBridgeCommand,
+  pinsViewKey,
   ACTION_VERBS,
   READ_VERBS,
   SEND_ACTION_VERBS,
@@ -2022,6 +2023,17 @@ describe("agents read model verbs", () => {
       /messageId/,
     );
     expect(METADATA_ACTION_VERBS).toContain("react");
+  });
+
+  it("keys a pins view with `%` and `:` escaped, so two threads can't share a key", () => {
+    const team = { org: "acme", team: "core" };
+    // The same keys `live_hub/pins.rs` asserts for the host.
+    expect(pinsViewKey(team, { agentId: "a:b", storyId: "c" })).toBe("pins:acme/core:a%3Ab:c");
+    expect(pinsViewKey(team, { agentId: "a", storyId: "b:c" })).toBe("pins:acme/core:a:b%3Ac");
+    expect(pinsViewKey(team, { agentId: "100%", storyId: "x" })).toBe("pins:acme/core:100%25:x");
+    expect(pinsViewKey(team, { agentId: "acme/core/dev", storyId: "S-1" })).toBe(
+      "pins:acme/core:acme/core/dev:S-1",
+    );
   });
 
   it("pins then reads an agent thread's pin list in the doc's team", async () => {
