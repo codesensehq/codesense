@@ -2399,10 +2399,10 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
 /// primitive.
-/// The census after the metrics-db timer and the bounded worktree reads is 6_516 (CI's count): 20
-/// more method calls in `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and
+/// The census after the metrics-db timer and the bounded, shared worktree reads is 6_520 (CI's
+/// count): 24 more method calls in `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and
 /// `commands/worktree.rs`; none reaches a sink.
-const MAX_UNRESOLVED_METHODS: usize = 6_516;
+const MAX_UNRESOLVED_METHODS: usize = 6_520;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
