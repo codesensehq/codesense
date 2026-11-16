@@ -7274,9 +7274,20 @@ describe("the Agents pane, review fixes round two", () => {
     const view = renderList();
     await screen.findByRole("button", { name: agentRow(/dev/) });
     expect(pruneAgentIdentity).not.toHaveBeenCalled();
+    // Once the tabs are back the list re-reads the roster, and prunes when that read lands: hold
+    // the read, so the prune is shown to wait on it and then follows it, however long it takes.
+    let finish!: (rows: AgentSessionRow[]) => void;
+    lateRoster = new Promise((resolve) => {
+      finish = resolve;
+    });
     layoutHydrated = true;
     view.rerender(<DockSlotHost teamKey="team-1" visible />);
-    await waitFor(() => expect(pruneAgentIdentity).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(pruneAgentIdentity).not.toHaveBeenCalled();
+    await act(async () => {
+      finish(listResult);
+    });
+    expect(pruneAgentIdentity).toHaveBeenCalledTimes(1);
     expect(pruneAgentIdentity.mock.calls[0]![0]).toBe("team-1");
     agentIdentity = { ...agentIdentity, "acme:ops": { "ended-ops": { role: "reviewer" } } };
     view.rerender(<DockSlotHost teamKey="team-1" visible />);
