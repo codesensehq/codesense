@@ -2379,6 +2379,24 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
     for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
   });
 
+  it("the chooser opens in view: it scrolls to the nearest edge once, not on every repaint", async () => {
+    const scrolled = vi.fn(function (this: Element, _opts?: ScrollIntoViewOptions) {});
+    const before = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      const { pinOf, chooser, agentSets } = await mountReplace();
+      pinOf(5).click();
+      await flush();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(chooser());
+      expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest" });
+      await agentSets([...FULL]);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = before;
+    }
+  });
+
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
     const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();
     const pin = pinOf(5);
