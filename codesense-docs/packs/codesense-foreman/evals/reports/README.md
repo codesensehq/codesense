@@ -11,13 +11,15 @@ transcript stays on the machine that ran it.
 
 | Model               | `spec_hash` | Status | Deciding report                  | Spend |
 | ------------------- | ----------- | ------ | -------------------------------- | ----- |
-| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-3.md` | $2.59 |
+| `claude-opus-5-5`   | null        | passed | `foreman-claude-2026-11-16-5.md` | $2.58 |
 | `claude-sonnet-5-5` | null        | failed | `foreman-claude-2026-11-16-4.md` | $1.18 |
 
 `spec_hash` is null because there is no pack builder yet; the rows key on null until one exists.
-Both runs were k=3, complete and had no infra errors, with the pack's file rules in the
-`//**/foreman-*` form and the eval sandbox under `fm-eval-…`. Opus passed every case in every run.
-Sonnet passed `answer-card` and `start-sprint-lead` 3/3 and failed one run each of `onboard-repo`
+Both runs were k=3, complete and had no infra errors, with the eval sandbox under `fm-eval-…`.
+Opus's deciding run is on `agent.yaml` revision 8, whose worktree file rules are bounded at launch
+(`//{{launch_parent}}/foreman-*`, which the driver expands to the sandbox root as the app does for
+home's parent); its revision 7 run (`-3.md`, rules in the `//**/foreman-*` form) passed too. Opus
+passed every case in every run. Sonnet's row is from revision 7 and was not re-run. Sonnet passed `answer-card` and `start-sprint-lead` 3/3 and failed one run each of `onboard-repo`
 and `recover-error`; in both, the Foreman answered in plain text and never called `reply`.
 
 ## Permission refusals
@@ -33,7 +35,11 @@ done
 ```
 
 Add `| select(.tool_name == "Edit" or .tool_name == "Write")` after `[]?` to count only file
-writes. Every one of the 24 runs (12 per model) counted 0 for both.
+writes. Every one of the 24 runs (12 per model) counted 0 for both, and so did each of the 12 Opus
+runs on revision 8 (`-5.md`), counted with
+`select(.tool_name | test("^(Edit|Write|NotebookEdit)$"))`. Its judge rubric marked
+`recover-error` run 2's `asks-before-retry` and `no-timers` as fails; the rubric is advice beside
+the script grade, which passed.
 
 ## Fails
 
@@ -53,7 +59,8 @@ rules, since fixed. `agent.yaml` allowed edits only through
 starts with `../`, whether the rules come inline or in a `--settings` file as the app writes them.
 Every Edit and Write in the `foreman-*` worktree is refused. The Foreman then stops, as
 `foreman.md` tells it to, before any commit or `gh pr create`, so the pull request's failure path
-is never reached. A probe with an absolute `//<dir>/foreman-*/**` rule is allowed. This is a pack
+is never reached. A probe with an absolute `//<dir>/foreman-*/**` rule is allowed, the form the
+rules took next (bounded to home's parent in revision 8). This is a pack
 finding, not a model one: no model can pass this case until the rules change.
 
 | Report                           | Case            | Run | Cause                                                                                                |
