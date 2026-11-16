@@ -44,7 +44,6 @@ mcp:
     - records_set_fields
     - create_content_file
     - validate_story
-    - open_workspace
     - set_epic_repos
     - read_epic_repos
     - set_active_team

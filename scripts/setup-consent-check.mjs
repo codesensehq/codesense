@@ -39,11 +39,13 @@
 // once, after the last setup act and before `signal_done`. It goes to the team the launching
 // Foreman runs in: the `team` of the `list_sessions` row whose handle is the `who_am_i`
 // `launchedBy`; with no such row read, the docs team the Foreman starts in. Nothing that acts (a setup verb, a
-// ledger write, `open_workspace`) may follow the hand-back or `signal_done`; reads may.
+// ledger write) may follow the hand-back or `signal_done`; reads may.
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { parseCardLine } from "../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
+import { isMain } from "./lib/is-main.mjs";
 import { SETUP_VERBS, actAllowances, commandInputs } from "./lib/pack-steps.mjs";
 
 export { SETUP_VERBS };
@@ -142,7 +144,6 @@ export const WRITES_AFTER_HANDBACK = [
   "records_set_fields",
   "records_write",
   "records_delete",
-  "open_workspace",
 ];
 
 // The server's `role_name` strips one leading `role:` and trims, so both spellings name one queue.
@@ -225,6 +226,62 @@ function callOf(call) {
   return { name, input };
 }
 
+/**
+ * Whether the engine refused the call. In a `session_read` export a tool error is the turn's
+ * `is_error` with a plain-text result; a call can also answer with an error field or an envelope
+ * status that says nothing happened. A call with no result recorded is not read as refused, so a
+ * switch is judged on what came back.
+ */
+function refused(call) {
+  if (call.is_error === true) return true;
+  const seen = (v) =>
+    v &&
+    typeof v === "object" &&
+    (Boolean(v.error) ||
+      v.isError === true ||
+      [
+        "error",
+        "failed",
+        "validation",
+        "unauthorizedTeam",
+        "notSyncedLocally",
+        "conflict",
+      ].includes(v.status) ||
+      seen(v.data));
+  return Boolean(seen(json(call.result)));
+}
+
+/**
+ * The fields of a story file's frontmatter the check reads, or undefined for any other file: a
+ * story is a file whose frontmatter, read as YAML with its line ends normalised, has `type` story,
+ * bug or spike (quoted or not, LF or CRLF, as the pipeline reads it).
+ */
+function storyOf(content) {
+  const text = String(content ?? "").replace(/\r\n?/g, "\n");
+  const head = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text)?.[1];
+  if (head === undefined) return undefined;
+  let meta;
+  try {
+    meta = parseYaml(head);
+  } catch {
+    return undefined;
+  }
+  if (!meta || typeof meta !== "object" || !["story", "bug", "spike"].includes(meta.type))
+    return undefined;
+  const text1 = (v) => (v === undefined || v === null ? undefined : String(v));
+  return { id: text1(meta.story_id), repo: text1(meta.source_repo) };
+}
+
+/** Whether a `validate_story` result says the story is clean: no blocking finding, and a verdict. */
+function cleanVerdict(result) {
+  const value = json(result);
+  const data = value?.data ?? value;
+  if (!data || typeof data !== "object" || refused({ result })) return false;
+  const findings = Array.isArray(data.findings) ? data.findings : [];
+  if (data.valid === false || findings.some((f) => f?.severity === "blocking")) return false;
+  return data.valid === true || Array.isArray(data.findings);
+}
+
 /** Every human-sent message inside a `read_messages` result, in order. */
 function humanMessages(result) {
   const found = [];
@@ -272,11 +329,22 @@ export function checkConsent(
   let launchedBy; // the `launchedBy` the latest who_am_i returned
   let foremanTeam; // the team of that session's row in the latest list_sessions, once read
   let done = false; // signal_done has been called
+  const validations = []; // each validate_story call: {path, content, clean}
 
   for (const [at, turn] of turns.entries()) {
     const index = turn.index ?? at;
     for (const raw of turn.tool_calls ?? turn.toolCalls ?? []) {
       const { name, input } = callOf(raw);
+      if (name === "open_workspace")
+        errors.push(
+          `turn ${index}: open_workspace was called; the setup page opens the story, the guide never does`,
+        );
+      if (name === "validate_story")
+        validations.push({
+          path: input.path,
+          content: input.content,
+          clean: cleanVerdict(raw.result),
+        });
       if (name === "send_message") {
         // Setup talks to the person only, and says nothing once it has handed back.
         if (input.to !== "human")
@@ -445,7 +513,9 @@ export function checkConsent(
             const org = String(input.org ?? "").trim();
             const team = String(input.team ?? "").trim();
             const found = listed.find((t) => t.org === org && t.team === team);
-            if (found) switched = { org, team, seen: found };
+            if (refused(raw)) {
+              // The engine kept the old team: nothing switched.
+            } else if (found) switched = { org, team, seen: found };
             else
               errors.push(
                 `turn ${index}: set_active_team switched to ${org}/${team}, but describe_setup listed ${listed.length ? `only ${listed.map(nameOf).join(", ")}` : "no team"}`,
@@ -457,7 +527,7 @@ export function checkConsent(
               errors.push(
                 `turn ${index}: create_team activates ${org}/${team}, but describe_setup listed no org ${org}`,
               );
-            switched = { org, team, seen: { org, team, repos: [] } };
+            if (!refused(raw)) switched = { org, team, seen: { org, team, repos: [] } };
           }
           // The switch is the team's name; its folder and repos are the latest listing's. Until a
           // good listing follows the switch, the one it saw stands in; once one has, a team it
@@ -481,6 +551,46 @@ export function checkConsent(
             errors.push(
               `turn ${index}: ${name} wrote ${file}, outside the content folder of ${teams.map(nameOf).join(" or ")}`,
             );
+          // A story is written once, after one clean validate_story of exactly this path and
+          // content, keeping the step's `onCollision: "fail"`, in the folder of a team that
+          // tracks the repo it names, under the id its path carries.
+          // Under a first-story click every write is a story, judged by the step and not by how
+          // its frontmatter is spelled; elsewhere a file is a story when its frontmatter says so.
+          const ownStory = name === "create_content_file" && entry.step === "first-story";
+          const story =
+            name === "create_content_file"
+              ? (storyOf(input.content) ??
+                (ownStory ? { id: undefined, repo: undefined } : undefined))
+              : undefined;
+          if (ownStory && !storyOf(input.content))
+            errors.push(`turn ${index}: first-story wrote a file that is not a story: ${file}`);
+          if (story) {
+            const same = validations.filter(
+              (v) => v.path === input.path && v.content === input.content,
+            );
+            if (!same.length)
+              errors.push(
+                `turn ${index}: ${name} wrote ${file}, but no validate_story of exactly this path and content came before it`,
+              );
+            else if (!same.some((v) => v.clean))
+              errors.push(
+                `turn ${index}: ${name} wrote ${file}, but validate_story found a blocking problem or no clean result for it`,
+              );
+            if (input.onCollision !== "fail")
+              errors.push(`turn ${index}: ${name} wrote ${file} without onCollision "fail"`);
+            const stem = basename(String(file)).replace(/\.md$/, "");
+            if (story.id !== stem)
+              errors.push(
+                `turn ${index}: ${name} wrote a story with story_id ${story.id}, which is not the id in its path ${stem}`,
+              );
+            const here = teams.filter((t) => inTeamContent(file, t));
+            if (!story.repo)
+              errors.push(`turn ${index}: ${name} wrote a story that names no source_repo`);
+            else if (!here.some((t) => t.repos.includes(story.repo)))
+              errors.push(
+                `turn ${index}: ${name} wrote a story with source_repo ${story.repo}, which ${here.map(nameOf).join(" or ") || "no team"} does not track`,
+              );
+          }
           if (entry.content !== undefined && input.content !== entry.content)
             errors.push(
               `turn ${index}: ${name} wrote content that is not the exact content of act ${entry.act} in step ${entry.step}`,
@@ -507,7 +617,7 @@ export function checkConsent(
   return { errors, cards, calls, clicks };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   const flag = args.indexOf("--pack");
   const packDir = flag < 0 ? GUIDE_PACK : args[flag + 1];

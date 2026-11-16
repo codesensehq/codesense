@@ -133,6 +133,7 @@
     problem: null,
     busy: false,
     marked: new Set(),
+    opened: new Set(),
   };
 
   // ---- alerts: keyed notices between the header and the chat ----
@@ -635,6 +636,7 @@
     });
     S.chat.subscribe(() => {
       if (leadSpoke()) hideLogin();
+      openStories();
       markShownRead();
     });
     reads.poke();
@@ -657,6 +659,36 @@
     });
   }
   document.addEventListener('visibilitychange', markShownRead);
+
+  // ---- the first story: the guide ends its reply with `story: <id> · <path>` and the page opens it ----
+  // The guide's verbs run in the docs team, which cannot open another team's story. The path is the absolute
+  // one the guide wrote, `<orgRoot>/<team>/content/stories/<id>.md`, and the page opens it with no team; the
+  // host decides which roots are the person's own synced teams, so the page only checks the path's shape and
+  // takes the root as the person spelled it (spaces, accents and all). The viewer shows the story's page, or
+  // markdown and the reason when the team has no story template.
+  const STORY_LINE = /^story: ([A-Z][A-Z0-9]{1,9}-[0-9]{1,4}) · (\/.*\S)\s*$/m;
+  function storyToOpen(text) {
+    const line = STORY_LINE.exec(text);
+    if (!line) return null;
+    const [, id, path] = line;
+    const shape = /^\/.+\/[^/]+\/content\/stories\/([A-Z0-9-]+)\.md$/.exec(path);
+    if (!shape || shape[1] !== id || path.split('/').slice(1).some((seg) => seg === '' || seg === '.' || seg === '..')) return null;
+    return { path };
+  }
+  function openStories() {
+    const chat = S.chat;
+    if (!chat) return;
+    const handles = chat.leadHandles();
+    chat.thread().forEach((row) => {
+      if (row.unread !== true || S.opened.has(row.messageId) || chatKit.thread.sideOf(row, handles) !== 'lead') return;
+      const story = storyToOpen(row.text || '');
+      if (!story) return;
+      S.opened.add(row.messageId);
+      Promise.resolve(cs.invoke('openFile', { path: story.path, newTab: true })).catch(() => {
+        // A refused open leaves the story in the person's team; the guide's reply already names its path.
+      });
+    });
+  }
 
   function unmountChat() {
     hideLogin();
