@@ -24,7 +24,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { htmlFrom: (who) => `Dashboard from ${who}`, starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
+    row: { htmlFrom: (who) => `Dashboard from ${who}`, htmlOpen: "Open", htmlClose: "Close", starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -761,7 +761,7 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/mount-ids.js
   function idsOf(n) {
     const tail = n > 1 ? `-${n}` : "";
-    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}` };
+    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}`, htmlSlot: (id) => `sv-html-${id}${tail}` };
   }
   var claims = /* @__PURE__ */ new WeakMap();
   function mountIds(doc, el) {
@@ -1365,7 +1365,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var targetOf = ({ target = null, storyId = null, leadRole = null }) => target || storyTarget(storyId, leadRole);
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, send: sendOpt = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, html = null, send: sendOpt = null }) {
     const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
     if (styles) linkChatStyles(win.document);
     const target = targetOf({ target: own, storyId, leadRole }), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
@@ -1544,13 +1544,67 @@
     };
     const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
     const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
+    const htmlOpen = /* @__PURE__ */ new Map();
+    const htmlRelease = (id) => {
+      const open = htmlOpen.get(id);
+      if (!open) return;
+      htmlOpen.delete(id);
+      open.closed = true;
+      open.slot.remove();
+      if (typeof open.release === "function") open.release();
+    };
+    const keepOpen = (id, fresh) => {
+      const open = htmlOpen.get(id), old = open && open.slot.isConnected ? open.slot.closest(".msg") : null, body = old && old.querySelector(":scope > .body"), freshBody = fresh.querySelector(":scope > .body");
+      if (!body || !freshBody) return fresh;
+      for (const child of [...old.childNodes]) if (child !== body) child.remove();
+      const kids = [...fresh.childNodes], at = kids.indexOf(freshBody);
+      body.before(...kids.slice(0, at));
+      body.after(...kids.slice(at + 1));
+      for (const { name } of [...old.attributes]) if (!fresh.hasAttribute(name)) old.removeAttribute(name);
+      for (const { name, value } of [...fresh.attributes]) old.setAttribute(name, value);
+      return old;
+    };
+    const htmlToggle = (item, title) => {
+      if (!html || typeof html.open !== "function") return null;
+      const slotId = ids.htmlSlot(item.id), button = h("button", { type: "button", class: "btn sm quiet html-open", "aria-controls": slotId });
+      const show = (on) => {
+        button.setAttribute("aria-expanded", on ? "true" : "false");
+        button.textContent = on ? copy.row.htmlClose : copy.row.htmlOpen;
+      };
+      button.addEventListener("click", () => {
+        if (htmlOpen.has(item.id)) {
+          htmlRelease(item.id);
+          show(false);
+          return;
+        }
+        const slot = h("div", { class: "html-slot", id: slotId }), open = { slot, release: null, closed: false };
+        button.parentNode.append(slot);
+        let answer;
+        try {
+          answer = html.open({ messageId: item.id, title, contentType: "html" }, slot);
+        } catch {
+          slot.remove();
+          return;
+        }
+        htmlOpen.set(item.id, open);
+        if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
+          if (!open.closed) open.release = release;
+          else if (typeof release === "function") release();
+        }, () => {
+        });
+        else open.release = answer;
+        show(true);
+      });
+      show(htmlOpen.has(item.id));
+      return button;
+    };
     const htmlName = (item, who) => {
-      const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary });
-      return name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from];
+      const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary }), open = htmlOpen.get(item.id);
+      return [...name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from], htmlToggle(item, name || from), open && !open.slot.isConnected ? open.slot : null];
     };
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
-      return h(
+      const node = h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
         first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
@@ -1561,6 +1615,7 @@
         pin2 ? pin2.tag : null,
         pin2 ? pin2.foot : null
       );
+      return item.contentType === "html" && htmlOpen.has(item.id) ? keepOpen(item.id, node) : node;
     };
     const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
@@ -1793,6 +1848,7 @@
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       const held = roving.focused();
       reconcile(log, cache, want);
+      for (const id of [...htmlOpen.keys()]) if (!cache.has("m" + id)) htmlRelease(id);
       roving.refresh(held);
       if (actFoot) reconcile(actFoot, actCache, act ? [act] : []);
       paintChips();
@@ -1914,6 +1970,7 @@
     return {
       unmount() {
         gone = true;
+        for (const id of [...htmlOpen.keys()]) htmlRelease(id);
         offs.forEach((off) => off && off());
         if (prose) prose.release();
         if (typeof releaseSlot === "function") releaseSlot();

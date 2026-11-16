@@ -1995,6 +1995,148 @@ describe("kit.chat onPin: the person pins a message", () => {
     );
   });
 
+  describe("an HTML message's Open (the page's html.open)", () => {
+    const html = {
+      messageId: 9,
+      from: "lead-1",
+      to: "human",
+      contentType: "html",
+      text: "<title>Merge board</title><p>x</p>",
+      createdAtMs: T0,
+    };
+    const toggleOf = (el: HTMLElement) =>
+      el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .html-open');
+
+    it("has no Open where the page gives no html.open", async () => {
+      const s = setup([lead("idle")], [html]);
+      mountOn(s);
+      await flush();
+      expect(toggleOf(s.el)).toBeNull();
+    });
+
+    it("opens the message into its bubble, keeps it through a repaint, and releases it on Close", async () => {
+      const release = vi.fn();
+      const open = vi.fn((_message: Row, slot: HTMLElement) => {
+        slot.append(document.createElement("iframe"));
+        return release;
+      });
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, { html: { open } });
+      await flush();
+      const toggle = toggleOf(s.el)!;
+      expect(toggle.textContent).toBe("Open");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      toggle.click();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0]![0]).toMatchObject({ messageId: 9, title: "Merge board" });
+      const slot = open.mock.calls[0]![1];
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.contains(slot)).toBe(true);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("true");
+      expect(toggleOf(s.el)!.textContent).toBe("Close");
+      expect(toggleOf(s.el)!.getAttribute("aria-controls")).toBe(slot.id);
+      const frame = slot.querySelector("iframe");
+      // A repaint that changes nothing keeps the open frame where it is: no second open, no reload.
+      await s.reads.sessions();
+      await flush();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(s.el.querySelector('.msg[data-mid="9"] iframe')).toBe(frame);
+      toggleOf(s.el)!.click();
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(s.el.contains(slot)).toBe(false);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("keeps an open frame in the page when pinning rebuilds the bubble, and releases it when the message leaves", async () => {
+      // An iframe that leaves the page reloads: this stand-in counts every time it leaves.
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const release = vi.fn();
+      const thread: Row[] = [html];
+      const s = setup([lead("idle")], thread);
+      let pins: Pin[] = [];
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return release;
+          },
+        },
+        onPin: {
+          pins: () => pins,
+          change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.classList.contains("pinned")).toBe(true);
+      expect(s.el.querySelector('.msg[data-mid="9"] .pin-b')!.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+      expect(left).toBe(0);
+      expect(release).not.toHaveBeenCalled();
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases an open that answers later, once it does, and survives an open that throws", async () => {
+      const release = vi.fn();
+      let answer: (fn: () => void) => void = () => {};
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, {
+        html: {
+          open: () => new Promise<() => void>((resolve) => (answer = resolve)),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      // Closed before the page answered: its release runs as soon as it does.
+      toggleOf(s.el)!.click();
+      answer(release);
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+      const t = setup([lead("idle")], [html]);
+      mountOn(t, {
+        html: {
+          open: () => {
+            throw new Error("no frame");
+          },
+        },
+      });
+      await flush();
+      toggleOf(t.el)!.click();
+      expect(t.el.querySelector('.msg[data-mid="9"] .html-slot')).toBeNull();
+      expect(toggleOf(t.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("releases an open message when the chat unmounts", async () => {
+      const release = vi.fn();
+      const s = setup([lead("idle")], [html]);
+      const chat = mountOn(s, { html: { open: () => release } });
+      await flush();
+      toggleOf(s.el)!.click();
+      chat.unmount();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("names an HTML message by its title, not its markup, in the live region", async () => {
     const s = setup(
       [lead("idle")],
