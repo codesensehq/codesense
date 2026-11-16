@@ -155,7 +155,7 @@
       "name": "add_source_repo"
     },
     {
-      "description": "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes Codex bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused.\nDocs: arc-e-agents/agent-design.html",
+      "description": "`agent_create {name, runtime}` is a complete agent. Required: `name`; `runtime` (`claude`, `codex` or `opencode`: the built-in CLI; it may be omitted when your verified session has a recorded CLI, which supplies the default). Optional: `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `dryRun`, `sessionId`. `env` is environment variables every launch sets on the CLI (e.g. `{\"CLAUDE_CODE_DISABLE_AUTO_MEMORY\":\"1\"}`), for what the CLI reads only from its environment; values are strings. CodeSense's own launch variables (its session id, API port, MCP config, activity bindings, `PATH` and `SHELL`) are always CodeSense's, and any other variable CodeSense sets for the launch wins over one of the same name. Visible to anyone who can read the agent (stored in agent.yaml); not for secrets. A prompt or routine task starting with `/name` needs `.claude/commands/name.md` or `.claude/skills/name/` (codex: `.agents/skills/name/`) in `startup`. `permissions` is the runtime's own native config, passed through verbatim and enforced by the CLI, never by CodeSense: `{claude: {allow, ask, deny, additionalDirectories, defaultMode, disableBypassPermissionsMode}}` with Claude's own rule strings (`Bash(npm test:*)`, `mcp__slack__*`), `{codex: {approvalPolicy, sandboxMode}}`, or `{opencode: {permission}}`. Each launch gets them in its own settings, so agents in one folder never share rules; CodeSense only adds the allows its own tools need. Examples: read-only plus Slack `{\"name\":\"Slack triage\",\"runtime\":\"claude\",\"mcpServers\":[\"slack\"],\"permissions\":{\"claude\":{\"allow\":[\"Read\",\"Grep\",\"Glob\",\"mcp__slack__*\"],\"deny\":[\"Edit\",\"Write\",\"Bash\"]}}}`; build and test but never force-push `{\"name\":\"Dev\",\"runtime\":\"claude\",\"permissions\":{\"claude\":{\"allow\":[\"Bash(npm test:*)\",\"Edit\"],\"deny\":[\"Bash(git push --force:*)\"]}}}`; codex `{\"name\":\"Dev (codex)\",\"runtime\":\"codex\",\"permissions\":{\"codex\":{\"approvalPolicy\":\"on-request\",\"sandboxMode\":\"workspace-write\"}}}`. CodeSense sets no limits: a big startup list or broad permissions are saved as given and only reported in `warnings`. Before creating, call agent_list and prefer an agent that already fits; agent_preview takes these same fields and writes nothing, so check its `manifest.errors`, `warnings` and that `provides` has every `/name` the prompts use. The starters `builtin/claude`, `builtin/codex`, `builtin/opencode` and their `-unattended` twins are read-only: copy one to customize it. The account is not part of an agent and never goes in agent.yaml: each user runs it with their own Claude, Codex or OpenCode CLI login, chosen on their own Mac. The agent is a local file in the context repo (`config/agents/<id>/agent.yaml`, revisioned), shared with the team by the user's own git push; CodeSense never commits, pushes or tells anyone. Returns { ok:true, data:{ id, revision, context ([{path, dest?}] as stored, or null while the runtime default applies, as agent_get reports it), repo_overrides:[{repo, add, remove}], preview: the agent_get `resolved` shape (or `preview_error` when the saved agent cannot be resolved; the save stands) } }, or { ok:false, error:{code:\"invalid\", message, field} } (`field` names the input, e.g. `runtime`, `startup`, `permissions.claude.foo`, or an input key this tool does not take); nothing is written on an error. Read the Docs page before creating a team. Optional budgetUsd {perDay?, perWeek?}: positive finite USD for local calendar day and Monday-start week. A first cap tightens immediately. At the cap or with unpriced usage, new launches and automatic wakes are refused; a running turn finishes. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. `mcpBridgeTools` scopes Codex bridge calls; see its input schema. Identity: verified connection; sessionId must match; unbound refused.\nDocs: arc-e-agents/agent-design.html",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -431,17 +431,6 @@
               "null"
             ]
           },
-          "skillAllowlist": {
-            "default": null,
-            "description": "The skills a launch offers, by name (e.g. `[\"bmad-build\"]`); null/omitted\noffers every skill the workspace has. A Claude launch turns off every other\nskill its startup places or the workspace's `.claude/skills/` holds, context\nworktrees included; personal (`~/.claude/skills`) and plugin skills stay on.\nOther runtimes warn and offer every skill. Names are 1-128 ASCII letters,\ndigits, `_`, `-` or `:`, each once. Stored as agent.yaml `skill_allowlist`;\na `skills` key there is not this field and does nothing.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "startup": {
             "default": null,
             "description": "Ordered plain content-relative paths the agent starts with (default none: only\nwhat CodeSense itself needs): each a file, or a directory that brings\neverything under it, e.g. `CLAUDE.md`, `.claude/skills/bmad-build/`,\n`.claude/commands/bmad-help.md`; never `skill:`/`command:` keys, absolute\npaths, `..`, globs, reserved top-level dirs such as `.git`, duplicates or\nan entry inside another. A file may list more content paths it needs in\n`requires:` frontmatter, and they come along. A path no content layer has\nis a manifest error, except the runtime's root instructions file\n(`CLAUDE.md` / `AGENTS.md`), skipped where the team has none.",
@@ -558,7 +547,7 @@
       "name": "agent_list"
     },
     {
-      "description": "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared Codex bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
+      "description": "Agent preview — what an agent would resolve to, writing nothing. Takes exactly agent_create's fields (`name`, `runtime`, `id`, `description`, `args`, `env`, `launch`, `mcpServers`, `mcpBridgeTools`, `startup`, `context`, `repoOverrides`, `permissions`, `defaultPrompt`, `scope`, `org`, `team`, `sessionId`), each meaning what agent_create describes (`context` omitted or `null` is the runtime default); or `agent` (a saved agent's `id`) to preview that agent as saved instead of a draft (no draft fields then; `org`+`team` name the team it would launch into). Optional `repo` (`host/owner/repo`, or `owner/repo` which always means github.com; a clone URL also works): resolve its context for that repo's workspace (the team's `repos/{host}/{owner}/{repo}/content/` tier wins per file, and the agent's override for that repo applies); `teamWorkspace` true previews native discovery in a context worktree: team files are already checked out, with inherited native instructions (`CLAUDE.md`, `.claude/commands`, `.claude/skills`) layered at CWD. Returns { ok:true, data: the `resolved` shape agent_get returns (check `manifest.errors`, `warnings`, `provides`; launch.bridge_tools is the declared Codex bridge restriction, null for all, and launch.effective_bridge_tools lists the registered tools it permits; warnings explain unknown names, excluded completion/inbox tools and by-name dispatch requiring both wrapper and target) plus `context`: the want set {repo?, defaulted, entries:[{path, dest?, source: context|default|startup|repo_add, files, bytes}], files:[{destination, logical, bytes, mode, tier:{kind: repo|personal|team, …}}] (at most 500; `truncated:true` when cut), totals:{files, bytes} (every file), warnings:[{path?, code: missing|excluded|empty|unreadable|invalid|layer|unsafe_destination|collision|skipped|large, message}]} and `repo_overrides` }, or { ok:false, error:{code:\"invalid\", message, field} } for anything agent_create would refuse except a taken id. `agent_create` with `dryRun:true` is the same check plus the id. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -853,17 +842,6 @@
               "null"
             ]
           },
-          "skillAllowlist": {
-            "default": null,
-            "description": "The skills a launch offers, by name (e.g. `[\"bmad-build\"]`); null/omitted\noffers every skill the workspace has. A Claude launch turns off every other\nskill its startup places or the workspace's `.claude/skills/` holds, context\nworktrees included; personal (`~/.claude/skills`) and plugin skills stay on.\nOther runtimes warn and offer every skill. Names are 1-128 ASCII letters,\ndigits, `_`, `-` or `:`, each once. Stored as agent.yaml `skill_allowlist`;\na `skills` key there is not this field and does nothing.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "startup": {
             "default": null,
             "description": "Ordered plain content-relative paths the agent starts with (default none: only\nwhat CodeSense itself needs): each a file, or a directory that brings\neverything under it, e.g. `CLAUDE.md`, `.claude/skills/bmad-build/`,\n`.claude/commands/bmad-help.md`; never `skill:`/`command:` keys, absolute\npaths, `..`, globs, reserved top-level dirs such as `.git`, duplicates or\nan entry inside another. A file may list more content paths it needs in\n`requires:` frontmatter, and they come along. A path no content layer has\nis a manifest error, except the runtime's root instructions file\n(`CLAUDE.md` / `AGENTS.md`), skipped where the team has none.",
@@ -978,7 +956,7 @@
       "name": "agent_unarchive"
     },
     {
-      "description": "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `skillAllowlist` (`null` lifts the list), `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
+      "description": "Agent update — change any agent you can see, a teammate's team agent included (no owner checks; the revision is credited to you). Required: `id`; `baseRevision` (the `revision` you last read). Optional, each replacing what is there and omitted ones unchanged: `name`, `description`, `runtime`, `args`, `env` (replaced whole; `{}` or `null` clears it; values are strings; OTEL_* and telemetry enable/disable variables are engine-owned and refused; visible to anyone who can read the agent (stored in agent.yaml), not for secrets), `launch`, `mcpServers`, `mcpBridgeTools`, `startup` (`[]` clears a list), `context` (the content sets a launch's workspace gets, replaced whole: `[{path, dest?}]` or bare paths, at most 32, NFC, relative, no `..`, no VCS data, `dest` never a managed file or colliding with another entry; `[]` = none; `null` returns it to the runtime default, which is what a launch gets while it is absent — omit it to leave it unchanged; agent_get's `context` (and `repo_overrides`) can be passed back as it is, and keys a newer build stored on an entry are kept on the entry with the same path and `dest` (else the same path), never sent or needed in input; anything else an agent needs is fetched at run time with hydrate_worktree; e.g. `{\"id\":\"acme/api/backend/dev\",\"baseRevision\":3,\"context\":[\"CLAUDE.md\",\".claude/skills\",{\"path\":\"_bmad-output/plans\",\"dest\":\"plans\"}]}`), `repoOverrides` (`[{repo: \"host/owner/repo\" or \"owner/repo\", add?, remove?}]`: replaces the override of each repo named, as part of the new revision; `{repo}` alone removes it), `permissions` (each runtime block given replaces that block whole, `{codex: null}` drops one, `null` drops all), `defaultPrompt`, `avatar` (a face `pack:id`, a colour or an emoji; `\"\"` removes it), `sessionId` (optional). Each field means what agent_create describes; anything else in the stored agent.yaml is kept as it is. A local edit to the context repo, shared by the user's own git push; tells no one. Returns { ok:true, data:{ id, revision, context (null while defaulted), repo_overrides, preview } } (as agent_create); { ok:false, error:{code:\"conflict\", current_revision} } when it changed since `baseRevision` (nothing changed: agent_get it again and reapply); `read_only` for a starter (`builtin/…`: copy it with agent_create instead); or `invalid` / `not_found`. budgetUsd {perDay?, perWeek?} replaces the cap; null requests removal. Lowering is immediate and ratchets the local accepted ceiling. Raising or removing saves the edit as pending; only a person in the native app can accept it, never MCP or a dashboard. Through CodeSense surfaces this approval boundary is enforced; unrestricted same-user shell agents are trusted not to edit private engine files. Use sandboxed permissions for untrusted agents. Read the Docs page before creating a team. Identity comes from the verified MCP connection; an unbound caller is refused. A supplied sessionId must name the caller itself.\nDocs: arc-e-agents/agent-design.html",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -1233,17 +1211,6 @@
             "description": "Omit to use the verified connection identity. A supplied id must name that caller.",
             "type": [
               "string",
-              "null"
-            ]
-          },
-          "skillAllowlist": {
-            "default": null,
-            "description": "Replaces the skill allowlist. Omit to keep it, null to offer every skill.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
               "null"
             ]
           },
@@ -1739,60 +1706,6 @@
         "type": "object"
       },
       "name": "claim_role_messages"
-    },
-    {
-      "description": "Clone a GitHub repo for a team and bind the clone, in one step the person can watch. Pass `org`, `team`, `repo` (`owner/name`, a repo the team tracks), `path` (the absolute folder to clone into, `<parent>/<name>`) and `workspaceId` (an open workspace that hosts the visible tab, from open_workspace). Every input is checked before anything runs: `repo` is ASCII `owner/name` (no URL, `@`, `:` or space); `path` is absolute, at most 1024 bytes, uses only letters, digits, `.`, `_`, `-`, space and `/`, and has no `..`, `.`, empty or trailing segment; it sits inside your home folder, not under `~/Library`, and no folder in it below home starts with `.`; its last segment equals the repo's name; the parent exists, is a directory and has no symlink in its path (it equals its canonical form); the target is absent or an empty directory. A refusal is { status:\"validation\", message } naming the rule, and no tab opens. Then `git clone -- https://github.com/<owner>/<name>.git <path>` runs as a fixed argument vector (no shell) in a new visible terminal tab; `gh` is not needed, and git signs in to the host the way the person has set it up. git never prompts for a credential (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`): with none it can use, the clone ends at once with `gitExited` and the tab says why. A second clone into a folder whose clone is still on record is refused (rule `busy`). The call waits up to 25 seconds, ending early when git exits, and once the clone has finished, the folder is bound with the same path as attach_source_repo_path. `git` must be installed. Returns { status:\"ok\", data:{ repo, path, created, tab, gitExited, attached, source, note } }: `created` is true only when the call created the folder; `tab` is { handle, headed, kind } for read_terminal_tab; `gitExited` is true when git exited before the clone finished (it failed; read the tab for why); `attached` is false with a `note` when the clone is still running (probe the folder, then call attach_source_repo_path), git exited first, or the binding was refused. Pass `stop: true` with `repo` and `path` to stop a clone: it closes the clone's tab, then removes the folder only when an earlier clone_repo call created it and the clone hasn't finished; a folder that was already there, a finished checkout or a bound clone is never removed. The reply is { status:\"ok\", data:{ removed, reason? } }, where `reason` is not_recorded, starting (the clone's tab hasn't opened yet; still recorded, so call Stop again), not_a_folder, finished or remove_failed (still recorded, so Stop can be retried). An unknown team returns { status:\"unauthorizedTeam\" }.\nDocs: arc-l-factory/team-and-notes-tools.html",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "org": {
-            "default": null,
-            "description": "The team's org (`owner/repo` slug) whose tracked `repo` the clone is bound to.\nRequired unless `stop` is true.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "The absolute folder to clone into: `<a parent folder that exists>/<name>`, under\nyour home folder but not `~/Library`, with no segment below home starting with\n`.`. Its last segment must equal the repo's name; the target must be absent or\nempty; the parent must be a real directory with no symlink in its path.",
-            "type": "string"
-          },
-          "repo": {
-            "description": "`owner/name` on GitHub, e.g. `acme/api`. A URL, `@`, `:`, a space or any\nnon-ASCII character is refused.",
-            "type": "string"
-          },
-          "stop": {
-            "default": null,
-            "description": "`true` stops the clone: it closes the clone's tab, then removes `path` only when\nan earlier `clone_repo` call created it and the clone hasn't finished. Nothing\nelse is touched. Use it when the person stops a clone.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "team": {
-            "default": null,
-            "description": "The team that tracks `repo`. Required unless `stop` is true.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "workspaceId": {
-            "default": null,
-            "description": "The viewer id of an open workspace that hosts the visible tab. Required unless\n`stop` is true.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "repo",
-          "path"
-        ],
-        "type": "object"
-      },
-      "name": "clone_repo"
     },
     {
       "description": "Close a terminal tab opened with open_terminal_tab or open_remote_tab, the symmetric counterpart of the open verbs. Args: {handle} only, no {tab}/{machine}/{workspace} name address (the opaque handle from the open or from list_sessions; a raw sessionId is refused). Terminates the CLI if one is running (SIGTERM then SIGKILL via the host's kill path), closes the tab, drops it from list_sessions. Works for local AND remote tabs — the handle resolves to its host transparently (same way read_terminal_tab does). Idempotent: a handle whose session is already gone returns { closed: true, alreadyClosed: true } instead of refusing; a handle nothing ever had returns { closed: false, reason: \"unknownHandle\" }. A session trying to close its own tab mid-call is refused with { closed: false, reason: \"selfClose\" } (the reply would never reach it). Does NOT remove the worktree or its files: a tab close never touches them, even when it is the last tab. close_workspace ends every session in a workspace and keeps its files too. Removing a worktree is a separate, explicit act. Gated by the trusted-side Interactive tier. Returns { closed, hadCliRunning, remote, alreadyClosed? }.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
@@ -2810,7 +2723,7 @@
       "name": "delete_team"
     },
     {
-      "description": "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs, repo}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors, teams:[...]}` (`teams` is empty when `loadErrors` is not); each team has `{name, archived, parentTeam, starterPage?, synced, sourceRepos:[{slug, remoteKey, attachment, localPath}]}` (`parentTeam`: null for a top-level team; `starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html; `slug` is owner/repo; `localPath` is the bound checkout or null) where `attachment` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create.\nDocs: arc-b-model/orgs.html",
+      "description": "Setup checklist. No arguments. The first attribution replacement notice is acknowledged in its diagnostic receipt. Returns `{status:\"ok\", data:{activeOrg, activeTeam, orgs:[...], scratch:{orgs:[...], allOrgs}, attribution:{status, binary, gitAiVersion, daemonReachable, supportedVersions, previousBinary, warnings, capture, notesRef, notesPushRepos, daemonRepoRoots}}}`. `attribution` is the machine's line-attribution doctor: whether the exact bundled git-ai pin at ~/.codesense/bin/git-ai is installed and its managed daemon answers (`supportedVersions` names the accepted pin; `status.kind` active | off with reason | installing | install_failed with message | not_installed | unsupported_version with found | unsupported with reason | error with message). A PATH copy is never run; `warnings` reports user_copy_present, user_hooks_present, replacement and install-failure messages, or restart pending. Old or restored copies keep capture off; a restored copy reports unsupported with reason user_pinned. To reinstall, call save_source_repo_attachment with {repoPath: absolute checkout path, attribution: on}. `previousBinary` is null or {version,replacement,path}, persisted across restarts; a pending replacement warning survives restart and is shown once. Install failures stay readable until a successful retry; app restart retries them. `capture` reports the last completed startup or watcher checkpoint pass: {lastSweepAt (epoch ms or null), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored, watchErrors, lastError}. It is retained per CodeSense home in memory since app start; reads never trigger a sweep. watchErrors counts registration failures in the latest watch reconciliation. Counts cover that pass; logsNew means first-imported files, and sessionMappingRowsStored counts stored rows carrying an s_ identity. A repo's own setting can still keep a worktree off (save_source_repo_attachment `attribution`: on|off|auto). Notes stay on this Mac in refs/notes/sense (`notesRef`) unless a repo is set `notes`: push; `notesPushRepos` lists those repos. `daemonRepoRoots` counts the attached clones CodeSense lists in git-ai's daemon_repo_roots, so its daemon ignores other repos (0: no list, so every repo; null while no attached clone resolves and the list written before is kept), and a worktree of an unattached repo launches off with reason repo_not_attached until its clone is attached. Each org has `{slug, displayName, orgRoot, remoteUrl, loadErrors?, teams:[...]}`; each team has `{name, archived, parent?, starterPage?, synced, sourceRepos:[{repo, status, localPath}]}` (`starterPage`: the declared file the team opens when nothing is open, relative to its content folder; absent ⇒ README.md / README.html / index.html) where `status` is `attached` (bound to an existing checkout), `missing` (bound but the checkout is gone), or `unattached` (no checkout recorded). `scratch` is your private space (never shared), one local git repo at `scratch.repo.path`, never pushed; uncommitted counts edits no commit holds yet. Use set_viewer_state navLens source private to show it, and set_private_items_use to change a team switch. Per-org: `{counts:{notes, overlayFiles, panes, routines, agents}, offTeams, settingsDamaged}` applies only in that org; `scratch.allOrgs:{skills, prompts, snippets, templates, notApplied}` are inert files that apply across every org. Use the result to decide the next tool: create_team/set_active_team, attach_source_repo_path (for `unattached`/`missing`; never add_source_repo for an already-tracked repo), agent_list → agent_create, routine_create.\nDocs: arc-b-model/orgs.html",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -5172,14 +5085,6 @@
               "null"
             ]
           },
-          "model": {
-            "default": null,
-            "description": "The model to run (with `target`), such as `opus` or `sonnet`: passed to the agent's CLI\nas `--model <model>` after the agent's own args. Omitted, the agent's own model.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "name": {
             "default": null,
             "description": "The session's display name. Required for `team-workspace` (e.g. \"Sprint 1\");\nthe same name in the same team while it runs is the same session. With `story`\nit opens another session in the story's workspace under `<storyId>#<name>`;\nwithout it the story's own session.",
@@ -5256,23 +5161,6 @@
         "type": "object"
       },
       "name": "open_workspace"
-    },
-    {
-      "description": "Validate a pack folder — read-only; nothing is fetched or run. Input: `path`, the absolute path of the folder that holds `pack.yml`, inside a context repo you can read (a relative path is refused). Checks the pack format: every path relative, under a declared root, with no symlink, `..` or `.git/`; at most 5 MB per file and 200 MB per pack; every file on disk listed in `files` with a matching sha256; a valid parts graph (presets, `needs`, no unknown id or cycle); external parts pinned to a full 40-hex commit or a registry integrity; and the bundle rule (a third-party file is refused with `third_party_bundled`). Returns {ok, errors: [{code, path?, message}], warnings, pack, parts, risk}. `risk` is derived from the files: executables, scripts, CLI hooks, agents that skip permission checks, MCP servers, routines, setup steps and network fetches. A pack's own `risk` claim is ignored (warning `risk_claim_ignored`).\nDocs: arc-e-agents/packs.html",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "description": "The pack folder's absolute path: the one holding `pack.yml`, inside a context repo\nyou can read.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      },
-      "name": "pack_validate"
     },
     {
       "description": "Pane list — the custom right panes a team sees: the panes of every team in its chain (nearest first), then your private ones for that org. The same id in two places is two entries. Optional `org`+`team` (both, or neither for the active team). Returns { status:\"ok\", data:{ contentRoot (the content a pane's reads resolve against), panes:[{ id, scope (team|private), team?, title, icon?, path, panesDir, panelId, modified? }] } }, or `validation`, `unauthorizedTeam`, `notSyncedLocally`. Write one with pane_write, show one with pane_open; to delete a pane, delete its file. How to write a pane (the `window.codesense` SDK, theme, errors): see pane_write; full reference: get_live_data_contract.\nDocs: arc-i-dashboard-primitives/your-first-dashboard.html",
@@ -5392,222 +5280,6 @@
         "type": "object"
       },
       "name": "pane_write"
-    },
-    {
-      "description": "Pin a message into your own thread's pin list, the strip on your chat overlay and full view that the person and pages see, or take it out. Your thread is the saved Agent and story your session was launched with; you can pin into no other. Args: {message_id} (a message you sent, received, or are the reply target of, usually a live HTML view you posted; from send_message, reply or read_messages), {position} (optional: 0 is first; omitted or past the end, it goes last), {remove} (optional boolean: true unpins it), {restore} (optional boolean: true brings back an unpinned pin as it was, keeping who pinned it, when, its preview and its place; refused at 3 pins), {preview} (optional: what the folded pin shows, {shortName (<=24 chars), value (<=32), unit (<=64), status: \"on-track\"|\"running\"|\"needs-you\"|\"not-updating\", chart: {kind:\"segments\",segments:[status],label} | {kind:\"progress\",percent:0-100,label} | {kind:\"stack\",parts:[{label,value}],label}, lines: up to 3 key lines}; send it again to update a pinned view's preview), {session_id} (optional: omit it to use this connection's verified tab identity). A thread shows at most 3 pins; a fourth is refused until one is unpinned. Pinning a message already pinned leaves it where it is. A pin whose message is archived or withdrawn drops out of the list. Returns `{status:\"pins\",org,team,agentId,storyId,pins:[{messageId,position,pinnedBy,pinnedAtMs,preview?,previewAtMs?}],outcome:\"pinned\"|\"updated\"|\"unpinned\"|\"restored\"|\"unchanged\"}` or `{status:\"invalid\",message}` (a session not launched from a saved Agent has no thread, a fourth pin, or a preview too large). Example: pin {message_id: 42, preview: {shortName: \"QA\", value: \"5 of 5\", unit: \"ACs traced\", status: \"on-track\"}}.\nDocs: arc-f-inboxes-and-triage/messages.html#tool-pin",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "message_id": {
-            "description": "The message to pin, from `send_message`, `reply` or `read_messages`.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "position": {
-            "default": null,
-            "description": "Where it goes among the pins: 0 is first; omitted or past the end, it goes last.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "preview": {
-            "anyOf": [
-              {
-                "additionalProperties": false,
-                "description": "What a folded pin shows of its view: a short name, a headline value and unit, a\nstatus, a small chart and its key lines. Every field is optional.",
-                "properties": {
-                  "chart": {
-                    "anyOf": [
-                      {
-                        "description": "The small chart of a preview. `label` says what it shows in words, for a screen\nreader and for a pane too small to draw it.",
-                        "oneOf": [
-                          {
-                            "description": "One segment per item, each with its status (ACs traced, review rounds).",
-                            "properties": {
-                              "kind": {
-                                "const": "segments",
-                                "type": "string"
-                              },
-                              "label": {
-                                "type": "string"
-                              },
-                              "segments": {
-                                "items": {
-                                  "description": "How a pinned view is doing, as its status dot shows it.",
-                                  "enum": [
-                                    "on-track",
-                                    "running",
-                                    "needs-you",
-                                    "not-updating"
-                                  ],
-                                  "type": "string"
-                                },
-                                "type": "array"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "segments",
-                              "label"
-                            ],
-                            "type": "object"
-                          },
-                          {
-                            "description": "A share done, 0 to 100 (test files run).",
-                            "properties": {
-                              "kind": {
-                                "const": "progress",
-                                "type": "string"
-                              },
-                              "label": {
-                                "type": "string"
-                              },
-                              "percent": {
-                                "format": "double",
-                                "type": "number"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "percent",
-                              "label"
-                            ],
-                            "type": "object"
-                          },
-                          {
-                            "description": "Parts of a whole by size (stories by stage, spend by runtime).",
-                            "properties": {
-                              "kind": {
-                                "const": "stack",
-                                "type": "string"
-                              },
-                              "label": {
-                                "type": "string"
-                              },
-                              "parts": {
-                                "items": {
-                                  "description": "One part of a [`PinChart::Stack`].",
-                                  "properties": {
-                                    "label": {
-                                      "type": "string"
-                                    },
-                                    "value": {
-                                      "format": "double",
-                                      "type": "number"
-                                    }
-                                  },
-                                  "required": [
-                                    "label",
-                                    "value"
-                                  ],
-                                  "type": "object"
-                                },
-                                "type": "array"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "parts",
-                              "label"
-                            ],
-                            "type": "object"
-                          }
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "lines": {
-                    "description": "Up to three key lines, most important first.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "shortName": {
-                    "description": "A few words for the line of chips (\"QA\", \"Review\").",
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "status": {
-                    "anyOf": [
-                      {
-                        "description": "How a pinned view is doing, as its status dot shows it.",
-                        "enum": [
-                          "on-track",
-                          "running",
-                          "needs-you",
-                          "not-updating"
-                        ],
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "unit": {
-                    "description": "What the value counts (\"ACs traced\").",
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "value": {
-                    "description": "The headline value (\"5 of 5\", \"0H 0M 0L\", \"$20.70\").",
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  }
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "What the folded pin shows of the view: {shortName, value, unit, status, chart, lines}.\nOn a message already pinned it replaces that pin's preview."
-          },
-          "remove": {
-            "default": null,
-            "description": "`true` unpins it.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "restore": {
-            "default": null,
-            "description": "`true` brings back its unpinned pin as it was (who pinned it, when, its preview and\nplace): the Undo of an unpin.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "session_id": {
-            "default": null,
-            "description": "Omit to pin as this connection's verified tab. If supplied, it must name that\nsame tab. An unbound connection is refused.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "message_id"
-        ],
-        "type": "object"
-      },
-      "name": "pin"
     },
     {
       "description": "Post a progress note to the chat surface bound to your session and to the agent-updates store, available to dashboards through codesense.updates(). Notes do not appear in the native human Inbox. To send the human a report there, use send_message to human with kind update. Fire-and-forget: emits a UI event and returns immediately — for a blocking question, use ask_user instead. Inputs: `sessionId` (your `$CODESENSE_TAB_SESSION_ID`, stamped into your PTY at spawn), `text`. Optional: `role` (default \"agent\"). The render tripwire may route long or artifact-bearing messages to a doc or artifact pane; pass `subclass` (your Weft subclass: `review`/`research`/`impl`/`planning`) and `hasArtifacts: true` after a report_artifact call for better routing. For a DrillDoc target, `openDocPath` is the absolute context-repo path to open in the viewer (absent → DrillDoc rule skipped).\nDocs: arc-e-agents/mcp-only-agents.html",
@@ -5929,32 +5601,6 @@
         "type": "object"
       },
       "name": "preview_reverse_sync_worktree"
-    },
-    {
-      "description": "Probe this Mac for setup — read-only; nothing is installed, written or opened. Returns {clis, git, gh_version, gh_auth, git_repo?, env_set?}. `clis` maps each agent CLI to {available, version, resolving}; `git` is {available, version}; `gh_version` is the GitHub CLI's version or null (a gh that was missing is looked for again first); `gh_auth` is {signed_in, account, scopes} for github.com, read from `gh auth status --hostname github.com` (or {signed_in:false, reason: gh_missing|gh_failed}). Optional: `gitRepoPath` (an absolute folder, at most 1024 bytes, no `..`) adds `git_repo` {path, exists, is_repo}; a folder under ~/Documents, ~/Desktop, ~/Downloads, ~/Library/CloudStorage, ~/Library/Mobile Documents or /Volumes is refused unless it is inside a folder already attached as a source repo, as is a path under a hidden top-level folder (such as /.vol), and each link is checked before it is followed, so no macOS privacy prompt is raised. `envNames` (at most 32 variable names) adds `env_set` {NAME: true|false|null}: whether your login shell, the one agent CLIs start from, exports the variable with a non-empty value; null when $SHELL is not zsh or bash or the shell could not be read within 5 s. Answers are reused for 3 s. The shell runs a fixed script that prints only 0 or 1 per name, so a value is never read back, and no token is returned.\nDocs: arc-b-model/orgs.html",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "envNames": {
-            "default": [],
-            "description": "Environment variable names to test in the login shell (at most 32). Each is\nreported as set or not; a value is never read back.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "gitRepoPath": {
-            "default": null,
-            "description": "An absolute folder path to test for being a git repository (it holds `.git`). At\nmost 1024 bytes, with no `..`; a folder under ~/Documents, ~/Desktop, ~/Downloads,\nthe cloud storage folders in ~/Library or /Volumes is refused unless it is inside a\nfolder already attached as a source repo.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "name": "probe_environment"
     },
     {
       "description": "Publish a dashboard to share.codesense.ai: sets its dashboard.yml publish.state to published (and visibility), validates the manifest and the publishable files first (allowlist, limits, no bridge calls in pages), then pushes it. A notes array advises when a listed cs-live.js has an older version comment than this app's toolkit; this does not block publishing. Pass dashboard as the absolute folder path. visibility is private or team; team is reserved and currently the same as private (only invited viewers get in). hostedCopy is live, or retrying / auth_failed / not_sent with hostedCopyError. A retrying publish is pushed again by calling publish_dashboard again. A dashboard.yml `live` block (queries: [names], [] for presence only, or all; optional fields) needs a person to confirm it once in the native CodeSense app before it takes effect. The result's live is on (a person published it), unchanged, none (no block: live data off), pending_confirmation (a new or wider block, or a legacy one, is waiting: the page is published without live data and a dialog asks the person) or declined (the person said no; it is not asked again until dashboard.yml changes). A narrower or removed block applies at once. An agent cannot switch a private dashboard that streams terminals to team: visibility stays private until a person confirms. On a dashboard that is already published, pushes the current folder and updates the requested visibility; an edited narrower live block also takes effect within seconds without calling this again, while CodeSense is open. A child agent cannot publish a parent's dashboard, even when shared. Copy shared files into its own team and publish the copy, or ask a human to publish the parent's dashboard.\nDocs: arc-i-dashboard-primitives/your-first-dashboard.html",
@@ -8843,7 +8489,7 @@
       "name": "role_save"
     },
     {
-      "description": "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, inReplyTo, text, textTruncated, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. `inReplyTo` is the messageId the message answers (the card a reply is for), null for none. `text` is the message, up to 4000 characters (`textTruncated` when cut), for an open delivery; null once acknowledged. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message.\nDocs: arc-f-inboxes-and-triage/messages.html",
+      "description": "Show the role mailboxes of a team: who holds each role and where every message sent to it stands. A role is a queue shared by every session registered for it (any role name, usually a saved Agent's id from agent_list). Changes and claims nothing. Args, all optional: {role} (just that one), {limit} (acknowledged deliveries per role, newest first; default 20 — open ones are always all listed), {team} `{org, team}` (default: the team active in the app). Returns {roles: [{role, roleName, registrations, counts, deliveries, deliveriesTruncated}]}. `roleName` is the saved Agent's name (null when unknown here). `registrations`: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}] — the instances that registered with register_role; `live` is false once `expiresAtMs` passed (they must register again); `instanceName` is the session's display name when the instance id is a known session. `counts`: {pending, claimed, accepted, acknowledged} over all deliveries. `deliveries`: open ones oldest first, then the newest acknowledged: [{deliveryId, messageId, state, from, fromName, excerpt, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}]. `state`: `pending` (waiting; no instance holds it), `claimed` (an instance took it with claim_role_messages and is deciding; `claimLapsed` true means the claim expired and it can be claimed again), `accepted` (accepted with accept_role_message, as work or no work, not yet acknowledged), `acknowledged` (finished with ack_role_message). `receipt` (once accepted): {receiptId, instanceId, generation, kind (work|no_work), note, queueItemId (deprecated — always null for new receipts; role work is not mirrored into wv_queue), acceptedAtMs}. `excerpt` is the start of the message text; inbox_list {role} shows the whole thread. All times are epoch milliseconds. Next: to work a role's queue yourself, register_role then claim_role_messages; to message it, send_role_message.\nDocs: arc-f-inboxes-and-triage/messages.html",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
