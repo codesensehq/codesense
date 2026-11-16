@@ -18,6 +18,8 @@ import { useInboxSessions } from "./use-inbox-sessions";
  * names the same chat: mail arriving in another team never moves the conversation, or a send,
  * there mid-chat.
  */
+const NONE: readonly string[] = [];
+
 export function useAgentConversation({
   data,
   source,
@@ -47,9 +49,17 @@ export function useAgentConversation({
     () => (team ? messages.filter((m) => sameTeam(m.team, team)) : messages),
     [messages, team],
   );
+  // A thread read holds the mail of every session of the thread: the chat is the human's with
+  // any of them, the predecessors' too, by handle or by tab session id.
+  const peers =
+    data && "addresses" in data && Array.isArray(data.addresses)
+      ? data.addresses
+      : data && "sessions" in data && Array.isArray(data.sessions)
+        ? data.sessions
+        : NONE;
   const conversation = useMemo(
-    () => teamMessages.filter((m) => between(m, handle)),
-    [teamMessages, handle],
+    () => teamMessages.filter((m) => between(m, handle) || peers.some((peer) => between(m, peer))),
+    [teamMessages, handle, peers],
   );
   const dir = useMemo(() => {
     // Demo messages (dev only) name demo sessions; label them from the demo roster too.
@@ -58,5 +68,5 @@ export function useAgentConversation({
     return buildDirectory(rows, messages, { humanName: user?.display_name });
   }, [sessions, source, messages, user?.display_name]);
   const roles = useMemo(() => roleSummaries(dir, teamMessages), [dir, teamMessages]);
-  return { messages, home, team, teamMessages, conversation, dir, roles };
+  return { messages, home, team, teamMessages, conversation, dir, roles, peers };
 }
