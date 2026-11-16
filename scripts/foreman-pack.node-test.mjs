@@ -8,6 +8,7 @@ import path from "node:path";
 import { parse } from "yaml";
 import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
 import { constant as rustConstant } from "./lib/foreman-constants.mjs";
+import { expandLaunchParent } from "./lib/launch-parent.mjs";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
 const text = (rel) => readFileSync(new URL(rel, pack), "utf8");
@@ -88,8 +89,9 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
     assert.ok(
-      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\/\/\*\*\/foreman-)/.test(rule) ||
-        rule === GITHUB_PR,
+      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\/\/\{\{launch_parent\}\}\/foreman-)/.test(
+        rule,
+      ) || rule === GITHUB_PR,
       rule,
     );
   }
@@ -161,12 +163,24 @@ function ruleMatches(cwd, target, tool, { deny = false } = {}) {
     return new RegExp(`^${re}$`).test(target);
   };
 }
+// The rules a launch in `cwd` writes: `{{launch_parent}}` becomes cwd's parent, as the app and
+// the eval driver expand it (`scripts/lib/launch-parent.mjs`).
+const launched = (cwd) =>
+  expandLaunchParent({ permissions: agent.permissions.claude }, cwd).content.permissions;
 // Only `Edit` denies count for files, and one denies every tool that writes a file.
-const writeDenied = (cwd, target) => deny.some(ruleMatches(cwd, target, "Edit", { deny: true }));
+const writeDenied = (cwd, target) =>
+  launched(cwd).deny.some(ruleMatches(cwd, target, "Edit", { deny: true }));
 const writeAllowed = (cwd, target, tools = ["Edit", "Write"]) =>
-  !writeDenied(cwd, target) && tools.every((tool) => allow.some(ruleMatches(cwd, target, tool)));
-// Each home layout: two plain ones, and home under a foreman-* parent.
-const LAYOUTS = ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"];
+  !writeDenied(cwd, target) &&
+  tools.every((tool) => launched(cwd).allow.some(ruleMatches(cwd, target, tool)));
+// Each home layout: two plain ones as the evals make them (`<root>/home`), home under a
+// foreman-* parent, and the app's team workspace (`…/<slug>/<team>/content`).
+const LAYOUTS = [
+  "/work/acme-docs/home",
+  "/work/acme-user/home",
+  "/tmp/foreman-x/home",
+  "/srv/cs/context-worktrees/acme/docs/foreman/docs/content",
+];
 // A stand-in user home, for the runtimes' home dirs.
 const USER_HOME = "/home/someone";
 // Denied outright, and neither an Edit nor a Write is allowed.
@@ -195,7 +209,7 @@ test("the rule model matches the probe: ../ never, // absolute, ./ relative, Edi
   );
 });
 
-test("edits are denied in home and allowed in a foreman-* worktree, in three layouts", () => {
+test("edits are denied in home and allowed in a foreman-* worktree, in every layout", () => {
   for (const home of LAYOUTS) {
     const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
     for (const file of ["README.md", "stories/a.md"]) {
@@ -213,12 +227,11 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
       true,
       "the commit message file",
     );
-    // The accepted width (Decisions): under a foreman-* parent, a non-foreman sibling is inside
-    // that parent, so the rule allows it; elsewhere it is refused.
-    const nested = /\/foreman-[^/]*\//.test(home);
+    // Bounded to home's parent: even under a foreman-* parent, a sibling that is not a foreman-*
+    // worktree is refused.
     for (const tool of ["Edit", "Write"]) {
-      assert.equal(writeAllowed(home, path.resolve(home, "../other/a.md"), [tool]), nested);
-      assert.equal(writeAllowed(home, path.resolve(home, "../other.msg"), [tool]), nested);
+      assert.equal(writeAllowed(home, path.resolve(home, "../other/a.md"), [tool]), false);
+      assert.equal(writeAllowed(home, path.resolve(home, "../other.msg"), [tool]), false);
       assert.equal(writeAllowed(home, path.join(sibling, ".git"), [tool]), false, "no .git");
       assert.equal(writeAllowed(home, path.join(sibling, ".git/config"), [tool]), false);
     }
@@ -226,7 +239,31 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
   }
 });
 
-test("no foreman-* path inside an agent-config or agent tree is writable, in three layouts", () => {
+test("the worktree allows reach only foreman-* beside home, in every layout", () => {
+  for (const home of LAYOUTS) {
+    const parent = path.dirname(home);
+    for (const tool of ["Edit", "Write"]) {
+      assert.equal(writeAllowed(home, path.resolve(home, "../foreman-ab/f.txt"), [tool]), true);
+    }
+    assert.equal(writeAllowed(home, path.resolve(home, "../foreman-ab.msg"), ["Write"]), true);
+    for (const target of [
+      // A foreman-* dir that is not a sibling of home.
+      path.join(path.dirname(parent), "elsewhere/foreman-ab/f.txt"),
+      path.join(parent, "nested/foreman-ab/f.txt"),
+      "/tmp/foreman-ab/f.txt",
+      path.join(path.dirname(parent), "elsewhere/foreman-ab.msg"),
+    ]) {
+      for (const tool of ["Edit", "Write"]) {
+        assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
+      }
+    }
+    for (const target of [path.join(home, "a.md"), path.join(parent, "foreman-ab/.git/config")]) {
+      assertLocked(home, target);
+    }
+  }
+});
+
+test("no foreman-* path inside an agent-config or agent tree is writable, in every layout", () => {
   // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
   // any agent's skills; the agent-config trees are denied for that reason.
   for (const home of LAYOUTS) {
@@ -307,7 +344,7 @@ function loaderRoots() {
   }
   return [...roots];
 }
-test("every loader root the source defines is denied, in three layouts", () => {
+test("every loader root the source defines is denied, in every layout", () => {
   const roots = loaderRoots();
   assert.ok(roots.length >= 10, roots.join(", "));
   for (const home of LAYOUTS) {
