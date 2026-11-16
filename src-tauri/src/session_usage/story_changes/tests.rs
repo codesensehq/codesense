@@ -4174,9 +4174,16 @@ mod attached_history_review {
         assert!(once.is_i64(), "the first read fetched");
         assert!(trail.source().trail_fetch_spent(home.path(), "SV-32"));
         std::thread::sleep(std::time::Duration::from_millis(20));
+        let walks = crate::session_usage::story_changes::git_walks(home.path());
         let second = story_read(home.path(), "SV-32").await;
         assert_eq!(fetched_at(home.path(), &trail), once, "the second read did not fetch");
         assert_eq!(second["unavailable"]["historyFetch"], crate::attribution::history::FETCH_SPENT);
+        let spent = crate::session_usage::story_changes::git_walks(home.path());
+        assert_eq!(spent, walks + 1, "a spent fetch reads the story once");
+        // The spent answer is kept: the next read walks nothing until origin's head moves.
+        let third = story_read(home.path(), "SV-32").await;
+        assert_eq!(third["unavailable"]["historyFetch"], crate::attribution::history::FETCH_SPENT);
+        assert_eq!(crate::session_usage::story_changes::git_walks(home.path()), spent);
         // refresh_history forgets the miss, so the next open may look again.
         refresh_story(home.path(), None).await;
         assert!(!trail.source().trail_fetch_spent(home.path(), "SV-32"));

@@ -99,24 +99,21 @@ pub(super) fn repo_stamp(repo: &git2::Repository, story: &str, names: &BTreeSet<
     out
 }
 
-/// [`repo_stamp`] of each repo of `spec`, and the size and content hash of each story file (a
-/// small file; an edit within the filesystem's timestamp granularity still changes it).
-pub(super) fn stamp_of(spec: &StampSpec) -> String {
+/// One story file's part of a stamp: its size and content hash, from `bytes` as read (`None`
+/// when it could not be read). A small file; an edit within the filesystem's timestamp
+/// granularity still changes it.
+pub(super) fn file_stamp(path: &Path, bytes: Option<&[u8]>) -> String {
+    let seen = Option::map(bytes, |bytes| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(bytes, &mut hasher);
+        (<[u8]>::len(bytes), std::hash::Hasher::finish(&hasher))
+    });
+    format!("file {} {seen:?}\n", std::path::Path::display(path))
+}
+
+/// [`repo_stamp`] of each repo of `spec`.
+pub(super) fn repos_stamp(spec: &StampSpec) -> String {
     let mut out = std::string::String::new();
-    for file in &spec.files {
-        let seen = Option::map(Result::ok(std::fs::read(file)), |bytes| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&bytes, &mut hasher);
-            (
-                std::vec::Vec::len(&bytes),
-                std::hash::Hasher::finish(&hasher),
-            )
-        });
-        String::push_str(
-            &mut out,
-            &format!("file {} {seen:?}\n", std::path::Path::display(file)),
-        );
-    }
     for (dir, names) in &spec.repos {
         let Ok(repo) = git2::Repository::open(dir) else {
             continue;
@@ -124,6 +121,17 @@ pub(super) fn stamp_of(spec: &StampSpec) -> String {
         String::push_str(&mut out, &format!("{}\n", std::path::Path::display(dir)));
         String::push_str(&mut out, &repo_stamp(&repo, &spec.story, names));
     }
+    out
+}
+
+/// [`file_stamp`] of each story file of `spec` as it reads now, then its [`repos_stamp`].
+pub(super) fn stamp_of(spec: &StampSpec) -> String {
+    let mut out = std::string::String::new();
+    for file in &spec.files {
+        let bytes = Result::ok(std::fs::read(file));
+        String::push_str(&mut out, &file_stamp(file, Option::as_deref(&bytes)));
+    }
+    String::push_str(&mut out, &repos_stamp(spec));
     out
 }
 
@@ -144,13 +152,16 @@ pub(super) fn walk_key(home: &Path, story: &str, scopes: &[CallerScope], refs: &
     )
 }
 
-/// [`get`] for a caller already off the async runtime, of a walk kept by [`put_walk`].
-pub(super) fn get_walk(key: &str) -> Option<git::GitFacts> {
+/// [`get`] for a caller already off the async runtime, of a walk kept by [`put_walk`]. A hit
+/// sights the live worktrees of `story` the walk read, as the walk itself would.
+pub(super) fn get_walk(home: &Path, story: &str, key: &str) -> Option<git::GitFacts> {
     let (spec, kept_stamp) = Store::fresh(&WALKS, key, std::time::Instant::now())?;
     if stamp_of(&spec) != kept_stamp {
         return None;
     }
-    Option::map(Store::renew(&WALKS, key, std::time::Instant::now()), |(git, _, _)| git)
+    let (git, _, _) = Store::renew(&WALKS, key, std::time::Instant::now())?;
+    super::sight_live_worktrees(home, story, &git.worktrees);
+    Some(git)
 }
 
 /// [`put`] for a caller already off the async runtime: keeps a story walk alone.
@@ -325,6 +336,44 @@ mod tests {
         assert!(
             store.get_at("t-moved", base).await.is_none(),
             "a half read across a ref move was kept"
+        );
+    }
+
+    /// refresh_history deepens a shallow copy by moving only its shallow boundary, so the
+    /// boundary is part of the stamp: a deepen misses the kept half.
+    #[tokio::test]
+    async fn a_moved_shallow_boundary_misses_the_kept_half() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let common = git2::Repository::commondir(&repo).to_owned();
+        let shallow = common.join("shallow");
+        std::fs::write(&shallow, format!("{}\n", "a".repeat(40))).unwrap();
+        let spec = StampSpec {
+            story: "demo".into(),
+            repos: vec![(common, BTreeSet::new())],
+            files: Vec::new(),
+        };
+        let git = git::GitFacts {
+            refs_stamp: stamp_of(&spec),
+            stamp_spec: spec,
+            ..Default::default()
+        };
+        let store = Store::new();
+        let now = std::time::Instant::now();
+        store
+            .put_at(
+                "t-shallow".into(),
+                &git,
+                &Default::default(),
+                &Default::default(),
+                now,
+            )
+            .await;
+        assert!(store.get_at("t-shallow", now).await.is_some());
+        std::fs::write(&shallow, format!("{}\n", "b".repeat(40))).unwrap();
+        assert!(
+            store.get_at("t-shallow", now).await.is_none(),
+            "a deepened copy served the half kept before it"
         );
     }
 

@@ -338,7 +338,7 @@ pub(super) fn collect_kept(
         SessionRef::of_read,
     ));
     let key = super::cache::walk_key(home, story, scopes, &refs);
-    if let Some(kept) = super::cache::get_walk(&key) {
+    if let Some(kept) = super::cache::get_walk(home, story, &key) {
         return Ok(kept);
     }
     let git = collect_refs(home, store, story, &refs, scopes, true, None)?;
@@ -490,13 +490,22 @@ pub(super) fn collect_refs(
     // it as a fallback after a worktree disappears; context edit provenance is separate.
     let mut work_missing = false;
     let mut work_by_convention = false;
+    let mut files_seen = std::string::String::new();
     for scope in scopes {
         if let Some(source) = story_source(home, store, story, scope) {
-            // A kept read is stamped with the story file too: its planned and done facts.
+            let bytes = Result::ok(std::fs::read(&source.path));
+            // A kept read is stamped with the story file too (its planned and done facts), from
+            // the bytes read here, so an edit after this read is never kept.
             if stamp && !<[PathBuf]>::contains(&out.stamp_spec.files, &source.path) {
                 Vec::push(&mut out.stamp_spec.files, PathBuf::clone(&source.path));
+                String::push_str(
+                    &mut files_seen,
+                    &super::cache::file_stamp(&source.path, Option::as_deref(&bytes)),
+                );
             }
-            if let Ok(text) = std::fs::read_to_string(&source.path) {
+            if let Some(text) = Option::and_then(bytes, |bytes| {
+                Result::ok(std::string::String::from_utf8(bytes))
+            }) {
                 let fields = crate::commands::frontmatter_editor::frontmatter_json(
                     crate::commands::pipeline_format::format_of(&source.path),
                     &text,
@@ -601,7 +610,7 @@ pub(super) fn collect_refs(
     }
     if stamp {
         out.stamp_spec.story = str::to_owned(story);
-        out.refs_stamp = super::cache::stamp_of(&out.stamp_spec);
+        out.refs_stamp = std::string::String::clone(&files_seen);
     }
     let mut repositories = std::collections::BTreeMap::new();
     for root in roots {
@@ -654,7 +663,7 @@ pub(super) fn collect_refs(
         if stamp {
             out.stamp_spec.story = story.to_owned();
             Vec::push(&mut out.stamp_spec.repos, (common.clone(), names.clone()));
-            out.refs_stamp = super::cache::stamp_of(&out.stamp_spec);
+            out.refs_stamp = format!("{files_seen}{}", super::cache::repos_stamp(&out.stamp_spec));
         }
         let mut merges = std::collections::BTreeMap::<String, Vec<git2::Oid>>::new();
         // Two-parent merges under the story's squash-style subject whose second parent is no
