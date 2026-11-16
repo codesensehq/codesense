@@ -162,7 +162,6 @@ fn the_claude_guide_allows_phase_1_and_the_always_on_tools_and_refuses_the_rest(
         .collect();
     expected.insert("Skill(codesense-setup)".to_string());
     assert_eq!(allow, expected);
-    assert_eq!(permissions["deny"], serde_json::json!([]));
     // Whatever the allow list misses is refused, not asked.
     assert_eq!(permissions["defaultMode"], "dontAsk");
     assert!(has_pair(
@@ -170,10 +169,45 @@ fn the_claude_guide_allows_phase_1_and_the_always_on_tools_and_refuses_the_rest(
         "--disallowedTools",
         "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"
     ));
-    // Claude can't take a bridge allowlist: its server lists every tool, and `dontAsk`
-    // with the allow list above is the restriction.
-    assert_eq!(resolved.launch.bridge_tools, None);
-    assert!(resolved.launch.effective_bridge_tools.is_empty());
+    // Claude enforces the bridge allowlist (#147): the agent's list plus the always-on tools
+    // are what it can call, and every other served tool is denied by name.
+    let wanted: BTreeSet<String> = PHASE_1.into_iter().map(str::to_string).collect();
+    assert_eq!(phase_1_declared(&resolved), wanted);
+    let always_on = crate::agents::permissions::always_on_bridge_tools(AgentCli::Claude);
+    let mut kept = phase_1_served();
+    kept.extend(always_on.iter().cloned());
+    let served: BTreeSet<String> = crate::mcp::handler::CodesenseHandler::served_tool_router()
+        .list_all()
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let effective: BTreeSet<String> = resolved
+        .launch
+        .effective_bridge_tools
+        .iter()
+        .cloned()
+        .collect();
+    assert_eq!(
+        effective,
+        kept.intersection(&served).cloned().collect::<BTreeSet<_>>()
+    );
+    let deny: BTreeSet<String> = permissions["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule.as_str().unwrap().to_string())
+        .collect();
+    let rule = |name: &str| format!("mcp__codesense__{name}");
+    // A served tool outside phase 1 and the always-on set is denied.
+    let outside = served
+        .iter()
+        .find(|name| !kept.contains(*name))
+        .expect("a served tool outside phase 1");
+    assert!(deny.contains(&rule(outside)), "{outside} is denied");
+    // No phase 1 or always-on tool is.
+    for name in &kept {
+        assert!(!deny.contains(&rule(name)), "{name} is not denied");
+    }
 }
 
 #[test]

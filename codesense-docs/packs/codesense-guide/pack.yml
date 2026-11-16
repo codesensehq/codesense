@@ -38,7 +38,7 @@ files:
     sha256: d0d1bba570c135a2a51273d7261df49c4ce5d63332a304d03626c5836cbbec4f
     exec: false
   - path: agents/guide-claude/agent.yaml
-    sha256: d690318e03ef20be493adef08e947be759bb33446395af2e211c95e3b474d541
+    sha256: 39949a6a8eacca9dcd7cb511a0b4ba215c0163b72c8c204f46b5ba3a7779e50e
     exec: false
   - path: agents/guide-codex/agent.yaml
     sha256: fe49f5843442412085ba468f410648caa18332281410bf937ca45221b93f212e

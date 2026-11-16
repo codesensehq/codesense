@@ -97,13 +97,16 @@ test("the built skill lands at each runtime's own path, byte for byte", () => {
   assert.match(source.toString(), /^---\nname: codesense-setup\n/);
 });
 
-test("Claude's allow list is exactly the phase 1 tools", () => {
-  const { permissions, args } = agent("claude");
+test("Claude's allow list and bridge tools are exactly the phase 1 tools", () => {
+  const { permissions, mcp, args } = agent("claude");
   const allow = permissions.claude.allow;
   const tools = allow
     .filter((rule) => rule.startsWith("mcp__codesense__"))
     .map((rule) => rule.slice("mcp__codesense__".length));
   assert.deepEqual(sorted(tools), sorted(PHASE_1));
+  // Claude enforces the bridge list too (#147), so it holds the same list as Codex and OpenCode.
+  assert.deepEqual(mcp.bridge_tools, PHASE_1);
+  assert.deepEqual(mcp.bridge_tools, agent("codex").mcp.bridge_tools);
   assert.deepEqual(
     allow.filter((rule) => !rule.startsWith("mcp__codesense__")),
     ["Skill(codesense-setup)"],
