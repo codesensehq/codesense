@@ -2126,6 +2126,89 @@ describe("kit.chat onPin: the person pins a message", () => {
       expect(toggleOf(t.el)!.getAttribute("aria-expanded")).toBe("false");
     });
 
+    it("brings an opened message's slot into the log's view once the page draws into it", async () => {
+      const s = setup([lead("idle")], [html]);
+      let opened: HTMLElement | null = null;
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            opened = slot;
+            // Filled at once, as a page's embed does (a loading node, empty until the host answers).
+            slot.append(document.createElement("div"));
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      const log = s.el.querySelector<HTMLElement>(".log")!;
+      // jsdom has no layout: the log is 0..500, and what it holds below its fold is at 480..720.
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 100,
+          width: 100,
+          height: bottom - top,
+          x: 0,
+          y: top,
+        }) as DOMRect;
+      log.getBoundingClientRect = () => rect(0, 500);
+      toggleOf(s.el)!.click();
+      const slot = opened!;
+      slot.getBoundingClientRect = () => rect(480 - log.scrollTop, 720 - log.scrollTop);
+      // The page fills the slot at once with its loading node; its frame arrives in it later.
+      await flush();
+      slot.firstElementChild!.append(document.createElement("iframe"));
+      await flush();
+      // Scrolled within the log by what was below the fold, and never past the slot's top.
+      expect(log.scrollTop).toBe(220);
+    });
+
+    it("keeps an open message's frame in place when an earlier row leaves the thread", async () => {
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const earlier = {
+        messageId: 8,
+        from: "lead-1",
+        to: "human",
+        text: "An earlier line.",
+        createdAtMs: T0 - 1000,
+      };
+      const thread: Row[] = [earlier, html];
+      const s = setup([lead("idle")], thread);
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="8"]')).toBeNull();
+      // Moving an iframe reloads it: the earlier row goes, the open bubble stays where it is.
+      expect(left).toBe(0);
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+    });
+
     it("releases an open message when the chat unmounts", async () => {
       const release = vi.fn();
       const s = setup([lead("idle")], [html]);

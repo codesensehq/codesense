@@ -193,6 +193,7 @@ pub(crate) mod workspace_open;
 pub mod worktree;
 // SW-XS-3 (K6): live-session worktree attribution, moved out of `watch`.
 pub mod worktree_liveness;
+pub mod worktree_probe;
 pub mod worktree_provenance;
 // SLW-WDE-3: lazy per-inset worktree file watcher (external-change reload).
 pub mod worktree_watch;
