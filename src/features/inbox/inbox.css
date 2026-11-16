@@ -2460,14 +2460,15 @@ button.ibx-media-open {
 .ibx-pin-cap {
   display: none;
 }
-.ibx-ov .ibx-pin-b {
-  position: relative;
+/* At the cap the icon widens to hold the count beside it, in the button's row with its gap, so
+   the 11 px count never sits over the 13 px icon. */
+.ibx-ov .ibx-pin-b[data-pin="cap"] {
+  width: auto;
+  min-width: 24px;
+  padding: 0 5px;
 }
 .ibx-ov .ibx-pin-cap {
   display: block;
-  position: absolute;
-  right: 1px;
-  bottom: 0;
   font-size: 11px;
   line-height: 1;
   font-weight: 700;
