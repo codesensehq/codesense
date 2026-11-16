@@ -9,7 +9,8 @@ import { supersedes, type FocusIntent, type Presence } from "./cli-workspace/act
 import { getActiveTeamKey } from "@/shared/lib/team-key";
 import { isTerminalPopupFocused } from "@/shared/lib/focus-utils";
 import { queryShown } from "@/shared/lib/warm-scopes";
-import { cliHostRoot, TERMINAL_SECTION_SELECTOR } from "./cli-host";
+import { cliHostRoot } from "./cli-host";
+import { useTerminalSectionRegistry } from "./terminal-section-registry";
 import { isTerminalColumnShown } from "./terminal-column";
 import {
   pickMruResumeTarget,
@@ -474,7 +475,8 @@ export function revealOrToggleTerminal(teamKey: string): void {
   // is CLI focus and goes through the focus cascade, never to the page body.
   if (
     active instanceof HTMLElement &&
-    (active.closest(TERMINAL_SECTION_SELECTOR) || (host && host.contains(active)))
+    (useTerminalSectionRegistry.getState().section?.contains(active) ||
+      (host && host.contains(active)))
   ) {
     toggleTerminalWithFocus(teamKey);
     return;

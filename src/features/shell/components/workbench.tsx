@@ -363,7 +363,6 @@ export function Workbench() {
               <div
                 ref={registerSection}
                 data-testid="terminal-section"
-                data-terminal-section=""
                 className="flex overflow-hidden"
                 style={
                   !cliTeam

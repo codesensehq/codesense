@@ -107,6 +107,7 @@ import {
   mayTakeUnrequestedFocus,
   revealOrToggleTerminal,
 } from "./focus-cascade";
+import { registerTerminalSection } from "./terminal-section-registry";
 import { TERMINAL_POPUP_ATTR } from "@/shared/lib/focus-utils";
 
 it("publishes every same-target foreground gesture while background activations stay silent", () => {
@@ -841,10 +842,12 @@ describe("revealOrToggleTerminal", () => {
     state.layoutMode = "shared";
     state.terminalVisible = true;
     state.workspaces["acme:default"] = [{ id: "ws-a", kind: "story" }];
-    document.body.innerHTML = `<div data-viewer-content tabindex="-1" id="viewer"></div><div data-terminal-section><div id="agents" tabindex="0"></div><div data-xterm-host></div></div>`;
+    document.body.innerHTML = `<div data-viewer-content tabindex="-1" id="viewer"></div><div id="section"><div id="agents" tabindex="0"></div><div data-xterm-host></div></div>`;
+    const unregister = registerTerminalSection(document.getElementById("section")!);
     document.getElementById("agents")!.focus();
     revealOrToggleTerminal("acme:default");
     raf.flush();
+    unregister();
     expect(setLayoutMode).toHaveBeenCalledWith("viewer");
     expect(document.activeElement?.id).toBe("viewer");
   });
