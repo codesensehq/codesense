@@ -131,6 +131,12 @@ const INVOKE_META = {
               position: 0,
               pinnedBy: "acme/core/dev",
               pinnedAtMs: 1700000000000,
+              message: {
+                from: "acme/core/dev",
+                createdAtMs: 1699999990000,
+                text: "QA summary: all five acceptance criteria traced.",
+                summary: "5 of 5 ACs traced",
+              },
               preview: { shortName: "QA", value: "5 of 5", unit: "ACs traced", status: "on-track" },
               previewAtMs: 1700000060000,
             },
