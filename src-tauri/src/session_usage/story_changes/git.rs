@@ -346,6 +346,21 @@ pub(super) fn collect_kept(
     Ok(git)
 }
 
+/// The checkouts whose notes a story walk read, and how often (tests count walks with it).
+#[cfg(test)]
+static WALKED: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn walked_key(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())
+}
+
+/// How many story walks read the notes of the checkout at `root`.
+#[cfg(test)]
+pub(crate) fn walks(root: &Path) -> usize {
+    crate::attribution::git_ai::counted_in(&WALKED, &walked_key(root))
+}
+
 /// The error a walk ends with when its cancel flag is set (a hosted read past its deadline).
 const CANCELLED: &str = "cancelled";
 
@@ -477,6 +492,10 @@ pub(super) fn collect_refs(
     let mut work_by_convention = false;
     for scope in scopes {
         if let Some(source) = story_source(home, store, story, scope) {
+            // A kept read is stamped with the story file too: its planned and done facts.
+            if stamp && !<[PathBuf]>::contains(&out.stamp_spec.files, &source.path) {
+                Vec::push(&mut out.stamp_spec.files, PathBuf::clone(&source.path));
+            }
             if let Ok(text) = std::fs::read_to_string(&source.path) {
                 let fields = crate::commands::frontmatter_editor::frontmatter_json(
                     crate::commands::pipeline_format::format_of(&source.path),
@@ -579,6 +598,10 @@ pub(super) fn collect_refs(
     }
     if work_missing {
         std::collections::BTreeMap::insert(&mut out.unavailable, "commits", WORK_REPO_NOT_ATTACHED);
+    }
+    if stamp {
+        out.stamp_spec.story = str::to_owned(story);
+        out.refs_stamp = super::cache::stamp_of(&out.stamp_spec);
     }
     let mut repositories = std::collections::BTreeMap::new();
     for root in roots {
@@ -806,6 +829,8 @@ pub(super) fn collect_refs(
         if std::collections::BTreeSet::is_empty(&note_commits) {
             continue;
         }
+        #[cfg(test)]
+        crate::attribution::git_ai::count_in(&WALKED, &walked_key(root));
         for sha in &note_commits {
             out.repo_paths
                 .entry(sha.clone())

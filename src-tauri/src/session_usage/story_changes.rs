@@ -724,7 +724,10 @@ async fn read_with(
     let refs = session.git_refs.clone();
     let cache_key = cache::key(home, story, scope, &refs, &session.git_key);
     let (git, planned, git_part) = match cache::get(&cache_key).await {
-        Some(half) => half,
+        Some(half) => {
+            sight_live_worktrees(home, story, &half.0).await;
+            half
+        }
         None => {
             if git::cancelled(&cancel) {
                 return Err("cancelled".into());
@@ -742,7 +745,12 @@ async fn read_with(
                 cancel.clone(),
             )
             .await?;
-            if !git::cancelled(&cancel) {
+            // A half whose trail fetch was in play is not kept: the next read retries the fetch
+            // or reads the history it brought.
+            if !git::cancelled(&cancel)
+                && !trail_needs_fetch(&git)
+                && !std::collections::BTreeMap::contains_key(&git.unavailable, "historyFetch")
+            {
                 cache::put(cache_key, &git, &planned, &git_part).await;
             }
             (git, planned, git_part)
@@ -1568,6 +1576,39 @@ pub(crate) fn story_is_done(home: &Path, story: &str, scope: &CallerScope) -> bo
     Result::ok(UsageStore::open(&home.join("usage.sqlite")))
         .and_then(|store| git::story_source(home, &store, story.trim(), scope))
         .is_some_and(|source| git::source_is_done(&source.path))
+}
+
+/// A kept half skips the walk that records a moved story tip, so a hit sights each live
+/// worktree it read (written only when the tip changed; never waits for the writer).
+async fn sight_live_worktrees(home: &Path, story: &str, git: &git::GitFacts) {
+    let roots: Vec<std::path::PathBuf> = Iterator::collect(Iterator::filter_map(
+        <[Value]>::iter(&git.worktrees),
+        |tree| {
+            let field = |name: &str| {
+                Option::and_then(serde_json::Value::get(tree, name), serde_json::Value::as_str)
+            };
+            if field("state") != Some("live") {
+                return None;
+            }
+            Option::map(field("path"), std::path::PathBuf::from)
+        },
+    ));
+    if std::vec::Vec::is_empty(&roots) {
+        return;
+    }
+    let (home, story) = (std::path::Path::to_path_buf(home), str::to_owned(story));
+    let _ = crate::commands::await_blocking("story_changes.tips", move || {
+        for root in &roots {
+            crate::install::story_tips::sight_root(
+                &home,
+                &story,
+                root,
+                crate::install::story_tips::Wait::Never,
+            );
+        }
+        Ok(())
+    })
+    .await;
 }
 
 /// A landed story's trail opened without its history: the merge scan stopped at the shallow

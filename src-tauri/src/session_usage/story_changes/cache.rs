@@ -4,7 +4,8 @@
 //! (the walk finishes on its own) is then an index read, not a second walk.
 use super::*;
 
-/// The longest a kept half is trusted: the worktree and planned facts in it have no ref to watch.
+/// The longest a kept half is trusted: the worktree facts and session links in it have no ref or
+/// file to watch.
 /// It is also how long a new note on a kept commit may go unread: the stamp watches
 /// origin's head and the story's branch tips, never the notes refs, so a note git-ai writes after
 /// the read that kept the half shows on the first read after a tip moves or within this bound.
@@ -58,11 +59,13 @@ pub(super) fn key(
     )
 }
 
-/// What a kept half was stamped from: the story and, per repo, the branch names its walk read.
+/// What a kept half was stamped from: the story, per repo the branch names its walk read, and
+/// the story files its planned and done facts were read from.
 #[derive(Debug, Clone, Default)]
 pub struct StampSpec {
     pub story: String,
     pub repos: Vec<(std::path::PathBuf, BTreeSet<String>)>,
+    pub files: Vec<std::path::PathBuf>,
 }
 
 /// Origin's default head, the names of the story's branches now, and the tips of those and of
@@ -87,12 +90,33 @@ pub(super) fn repo_stamp(repo: &git2::Repository, story: &str, names: &BTreeSet<
             String::push_str(&mut out, &format!("{prefix}{name} {tip:?}\n"));
         }
     }
+    // A deepen (refresh_history) moves only the shallow boundary, no tip.
+    let shallow = Result::unwrap_or_default(std::fs::read_to_string(std::path::Path::join(
+        git2::Repository::commondir(repo),
+        "shallow",
+    )));
+    String::push_str(&mut out, &format!("shallow {shallow:?}\n"));
     out
 }
 
-/// [`repo_stamp`] of each repo of `spec`.
+/// [`repo_stamp`] of each repo of `spec`, and the size and content hash of each story file (a
+/// small file; an edit within the filesystem's timestamp granularity still changes it).
 pub(super) fn stamp_of(spec: &StampSpec) -> String {
     let mut out = std::string::String::new();
+    for file in &spec.files {
+        let seen = Option::map(Result::ok(std::fs::read(file)), |bytes| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&bytes, &mut hasher);
+            (
+                std::vec::Vec::len(&bytes),
+                std::hash::Hasher::finish(&hasher),
+            )
+        });
+        String::push_str(
+            &mut out,
+            &format!("file {} {seen:?}\n", std::path::Path::display(file)),
+        );
+    }
     for (dir, names) in &spec.repos {
         let Ok(repo) = git2::Repository::open(dir) else {
             continue;
@@ -145,6 +169,17 @@ pub(super) async fn put(
 ) {
     KEPT.put_at(key, git, planned, part, std::time::Instant::now())
         .await;
+}
+
+/// Forget every half and walk kept for `home`: a test that changes what a half was read from
+/// without moving a ref it watches (a session mapped later shows within [`KEPT_FOR`]).
+#[cfg(test)]
+pub(super) fn forget_home(home: &Path) {
+    let home = format!("{}\n", std::path::Path::display(home));
+    for store in [&KEPT, &WALKS] {
+        let mut kept = store.0.lock().unwrap();
+        kept.retain(|key, _| !key.starts_with(&home) && !key.starts_with(&format!("walk\n{home}")));
+    }
 }
 
 impl Store {

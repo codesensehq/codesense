@@ -1611,7 +1611,7 @@ async fn empty_branch_history_skips_managed_drain_and_checkpoint_work_for_story_
 }
 
 #[tokio::test]
-async fn story_notes_use_the_managed_offline_drain_once_per_repository() {
+async fn story_notes_are_read_without_a_git_ai_await() {
     let (home, mut store) = store();
     let f = GitStory::new();
     f.seed(home.path(), &mut store, "feat/SV-29-work", false);
@@ -1632,9 +1632,10 @@ async fn story_notes_use_the_managed_offline_drain_once_per_repository() {
         ),
     );
     assert_eq!(get(home.path()).await["total"], 2);
-    assert_eq!(
-        std::fs::read_to_string(log).unwrap().trim(),
-        "await --timeout 5|1|0"
+    assert!(
+        !log.exists(),
+        "a story read awaited git-ai: {:?}",
+        std::fs::read_to_string(&log)
     );
 }
 
@@ -2385,7 +2386,7 @@ fn append_fresh_request_commit(f: &GitStory) {
 }
 #[tokio::test]
 async fn task_list_builds_story_evidence_once_and_rebuilds_next_request() {
-    let (_home, store, f, log) = request_outcome_fixture();
+    let (_home, store, f, _log) = request_outcome_fixture();
     for fresh in [false, true] {
         if fresh {
             append_fresh_request_commit(&f);
@@ -2402,15 +2403,15 @@ async fn task_list_builds_story_evidence_once_and_rebuilds_next_request() {
             assert_batch_outcome(value["taskId"].as_str().unwrap(), &value["outcome"], fresh);
         }
         assert_eq!(
-            crate::attribution::testing::logged_calls(&log).len(),
+            git::walks(f.dir.path()),
             if fresh { 2 } else { 1 },
-            "one managed drain/notes batch for the story repository per request"
+            "one walk for the story repository per request"
         );
     }
 }
 #[tokio::test]
 async fn task_read_subtree_builds_story_evidence_once_and_rebuilds_next_request() {
-    let (_home, store, f, log) = request_outcome_fixture();
+    let (_home, store, f, _log) = request_outcome_fixture();
     for fresh in [false, true] {
         if fresh {
             append_fresh_request_commit(&f);
@@ -2433,9 +2434,9 @@ async fn task_read_subtree_builds_story_evidence_once_and_rebuilds_next_request(
             );
         }
         assert_eq!(
-            crate::attribution::testing::logged_calls(&log).len(),
+            git::walks(f.dir.path()),
             if fresh { 2 } else { 1 },
-            "one managed drain/notes batch for the subtree repository per request"
+            "one walk for the subtree repository per request"
         );
     }
 }
@@ -2499,7 +2500,7 @@ async fn task_subtree_gathers_later_candidate_worktrees_before_collecting() {
             "b.rs"
         );
         assert_eq!(
-            crate::attribution::testing::logged_calls(&log).len(),
+            git::walks(a.dir.path()) + git::walks(b.dir.path()),
             2,
             "each candidate repository is collected once"
         );
@@ -2575,7 +2576,7 @@ async fn task_request_keeps_each_original_scope_for_planned_enrichment() {
                 assert!(!node["outcome"].to_string().contains("parent-plan.rs"));
             }
         }
-        assert_eq!(crate::attribution::testing::logged_calls(&log).len(), 1);
+        assert_eq!(git::walks(f.dir.path()), 1);
     }
 }
 
@@ -3151,6 +3152,8 @@ async fn captured_claude_fallback_story_session_ids_and_task_selection_follow_la
         json!(["s_5cef34e3292d7d"])
     );
     let log = replay_log(repo.path());
+    // A session mapped after a read shows once the kept half goes (at most `KEPT_FOR`).
+    cache::forget_home(home.path());
     let linked = get(home.path()).await;
     assert_eq!(
         linked["commits"][0]["sessionIds"],

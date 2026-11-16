@@ -494,6 +494,7 @@ impl RawReader {
             #[cfg(test)]
             if !hit {
                 self.snapshots += 1;
+                super::git_ai::count_in(&COLD_READS, &cold_key(&self.checkout));
             }
             if now == notes {
                 save_raw(self.cache.as_mut(), &key, hit, &raw);
@@ -507,6 +508,21 @@ impl RawReader {
         }
         Err(NOTES_CHANGED.into())
     }
+}
+
+/// The cold (not cached) raw reads of each checkout, across readers (tests count blames with it).
+#[cfg(test)]
+static COLD_READS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn cold_key(checkout: &Path) -> PathBuf {
+    std::fs::canonicalize(checkout).unwrap_or_else(|_| checkout.to_owned())
+}
+
+/// How many raw reads of the checkout at `checkout` missed the cache.
+#[cfg(test)]
+pub(crate) fn cold_reads(checkout: &Path) -> usize {
+    super::git_ai::counted_in(&COLD_READS, &cold_key(checkout))
 }
 
 /// The note blob that owns this commit's lines; unrelated notes do not invalidate that row.
@@ -652,6 +668,10 @@ fn resolve_with_read(
         let mut unsupported: HashMap<String, Option<String>> = HashMap::new();
         let key = raw_key(&local.remote_key, &commit, &params.path, notes_ref);
         let (raw, hit) = cached_raw(disk_cache.as_ref(), &key, || read(repo, &commit, &params.path))?;
+        #[cfg(test)]
+        if !hit {
+            super::git_ai::count_in(&COLD_READS, &cold_key(repo));
+        }
         let mut ranges: Vec<Value> = raw
             .iter()
             .cloned()
@@ -1660,7 +1680,21 @@ pub(crate) mod tests {
         let log = home.path().join("await.log");
         crate::attribution::testing::script(&home.path().join("bin/git-ai"), &format!(
             "printf '%s|%s|%s|%s|%s|%s|%s\\n' \"$*\" \"$HOME\" \"$GIT_NO_LAZY_FETCH\" \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" \"$GIT_CONFIG_NOSYSTEM\" \"$GIT_CONFIG_GLOBAL\" >> '{}'", log.display()));
-        joined(home.path(), &home.path().join("usage.sqlite"), &params()).await;
+        // The MCP `why_line` read waits for git-ai; a story page's read never does.
+        resolve_at_holding(
+            home.path(),
+            &Principal::from(1),
+            &home.path().join("usage.sqlite"),
+            &home.path().join("conversations"),
+            &params(),
+            &CallerScope::Human,
+            Default::default(),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         let calls = std::fs::read_to_string(&log).unwrap();
         assert_eq!(
             calls.trim(),
