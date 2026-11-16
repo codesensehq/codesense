@@ -16,7 +16,7 @@ const PACK_YML = `${PACK}/pack.yml`;
 export const CONSTANT_FILES = [OPEN, THREAD, DOCS, LAUNCH, CONFIG, PACK_YML];
 
 /** The string or number a `NAME = <value>` (TS) or `NAME: &str = <value>` (Rust) line holds. */
-export function constant(text, name) {
+function constant(text, name) {
   const found = new RegExp(`\\b${name}(?::\\s*&str)?\\s*=\\s*("([^"]*)"|\\d+)`).exec(text);
   if (!found) return undefined;
   return found[2] ?? Number(found[1]);

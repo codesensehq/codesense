@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Model-free checks on the Foreman pack: the root prompt, the saved agent's tool and write rules,
+// Model-free checks on the Foreman pack: the root prompt, the saved agent's tool rules,
 // and the settings that keep the team's own skills and instructions out of its first call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +7,6 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import { GITHUB_PR } from "../codesense-docs/packs/codesense-foreman/evals/lib/fixture.mjs";
-import { constant as rustConstant } from "./lib/foreman-constants.mjs";
 
 const pack = new URL("../codesense-docs/packs/codesense-foreman/", import.meta.url);
 const text = (rel) => readFileSync(new URL(rel, pack), "utf8");
@@ -61,6 +60,8 @@ const FORBIDDEN = [
   "create_local_organization",
 ];
 const mcp = (name) => `mcp__codesense__${name}`;
+// The instructions, not rules, say where the Foreman works: no file is fenced by a rule.
+const FILE_TOOLS = ["Read", "Edit", "Write"];
 
 // Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
 // system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
@@ -88,8 +89,7 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
     assert.ok(
-      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\/\/\*\*\/foreman-)/.test(rule) ||
-        rule === GITHUB_PR,
+      /^(mcp__codesense__|Bash\()/.test(rule) || FILE_TOOLS.includes(rule) || rule === GITHUB_PR,
       rule,
     );
   }
@@ -101,23 +101,34 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   }
 });
 
-test("bridge_tools lists exactly the allowed codesense tools, each one the app serves", () => {
-  const allowed = allow
-    .filter((rule) => rule.startsWith("mcp__codesense__"))
-    .map((rule) => rule.slice("mcp__codesense__".length));
-  assert.deepEqual([...agent.mcp.bridge_tools].sort(), allowed.sort());
-  const served = new Set(
-    JSON.parse(
-      readFileSync(
-        new URL(
-          "../codesense-docs/getting-started/content/generated/mcp-tools.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    ).families.flatMap((family) => family.tools),
-  );
-  for (const name of agent.mcp.bridge_tools) assert.ok(served.has(name), `${name} is served`);
+test("the file tools are allowed plainly, with no path rule and no bridge tool list", () => {
+  for (const tool of FILE_TOOLS) assert.ok(allow.includes(tool), `${tool} is allowed`);
+  for (const rule of [...allow, ...deny]) {
+    assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(/.test(rule), `${rule} fences a path`);
+  }
+  assert.equal(agent.mcp?.bridge_tools, undefined, "no bridge tool list");
+});
+
+test("the spec says where to edit: a foreman-* worktree, never home, agent config or .git", () => {
+  const work = spec.split("## Where you work")[1].split("\n## ")[0];
+  for (const phrase of [
+    "only fast-forwards",
+    "Edit only in a new worktree `../<wt>`, where `<wt>` is `foreman-<slug>-<4 hex>`",
+    "never edit agent config",
+    ...[
+      ".claude",
+      ".agents",
+      ".codex",
+      ".hermes",
+      ".opencode",
+      "config/agents",
+      "config/routines",
+      "agent-account-homes",
+      ".git",
+    ].map((dir) => `\`${dir}\``),
+  ]) {
+    assert.ok(work.includes(phrase), `Where you work says: ${phrase}`);
+  }
 });
 
 test("the Foreman claims its mail on the codesense-foreman queue, never foreman", () => {
@@ -133,219 +144,6 @@ test("every tool the spec names is allowed or forbidden", () => {
   }
   for (const name of FORBIDDEN)
     assert.ok(spec.includes(`\`${name}\``), `${name} is listed as unavailable`);
-});
-
-// Claude's file rules, as a live `claude -p` probe showed them (Claude Code 2.1.296, dontAsk, an
-// app-style `--settings` file outside cwd, 2026-11-16): `//path` is absolute, `./path` or a bare
-// path is relative to the working directory, and a `../` path never matches. An allow matches only
-// its own tool. Only `Edit(path)` denies are checked for files, and they cover every tool that
-// writes a file (Claude warns that a `Write(path)` deny "is not matched by file permission
-// checks"). `**/` matches any run of directories, none included.
-function ruleMatches(cwd, target, tool, { deny = false } = {}) {
-  return (rule) => {
-    const m = /^(Read|Edit|Write|NotebookEdit)\((.*)\)$/.exec(rule);
-    if (!m) return false;
-    if (deny ? m[1] !== "Edit" : m[1] !== tool) return false;
-    const rulePath = m[2];
-    if (rulePath.startsWith("../")) return false;
-    const abs = rulePath.startsWith("//")
-      ? rulePath.slice(1)
-      : path.join(cwd, rulePath.replace(/^\.\//, ""));
-    const re = abs
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      .replace(/\*\*\//g, "\u0001")
-      .replace(/\*\*/g, "\u0000")
-      .replace(/\*/g, "[^/]*")
-      .replace(/\u0001/g, "(?:.*/)?")
-      .replace(/\u0000/g, ".*");
-    return new RegExp(`^${re}$`).test(target);
-  };
-}
-// Only `Edit` denies count for files, and one denies every tool that writes a file.
-const writeDenied = (cwd, target) => deny.some(ruleMatches(cwd, target, "Edit", { deny: true }));
-const writeAllowed = (cwd, target, tools = ["Edit", "Write"]) =>
-  !writeDenied(cwd, target) && tools.every((tool) => allow.some(ruleMatches(cwd, target, tool)));
-// Each home layout: two plain ones, and home under a foreman-* parent.
-const LAYOUTS = ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"];
-// A stand-in user home, for the runtimes' home dirs.
-const USER_HOME = "/home/someone";
-// Denied outright, and neither an Edit nor a Write is allowed.
-function assertLocked(home, target) {
-  assert.equal(writeDenied(home, target), true, `${home}: ${target} is denied`);
-  for (const tool of ["Edit", "Write"])
-    assert.equal(writeAllowed(home, target, [tool]), false, `${home}: ${tool} ${target}`);
-}
-
-test("the rule model matches the probe: ../ never, // absolute, ./ relative, Edit denies only", () => {
-  const cwd = "/r/home";
-  const m = (rule, target, tool, opts) => ruleMatches(cwd, target, tool, opts)(rule);
-  assert.equal(m("Edit(../foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), false);
-  assert.equal(m("Edit(//**/foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), true);
-  assert.equal(m("Edit(//**/foreman-*/**)", "/r/other/f.txt", "Edit"), false);
-  assert.equal(m("Edit(//r/foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), true);
-  assert.equal(m("Write(//**/foreman-*.msg)", "/r/foreman-ab12.msg", "Write"), true);
-  assert.equal(m("Write(//**/foreman-*.msg)", "/r/other.msg", "Write"), false);
-  assert.equal(m("Edit(//**/foreman-*/**)", "/r/foreman-ab12/f.txt", "Write"), false, "own tool");
-  assert.equal(m("Edit(./**)", "/r/home/a.md", "Edit"), true);
-  const d = { deny: true };
-  assert.equal(m("Edit(//**/foreman-*/.git/**)", "/r/foreman-ab12/.git/config", "Write", d), true);
-  assert.equal(
-    m("Write(//**/foreman-*/.git/**)", "/r/foreman-ab12/.git/config", "Write", d),
-    false,
-  );
-});
-
-test("edits are denied in home and allowed in a foreman-* worktree, in three layouts", () => {
-  for (const home of LAYOUTS) {
-    const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
-    for (const file of ["README.md", "stories/a.md"]) {
-      assert.equal(writeDenied(home, path.join(home, file)), true, `${home} is denied outright`);
-      assert.equal(writeAllowed(home, path.join(home, file), ["Edit"]), false);
-      assert.equal(writeAllowed(home, path.join(home, file), ["Write"]), false);
-    }
-    assert.equal(
-      writeAllowed(home, path.join(sibling, "stories/a.md")),
-      true,
-      "an Edit and a Write in a foreman-* worktree",
-    );
-    assert.equal(
-      writeAllowed(home, path.resolve(home, "../foreman-fix-docs-9f2a.msg"), ["Write"]),
-      true,
-      "the commit message file",
-    );
-    // The accepted width (Decisions): under a foreman-* parent, a non-foreman sibling is inside
-    // that parent, so the rule allows it; elsewhere it is refused.
-    const nested = /\/foreman-[^/]*\//.test(home);
-    for (const tool of ["Edit", "Write"]) {
-      assert.equal(writeAllowed(home, path.resolve(home, "../other/a.md"), [tool]), nested);
-      assert.equal(writeAllowed(home, path.resolve(home, "../other.msg"), [tool]), nested);
-      assert.equal(writeAllowed(home, path.join(sibling, ".git"), [tool]), false, "no .git");
-      assert.equal(writeAllowed(home, path.join(sibling, ".git/config"), [tool]), false);
-    }
-    assert.equal(writeDenied(home, path.join(sibling, ".git/config")), true, "git internals");
-  }
-});
-
-test("no foreman-* path inside an agent-config or agent tree is writable, in three layouts", () => {
-  // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
-  // any agent's skills; the agent-config trees are denied for that reason.
-  for (const home of LAYOUTS) {
-    const root = path.dirname(home);
-    for (const target of [
-      path.join(root, "repo/.agents/skills/foreman-x/SKILL.md"),
-      path.join(USER_HOME, ".codex/skills/foreman-x/SKILL.md"),
-      path.join(USER_HOME, ".claude/skills/foreman-x/SKILL.md"),
-      path.join(root, "foreman-fix-docs-9f2a/.claude/settings.json"),
-      // CodeSense's own agent configs: the Foreman's, its routines, any foreman-* agent.
-      path.join(root, "team/config/agents/foreman-claude/agent.yaml"),
-      path.join(root, "team/config/agents/foreman-claude/routines/x/routine.yml"),
-      // The other runtimes' config trees CodeSense stages.
-      path.join(USER_HOME, ".hermes/skills/foreman-x/SKILL.md"),
-      path.join(USER_HOME, ".opencode/agent/foreman-x.md"),
-      path.join(root, "repo/.opencode/skills/foreman-x/SKILL.md"),
-      path.join(USER_HOME, ".config/opencode/skills/foreman-x/SKILL.md"),
-    ]) {
-      assertLocked(home, target);
-    }
-    assert.equal(
-      writeAllowed(home, path.join(root, "foreman-fix-docs-9f2a/stories/a.md")),
-      true,
-      "a normal worktree file is still allowed",
-    );
-  }
-});
-
-// Every root CodeSense or one of its runtimes loads agent config from, read from the source so a
-// new runtime or root fails here instead of waiting for a reviewer.
-function loaderRoots() {
-  const src = (rel) => readFileSync(new URL(`../src-tauri/${rel}`, import.meta.url), "utf8");
-  const constant = (text, name, file) => {
-    const value = rustConstant(text, name);
-    assert.ok(typeof value === "string", `${file} defines ${name}`);
-    return value;
-  };
-  const layout = src("src/routines/layout.rs");
-  const config = constant(layout, "CONFIG_DIR", "layout.rs");
-  const roots = new Set([
-    `${config}/${constant(layout, "AGENTS_DIR", "layout.rs")}`,
-    // The legacy `config/routines/`, which discovery and migration still read.
-    `${config}/${constant(layout, "ROUTINES_DIR", "layout.rs")}`,
-    constant(src("src/install/agent_account_store.rs"), "HOMES_DIR", "agent_account_store.rs"),
-  ]);
-  // The pack build's runtime roots, `.opencode/command/` among them.
-  const list = /RUNTIME_ROOTS: &\[&str\] = &\[([^\]]*)\];/.exec(src("src/packs/validate.rs"));
-  assert.ok(list, "validate.rs defines RUNTIME_ROOTS");
-  const runtimeRoots = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1].replace(/\/$/, ""));
-  assert.ok(runtimeRoots.length, "RUNTIME_ROOTS lists roots");
-  for (const root of runtimeRoots) roots.add(root);
-  // Every runtime in `AgentCli::ALL`, each with its descriptor in `agent_cli/<name>.rs`.
-  const all = /pub const ALL: \[AgentCli; \d+\] = \[([^\]]*)\];/.exec(
-    src("crates/codesense-host-proto/src/agent_cli.rs"),
-  );
-  assert.ok(all, "agent_cli.rs defines AgentCli::ALL");
-  const dir = "crates/codesense-pty-core/src/agent_cli/";
-  const runtimes = [...all[1].matchAll(/AgentCli::(\w+)/g)].map((m) => `${m[1].toLowerCase()}.rs`);
-  assert.ok(runtimes.length, "AgentCli::ALL lists runtimes");
-  for (const f of runtimes) {
-    assert.ok(existsSync(new URL(`../src-tauri/${dir}${f}`, import.meta.url)), `${f} exists`);
-    const text = src(dir + f);
-    const field = (name) => new RegExp(`\\b${name}: (?:Some\\()?"([^"]+)"`).exec(text)?.[1];
-    const skills = field("skills_dir");
-    const homeEnv = field("home_env");
-    assert.ok(
-      skills && homeEnv,
-      `${f}: the descriptor of an AgentCli::ALL runtime sets skills_dir and home_env to literals`,
-    );
-    roots.add(skills.replace(/\/$/, ""));
-    const commands = field("commands_dir");
-    if (commands) roots.add(commands.replace(/\/$/, ""));
-    const home = field("home_default");
-    if (home) roots.add(home.replace(/^~\//, ""));
-    // An XDG runtime keeps its files in `<XDG_CONFIG_HOME>/<binary>`, by default `~/.config/…`.
-    else if (homeEnv === "XDG_CONFIG_HOME") roots.add(`.config/${field("binary")}`);
-    else assert.fail(`${f}: no home_default and no XDG home`);
-  }
-  return [...roots];
-}
-test("every loader root the source defines is denied, in three layouts", () => {
-  const roots = loaderRoots();
-  assert.ok(roots.length >= 10, roots.join(", "));
-  for (const home of LAYOUTS) {
-    for (const base of [USER_HOME, path.join(path.dirname(home), "repo")]) {
-      for (const root of roots) {
-        const target = path.join(base, root, "foreman-x/f");
-        assert.equal(writeDenied(home, target), true, `${home}: ${target}`);
-      }
-    }
-  }
-});
-
-test("routines, account homes and git internals are denied; team config in a worktree is not", () => {
-  for (const home of LAYOUTS) {
-    const root = path.dirname(home);
-    for (const target of [
-      path.join(root, "team/config/routines/foreman-x/routine.yml"),
-      path.join(USER_HOME, "agent-account-homes/abc/skills/foreman-x/SKILL.md"),
-      path.join(root, "repo/.git/worktrees/foreman-x/config.worktree"),
-    ]) {
-      assertLocked(home, target);
-    }
-    for (const file of ["acme/config/sprints.yaml", "src/config/app.ts"])
-      assert.equal(
-        writeAllowed(home, path.join(root, "foreman-x", file)),
-        true,
-        `${home}: ${file} in a worktree stays allowed`,
-      );
-  }
-});
-
-test("no file rule starts with ../ and no Write or NotebookEdit deny remains", () => {
-  for (const rule of [...allow, ...deny]) {
-    assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(\.\.\//.test(rule), `${rule} never matches`);
-  }
-  for (const rule of deny) {
-    assert.ok(!/^(Write|NotebookEdit)\(/.test(rule), `${rule} is ignored for files`);
-  }
 });
 
 // Claude's Bash rules, as a live `claude -p` probe (Claude Code 2.1.296, dontAsk, 2026-11-13)
@@ -607,7 +405,6 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "with no remote, no push or PR",
     "one command to merge",
     "never touch the canonical clone",
-    "Home gets no commit",
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
