@@ -1357,9 +1357,11 @@ fn retained_story_hydration_intersects_real_checkout_shares_before_copying() {
         .unwrap()
     };
     let files = remote().files;
-    assert_eq!(files.len(), 5, "{files:?}");
+    // A team reader hydrates only its own org: the other org's story is left out.
+    assert_eq!(files.len(), 4, "{files:?}");
+    assert!(!files.contains(&selected.join("child/content/unrelated/story.md")));
     let (want, outside) = want_for_files(home.path(), &alice(), &target, &files);
-    assert_eq!((want.files.len(), outside), (5, 0));
+    assert_eq!((want.files.len(), outside), (4, 0));
     let workspace = dirs.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
     git(&workspace, &["init", "-q"]);
@@ -1385,13 +1387,14 @@ fn retained_story_hydration_intersects_real_checkout_shares_before_copying() {
     let report = hydrate_want(&want, "retained");
     assert_eq!(report.status, PrepareStatus::Ready);
     let copied = snapshot(&workspace);
-    assert_eq!(copied.len(), 5, "{copied:?}");
+    assert_eq!(copied.len(), 4, "{copied:?}");
     for bytes in copied.values() {
         let text = String::from_utf8_lossy(bytes);
         assert!(
             !text.contains("secret_BYTES")
                 && !text.contains("source-denied_BYTES")
                 && !text.contains("selected-denied_BYTES")
+                && !text.contains("unrelated_BYTES")
         );
     }
     for alias in denied_aliases {
