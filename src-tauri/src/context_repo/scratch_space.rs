@@ -857,7 +857,7 @@ pub fn in_other_org_space(path: &Path, org_slug: &str) -> bool {
         return !own.starts_with(space);
     };
     // `orgs/<slug>/` of a one-segment org also holds every `<slug>/<repo>` org's space.
-    matches!(inside, [dir, _, ..] if own.len() == 1 && !SPACE_LAYOUT_DIRS.contains(&dir.as_str()))
+    matches!(inside, [dir, _, ..] if own.len() == 1 && !SPACE_LAYOUT_DIRS.contains(&&**dir))
 }
 
 /// `path`'s lowercased, lexically normalised components below
