@@ -3,7 +3,7 @@
 //!
 //! A page's open normally runs in its own content root's scope, which for the setup page is
 //! the docs team, so a story in the person's own team is out of reach. The page whose bytes
-//! match its pin in the page list (see `foreman_launch::is_guide_page`) gets this narrow route
+//! match its pin in the page list (see `foreman_launch::is_guide_page_in`) gets this narrow route
 //! instead. It checks its own conditions and never asks the caller scope, so it neither
 //! depends on nor widens what that scope admits. Every refusal is the same "File not found",
 //! so a refused path looks like a missing one.
@@ -40,8 +40,12 @@ pub(crate) fn resolve(
     let root = roots
         .iter()
         .filter(|root| {
+            // The team's own `content` folder, not a collection folder that happens to end in it.
             root.layer == Layer::Team
-                && root.dir.ends_with("content")
+                && root
+                    .team
+                    .as_deref()
+                    .is_some_and(|team| root.dir.ends_with(Path::new(team).join("content")))
                 && file.starts_with(&root.dir)
         })
         .max_by_key(|root| root.dir.components().count())
@@ -239,6 +243,17 @@ mod tests {
         });
         let in_collection = lossy(&collection.join(STORY));
         assert_eq!(resolve(&roots, &in_collection, None).unwrap_err(), MISSING);
+        // Nor is a collection folder that is itself named `content`.
+        let named = fx.f.path("parent", "notes/content");
+        write(&named.join(STORY), b"x");
+        roots.push(IndexRoot {
+            dir: named.clone(),
+            org: Some("acme/ctx".into()),
+            team: Some("parent".into()),
+            layer: Layer::Team,
+        });
+        let in_named = lossy(&named.join(STORY));
+        assert_eq!(resolve(&roots, &in_named, None).unwrap_err(), MISSING);
         for path in [
             "README.md",
             "storiesx/e/S-2.md",
@@ -327,6 +342,7 @@ mod tests {
         let mut roots = fx.roots.clone();
         let at = roots.iter().position(|r| r.dir == fx.team).unwrap();
         roots[at].dir = linked.clone();
+        roots[at].team = Some("linked".into());
         let path = lossy(&linked.join("stories/secret.md"));
         assert_eq!(resolve(&roots, &path, None).unwrap_err(), MISSING);
     }

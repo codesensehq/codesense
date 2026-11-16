@@ -72,11 +72,8 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
 pub const GUIDE_PAGE: &str = "getting-started/content/guide/index.html";
 
 /// Whether the document is the pinned setup guide: the page list's entry for [`GUIDE_PAGE`],
-/// at its place under `docs_root`, with that entry's bytes. Read and hashed on every call.
-pub fn is_guide_page(docs_root: &Path, document_path: &str) -> bool {
-    is_guide_page_in(PAGES, docs_root, document_path)
-}
-
+/// at its place under `docs_root`, with that entry's bytes. Read and hashed on every
+/// call. Production passes [`PAGES`].
 pub fn is_guide_page_in(pages: &[Page], docs_root: &Path, document_path: &str) -> bool {
     pages
         .iter()
