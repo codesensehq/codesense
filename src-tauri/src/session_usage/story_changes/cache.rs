@@ -182,14 +182,18 @@ pub(super) async fn put(
         .await;
 }
 
-/// Forget every half and walk kept for `home`: a test that changes what a half was read from
-/// without moving a ref it watches (a session mapped later shows within [`KEPT_FOR`]).
-#[cfg(test)]
+/// Forget every half and walk kept for `home`: after a change to what a half was read from
+/// that moves no ref or file it watches (a history refresh forgets its spent fetches).
 pub(super) fn forget_home(home: &Path) {
     let home = format!("{}\n", std::path::Path::display(home));
+    let walk = format!("walk\n{home}");
     for store in [&KEPT, &WALKS] {
-        let mut kept = store.0.lock().unwrap();
-        kept.retain(|key, _| !key.starts_with(&home) && !key.starts_with(&format!("walk\n{home}")));
+        let Ok(mut kept) = store.0.lock() else {
+            continue;
+        };
+        std::collections::BTreeMap::retain(&mut kept, |key, _| {
+            !str::starts_with(key, &home) && !str::starts_with(key, &walk)
+        });
     }
 }
 

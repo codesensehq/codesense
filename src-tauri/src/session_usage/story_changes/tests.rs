@@ -4187,6 +4187,12 @@ mod attached_history_review {
         // refresh_history forgets the miss, so the next open may look again.
         refresh_story(home.path(), None).await;
         assert!(!trail.source().trail_fetch_spent(home.path(), "SV-32"));
+        let after = story_read(home.path(), "SV-32").await;
+        assert_ne!(
+            after["unavailable"]["historyFetch"],
+            crate::attribution::history::FETCH_SPENT,
+            "a read kept before the refresh still said the fetch was spent"
+        );
     }
 
     // M3: a story in progress on a shallow copy: its branch answers, nothing fetches.

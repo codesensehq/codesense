@@ -725,13 +725,19 @@ async fn read_with(
     let cache_key = cache::key(home, story, scope, &refs, &session.git_key);
     let (git, planned, git_part) = match cache::get(&cache_key).await {
         Some(half) => {
-            let (home, story) = (std::path::Path::to_path_buf(home), str::to_owned(story));
-            let worktrees = std::vec::Vec::clone(&half.0.worktrees);
-            let _ = crate::commands::await_blocking("story_changes.tips", move || {
-                sight_live_worktrees(&home, &story, &worktrees);
-                Ok(())
-            })
-            .await;
+            let live = Iterator::any(&mut <[Value]>::iter(&half.0.worktrees), |tree| {
+                Option::and_then(serde_json::Value::get(tree, "state"), serde_json::Value::as_str)
+                    == Some("live")
+            });
+            if live {
+                let (home, story) = (std::path::Path::to_path_buf(home), str::to_owned(story));
+                let worktrees = std::vec::Vec::clone(&half.0.worktrees);
+                let _ = crate::commands::await_blocking("story_changes.tips", move || {
+                    sight_live_worktrees(&home, &story, &worktrees);
+                    Ok(())
+                })
+                .await;
+            }
             half
         }
         None => {
@@ -1589,6 +1595,12 @@ pub(crate) fn story_is_done(home: &Path, story: &str, scope: &CallerScope) -> bo
     Result::ok(UsageStore::open(&home.join("usage.sqlite")))
         .and_then(|store| git::story_source(home, &store, story.trim(), scope))
         .is_some_and(|source| git::source_is_done(&source.path))
+}
+
+/// Forget the story reads kept for `home`: a history refresh forgot the fetches they found
+/// spent, so the next read may fetch again.
+pub(crate) fn forget_kept(home: &Path) {
+    cache::forget_home(home);
 }
 
 /// A kept half or walk skips the walk that records a moved story tip, so a hit sights each live
