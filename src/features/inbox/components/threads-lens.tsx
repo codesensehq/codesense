@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { InboxRole } from "./inbox-role";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Archive, ChevronLeft, Layers } from "lucide-react";
 
 import type { ConversationMessage } from "../api";
@@ -679,8 +679,12 @@ const follows = (prev: ConversationMessage | undefined, m: ConversationMessage) 
   return gap >= 0 && gap < GROUP_MS;
 };
 
-/** One message: in (left) or out (right), terminal-typed in a dashed mono box, with its claim state. */
-export function Bubble({
+/**
+ * One message: in (left) or out (right), terminal-typed in a dashed mono box, with its claim state.
+ * Memoized: a scroll that flips `away` re-renders the Conversation, and without this every one of
+ * its up-to-500 messages (each a parsed body) rendered again for an unchanged message.
+ */
+export const Bubble = memo(function Bubble({
   m,
   plain = false,
   grouped = false,
@@ -844,4 +848,4 @@ export function Bubble({
       )}
     </div>
   );
-}
+});

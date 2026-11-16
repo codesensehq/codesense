@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 import createDOMPurify, { type DOMPurify as DOMPurifyType } from "dompurify";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -102,7 +102,9 @@ const MARKDOWN_COMPONENTS: Components = {
   },
 };
 
-function MarkdownBody({
+/** Memoized: the parse and render of a body is the cost of a long log, and a re-render of the log
+ *  (a context change, a refresh) leaves most bodies' text as it was. */
+const MarkdownBody = memo(function MarkdownBody({
   text,
   className,
 }: {
@@ -130,7 +132,7 @@ function MarkdownBody({
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 /** DOMPurify allowlist for inbox HTML. Explicit — a change here is a security
  *  review surface. `#text` is required because `ALLOWED_TAGS` REPLACES the
