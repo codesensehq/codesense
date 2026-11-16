@@ -176,10 +176,11 @@ mod tests {
     fn the_page_is_found_through_either_spelling_of_the_docs_root() {
         let (_dir, docs, page) = placed(BODY);
         let canonical_page = std::fs::canonicalize(&page).unwrap();
-        let canonical_docs = std::fs::canonicalize(&docs).unwrap();
-        for (root, document) in [(&docs, &canonical_page), (&canonical_docs, &page)] {
+        // The page may be named through the root as spelled or through its canonical
+        // form; the root argument is the spelling the caller holds.
+        for document in [&page, &canonical_page] {
             assert_eq!(
-                grant_in(&pages(), root, &document.to_string_lossy()).as_deref(),
+                grant_in(&pages(), &docs, &document.to_string_lossy()).as_deref(),
                 Some(CAPABILITY)
             );
         }
