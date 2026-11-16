@@ -57,6 +57,8 @@ struct CountingHost {
     dir: tempfile::TempDir,
     passes: AtomicUsize,
     changed: AtomicUsize,
+    /// The teams each `agent-inbox-changed` notice named.
+    named: std::sync::Mutex<Vec<Vec<(LaunchTeam, Vec<i64>)>>>,
     store_failed: AtomicBool,
     discovery_failed: AtomicBool,
 }
@@ -66,6 +68,7 @@ impl CountingHost {
             dir: tempfile::tempdir().unwrap(),
             passes: AtomicUsize::new(0),
             changed: AtomicUsize::new(0),
+            named: Default::default(),
             store_failed: AtomicBool::new(false),
             discovery_failed: AtomicBool::new(false),
         }
@@ -78,6 +81,9 @@ impl CountingHost {
     }
     fn take_changed(&self) -> usize {
         self.changed.swap(0, Ordering::Relaxed)
+    }
+    fn take_named(&self) -> Vec<Vec<(LaunchTeam, Vec<i64>)>> {
+        std::mem::take(&mut *self.named.lock().unwrap())
     }
 }
 #[async_trait::async_trait]
@@ -113,7 +119,8 @@ impl crate::commands::agent_inbox::InboxHost for CountingHost {
     fn display_name(&self, _handle: &str) -> Option<String> {
         None
     }
-    fn inbox_changed(&self) {
+    fn inbox_changed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
+        self.named.lock().unwrap().push(changes.to_vec());
         self.changed.fetch_add(1, Ordering::Relaxed);
     }
     fn inbox_committed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {}
@@ -261,6 +268,11 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     assert_eq!(host.take_changed(), 1, "hydrating the inbox is announced");
+    assert_eq!(
+        host.take_named(),
+        vec![vec![(team(), vec![])]],
+        "hydration names every allowed team, team-wide"
+    );
 
     let topics = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
     let seen = topics.clone();
@@ -282,6 +294,7 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         "the agent list changed"
     );
     assert_eq!(host.take_changed(), 0, "no mail changed");
+    assert!(host.take_named().is_empty());
 
     // A change to how the mail reads still is announced.
     set_rows(&app, vec![row("worker", "Renamed", SessionState::Idle)]);
@@ -289,6 +302,7 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     assert_eq!(host.take_changed(), 1, "the sender's name changed");
+    assert_eq!(host.take_named(), vec![vec![(team(), vec![])]]);
 
     // A session that joins the team shows in its counts, with no mail of its own.
     set_rows(
@@ -302,6 +316,11 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     assert_eq!(host.take_changed(), 1, "the team's counts changed");
+    assert_eq!(
+        host.take_named(),
+        vec![vec![(team(), vec![])]],
+        "a counts change names the team whose counts moved"
+    );
 
     // A team that is no longer synced retires from the inbox.
     let mut elsewhere = row("visitor", "Visitor", SessionState::Idle);
@@ -314,6 +333,7 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         .await
         .unwrap();
     host.take_changed();
+    host.take_named();
     set_rows(&app, vec![]);
     refresh_inbox_with_host(app.handle(), &host, true)
         .await
@@ -323,6 +343,13 @@ async fn an_agent_list_change_without_mail_announces_nothing_to_inbox_readers() 
         team: "elsewhere".into(),
     }));
     assert_eq!(host.take_changed(), 1, "a retired team is announced");
+    assert!(
+        host.take_named()
+            .iter()
+            .flatten()
+            .any(|(team, ids)| team.team == "elsewhere" && ids.is_empty()),
+        "the retired team is named, team-wide"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -412,7 +439,11 @@ async fn no_active_team_is_not_a_failure() {
         fn display_name(&self, _handle: &str) -> Option<String> {
             None
         }
-        fn inbox_changed(&self) {}
+        fn inbox_changed(
+            &self,
+            _changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
+        ) {
+        }
     }
     let app = app();
     let mut gate = InboxGate::default();

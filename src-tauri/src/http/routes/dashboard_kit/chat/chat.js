@@ -33,7 +33,7 @@ import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {rovingThread} from './roving.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,pinTitleOf,pinWho} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,htmlNameOf,pinTitleOf,pinWho} from './chat-core.js';
 import {createPinReplace} from './pin-replace.js';
 import {cardNode} from './card.js';
 import {inlineNodes} from './inline.js';
@@ -67,8 +67,10 @@ function reconcile(parent,cache,items){
   if(old&&old.sig===item.sig)nodes.push(old.node);else{const node=item.make();cache.set(item.id,{sig:item.sig,node});nodes.push(node);}
  }
  for(const id of [...cache.keys()])if(!seen.has(id))cache.delete(id);
+ // Stale children go first, so a node that keeps its place is not moved past them (moving an iframe reloads it).
+ const keep=new Set(nodes);
+ for(const child of [...parent.childNodes])if(!keep.has(child))child.remove();
  nodes.forEach((node,index)=>{if(parent.childNodes[index]!==node)parent.insertBefore(node,parent.childNodes[index]||null);});
- while(parent.childNodes.length>nodes.length)parent.lastChild.remove();
 }
 export const storyTarget=(storyId,leadRole)=>({
  rows:sessions=>leadRowsOf(sessions,storyId,leadRole),
@@ -77,7 +79,7 @@ export const storyTarget=(storyId,leadRole)=>({
 });
 // The peer a chat talks to: the page's own target, else the story's lead rows. A page that makes the send state itself resolves its target the same way.
 export const targetOf=({target=null,storyId=null,leadRole=null})=>target||storyTarget(storyId,leadRole);
-export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null,send:sendOpt=null}){
+export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIMERS,card=text=>text,clock=systemClock(),done=false,win=window,target:own=null,headerSlot=null,layout={},cards={},chips=[],faces=null,next=false,activity=false,copy:words=null,styles=true,onPin=null,html=null,send:sendOpt=null}){
  const mountSlot=mountIds(win.document,el),ids=mountSlot.ids;
  if(styles)linkChatStyles(win.document);
  const target=targetOf({target:own,storyId,leadRole}),parseOf=cards&&cards.parse||parseCard,consentOn=Boolean(cards&&cards.consent),copy=words?mergeCopy(words):CHAT_COPY;
@@ -200,10 +202,55 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A face name the line doesn't show (a person's name beside a role word) is said once before it, as a sighted reader gets it from the face; one that holds the line's name (an emoji before it, another case) adds nothing. The visible line is unchanged.
  const holds=(name,who)=>String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
  const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),holds(info.name,who)?null:h('span',{class:'sr'},`${info.name}, `),meta):meta;
+ // An HTML message is a page the chat doesn't draw: it shows by name (summary, <title>, first heading, as a pin names it) and sender, never as its source.
+ // A page that can show the message (html.open(message, slot) → release, or a promise of it) gives the bubble an Open: the page fills a slot under the name, and Close, the message leaving
+ // the thread or unmount releases it (a release that arrives after Close runs as it arrives). An open that throws leaves the bubble closed. The toggle changes the bubble in place, so a repaint
+ // that changes nothing keeps an open frame, and a bubble rebuilt for another reason (a pin) is updated around its body (keepOpen): an iframe that leaves the page reloads.
+ const htmlOpen=new Map();
+ const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;if(open.shown)open.shown.disconnect();open.slot.remove();if(typeof open.release==='function')open.release();};
+ const keepOpen=(id,fresh)=>{
+  const open=htmlOpen.get(id),old=open&&open.slot.isConnected?open.slot.closest('.msg'):null,body=old&&old.querySelector(':scope > .body'),freshBody=fresh.querySelector(':scope > .body');
+  if(!body||!freshBody)return fresh;
+  for(const child of [...old.childNodes])if(child!==body)child.remove();
+  const kids=[...fresh.childNodes],at=kids.indexOf(freshBody);
+  body.before(...kids.slice(0,at));body.after(...kids.slice(at+1));
+  for(const {name} of [...old.attributes])if(!fresh.hasAttribute(name))old.removeAttribute(name);
+  for(const {name,value} of [...fresh.attributes])old.setAttribute(name,value);
+  return old;
+ };
+ const htmlToggle=(item,title)=>{
+  if(!html||typeof html.open!=='function')return null;
+  const slotId=ids.htmlSlot(item.id),button=h('button',{type:'button',class:'btn sm quiet html-open','aria-controls':slotId});
+  const show=on=>{button.setAttribute('aria-expanded',on?'true':'false');button.textContent=on?copy.row.htmlClose:copy.row.htmlOpen;};
+  button.addEventListener('click',()=>{
+   if(htmlOpen.has(item.id)){htmlRelease(item.id);show(false);return;}
+   const slot=h('div',{class:'html-slot',id:slotId}),open={slot,release:null,closed:false};
+   button.parentNode.append(slot);
+   let answer;
+   try{answer=html.open({messageId:item.id,title,contentType:'html'},slot);}catch{slot.remove();return;}
+   htmlOpen.set(item.id,open);
+   // What the page draws into the slot is brought into the log's view, within the log only: Open on the newest message must not draw below the fold. A page fills the slot at
+   // once and its frame arrives later, inside what it drew, so the slot is watched while it is open (released with it).
+   const reveal=()=>{if(!slot.isConnected)return;const l=log.getBoundingClientRect(),r=slot.getBoundingClientRect(),below=r.bottom-l.bottom;if(below>0)log.scrollTop+=Math.min(below,r.top-l.top);};
+   open.shown=new MutationObserver(reveal);
+   open.shown.observe(slot,{childList:true,subtree:true});
+   reveal();
+   if(answer&&typeof answer.then==='function')Promise.resolve(answer).then(release=>{if(!open.closed)open.release=release;else if(typeof release==='function')release();},()=>{});
+   else open.release=answer;
+   show(true);
+  });
+  show(htmlOpen.has(item.id));
+  return button;
+ };
+ const htmlName=(item,who)=>{
+  const from=copy.row.htmlFrom(who),name=htmlNameOf({text:item.said||item.text,summary:item.summary}),open=htmlOpen.get(item.id);
+  return [...(name?[h('div',{class:'html-t'},name),h('div',{class:'html-from'},from)]:[from]),htmlToggle(item,name||from),open&&!open.slot.isConnected?open.slot:null];
+ };
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
-  return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`,item.label?h('span',{'data-row-label':''},` · ${item.label}`):null)):null,pin?pin.acts:null,h('div',{class:'body'},item.contentType==='html'?item.text:inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+  const node=h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
+   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`,item.label?h('span',{'data-row-label':''},` · ${item.label}`):null)):null,pin?pin.acts:null,item.contentType==='html'?h('div',{class:'body','data-html':'1'},htmlName(item,who)):h('div',{class:'body'},inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+  return item.contentType==='html'&&htmlOpen.has(item.id)?keepOpen(item.id,node):node;
  };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
@@ -387,6 +434,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
   const act=activityItem(),want=[...emptyItems(),...threadItems(),{id:'status',node:status},...(awaiting()?[{id:'typing',sig:'t',make:typing}]:[])];
   const held=roving.focused();
   reconcile(log,cache,want);
+  for(const id of [...htmlOpen.keys()])if(!cache.has('m'+id))htmlRelease(id);
   roving.refresh(held);
   if(actFoot)reconcile(actFoot,actCache,act?[act]:[]);
   paintChips();
@@ -464,7 +512,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  }
  readRoster();
  return {
-  unmount(){gone=true;offs.forEach(off=>off&&off());if(prose)prose.release();if(typeof releaseSlot==='function')releaseSlot();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
+  unmount(){gone=true;for(const id of [...htmlOpen.keys()])htmlRelease(id);offs.forEach(off=>off&&off());if(prose)prose.release();if(typeof releaseSlot==='function')releaseSlot();pin.release();roving.release();if(replacer)replacer.release();mountSlot.release();if(sendOpt)detach();else send.dispose();el.replaceChildren();},
   // The header's lead controls: which are on, and what each does (the page's inline confirm comes first).
   controls:()=>({launch:!isDone&&!live()&&launch.state!=='starting'&&launch.state!=='slow',focus:Boolean(terminalTarget()),stop:Boolean(live()),done:isDone}),
   launchLead:()=>launch.start(),

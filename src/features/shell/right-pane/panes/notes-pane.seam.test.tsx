@@ -103,6 +103,10 @@ const BASE = "# Alpha\n\nFirst\n\nLast";
 let handlers: HandlerRegistry, appState: string, failWrites: boolean, teamSafe: boolean;
 let seed: FrameRecord, p: PaneDoc | undefined;
 let observeEditorChange: (() => void) | undefined;
+type BootWindow = Parameters<
+  NonNullable<NonNullable<Parameters<typeof bootPaneDoc>[4]>["beforeScripts"]>
+>[0];
+let beforeBoot: ((win: BootWindow) => void) | undefined;
 let agentCommits: Map<string, string>;
 let sessionRows: Record<string, unknown>[], allowSend: boolean, sendResult: Record<string, unknown>;
 let contextQuery: (query: Record<string, unknown>) => unknown;
@@ -125,6 +129,7 @@ const calls = (operation: string) =>
 beforeEach(async () => {
   liveHub.dispose();
   observeEditorChange = undefined;
+  beforeBoot = undefined;
   vi.stubGlobal("IntersectionObserver", undefined);
   listeners.clear();
   ipc.mockReset();
@@ -237,6 +242,7 @@ function bootNotesFrame(frame: HTMLIFrameElement, source = SOURCE) {
   const pane = bootPaneDoc(frame, html, undefined, false, {
     shim: shimSource(),
     beforeScripts: (win) => {
+      beforeBoot?.(win);
       Object.assign(win, {
         createEditor: (element: HTMLElement, options: Parameters<typeof createEditor>[1]) =>
           createEditor(element, {
@@ -2478,4 +2484,83 @@ it("applies the shipped Notes recipe and keeps pin metadata, row identity and re
     identity,
   );
   expect(p!.doc.querySelectorAll(".nt-note-row")).toHaveLength(2);
+});
+
+describe("the pane's idle work", () => {
+  const visibility = (visible: boolean) =>
+    act(async () => {
+      p!.win.dispatchEvent(
+        new p!.win.MessageEvent("message", {
+          source: p!.win.parent as never,
+          origin: "tauri://localhost",
+          data: { type: "codesense:visibility", visible },
+        }) as never,
+      );
+    });
+
+  it("runs no interval while hidden and arms one on show", async () => {
+    const armed = new Set<unknown>();
+    beforeBoot = (win) => {
+      const set = win.setInterval.bind(win);
+      const clear = win.clearInterval.bind(win);
+      Object.assign(win, {
+        setInterval: (...args: Parameters<typeof set>) => {
+          const id = set(...args);
+          armed.add(id);
+          return id;
+        },
+        clearInterval: (id: Parameters<typeof clear>[0]) => {
+          armed.delete(id);
+          clear(id);
+        },
+      });
+    };
+    await open();
+    await visibility(true);
+    expect(armed.size).toBe(1);
+    await visibility(false);
+    expect(armed.size).toBe(0);
+    await visibility(true);
+    expect(armed.size).toBe(1);
+    await visibility(true);
+    expect(armed.size).toBe(1);
+    await visibility(false);
+    expect(armed.size).toBe(0);
+  });
+
+  it("re-reads sessions only when a handle, state, role or name changes", async () => {
+    sessionRows = [sender()];
+    await open();
+    await visibility(true);
+    // The pane's own `cs.sessions()` reads, as the bridge sees them.
+    const reads = () =>
+      p!.sent.filter((m) => m.type === "codesense:invoke" && m.command === "sessions").length;
+    const delta = (rev: number, row: Record<string, unknown>) =>
+      act(async () => {
+        p!.win.dispatchEvent(
+          new p!.win.MessageEvent("message", {
+            source: p!.win.parent as never,
+            origin: "tauri://localhost",
+            data: {
+              token: "frame-token",
+              type: "codesense:delta",
+              topic: "sessions",
+              viewKey: "all",
+              rev,
+              upserts: [row],
+              removes: [],
+            },
+          }) as never,
+        );
+      });
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    // Fields the pane never shows (spend, activity) move on every delta.
+    for (let rev = 1; rev <= 20; rev++) await delta(rev, { ...sender(), spend: rev, tick: rev });
+    expect(reads()).toBe(before);
+    await delta(21, { ...sender(), state: "working" });
+    await waitFor(() => expect(reads()).toBe(before + 1));
+    await delta(22, { ...sender(), state: "working", rowNames: { primary: "Renamed" } });
+    await waitFor(() => expect(reads()).toBe(before + 2));
+  });
 });

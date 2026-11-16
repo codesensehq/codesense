@@ -85,8 +85,8 @@ async function boot(page: Page) {
         set: (v: Internals) => {
           const orig = v.invoke.bind(v);
           v.invoke = (cmd, args) => {
-            if (cmd === "list_session_inbox")
-              return Promise.resolve(conversation(String(args?.handle ?? "x")));
+            if (cmd === "list_session_inbox" || cmd === "list_thread_inbox")
+              return Promise.resolve(conversation(String(args?.handle ?? args?.session ?? "x")));
             if (cmd === "agent_pins") {
               window.__pinCalls.push({ ...(args ?? {}) });
               if (args?.op === "pin")

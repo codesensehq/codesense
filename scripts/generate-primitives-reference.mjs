@@ -1923,14 +1923,17 @@ const EVENT_META = {
     direction: "parent-to-doc",
     payload: "N/A",
     timing: "On agent state / roster change",
-    description: "Nudge for `onAgentsChanged` / `onSessions` listeners.",
+    description:
+      "Nudge for `onAgentsChanged` / `onSessions` listeners. `onAgentsChanged` also follows sessions changes, without reading sessions.",
     example: "codesense.onAgentsChanged(() => codesense.agents().then(render));",
   },
   "codesense:inbox-changed": {
     direction: "parent-to-doc",
-    payload: "N/A",
+    payload:
+      "`{changes?: [{team: {org, team}, messageIds}]}`: the teams and messages the change touched. An empty `messageIds` means re-read the whole team; no `changes` means anything could have changed.",
     timing: "On inbox update",
-    description: "Nudge for `watchInbox` / `onInboxChanged` listeners.",
+    description:
+      "Nudge for `watchInbox` / `onInboxChanged` listeners. Inbox changes only: a sessions change never fires it.",
     example: "codesense.onInboxChanged(() => codesense.inbox({}).then(render));",
   },
   "codesense:agent-activity-changed": {

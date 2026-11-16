@@ -217,7 +217,7 @@ beforeEach(() => {
   const handlers = {
     ...events.handlers(),
     ...world.handlers,
-    ...agentTeamInboxHandlers((e) => events.emit(e, null), { sessions }),
+    ...agentTeamInboxHandlers((e, payload = null) => events.emit(e, payload), { sessions }),
     local_profile_status: () => ({ active: null }),
     agent_list_refresh: () => {
       publishOwners();

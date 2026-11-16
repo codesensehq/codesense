@@ -221,7 +221,7 @@ revision: 7</code></pre>
         </table>
       </section>
 
-      <section data-search="Optional fields — description, created_by, args, launch, mcp, startup, permissions, default_prompt, avatar, archived_at" id="optional">
+      <section data-search="Optional fields — description, created_by, args, launch, mcp, startup, skill_allowlist, permissions, default_prompt, avatar, archived_at" id="optional">
         <h2>Optional</h2>
         <table class="arce-fields">
           <thead>
@@ -313,10 +313,37 @@ revision: 7</code></pre>
               </td>
             </tr>
             <tr>
+              <td><code>skill_allowlist</code> <span class="arce-opt">opt</span></td>
+              <td>string array · <code>null</code></td>
+              <td>
+                The skills a launch offers, by name. Omitted or <code>null</code>
+                offers every skill the workspace has. With a list, a Claude launch
+                turns off every other skill its <code>startup</code> places or the
+                workspace's <code>.claude/skills/</code> holds, so a launch into a
+                context worktree lists only these. Personal skills
+                (<code>~/.claude/skills/</code>) and plugin skills stay on.
+                <code>[]</code> turns every skill of the startup and the workspace
+                off. Names are 1–128 ASCII letters, digits, <code>_</code>,
+                <code>-</code> or <code>:</code>, without duplicates. Other runtimes
+                don't enforce it yet and warn <code>skills_not_enforced</code>; a
+                listed skill the startup doesn't place warns
+                <code>skills_not_in_manifest</code>. Preview reports
+                <code>launch.skill_allowlist</code> and narrows
+                <code>provides.skills</code> to the list, as do the session record's
+                provided skills and its task's skills. An update keeps an omitted
+                list; <code>null</code> clears it (MCP: <code>skillAllowlist</code>).
+                A <code>skills</code> key is not this field: it is kept as written
+                and does nothing.
+              </td>
+            </tr>
+            <tr>
               <td><code>mcp.bridge_tools</code> <span class="arce-opt">opt</span></td>
               <td>string array · <code>null</code></td>
               <td>
-                Applies to local Codex and OpenCode launches. A remote agent with an explicit
+                Applies to local Claude, Codex and OpenCode launches. Claude gets a
+                per-tool <code>deny</code> for each served tool the list leaves out and
+                always keeps <code>signal_done</code>, <code>read_messages</code>,
+                <code>reply</code> and the other tools every agent needs. A remote agent with an explicit
                 list is refused, so a restriction is never silently dropped; a remote agent with
                 no list (omitted or <code>null</code>) has the full tool set. Exact, unqualified tool names; 1–128 ASCII
                 letters, digits, underscores or hyphens, without duplicates or
@@ -723,6 +750,7 @@ permissions:
           <li><code>runtime</code> — not <code>claude</code>, <code>codex</code> or <code>opencode</code> (and no <code>sessionId</code> to infer from).</li>
           <li><code>args[n]</code> — contains shell syntax (pipe, redirect, quote), NUL, or an empty string.</li>
           <li><code>mcp.servers[n]</code> — <code>codesense</code> (the bridge), a duplicate, empty, or NUL.</li>
+          <li><code>skill_allowlist</code> — a name with other characters, empty, over 128 bytes, or listed twice.</li>
           <li><code>startup[n]</code> — absolute path, <code>..</code>, a glob, inside a reserved top-level dir, or overlaps an earlier entry.</li>
           <li><code>permissions.&lt;runtime&gt;.&lt;key&gt;</code> — a key the runtime doesn't have.</li>
           <li><code>revision</code> — &lt; 1, or (on update) doesn't match <code>baseRevision</code> → <code>conflict</code>.</li>

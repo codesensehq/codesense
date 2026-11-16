@@ -1328,5 +1328,6 @@ export const PAGE_SDK_FEATURES = [
   "slotContext",
   "theme",
   "kitTokens",
-  "virtualList"
+  "virtualList",
+  "inboxThread"
 ] as const;

@@ -372,7 +372,7 @@ it("resyncs a delta that arrives before the first subscribe reply", async () => 
   expect(changed).toHaveBeenCalledTimes(1);
 });
 
-it("agent changes follow definitions and sessions while inbox changes retain their subscription", async () => {
+it("agent changes follow definitions and sessions while inbox changes follow only the inbox ping", async () => {
   const s = shim();
   s.show(true);
   const agents = vi.fn(),
@@ -380,9 +380,8 @@ it("agent changes follow definitions and sessions while inbox changes retain the
   const stopAgents = s.codesense.onAgentsChanged(agents);
   const stopInbox = s.codesense.onInboxChanged(inbox);
   await vi.waitFor(() => expect(agents).toHaveBeenCalledTimes(2));
-  expect(inbox).toHaveBeenCalledOnce();
+  expect(inbox).not.toHaveBeenCalled();
   agents.mockClear();
-  inbox.mockClear();
   s.message({
     type: "codesense:delta",
     topic: "sessions",
@@ -391,12 +390,11 @@ it("agent changes follow definitions and sessions while inbox changes retain the
     upserts: [{ id: "a", state: "needs-you" }],
     removes: [],
   });
-  await vi.waitFor(() => expect(inbox).toHaveBeenCalledTimes(1));
   expect(agents).toHaveBeenCalledTimes(1);
-  expect(inbox).toHaveBeenCalledTimes(1);
+  expect(inbox).not.toHaveBeenCalled();
   s.ping();
   expect(agents).toHaveBeenCalledTimes(1);
-  expect(inbox).toHaveBeenCalledTimes(2);
+  expect(inbox).toHaveBeenCalledTimes(1);
   stopAgents();
   stopInbox();
   s.ping();
@@ -409,30 +407,67 @@ it("agent changes follow definitions and sessions while inbox changes retain the
     removes: ["a"],
   });
   expect(agents).toHaveBeenCalledTimes(1);
-  expect(inbox).toHaveBeenCalledTimes(2);
+  expect(inbox).toHaveBeenCalledTimes(1);
   expect(s.invoke).toHaveBeenCalledWith("unsubscribe", { topic: "sessions" });
-  expect(s.invoke).toHaveBeenLastCalledWith("unsubscribe", { topic: "sessions" });
 });
 
-it("passes inbox changes through and marks a sessions re-read as naming no inbox rows", async () => {
+it("passes inbox changes through unchanged", async () => {
   const s = shim();
   s.show(true);
   const inbox = vi.fn();
   const stop = s.codesense.onInboxChanged(inbox);
-  await vi.waitFor(() => expect(inbox).toHaveBeenCalledOnce());
-  // The sessions re-read changes no inbox rows; an empty change list says so.
-  expect(inbox).toHaveBeenLastCalledWith({ type: "codesense:inbox-changed", changes: [] });
-  inbox.mockClear();
   const change = {
     type: "codesense:inbox-changed",
     changes: [{ team: { org: "acme", team: "web" }, messageIds: [5] }],
   };
   s.ping(change);
-  expect(inbox).toHaveBeenCalledWith(change);
-  // The ping also re-reads sessions, which follows as an empty change.
-  await vi.waitFor(() => expect(inbox).toHaveBeenCalledTimes(2));
-  expect(inbox).toHaveBeenLastCalledWith({ type: "codesense:inbox-changed", changes: [] });
+  expect(inbox).toHaveBeenCalledExactlyOnceWith(change);
+  // A ping with no change payload could be anything, so it arrives as sent.
+  s.ping();
+  expect(inbox).toHaveBeenCalledTimes(2);
+  expect(inbox.mock.calls[1][0]).toBeUndefined();
   stop();
+});
+
+it("a sessions delta fires no onInboxChanged and onAgentsChanged reads no sessions()", async () => {
+  const s = shim();
+  s.show(true);
+  const agents = vi.fn(),
+    inbox = vi.fn();
+  const stopAgents = s.codesense.onAgentsChanged(agents);
+  const stopInbox = s.codesense.onInboxChanged(inbox);
+  await vi.waitFor(() => expect(agents).toHaveBeenCalled());
+  agents.mockClear();
+  inbox.mockClear();
+  const reads = () => s.invoke.mock.calls.filter(([verb]) => verb === "sessions").length;
+  const before = reads();
+  for (let rev = 5; rev < 65; rev++)
+    s.message({
+      type: "codesense:delta",
+      topic: "sessions",
+      viewKey: "team:a",
+      rev,
+      upserts: [{ id: "a", state: rev % 2 ? "needs-you" : "working" }],
+      removes: [],
+    });
+  // Agent changes still follow sessions, but nothing re-reads the 28 KB list for them.
+  await vi.waitFor(() => expect(agents).toHaveBeenCalled());
+  expect(inbox).not.toHaveBeenCalled();
+  expect(reads()).toBe(before);
+  agents.mockClear();
+  // The legacy ping is the only thing that nudges the inbox.
+  const change = {
+    type: "codesense:inbox-changed",
+    changes: [{ team: { org: "acme", team: "web" }, messageIds: [5] }],
+  };
+  s.ping(change);
+  expect(inbox).toHaveBeenCalledExactlyOnceWith(change);
+  // An inbox ping is not an agent change either: pages that render both register both.
+  // `onSessions` answered a ping asynchronously (a sessions re-read), so let that settle.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(agents).not.toHaveBeenCalled();
+  stopAgents();
+  stopInbox();
 });
 
 it("the actual injected SDK getter exposes the hub firstPaint snapshot", () => {

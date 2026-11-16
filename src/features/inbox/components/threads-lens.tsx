@@ -614,7 +614,9 @@ export function Conversation({
             // own (useRovingThread).
             if (pins && e.key === "Escape" && pins.note) {
               e.stopPropagation();
-              pins.dismiss();
+              pins.dismiss(
+                e.target instanceof Element && e.target.closest(".ibx-pin-note") !== null,
+              );
             }
           }}
         >

@@ -24,6 +24,32 @@ thread_local! {
 pub fn team_key(team: &LaunchTeam) -> String {
     super::view_key::team_key(&team.org, &team.team)
 }
+/// The teams whose count rows differ between two `count_rows` snapshots: a changed row, a new
+/// team, or a retired team whose row is gone. These are the teams a legacy reader must
+/// re-read after a pass.
+pub fn changed_count_teams(
+    before: &[(Option<String>, Value)],
+    after: &[(Option<String>, Value)],
+) -> Vec<LaunchTeam> {
+    let team_of =
+        |row: &Value| -> Option<LaunchTeam> { serde_json::from_value(row["team"].clone()).ok() };
+    let moved = after
+        .iter()
+        .filter(|(key, row)| !before.iter().any(|(k, r)| k == key && r == row))
+        .chain(
+            before
+                .iter()
+                .filter(|(key, _)| !after.iter().any(|(k, _)| k == key)),
+        )
+        .filter_map(|(_, row)| team_of(row));
+    let mut out: Vec<LaunchTeam> = Vec::new();
+    for team in moved {
+        if !out.contains(&team) {
+            out.push(team);
+        }
+    }
+    out
+}
 pub fn message_key(team: &LaunchTeam, id: i64) -> String {
     format!("message:{}/{}/{id}", team.org, team.team)
 }
@@ -153,6 +179,7 @@ impl ViewParts {
             conversations: self.conversations.as_ref().clone(),
             has_more: false,
             matched: 0,
+            thread_sessions: None,
         }
     }
 }
@@ -204,6 +231,13 @@ impl InboxProjection {
     }
     pub fn contains_team(&self, team: &LaunchTeam) -> bool {
         self.teams.contains_key(&team_key(team))
+    }
+    /// Every team the projection holds.
+    pub fn held_teams(&self) -> Vec<LaunchTeam> {
+        self.teams
+            .iter()
+            .map(|(_, (team, _))| team.clone())
+            .collect()
     }
     pub fn human_unread_total(&self) -> u32 {
         self.teams
@@ -618,5 +652,32 @@ mod tests {
             assert_eq!(projection.counts(&team)["humanUnread"], 1);
         }
         assert_eq!(projection.human_unread_total(), 2);
+    }
+
+    #[test]
+    fn changed_count_teams_names_changed_new_and_retired_teams_only() {
+        let row = |team: &str, unread: u32| {
+            (
+                Some(format!("acme:{team}")),
+                json!({"id": format!("counts:acme:{team}"), "team": {"org": "acme", "team": team}, "humanUnread": unread}),
+            )
+        };
+        let named = |names: &[&str]| -> Vec<LaunchTeam> {
+            names
+                .iter()
+                .map(|team| LaunchTeam {
+                    org: "acme".into(),
+                    team: (*team).into(),
+                })
+                .collect()
+        };
+        let before = vec![row("web", 1), row("ops", 0), row("old", 2)];
+        assert!(changed_count_teams(&before, &before).is_empty());
+        // `web` changed, `old` retired and `new` arrived; `ops` didn't move.
+        let after = vec![row("web", 2), row("ops", 0), row("new", 0)];
+        assert_eq!(
+            changed_count_teams(&before, &after),
+            named(&["web", "new", "old"])
+        );
     }
 }

@@ -285,6 +285,15 @@
   gap: 4px;
   padding: 4px;
 }
+/* The Foreman's hosted setup is running: one line, with Open full view (its messages are there). */
+.ibx-ov-setup {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--ibx-border);
+}
 /* A pins read that failed: one line in the zone, with Retry. */
 .ibx-ov-pins.ibx-ov-pins-failed {
   display: flex;
@@ -2460,15 +2469,14 @@ button.ibx-media-open {
 .ibx-pin-cap {
   display: none;
 }
-.ibx-ov .ibx-pin-b {
-  position: relative;
+/* At the cap the 24 px icon holds the count beside it, in its row with a 2 px gap, so the 11 px
+   count never sits over the 13 px icon. */
+.ibx-ov .ibx-pin-b[data-pin="cap"] {
+  gap: 2px;
 }
 .ibx-ov .ibx-pin-cap {
   display: block;
-  position: absolute;
-  right: 1px;
-  bottom: 0;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1;
   font-weight: 700;
 }
@@ -2737,7 +2745,7 @@ button.ibx-media-open {
    still accent wash and the word New instead. Both clear on the next click or key press. */
 .ibx-pk-new {
   display: none;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   /* Accent ink on the pin's light wash; the on-accent ink is only for a full accent fill. */
   color: var(--ibx-accent);

@@ -118,6 +118,14 @@ pub trait AgentCliAdapter: Send + Sync {
         true
     }
 
+    /// Whether a host enforces an agent's CodeSense bridge tool list on this CLI by
+    /// denying each left-out tool in its permission rules, which always keep the tools
+    /// every agent needs (finishing, the inbox). A CLI that takes a native enabled-tool
+    /// list instead enforces the list as written.
+    fn denies_unlisted_bridge_tools(&self) -> bool {
+        false
+    }
+
     /// Whether this hook confirms a prompt wake without waiting or handing over mail.
     fn confirms_notice(&self, _event: &str) -> bool {
         false

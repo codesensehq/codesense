@@ -34,7 +34,7 @@ import { capLabel, pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { useMessageDelivery } from "../hooks/use-message-delivery";
-import { useSessionInbox } from "../hooks/use-session-inbox";
+import { useAgentInbox } from "../hooks/use-session-inbox";
 import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
@@ -83,38 +83,49 @@ export function ChatOverlay({
 }) {
   const roster = useAgentListProjectionStore((s) => s.sessions);
   const row = roster?.find((r) => r.sessionId === sessionId) ?? null;
-  const { data, source, error, reload } = useSessionInbox(sessionId);
+  const sessions = useInboxSessions();
+  // The thread is the saved agent and story the session was launched with, as the engine keys
+  // it (its pins and its mail): the launch's agent, else the one its tab says it runs. It is
+  // known before any mail is read, so a successor opens on its predecessor's mail.
+  const launched = sessions?.find((s) => s.handle === row?.handle) ?? null;
+  const pinAgent = launched?.agent ?? agentKeyOfRevision(row?.agentRevision);
+  const pinStory = row?.story ?? launched?.story ?? null;
+  // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
+  // useForemanThread), the same pins (the page's team) and its one tab as the full view.
+  const foreman = isForemanAgent(pinAgent);
+  const agentThread = useMemo(
+    () => (pinAgent && !foreman ? { agentId: pinAgent, storyId: pinStory } : null),
+    [pinAgent, pinStory, foreman],
+  );
+  const { data, source, error, reload } = useAgentInbox(sessionId, agentThread);
   const handle = data?.handle ?? row?.handle ?? "";
   const name = row?.displayName || handle || sessionId;
   const statusRows = useMemo(() => (row ? [row] : NO_ROWS), [row]);
   const statusOf = useAgentStatusOf(statusRows);
   const status = row ? statusOf(row) : null;
   const subagents = useSubagentsOpen(sessionId);
-  const sessions = useInboxSessions();
   const rootRef = useRef<HTMLElement>(null);
   const layout = overlayLayout(size.width, size.height);
   const tall = layout.height === "tall";
 
   // The chat's team is fixed while it shows this session, as the quick chat's is.
   const chatKey = JSON.stringify([teamKey, sessionId]);
-  const { messages, home, team, teamMessages, conversation, dir, roles } = useAgentConversation({
-    data,
-    source,
-    handle,
-    teamKey,
-    chatKey,
-  });
+  const { messages, home, team, teamMessages, conversation, dir, roles, peers } =
+    useAgentConversation({
+      data,
+      source,
+      handle,
+      teamKey,
+      chatKey,
+    });
   // Queued or Delivered on what you send here, by the kit's rule: each message's own
   // messageDelivery row where the host pushes it, else the lead's sessions() row.
   const lead = sessions?.find((s) => s.handle === handle) ?? null;
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it: the launch's agent, else the one its tab says it runs.
-  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
-  const pinStory = row?.story ?? lead?.story ?? null;
-  // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too), the same
-  // pins (the page's team) and its one tab as the full view.
-  const foreman = isForemanAgent(pinAgent);
-  const thread = useForemanThread(foreman && handle ? handle : null, conversation);
+  const { thread, setupLive } = useForemanThread(foreman && handle ? handle : null, conversation);
+  // While the page's hosted setup runs, its messages and cards are the full view's: the overlay
+  // says so once, with Open full view. A published session that has since ended is not running.
+  const setupRunning =
+    foreman && setupLive.some((h) => roster?.some((r) => r.handle === h && r.alive) ?? false);
   const pinTeam = foreman ? FOREMAN_TEAM : (team ?? home);
   const delivery = useMessageDelivery(team ?? home);
   const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
@@ -143,7 +154,8 @@ export function ChatOverlay({
     [handle, dir, teamMessages, roles, tabId, sessionId, team, home, source],
   );
 
-  // On screen, the chat reads what the agent sent you, as the rail did; nothing else is marked.
+  // On screen, the chat reads what the agent sent you, as the rail did, its predecessors' mail
+  // too (any address of the thread); nothing else is marked.
   const windowShown = useDocumentVisible();
   const marked = useRef(new Set<string>());
   useEffect(() => {
@@ -152,11 +164,12 @@ export function ChatOverlay({
     if (!box || box.width <= 0 || box.height <= 0) return;
     for (const m of conversation) {
       const k = msgKey(m);
-      if (m.from !== handle || !m.unread || marked.current.has(k)) continue;
+      if ((m.from !== handle && !peers.includes(m.from)) || !m.unread || marked.current.has(k))
+        continue;
       marked.current.add(k);
       void markInboxMessageRead(m.team, m.id).catch(() => marked.current.delete(k));
     }
-  }, [visible, source, windowShown, conversation, handle]);
+  }, [visible, source, windowShown, conversation, handle, peers]);
 
   // "Message this agent" from elsewhere focuses the composer once it shows.
   const composeHandled = useAgentInboxRailComposeHandled(sessionId);
@@ -500,6 +513,15 @@ export function ChatOverlay({
               )}
             </div>
           </section>
+        )}
+        {setupRunning && (
+          <div className="ibx-ov-setup" role="status" data-testid="chat-overlay-setup">
+            <b>Setup is running</b>
+            <span aria-hidden>·</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={openForeman}>
+              Open full view
+            </button>
+          </div>
         )}
         {error && data && (
           <StaleNotice error={error} onRetry={() => void reload()} what="the chat" />

@@ -1595,3 +1595,145 @@ fn a_launch_records_its_cli_version_and_warns_only_outside_the_range() {
     assert_eq!(unknown.cli_version, None);
     assert_eq!(codes(&unknown), 0);
 }
+
+fn claude_with_skills(id: &str, skills: &[&str]) -> Agent {
+    Agent {
+        skill_allowlist: Some(skills.iter().map(|s| s.to_string()).collect()),
+        ..draft(id, AgentCli::Claude)
+    }
+}
+
+fn skill(cwd: &Path, name: &str) {
+    write(
+        cwd,
+        &format!(".claude/skills/{name}/SKILL.md"),
+        b"# Skill\n",
+    );
+}
+
+#[test]
+fn a_skill_allowlist_turns_off_every_other_skill_the_launch_finds() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        claude_with_skills("lean", &["bmad-code-review"]),
+    );
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(
+        launch.launch.skill_allowlist,
+        Some(vec!["bmad-code-review".to_string()])
+    );
+    // The startup places bmad-build, which the list leaves out.
+    assert_eq!(
+        launch.generated[0].content["skillOverrides"],
+        json!({ "bmad-build": "off" })
+    );
+    // So the session record and the task layers don't name it either.
+    assert!(launch.provided_skills().is_empty());
+    assert!(
+        crate::session_usage::task_capture::TaskInputs::from_launch(&launch, None)
+            .skills
+            .is_empty()
+    );
+    assert!(launch
+        .warnings
+        .iter()
+        .any(|w| w.code == LaunchWarningCode::SkillsNotInManifest
+            && w.message.contains("bmad-code-review")));
+
+    // A context worktree already holds every skill of its team.
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-code-review");
+    skill(&cwd, "bmad-party-mode");
+    write(&cwd, ".claude/skills/notes/README.md", b"not a skill\n");
+    let applied = apply_generated(&launch, "sess-lean", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert_eq!(
+        written["skillOverrides"],
+        json!({ "bmad-build": "off", "bmad-party-mode": "off" })
+    );
+}
+
+#[test]
+fn a_skill_allowlist_survives_a_mode_override() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(home, &alice(), claude_with_skills("lean", &[]));
+    let headless = prep(
+        home,
+        &alice(),
+        &key,
+        PrepareOptions {
+            mode_override: Some(LaunchMode::Headless),
+            ..PrepareOptions::default()
+        },
+    );
+    let settings = &headless.generated[0].content;
+    assert_eq!(settings["permissions"]["defaultMode"], "dontAsk");
+    assert_eq!(settings["skillOverrides"], json!({ "bmad-build": "off" }));
+    assert_eq!(headless.manifest_hash, headless.manifest.compute_hash());
+}
+
+/// A Claude agent with both lists gets both: its written settings hold the per-tool
+/// bridge denies and the skill overrides, neither dropping the other.
+#[test]
+fn a_skill_allowlist_and_a_bridge_tool_list_both_reach_claude() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let mut agent = claude_with_skills("lean", &["bmad-code-review"]);
+    agent.mcp.bridge_tools = Some(vec!["notes_read".to_string()]);
+    let key = save(home, &alice(), agent);
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(
+        launch.launch.bridge_tools,
+        Some(vec!["notes_read".to_string()])
+    );
+
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-party-mode");
+    let applied = apply_generated(&launch, "sess-lean", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert_eq!(
+        written["skillOverrides"],
+        json!({ "bmad-build": "off", "bmad-party-mode": "off" })
+    );
+    let deny = written["permissions"]["deny"].as_array().unwrap();
+    let denies = crate::agents::permissions::claude_bridge_tool_denies(&["notes_read".to_string()]);
+    assert!(!denies.is_empty());
+    for rule in denies {
+        assert!(deny.contains(&json!(rule)), "{rule}");
+    }
+    for kept in ["notes_read", "signal_done", "read_messages", "reply"] {
+        assert!(
+            !deny.contains(&json!(format!("mcp__codesense__{kept}"))),
+            "{kept}"
+        );
+    }
+}
+
+#[test]
+fn without_a_skill_allowlist_a_launch_turns_no_skill_off() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(home, &alice(), draft("open", AgentCli::Claude));
+    let launch = prep(home, &alice(), &key, PrepareOptions::default());
+    assert_eq!(launch.launch.skill_allowlist, None);
+    assert_eq!(launch.provided_skills(), vec!["bmad-build"]);
+    assert!(launch.generated[0].content.get("skillOverrides").is_none());
+
+    let cwd = tmp.path().join("context-worktree");
+    skill(&cwd, "bmad-party-mode");
+    let applied = apply_generated(&launch, "sess-open", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert!(written.get("skillOverrides").is_none());
+}

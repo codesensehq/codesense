@@ -11,7 +11,8 @@
     "slotContext",
     "theme",
     "kitTokens",
-    "virtualList"
+    "virtualList",
+    "inboxThread"
   ],
   "counts": {
     "bridgeMethods": 123,
@@ -2003,7 +2004,7 @@
     {
       "name": "inbox",
       "owner": "VerbMethods",
-      "signature": "inbox(args?: {\n      before?: number;\n      conversation?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "inbox(args?: {\n      agentId?: string;\n      before?: number;\n      conversation?: string;\n      sessionId?: string;\n      storyId?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "read · inbox:read:team · MCP twin inbox_list",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -2013,12 +2014,23 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "before": {
             "minimum": 1,
             "type": "integer"
           },
           "conversation": {
             "minLength": 1,
+            "type": "string"
+          },
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "storyId": {
             "type": "string"
           }
         },
@@ -10525,12 +10537,23 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "before": {
             "minimum": 1,
             "type": "integer"
           },
           "conversation": {
             "minLength": 1,
+            "type": "string"
+          },
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "storyId": {
             "type": "string"
           }
         },
@@ -18092,12 +18115,23 @@
       "args": {
         "additionalProperties": true,
         "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
           "before": {
             "minimum": 1,
             "type": "integer"
           },
           "conversation": {
             "minLength": 1,
+            "type": "string"
+          },
+          "sessionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "storyId": {
             "type": "string"
           }
         },
@@ -23752,12 +23786,12 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "037130ef850f4007989d62bb2485d1c13008f1e8c487df1170ade3f6174f8b25",
-    "src-tauri/src/verbs/registry.generated.json": "a4de52e76f2fce54873590259400858757fa6f1c608c8722af3643dba06bbea8",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "367a87e674df63a7b9b65aa62781a5ba53a62385fd4b9d727d0c06689f0fb123",
+    "src-tauri/src/verbs/registry.generated.json": "d4b61f1e18e4e44efd0b87562d32f4b4f9b70ab76177aa977aedaebb37116df0",
     "src-tauri/src/verbs/registry.rs": "f599ccbb17d3f3b23bb5e557cb4d12199480e3a536b109a13ad4496309fb3770",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "731a5c291fc4e43f5a328119912aff18e29656fa7c9abf4a2cde25f0dff54fc2",
+    "src-tauri/src/http/routes/viewer.rs": "97e9f952b3d94ca2a35b05f7cd78946873911acb23e4e314cf44b625b94ceeba",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

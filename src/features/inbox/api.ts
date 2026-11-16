@@ -8,9 +8,11 @@ import { fixtureRollup, fixtureSessionInbox, fixtureSessions } from "./fixtures"
 import {
   listInboxRollup,
   listSessionInbox,
+  listThreadInbox,
   sendInboxAsHuman,
   type RollupDto,
   type SessionInboxDto,
+  type ThreadInboxDto,
 } from "@/tauri/commands";
 
 export {
@@ -20,6 +22,7 @@ export {
   type ConversationMessage,
   type RollupDto,
   type SessionInboxDto,
+  type ThreadInboxDto,
 } from "@/tauri/commands";
 
 /** A role-queue delivery's claim state, as the role inbox tracks it. */
@@ -56,6 +59,25 @@ export async function loadSessionInbox(
     if (fixtureAllowed() && isCommandUnavailable(err, "list_session_inbox")) {
       return { dto: fixtureSessionInbox(handle), source: "fixture" };
     }
+    throw err;
+  }
+}
+
+/** What a thread read names: the saved agent, its story (empty for none) and the seat it is
+ *  read for. One string, so it keys a read as a handle does. */
+export const threadReadKey = (agentId: string, storyId: string | null, session: string) =>
+  JSON.stringify([agentId, storyId ?? "", session]);
+
+/** A saved agent + story thread's conversation, every session of it, ended ones included. A
+ *  backend without the thread read gives the seat's own conversation. */
+export async function loadThreadInbox(
+  key: string,
+): Promise<{ dto: SessionInboxDto | ThreadInboxDto; source: InboxSource }> {
+  const [agentId, storyId, session] = JSON.parse(key) as [string, string, string];
+  try {
+    return { dto: await listThreadInbox(agentId, storyId, session), source: "live" };
+  } catch (err) {
+    if (isCommandUnavailable(err, "list_thread_inbox")) return loadSessionInbox(session);
     throw err;
   }
 }

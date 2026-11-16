@@ -660,15 +660,18 @@ fn editor_preview_and_save_validate_the_same_bridge_policy() {
             &by("alice"),
         )
         .unwrap();
-        let AgentPreviewReply::Invalid { field, message } = shown else {
-            panic!("Claude preview must refuse the stored Codex policy")
+        // Claude enforces the list too, so the restriction carries over to it.
+        let AgentPreviewReply::Resolved { resolved, .. } = shown else {
+            panic!("Claude preview keeps the stored policy")
         };
-        assert_eq!(field.as_deref(), Some("mcpBridgeTools"));
-        assert_eq!(saved, AgentSaveReply::Invalid { field, message });
-        assert_eq!(
-            detail(&caller, &key).unwrap().definition.mcp.bridge_tools,
-            Some(tools)
+        assert_eq!(resolved.launch.bridge_tools.as_ref(), Some(&tools));
+        assert!(
+            !matches!(saved, AgentSaveReply::Invalid { .. }),
+            "{saved:?}"
         );
+        let stored = detail(&caller, &key).unwrap().definition;
+        assert_eq!(stored.runtime, AgentCli::Claude);
+        assert_eq!(stored.mcp.bridge_tools, Some(tools));
     }
 }
 

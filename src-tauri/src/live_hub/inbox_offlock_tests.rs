@@ -44,7 +44,11 @@ impl crate::commands::agent_inbox::InboxHost for TestHost {
     fn display_name(&self, _handle: &str) -> Option<String> {
         None
     }
-    fn inbox_changed(&self) {}
+    fn inbox_changed(
+        &self,
+        _changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
+    ) {
+    }
 }
 
 fn hub_with_one_message() -> (std::sync::Arc<LiveHub>, i64) {

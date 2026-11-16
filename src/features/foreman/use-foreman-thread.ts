@@ -40,18 +40,43 @@ export function foremanSenders(state: unknown): string[] {
     : [];
 }
 
-/** The page's newest senders, watched while `enabled`. */
-export function useForemanSenders(enabled: boolean): readonly string[] {
+/**
+ * The page's live hosted setup sessions in a `ui:foreman` snapshot (its `setupLive`): the page
+ * decides which sessions it hosts and publishes their handles, so the overlay keeps no rule of
+ * its own.
+ */
+export function foremanSetupLive(state: unknown): string[] {
+  const live = (state as { setupLive?: unknown } | null | undefined)?.setupLive;
+  return Array.isArray(live)
+    ? live.filter((s): s is string => typeof s === "string" && s !== "")
+    : [];
+}
+
+interface ForemanUi {
+  senders: readonly string[];
+  setupLive: readonly string[];
+}
+const NO_UI: ForemanUi = { senders: NONE, setupLive: NONE };
+
+/** The page's newest senders and its live setup handles, watched while `enabled`. */
+function useForemanUi(enabled: boolean): ForemanUi {
   const preset = useDashboardPolicy()?.preset;
   const view = enabled && preset ? foremanUiView(preset) : null;
-  const [senders, setSenders] = useState<{ view: string; list: readonly string[] }>();
+  const [ui, setUi] = useState<{ view: string; ui: ForemanUi }>();
   useEffect(() => {
     if (!view) return;
-    return liveHub.watch(UI_TOPIC, view, (snapshot) =>
-      setSenders({ view, list: foremanSenders(snapshot.snapshot[0]).slice(0, FOREMAN_HISTORY) }),
-    );
+    return liveHub.watch(UI_TOPIC, view, (snapshot) => {
+      const state = snapshot.snapshot[0];
+      setUi({
+        view,
+        ui: {
+          senders: foremanSenders(state).slice(0, FOREMAN_HISTORY),
+          setupLive: foremanSetupLive(state),
+        },
+      });
+    });
   }, [view]);
-  return view && senders?.view === view ? senders.list : NONE;
+  return view && ui?.view === view ? ui.ui : NO_UI;
 }
 
 /** Each earlier sender's mail with you; `key` is their handles, one per line. */
@@ -71,22 +96,25 @@ async function loadEarlierSenders(key: string) {
 /**
  * The thread the overlay shows for the live Foreman `handle` (null: not the Foreman): `live`, its
  * own conversation, merged with each earlier sender's mail with you, oldest first. The earlier
- * senders are read again on each inbox change: one may still be running.
+ * senders are read again on each inbox change: one may still be running. `setupLive` is the
+ * page's live hosted setup handles: their messages are the page's to show, so the overlay only
+ * says setup is running and offers the full view.
  */
 export function useForemanThread(
   handle: string | null,
   live: ConversationMessage[],
-): ConversationMessage[] {
-  const senders = useForemanSenders(handle !== null);
+): { thread: ConversationMessage[]; setupLive: readonly string[] } {
+  const { senders, setupLive } = useForemanUi(handle !== null);
   const earlier = useMemo(() => senders.filter((s) => s !== handle), [senders, handle]);
   const key = earlier.join("\n");
   // Read again on each inbox change, as the live thread is: an earlier Foreman may still be running.
   const { data } = useInboxRead(key || null, loadEarlierSenders);
   const mail = key && data ? data : NO_MAIL;
-  return useMemo(() => {
+  const thread = useMemo(() => {
     if (handle === null || mail.length === 0) return live;
     const byKey = new Map<string, ConversationMessage>();
     for (const m of [...mail, ...live]) byKey.set(msgKey(m), m);
     return [...byKey.values()].sort((a, b) => a.createdAtMs - b.createdAtMs);
   }, [handle, live, mail]);
+  return { thread, setupLive };
 }
