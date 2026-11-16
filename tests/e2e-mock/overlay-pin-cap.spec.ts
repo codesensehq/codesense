@@ -44,6 +44,7 @@ async function boot(page: Page, scheme: "light" | "dark") {
       pinnedAtMs: now - 1000,
       preview: null,
       previewAtMs: null,
+      message: { from: message(id, "lead").from, createdAtMs: now, text: message(id, "lead").text },
     }));
     type Internals = { invoke: (c: string, a?: Record<string, unknown>) => Promise<unknown> };
     let inner: Internals | undefined;

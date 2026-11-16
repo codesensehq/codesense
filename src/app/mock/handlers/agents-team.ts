@@ -887,6 +887,17 @@ export function agentTeamInboxHandlers(
     agent_pins: (args: Record<string, unknown>) => {
       const team = (args.team ?? {}) as { org?: string; team?: string };
       const lead = args.agentId === "builtin/claude" && args.storyId === "BUG-142";
+      // What the pins read says each pinned message is, from the store.
+      const pinned = (id: number) => {
+        const r = rows.find((row) => row.messageId === id);
+        return {
+          from: r?.from ?? "BUG-142#lead",
+          createdAtMs: r?.createdAtMs ?? at(8),
+          text: r?.text ?? "",
+          contentType: r?.contentType ?? null,
+          summary: r?.summary ?? null,
+        };
+      };
       return {
         status: "pins",
         org: team.org ?? "",
@@ -900,6 +911,7 @@ export function agentTeamInboxHandlers(
                 position: 0,
                 pinnedBy: "BUG-142#lead",
                 pinnedAtMs: at(8),
+                message: pinned(4),
                 preview: {
                   shortName: "Review",
                   value: "0H 0M 0L",
@@ -918,6 +930,7 @@ export function agentTeamInboxHandlers(
                 position: 1,
                 pinnedBy: "BUG-142#lead",
                 pinnedAtMs: at(30),
+                message: pinned(9),
                 preview: {
                   shortName: "Tests",
                   value: "48",

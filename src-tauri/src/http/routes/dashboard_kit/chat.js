@@ -1442,17 +1442,23 @@
       return pinChange(item, "pin");
     }
     const threadRow = (id) => thread.find((row) => row.messageId === id);
+    const pinMessage = (pin2) => {
+      const row = threadRow(pin2.messageId);
+      if (row) return { said: row, who: row.fromName || row.from || "" };
+      const m = pin2.message;
+      return m ? { said: m, who: pinName(m.from) } : null;
+    };
     const pinTitleOfPin = (pin2) => {
       const named = typeof onPin.title === "function" && onPin.title(pin2);
       if (named) return named;
       if (pin2.preview && pin2.preview.shortName) return pin2.preview.shortName;
-      const row = threadRow(pin2.messageId);
-      return row ? pinTitleOf(row, row.fromName || row.from || "") : String(pin2.messageId);
+      const m = pinMessage(pin2);
+      return m ? pinTitleOf(m.said, m.who) : String(pin2.messageId);
     };
     const chooserId = (mid) => `${ids.status}-pin-chooser-${mid}`;
     const replacer = onPin && onPin.replace ? createPinReplace({ onPin, state: pinState, live: pinLive, list: pinList, nameOf: pinName, titleOf: pinTitleOfPin, ownOf: (pin2) => {
-      const row = threadRow(pin2.messageId);
-      return row && row.contentType === "html" ? "name" : "quote";
+      const m = pinMessage(pin2);
+      return m && m.said.contentType === "html" ? "name" : "quote";
     }, idOf: chooserId, copy: pinCopy, render: () => render(), pinNow: (item) => pinChange(item, "pin") }) : null;
     function pinParts(item) {
       if (!onPin || item.id === void 0 || item.id === null) return null;

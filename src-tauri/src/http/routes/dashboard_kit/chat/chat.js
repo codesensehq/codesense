@@ -142,9 +142,11 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // onPin.replace: at the cap, Pin… opens a chooser of which pin to replace, under the message (pin-replace.js). A pin is named as the page's pins name it (onPin.title), else by its
  // preview's name, else as its message; one with no preview is the person's own, drawn as a quote or, for an HTML message, a dashboard.
  const threadRow=id=>thread.find(row=>row.messageId===id);
- const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const row=threadRow(pin.messageId);return row?pinTitleOf(row,row.fromName||row.from||''):String(pin.messageId);};
+ // A pin's message: the thread's row, else what the pins read says it is (another seat's mail, which this thread leaves out).
+ const pinMessage=pin=>{const row=threadRow(pin.messageId);if(row)return{said:row,who:row.fromName||row.from||''};const m=pin.message;return m?{said:m,who:pinName(m.from)}:null;};
+ const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const m=pinMessage(pin);return m?pinTitleOf(m.said,m.who):String(pin.messageId);};
  const chooserId=mid=>`${ids.status}-pin-chooser-${mid}`;
- const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const row=threadRow(pin.messageId);return row&&row.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
+ const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const m=pinMessage(pin);return m&&m.said.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
  // A message's Pin, its tag and its note; the signature changes when any of them does, so the bubble is rebuilt only then.
  function pinParts(item){
   if(!onPin||item.id===undefined||item.id===null)return null;

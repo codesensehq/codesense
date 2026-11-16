@@ -37,16 +37,11 @@ export function useThreadPins(
     apply,
     sender: (m) => labelOf(view.dir, m.from),
     labelOf: (from) => labelOf(view.dir, from),
-    // A pin is named as the agent's chat names it: its short name, else its message's title.
-    titleOf: (p) => {
-      if (p.preview?.shortName) return p.preview.shortName;
-      const m = messages.find((x) => x.id === p.messageId);
-      return m ? pinTitleOf(m, labelOf(view.dir, m.from)) : `Pin ${p.messageId}`;
-    },
-    ownOf: (p) => {
-      const m = messages.find((x) => x.id === p.messageId);
-      return m ? (m.contentType === "html" ? "name" : "quote") : null;
-    },
+    // A pin is named as the agent's chat names it: its short name, else its message's title,
+    // from what the pins read says the message is (another seat's mail too).
+    titleOf: (p) =>
+      p.preview?.shortName || pinTitleOf(p.message, labelOf(view.dir, p.message.from)),
+    ownOf: (p) => (p.message.contentType === "html" ? "name" : "quote"),
     onShowPins: () => view.goTo(key),
   });
 }

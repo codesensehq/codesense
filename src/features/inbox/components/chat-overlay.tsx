@@ -232,24 +232,14 @@ export function ChatOverlay({
     retry: retryPins,
   } = useAgentPins(pinTeam, pinAgent, pinStory);
   const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
-  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
-  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too),
-  // else the rest of its mail (a lead's or a role's), in the Foreman's pin team.
-  const pinnedMessage = (id: number) =>
-    foreman
-      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
-        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
-        null)
-      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
-  const pinTitle = (id: number) => {
-    const m = pinnedMessage(id);
-    return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
-  };
+  // A pin is named as its message, from what the pins read says it is (another seat's mail
+  // too): an HTML one by its summary, title or heading, never markup.
+  const pinTitle = (p: AgentPin) => pinTitleOf(p.message, labelOf(dir, p.message.from));
   // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
   const ownCard = (p: AgentPin): OwnPinCard | null => {
-    const m = pinnedMessage(p.messageId);
-    if (p.preview || !m) return null;
-    const who = senderOf(m);
+    if (p.preview) return null;
+    const m = p.message;
+    const who = labelOf(dir, m.from);
     const at = formatClock(m.createdAtMs);
     if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
     const pinnedBy = whoPinned(p.pinnedBy, (from) => labelOf(dir, from));
@@ -259,6 +249,14 @@ export function ChatOverlay({
       rest: quoteOf(m, who).rest,
     };
   };
+  // The opened pin's message as the thread holds it: for the Foreman, its merged thread
+  // (earlier sessions' mail too), else the rest of its mail, in the pin team.
+  const pinnedMessage = (id: number) =>
+    foreman
+      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        null)
+      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
   const openedMessage = opened ? pinnedMessage(opened.messageId) : null;
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -271,7 +269,7 @@ export function ChatOverlay({
     apply,
     sender: senderOf,
     labelOf: (from) => labelOf(dir, from),
-    titleOf: (p) => p.preview?.shortName || pinTitle(p.messageId),
+    titleOf: (p) => p.preview?.shortName || pinTitle(p),
     ownOf: (p) => ownCard(p)?.kind ?? null,
     onShowPins: () => {
       const first = pins[0];
@@ -478,7 +476,7 @@ export function ChatOverlay({
                 }}
                 pin={p}
                 shape={pinShape}
-                title={pinTitle(p.messageId)}
+                title={pinTitle(p)}
                 own={ownCard(p)}
                 fresh={personPins?.fresh === p.messageId}
                 replacing={personPins?.replacing === p.messageId}
@@ -493,15 +491,15 @@ export function ChatOverlay({
           <section
             className="ibx-ov-sheet"
             data-in-place={sheetInPlace ? "true" : "false"}
-            aria-label={opened.preview?.shortName || pinTitle(opened.messageId)}
+            aria-label={opened.preview?.shortName || pinTitle(opened)}
           >
             <div className="ibx-ov-sheet-h">
-              <b>{opened.preview?.shortName || pinTitle(opened.messageId)}</b>
+              <b>{opened.preview?.shortName || pinTitle(opened)}</b>
               <span className="ibx-ov-sp" />
               <button
                 type="button"
                 className="ibx-ov-btn"
-                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened.messageId)}`}
+                aria-label={`Close ${opened.preview?.shortName || pinTitle(opened)}`}
                 onClick={closePin}
               >
                 <Ico icon={X} sm />
