@@ -138,16 +138,29 @@ fn compact(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(true)
 }
 
-/// The newest row id, which moves whenever the daemon stores an event.
+/// The newest row id ever handed out, which moves whenever the daemon stores an event and never
+/// moves back. `metrics` is AUTOINCREMENT, so `sqlite_sequence` keeps it even after the prune
+/// deletes the newest rows (a db whose rows are all past the window); `MAX(id)` would drop and
+/// read as a new insert. A db without the sequence table falls back to `MAX(id)`.
 fn newest_id(db: &Path) -> rusqlite::Result<i64> {
     let conn = Connection::open_with_flags(
         db,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(LOCK_WAIT)?;
-    conn.query_row("SELECT COALESCE(MAX(id), 0) FROM metrics", [], |row| {
-        row.get(0)
-    })
+    let sequence = conn.query_row(
+        "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'metrics'), \
+         (SELECT MAX(id) FROM metrics), 0)",
+        [],
+        |row| row.get(0),
+    );
+    match sequence {
+        Err(error) if error.to_string().contains("no such table: sqlite_sequence") => conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM metrics", [], |row| {
+                row.get(0)
+            }),
+        other => other,
+    }
 }
 
 /// The newest row id if no row was stored over `window`, else `None`. `wait` is the sleep, so a
