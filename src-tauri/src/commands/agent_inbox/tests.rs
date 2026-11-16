@@ -6006,7 +6006,8 @@ fn a_thread_is_its_listed_sessions_less_the_concurrent_live_seats() {
     // thread read leaves its conversation out, so nothing is counted twice.
     let live = thread_peers(&rows, ended, "dev-b");
     assert_eq!(live.counted, vec!["dev-a".to_string()]);
-    assert_eq!(live.seats, vec!["dev-c".to_string()]);
+    // A seat is named by its tab session, which a relaunch under the same handle doesn't share.
+    assert_eq!(live.seats, vec!["sess-dev-c".to_string()]);
     // An ended session is no seat: every listed session of its thread is its thread.
     let mut after = thread_peers(&rows, ended, "dev-a").counted;
     after.sort();
@@ -6015,7 +6016,7 @@ fn a_thread_is_its_listed_sessions_less_the_concurrent_live_seats() {
     // the no-story sessions are another thread.
     let story = thread_peers(&rows, ended, "dev-story");
     assert_eq!(story.counted, Vec::<String>::new());
-    assert_eq!(story.seats, vec!["dev-story-2".to_string()]);
+    assert_eq!(story.seats, vec!["sess-dev-story-2".to_string()]);
     // A session with no saved agent has no thread.
     assert_eq!(
         thread_peers(&rows, ended, "bare"),

@@ -266,10 +266,10 @@ fn a_story_chain_sums_its_ended_predecessors_and_never_a_concurrent_seat() {
     chain_session(dir.path(), "dev-1", "dev@3", "STORY-A", AT, 100);
     chain_session(dir.path(), "dev-2", "dev@3", "STORY-A", AT + 1_000, 200);
     chain_session(dir.path(), "dev-3", "dev@4", "STORY-A", AT + 2_000, 400);
-    // dev-2 runs beside dev-3 (a live seat); dev-1 has ended.
+    // dev-2 runs beside dev-3 (a live seat, by its tab session); dev-1 has ended.
     let peers = ThreadPeers {
         counted: vec!["dev-1".to_owned()],
-        seats: vec!["dev-2".to_owned()],
+        seats: vec!["tab-dev-2".to_owned()],
     };
     let seat = usage_half(dir.path(), "dev-3", HashMap::new(), &peers, &CallerScope::Human).unwrap();
     let record = assemble("dev-3", &seat, None, None);
@@ -284,6 +284,46 @@ fn a_story_chain_sums_its_ended_predecessors_and_never_a_concurrent_seat() {
     let record = assemble("dev-3", &after, None, None);
     assert_eq!(record["chain"], json!(["tab-dev-1", "tab-dev-2", "tab-dev-3"]));
     assert_eq!(record["tokens"]["input"], 700);
+}
+
+#[test]
+fn a_seat_relaunched_under_an_ended_predecessors_handle_leaves_that_predecessor_in() {
+    let (dir, _store) = store();
+    // dev-seat ended as tab-old; a new session took the same handle (tab-new) and runs beside
+    // dev-3. The live seat is told apart by its tab session, not its handle.
+    let mut store = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    for (session, at, input) in [("tab-old", AT, 100), ("tab-new", AT + 1_000, 200)] {
+        let mut record = SessionRecord::new(session.to_owned());
+        record.handle = Some("dev-seat".into());
+        record.agent = Some("dev@3".into());
+        record.story_id = Some("STORY-A".into());
+        record.cli = Some(AgentCli::Claude.to_string());
+        record.model = Some("claude-sonnet-5-5".into());
+        record.recorded_at_ms = at;
+        store.write_session_record(&record).unwrap();
+        let call = event(
+            &format!("e-{session}"),
+            session,
+            "claude-sonnet-5-5",
+            at,
+            Tokens {
+                input,
+                output: 10,
+                ..Default::default()
+            },
+        );
+        store.ingest(&[call]).unwrap();
+    }
+    drop(store);
+    chain_session(dir.path(), "dev-3", "dev@4", "STORY-A", AT + 2_000, 400);
+    let peers = ThreadPeers {
+        counted: vec![],
+        seats: vec!["tab-new".to_owned()],
+    };
+    let seat = usage_half(dir.path(), "dev-3", HashMap::new(), &peers, &CallerScope::Human).unwrap();
+    let record = assemble("dev-3", &seat, None, None);
+    assert_eq!(record["chain"], json!(["tab-old", "tab-dev-3"]));
+    assert_eq!(record["tokens"]["input"], 500);
 }
 
 #[test]

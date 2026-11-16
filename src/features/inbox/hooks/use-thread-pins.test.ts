@@ -110,3 +110,29 @@ describe("Inbox pins: a pin is named by what the pins read says its message is",
     expect(rows.find((r) => r.pin.messageId === 77)!.own).toBe("quote");
   });
 });
+
+describe("Inbox pins: a message this conversation holds is named from its own row", () => {
+  it("prefers the conversation's message to the pins read's copy", async () => {
+    h.sessions = [
+      { handle: "BUG-1#lead", agent: "acme/backend/dev", story: "BUG-1" } as SessionListRow,
+    ];
+    h.agentPins.mockResolvedValue({
+      status: "pins",
+      ...TEAM,
+      agentId: "acme/backend/dev",
+      storyId: "BUG-1",
+      pins: [1, 2, 3].map((messageId) => ({
+        messageId,
+        position: messageId - 1,
+        pinnedBy: "BUG-1#lead",
+        pinnedAtMs: 1,
+        message: { from: "BUG-1#lead", createdAtMs: 1, text: "A shortened copy." },
+      })),
+    });
+    const mine = [1, 2, 3, 4].map((id) => said(id, "BUG-1#lead"));
+    const { result } = renderHook(() => useThreadPins("BUG-1#lead", mine, view(HUMAN)));
+    await waitFor(() => expect(result.current?.stateOf(mine[3]!).atCap).toBe(true));
+    act(() => result.current!.toggle(mine[3]!));
+    expect(result.current!.chooser!.rows.map((r) => r.title)).toEqual(["m1", "m2", "m3"]);
+  });
+});

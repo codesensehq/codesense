@@ -1389,6 +1389,55 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(choice).not.toHaveTextContent("Pin 77");
   });
 
+  it("opens a pin of a concurrent seat's message as what it says, never as gone from the thread", async () => {
+    held.push({
+      messageId: 77,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: { from: "BUG-142#dev6", createdAtMs: NOW, text: "Tests pass. The rest is cleanup." },
+    });
+    await renderOverlay(300, 700);
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-77"));
+    const sheet = screen.getByRole("region", { name: "Tests pass." });
+    expect(within(sheet).getByText("Tests pass. The rest is cleanup.")).toBeInTheDocument();
+    expect(within(sheet).queryByText("This view is no longer in the thread.")).toBeNull();
+  });
+
+  it("opens a concurrent seat's HTML pin as its live view, by its message", async () => {
+    held.push({
+      messageId: 78,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: {
+        from: "BUG-142#dev6",
+        createdAtMs: NOW,
+        text: "<title>Merge board</title><p>x</p>",
+        contentType: "html",
+      },
+    });
+    await renderOverlay(300, 700);
+    fireEvent.click(await screen.findByTestId("chat-overlay-pin-78"));
+    const sheet = screen.getByRole("region", { name: "Merge board" });
+    expect(within(sheet).getByTestId("inbox-message-frame")).toBeInTheDocument();
+    expect(within(sheet).queryByText("This view is no longer in the thread.")).toBeNull();
+  });
+
+  it("names a pin of a message the thread holds from the thread's own row, not the pins read's copy", async () => {
+    held.push({
+      messageId: 2,
+      position: 2,
+      pinnedBy: "human",
+      pinnedAtMs: NOW,
+      message: { from: "human", createdAtMs: NOW, text: "A shortened copy." },
+    });
+    await renderOverlay(420, 700);
+    const strip = await screen.findByTestId("chat-overlay-pin-2");
+    expect(strip).toHaveTextContent("Thanks, keep me posted.");
+    expect(strip).not.toHaveTextContent("A shortened copy.");
+  });
+
   describe("at the cap: Pin… asks which pin to replace", () => {
     const full = async () => {
       held.push({ messageId: 2, position: 2, pinnedBy: "human", pinnedAtMs: NOW });
