@@ -184,15 +184,22 @@ pub(super) async fn put(
 
 /// Forget every half and walk kept for `home`: after a change to what a half was read from
 /// that moves no ref or file it watches (a history refresh forgets its spent fetches).
+/// A task walk keys `home` as the usage store's connection reports it, with symlinks resolved
+/// (`/var` is `/private/var` on macOS), so both spellings are forgotten.
 pub(super) fn forget_home(home: &Path) {
-    let home = format!("{}\n", std::path::Path::display(home));
-    let walk = format!("walk\n{home}");
+    let mut homes = vec![format!("{}\n", std::path::Path::display(home))];
+    if let Ok(real) = std::fs::canonicalize(home) {
+        homes.push(format!("{}\n", std::path::Path::display(&real)));
+    }
+    let prefixes: Vec<String> = Iterator::collect(Iterator::flat_map(homes.iter(), |home| {
+        [home.clone(), format!("walk\n{home}")]
+    }));
     for store in [&KEPT, &WALKS] {
         let Ok(mut kept) = store.0.lock() else {
             continue;
         };
         std::collections::BTreeMap::retain(&mut kept, |key, _| {
-            !str::starts_with(key, &home) && !str::starts_with(key, &walk)
+            !Iterator::any(&mut prefixes.iter(), |prefix| str::starts_with(key, prefix))
         });
     }
 }
@@ -378,6 +385,32 @@ mod tests {
         assert!(
             store.get_at("t-shallow", now).await.is_none(),
             "a deepened copy served the half kept before it"
+        );
+    }
+
+    /// A walk keyed by the home's resolved path (as a task walk reads it from the usage store) is
+    /// forgotten through a symlinked spelling of that home.
+    #[cfg(unix)]
+    #[test]
+    fn forgetting_a_home_drops_its_walks_under_either_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(dir.path()).unwrap().join("home");
+        std::fs::create_dir(&real).unwrap();
+        let link = real.with_file_name("linked-home");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let key = walk_key(&real, "demo", &[CallerScope::Human], &[]);
+        put_walk(key.clone(), &Default::default());
+        assert!(get_walk(&real, "demo", &key).is_some());
+        let other = real.with_file_name("home-other");
+        forget_home(&other);
+        assert!(
+            get_walk(&real, "demo", &key).is_some(),
+            "another home's forget dropped this walk"
+        );
+        forget_home(&link);
+        assert!(
+            get_walk(&real, "demo", &key).is_none(),
+            "the walk outlived its home's forget"
         );
     }
 
