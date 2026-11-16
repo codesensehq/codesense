@@ -318,6 +318,9 @@ pub fn spawn_capture(req: CaptureRequest) -> Result<CaptureOutput, CaptureError>
     let start = Instant::now();
     let mut timed_out = false;
     let mut cancelled = false;
+    // Start the polls short and grow to POLL_INTERVAL: a child that exits in a few
+    // milliseconds (a `git rev-parse`) is not held for a whole interval.
+    let mut poll = Duration::from_millis(2);
     let status = loop {
         // Keep the group leader unreaped while descendants can hold its pipes.
         // Its reserved pid keeps both cooperative cancellation and killpg safe.
@@ -361,7 +364,8 @@ pub fn spawn_capture(req: CaptureRequest) -> Result<CaptureOutput, CaptureError>
                     }
                     break None;
                 }
-                std::thread::sleep(POLL_INTERVAL);
+                std::thread::sleep(poll);
+                poll = (poll * 2).min(POLL_INTERVAL);
             }
             Err(e) => return Err(CaptureError::Wait(e)),
         }
