@@ -21,8 +21,9 @@ import { stringify } from "yaml";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH } = await lib("fixture");
-const { loadCases, grade, scriptView } = await lib("graders");
+const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH, TMP_PREFIX } =
+  await lib("fixture");
+const { loadCases, loadExtraCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
 const { CASE_IDS, statusFor, parseReport, loadReports } = await lib("floor");
@@ -34,7 +35,7 @@ const caseOf = (id) => cases.find((c) => c.id === id);
 const turnsOf = (id) => caseOf(id).input.turns;
 // A temp dir removed when the test ends, pass or fail.
 const tmp = (t) => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-test-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-test-`));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 };
@@ -129,6 +130,59 @@ test("fixture: the shim records the foreman worktrees present at each call", asy
   }
 });
 
+test("fixture: git refuses -C, --git-dir and --work-tree outside the sandbox and runs nothing", async (t) => {
+  const outside = tmp(t);
+  spawnSync("git", ["init", "-q", "-b", "main", outside]);
+  const fx = await createFixture();
+  try {
+    const home = path.join(fx.root, "home");
+    const rel = path.relative(home, outside);
+    const made = path.join(outside, "made");
+    for (const pre of [
+      ["-C", outside],
+      ["-C", rel],
+      ["-C", "..", "-C", path.relative(fx.root, outside)],
+      ["-C", ".", "-C", rel],
+      [`--git-dir=${path.join(outside, ".git")}`],
+      ["--git-dir", path.join(outside, ".git")],
+      [`--work-tree=${outside}`],
+      ["--work-tree", outside],
+      ["-C", "..", "--git-dir", path.relative(fx.root, path.join(outside, ".git"))],
+      // An option the check doesn't know could hide a later path (its value looks like the
+      // subcommand), so any other option before the subcommand is refused.
+      ["--namespace", "x", "-C", outside],
+      ["--config-env", "a.b=C", "-C", outside],
+    ]) {
+      const r = fx.git([...pre, "init", "-q", made]);
+      assert.equal(r.status, 128, pre.join(" "));
+      assert.match(r.stderr, /outside the eval sandbox|not allowed in the eval sandbox/);
+      assert.ok(!existsSync(made), `${pre.join(" ")} ran nothing`);
+    }
+    // A `-c` can redirect git (core.worktree, core.hooksPath, include.path), and the pack's rules
+    // refuse `git -c` anyway, so the fixture refuses every one.
+    for (const pre of [
+      ["--namespace", "x"],
+      ["--paginate"],
+      ["--exec-path=/x"],
+      ["-c", `core.worktree=${outside}`],
+      ["-c", "core.pager=cat"],
+    ]) {
+      const r = fx.git([...pre, "status"]);
+      assert.equal(r.status, 128, pre.join(" "));
+      assert.match(r.stderr, /not allowed in the eval sandbox/);
+    }
+    assert.equal(fx.git(["--no-pager", "status"]).status, 0);
+    // Inside the sandbox, the same options still run, and a subcommand's own -C is not a path.
+    fx.git(["worktree", "add", "-q", "-b", "foreman/x-ab12", "../foreman-x-ab12", "origin/main"]);
+    assert.equal(fx.git(["-C", "../foreman-x-ab12", "status"]).status, 0);
+    assert.equal(fx.git(["-C", fx.root, "-C", "home", "status"]).status, 0);
+    assert.equal(fx.git([`--git-dir=${path.join(home, ".git")}`, "status"]).status, 0);
+    assert.doesNotMatch(fx.git(["log", "-C", outside, "-1"]).stderr, /outside the eval sandbox/);
+  } finally {
+    fx.teardown();
+  }
+});
+
 test("fixture: git refuses a cwd outside the sandbox", async () => {
   const fx = await createFixture();
   try {
@@ -213,9 +267,28 @@ test("fixture: an inherited GIT_DIR (as in a git hook) never reaches the real re
   }
 });
 
+test("fixture: no temp path has a foreman-* part, so the sandbox never looks like a worktree", async () => {
+  // The guidance lets the Foreman edit inside a foreman-* worktree: a sandbox under a foreman-*
+  // directory would put home, HOME, the gh shim and origin inside one.
+  const fx = await createFixture({ handoff: true });
+  try {
+    const parts = (p) => p.split(path.sep);
+    for (const p of [fx.root, fx.env.HOME, ...fx.env.PATH.split(path.delimiter).slice(0, 1)]) {
+      assert.ok(!parts(p).some((part) => part.startsWith("foreman-")), p);
+    }
+  } finally {
+    fx.teardown();
+  }
+  for (const name of readdirSync(new URL("lib/", evals))) {
+    const src = readFileSync(new URL(`lib/${name}`, evals), "utf8");
+    for (const m of src.matchAll(/mkdtempSync\(([^;]*)\)/g))
+      assert.ok(!/foreman-/.test(m[1]) && /TMP_PREFIX/.test(m[1]), `${name}: ${m[1]}`);
+  }
+});
+
 test("fixture: a failed setup removes its temp dir", async () => {
   // This process's fixtures only: other test files make fixtures at the same time.
-  const mine = (f) => f.startsWith(`foreman-eval-${process.pid}-`);
+  const mine = (f) => f.startsWith(`${TMP_PREFIX}-${process.pid}-`);
   const before = new Set(readdirSync(os.tmpdir()).filter(mine));
   await withEnv({ PATH: "/nonexistent" }, () => assert.rejects(createFixture()));
   const after = readdirSync(os.tmpdir()).filter((f) => mine(f) && !before.has(f));
@@ -340,6 +413,32 @@ for (const id of CASES) {
     assert.equal(green.pass, true);
   });
 }
+
+test("floor: any case run, floor or outside-floor, fails when a turn sent no reply", async () => {
+  const noReply = (n) => `floor: turn ${n} sent the person no reply`;
+  for (const caseDef of [...loadCases(), ...loadExtraCases()]) {
+    const fx = await fixtureFor(caseDef);
+    try {
+      await stubs.good({ caseDef, fx });
+      const state = fx.state();
+      assert.deepEqual(grade(caseDef, state).failures, [], `${caseDef.id}: the good stub passes`);
+      for (let n = 1; n <= caseDef.input.turns.length; n++) {
+        const dropped = { ...state, replies: state.replies.filter((r) => r.turn !== n) };
+        assert.ok(grade(caseDef, dropped).failures.includes(noReply(n)), `${caseDef.id} turn ${n}`);
+      }
+    } finally {
+      fx.teardown();
+    }
+    const idle = await fixtureFor(caseDef);
+    try {
+      await stubs.doNothing({ caseDef, fx: idle });
+      const red = grade(caseDef, idle.state()).failures;
+      assert.ok(red.includes(noReply(1)), `${caseDef.id}: do-nothing fails the floor check`);
+    } finally {
+      idle.teardown();
+    }
+  }
+});
 
 test("every grader is red when the driver skips the case's turns", async () => {
   for (const id of CASES) {
@@ -719,6 +818,17 @@ test("recover-error: red on a retry by pr create or by gh api, and on a leftover
   redFor(
     await play(recover({ before: [addWt], attempt: (fx) => prCreate(fx) }), "recover-error"),
     /worktree was left behind/,
+  );
+});
+
+test("recover-error: red when the Foreman edits home, even after a clean worktree run", async () => {
+  const editHome = (fx) => fx.write(path.join(fx.root, "home", "README.md"), "# fixed\n");
+  redFor(
+    await play(
+      recover({ before: [addWt, editHome], attempt: (fx) => prCreate(fx), after: [removeWt] }),
+      "recover-error",
+    ),
+    /home worktree changed/,
   );
 });
 
@@ -1992,6 +2102,28 @@ test("run.sh: the claude driver is accepted and its report records the driver an
   const front = parseReport(readFileSync(path.join(out, file), "utf8"));
   assert.equal(front.driver, "claude");
   assert.equal(front.model, "claude-sonnet-5-5");
+});
+
+test("run.sh: SIGTERM leaves no fixture root in TMPDIR", async (t) => {
+  const script = new URL("run.sh", evals).pathname;
+  const fake = fakeClaude(t, [{ ...ok(), steps: [{ grandchild: "free" }, { sleep: 20000 }] }]);
+  const tmpdir = tmp(t);
+  const args = [script, "foreman-claude", "--driver", "claude", "--k", "1", "--out", tmp(t)];
+  const env = {
+    ...process.env,
+    TMPDIR: tmpdir,
+    FOREMAN_EVAL_CLAUDE: fake.bin,
+    FOREMAN_EVAL_LOGS: tmp(t),
+  };
+  const runner = spawn("sh", args, { env, stdio: "ignore" });
+  const exited = new Promise((resolve) => runner.on("exit", resolve));
+  for (const end = Date.now() + 10000; !fake.pids() && Date.now() < end; ) await sleep(50);
+  assert.ok(fake.pids(), "the run is under way");
+  const ours = () => readdirSync(tmpdir).filter((f) => f.startsWith(`${TMP_PREFIX}-`));
+  assert.ok(ours().length > 0, "a fixture root exists while the case runs");
+  runner.kill("SIGTERM");
+  await exited;
+  assert.deepEqual(ours(), []);
 });
 
 test("run.sh: SIGTERM ends the running claude and what it started", async (t) => {

@@ -210,6 +210,36 @@ Run both from the story's worktree:
 const KEYS = ["foreman_team", "git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
+// Every eval temp dir starts with this. It must never be `foreman-*`: the guidance lets the Foreman
+// edit inside a `foreman-*` worktree, and a sandbox under such a dir would put home inside one.
+export const TMP_PREFIX = "fm-eval";
+
+// The roots of the fixtures not yet torn down: a runner ended by a signal removes them on exit.
+const live = new Set();
+export const removeLiveFixtures = () => {
+  for (const root of live) rmSync(root, { recursive: true, force: true });
+  live.clear();
+};
+
+// The directories git's own options name before the subcommand: each `-C` resolves against the
+// one before it, and `--git-dir`/`--work-tree` against the last. Any other option there is
+// `refused`: one this doesn't know may take a value that would read as the subcommand and hide a
+// later path, and a `-c` can redirect git (core.worktree, core.hooksPath, include.path).
+function gitPaths(args, cwd) {
+  const dirs = [];
+  let dir = cwd;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-C") dirs.push((dir = path.resolve(dir, args[++i] ?? "")));
+    else if (a === "--git-dir" || a === "--work-tree") dirs.push(path.resolve(dir, args[++i] ?? ""));
+    else if (/^--(git-dir|work-tree)=/.test(a)) dirs.push(path.resolve(dir, a.slice(a.indexOf("=") + 1)));
+    else if (a === "--no-pager") continue;
+    else if (a.startsWith("-")) return { dirs, refused: a };
+    else break;
+  }
+  return { dirs, refused: null };
+}
+
 // The fixture a case asks for.
 export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 
@@ -218,7 +248,7 @@ export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 let template;
 function repos() {
   if (template) return template;
-  const dir = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-template-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-template-`));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !DROPPED.test(k))), ...GIT_ENV, HOME: dir };
   const gitOk = (args, cwd = path.join(dir, "home")) => {
@@ -276,11 +306,13 @@ export async function createFixture(options = {}) {
     guide: options.guide,
     foremanTeam: options.foreman_team === "user" ? { org: CONFIG.team, team: CONFIG.team } : DOCS,
   };
-  const root = mkdtempSync(path.join(os.tmpdir(), `foreman-eval-${process.pid}-`));
+  const root = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-${process.pid}-`));
+  live.add(root);
   try {
     return build(root, opts);
   } catch (error) {
     rmSync(root, { recursive: true, force: true });
+    live.delete(root);
     throw error;
   }
 }
@@ -530,7 +562,10 @@ function build(root, opts) {
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
     git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
-      if (!within(cwd)) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${cwd}\n` };
+      const { dirs, refused } = gitPaths(args, cwd);
+      if (refused) return { status: 128, stdout: "", stderr: `fatal: git ${refused} is not allowed in the eval sandbox\n` };
+      const out = [cwd, ...dirs].find((dir) => !within(dir));
+      if (out !== undefined) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${out}\n` };
       return git(args, cwd);
     },
     // A script from the worktree (the team's `stories/*.sh`), run with the sandbox env.
@@ -574,6 +609,7 @@ function build(root, opts) {
     },
     teardown() {
       rmSync(root, { recursive: true, force: true });
+      live.delete(root);
     },
   };
   return fx;

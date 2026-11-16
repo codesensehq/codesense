@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Model-free checks on the Foreman pack: the root prompt, the saved agent's tool and write rules,
+// Model-free checks on the Foreman pack: the root prompt, the saved agent's tool rules,
 // and the settings that keep the team's own skills and instructions out of its first call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -60,6 +60,8 @@ const FORBIDDEN = [
   "create_local_organization",
 ];
 const mcp = (name) => `mcp__codesense__${name}`;
+// The instructions, not rules, say where the Foreman works: no file is fenced by a rule.
+const FILE_TOOLS = ["Read", "Edit", "Write"];
 
 // Calibrated on the real tokenizer: `claude -p` on Opus 5.5 with and without foreman.md as the
 // system prompt (2026-11-13) counted 1,368 tokens for 3,756 bytes and 1,986 for 5,347, about
@@ -67,9 +69,10 @@ const mcp = (name) => `mcp__codesense__${name}`;
 const BYTES_PER_TOKEN = 2.65;
 const tokens = (s) => Math.ceil(Buffer.byteLength(s) / BYTES_PER_TOKEN);
 // 2k until the setup rules (offer, resume, hand-back) went in; flagged in that PR.
-const ROOT_CAP = 2200;
+// 2.25k when two trims to stay under 2.2k regressed the floor evals; flagged in that PR.
+const ROOT_CAP = 2250;
 
-test("the root prompt is the spec, under 2.2k tokens, passed as the agent's system prompt", () => {
+test("the root prompt is the spec, under 2.25k tokens, passed as the agent's system prompt", () => {
   const at = agent.args.indexOf("--append-system-prompt");
   assert.ok(at >= 0, "the saved agent appends its root prompt");
   assert.equal(
@@ -87,8 +90,7 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
     assert.ok(
-      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule) ||
-        rule === GITHUB_PR,
+      /^(mcp__codesense__|Bash\()/.test(rule) || FILE_TOOLS.includes(rule) || rule === GITHUB_PR,
       rule,
     );
   }
@@ -97,6 +99,41 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   for (const name of FORBIDDEN) {
     assert.ok(deny.includes(mcp(name)), `${name} is denied`);
     assert.ok(!allow.includes(mcp(name)), `${name} is not allowed`);
+  }
+});
+
+test("the file tools are allowed plainly, with no path rule and no bridge tool list", () => {
+  for (const tool of FILE_TOOLS) assert.ok(allow.includes(tool), `${tool} is allowed`);
+  for (const rule of [...allow, ...deny]) {
+    assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(/.test(rule), `${rule} fences a path`);
+  }
+  // A bare file tool in deny would fence every file.
+  for (const rule of deny) {
+    assert.ok(!/^(Read|Edit|Write|NotebookEdit)$/.test(rule), `${rule} is denied outright`);
+  }
+  assert.equal(agent.mcp?.bridge_tools, undefined, "no bridge tool list");
+});
+
+test("the spec says where to edit: a foreman-* worktree, never home, agent config or .git", () => {
+  const work = spec.split("## Where you work")[1].split("\n## ")[0];
+  for (const phrase of [
+    "only fast-forwards",
+    "Edit only in a new worktree `../<wt>`",
+    "`<wt>` is `foreman-<slug>-<4 hex>`",
+    "outside it, only `../<wt>.msg`",
+    "never edit agent config",
+    ".claude",
+    ".agents",
+    ".codex",
+    ".hermes",
+    ".opencode",
+    "config/agents",
+    "config/routines",
+    "agent-account-homes",
+    ".git",
+    "when done, even if the PR failed",
+  ]) {
+    assert.ok(work.includes(phrase), `Where you work says: ${phrase}`);
   }
 });
 
@@ -113,48 +150,6 @@ test("every tool the spec names is allowed or forbidden", () => {
   }
   for (const name of FORBIDDEN)
     assert.ok(spec.includes(`\`${name}\``), `${name} is listed as unavailable`);
-});
-
-// A Claude path rule: `Tool(glob)`, the glob relative to the session's working directory.
-function ruleMatches(cwd, target, tool) {
-  return (rule) => {
-    const m = /^(Edit|Write|NotebookEdit)\((.*)\)$/.exec(rule);
-    if (!m || m[1] !== tool) return false;
-    const glob = path.resolve(cwd, m[2]).replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    const re = glob
-      .replace(/\*\*/g, "\u0000")
-      .replace(/\*/g, "[^/]*")
-      .replace(/\u0000/g, ".*");
-    return new RegExp(`^${re}$`).test(target);
-  };
-}
-const TOOLS_THAT_WRITE = ["Edit", "Write", "NotebookEdit"];
-const writeDenied = (cwd, target) =>
-  TOOLS_THAT_WRITE.every((tool) => deny.some(ruleMatches(cwd, target, tool)));
-const writeAllowed = (cwd, target) =>
-  TOOLS_THAT_WRITE.slice(0, 2).every(
-    (tool) =>
-      !deny.some(ruleMatches(cwd, target, tool)) && allow.some(ruleMatches(cwd, target, tool)),
-  );
-
-test("edits are denied in the home worktree and allowed in a foreman-* worktree, in two layouts", () => {
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home"]) {
-    const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
-    assert.equal(
-      writeDenied(home, path.join(home, "README.md")),
-      true,
-      `${home} is denied outright`,
-    );
-    assert.equal(writeAllowed(home, path.join(home, "README.md")), false, `${home} is read-only`);
-    assert.equal(writeAllowed(home, path.join(home, "stories/a.md")), false);
-    assert.equal(
-      writeAllowed(home, path.join(sibling, "stories/a.md")),
-      true,
-      "a foreman-* worktree",
-    );
-    assert.equal(writeAllowed(home, path.resolve(home, "../other-worktree/a.md")), false);
-    assert.equal(writeAllowed(home, path.join(sibling, ".git")), false, "no git internals");
-  }
 });
 
 // Claude's Bash rules, as a live `claude -p` probe (Claude Code 2.1.296, dontAsk, 2026-11-13)
@@ -404,7 +399,7 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "stories live in a team",
     "offer setup",
     "Options: `Create`, `Change`, `Not now`",
-    "`git remote`",
+    "Run `git remote`",
     "`git worktree list`",
     "`story-create`",
     "`stories/next-id.sh`",
@@ -416,7 +411,6 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "with no remote, no push or PR",
     "one command to merge",
     "never touch the canonical clone",
-    "Home gets no commit",
   ]) {
     assert.ok(spec.includes(phrase), `the spec says: ${phrase}`);
   }
@@ -496,6 +490,8 @@ test("sprint leads: look for a live one on any machine, then launch the team's s
   for (const phrase of [
     "Start sprint <n>",
     "`list_sessions`",
+    "a live session in that team",
+    "(`launchedBy`: your `who_am_i` handle)",
     "Sprint <n>",
     "launched_by:<your handle>",
     'target:"team-workspace"',
