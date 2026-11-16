@@ -63,6 +63,13 @@ export function exportsUntouchedSinceMain(root, exportFiles) {
   }
 }
 
+// A PR that re-exported is held to the strict check, yet main may since have changed inputs the
+// PR never touched (another PR's tool edit). Then the PR's export matched its own inputs and the
+// drift is main's, refreshed in the next docs wave like any inherited drift. True when the PR left
+// every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
+export const driftInheritedFromMain = (root, driftedInputs) =>
+  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);
+
 const mergeBase = (root) => {
   try {
     return git(root, ["merge-base", "HEAD", "origin/main"]).toString().trim().slice(0, 10);
