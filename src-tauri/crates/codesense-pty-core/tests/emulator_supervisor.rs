@@ -401,7 +401,11 @@ fn a_worker_gets_a_scrubbed_environment() {
         &worker,
         &runs_file,
         &[("6.0.0", 1)],
-        &format!("env > '{}'\nexec cat > /dev/null", dump.display()),
+        // Renamed into place once written: the test reads the dump as soon as it exists.
+        &format!(
+            "env > '{0}.part' && mv '{0}.part' '{0}'\nexec cat > /dev/null",
+            dump.display()
+        ),
     );
     let allowed = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ"];
     // sh itself sets these.
