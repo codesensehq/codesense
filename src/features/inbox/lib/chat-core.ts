@@ -19,6 +19,7 @@ export {
   pinFirstWords,
   pinLiveText,
   pinTitleOf,
+  threadOf,
   pinWho,
   pinReplaceLabel,
   pinChooserHeading,

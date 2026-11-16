@@ -7,7 +7,6 @@ import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-t
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
   closeAgentInboxRailToTerminal,
@@ -27,6 +26,7 @@ import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tau
 
 import type { ConversationMessage } from "../api";
 import { goToSession, openStory } from "../actions";
+import { threadOf } from "../lib/chat-core";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
 import { usePersonPins } from "../hooks/use-person-pins";
@@ -107,10 +107,11 @@ export function ChatOverlay({
   // Queued or Delivered on what you send here, by the kit's rule: each message's own
   // messageDelivery row where the host pushes it, else the lead's sessions() row.
   const lead = sessions?.find((s) => s.handle === handle) ?? null;
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it: the launch's agent, else the one its tab says it runs.
-  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
-  const pinStory = row?.story ?? lead?.story ?? null;
+  // The thread is the saved agent and story the session was launched with (the launch's agent,
+  // else the one its tab says it runs), keyed by the one thread rule the engine keys it by.
+  const pinThread = threadOf(lead?.agent ?? row?.agentRevision, row?.story ?? lead?.story);
+  const pinAgent = pinThread.agentId || null;
+  const pinStory = pinThread.storyId || null;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too), the same
   // pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);

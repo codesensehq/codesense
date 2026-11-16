@@ -59,8 +59,8 @@ fn session_for_handle(store: &UsageStore, handle: &str) -> Result<Option<String>
     Ok(None)
 }
 
-/// A `session_record` row of the thread of saved agent `?2` (the id before `@`) and story `?1`:
-/// any revision of the agent continues its threads.
+/// A `session_record` row of the thread of saved agent `?2` ([`crate::weft::pins::saved_agent`])
+/// and story `?1`: any revision of the agent continues its threads.
 const THREAD_MATCH: &str =
     "story_id = ?1 AND (agent = ?2 OR substr(agent, 1, length(?2) + 1) = ?2 || '@')";
 
@@ -80,7 +80,7 @@ pub(crate) fn thread_sessions(
     agent: &str,
     story: &str,
 ) -> Result<Vec<ThreadSession>, String> {
-    let key = agent.split('@').next().unwrap_or(agent).trim();
+    let key = crate::weft::pins::saved_agent(agent);
     let story = story.trim();
     if str::is_empty(key) || str::is_empty(story) {
         return Ok(vec![]);
@@ -123,7 +123,7 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
     let (Some(agent), Some(story)) = (record.agent.as_ref(), record.story_id.as_ref()) else {
         return Ok(vec![]);
     };
-    let key = agent.split('@').next().unwrap_or(agent);
+    let key = crate::weft::pins::saved_agent(agent);
     let mut stmt = rusqlite::Connection::prepare(
         &store.conn,
         &format!(
@@ -140,6 +140,42 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
         )
         .map_err(super::db_err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(super::db_err)
+}
+
+/// A no-story session's thread, by the thread read's rule: the other sessions of its saved agent
+/// with no story that the roster lists (`peers`, by handle), oldest first. Nothing else bounds a
+/// saved agent's no-story sessions (every one it ever launched), so only the listed ones count.
+fn listed_no_story(
+    store: &UsageStore,
+    record: &SessionRecord,
+    peers: &[String],
+) -> Result<Vec<String>, String> {
+    let story = Option::map(record.story_id.as_deref(), str::trim);
+    let (Some(agent), None | Some("")) = (record.agent.as_deref(), story) else {
+        return Ok(vec![]);
+    };
+    let key = crate::weft::pins::saved_agent(agent);
+    let mut found = std::collections::BTreeSet::new();
+    for peer in peers {
+        let Some(session_id) = session_for_handle(store, peer)? else {
+            continue;
+        };
+        if session_id == record.session_id {
+            continue;
+        }
+        let Some(other) = UsageStore::read_session_record(store, &session_id)? else {
+            continue;
+        };
+        let same = Option::is_some_and(other.agent.as_deref(), |a| {
+            crate::weft::pins::saved_agent(a) == key
+        });
+        let unstoried =
+            Option::is_none_or(other.story_id.as_deref(), |s| str::is_empty(str::trim(s)));
+        if same && unstoried {
+            std::collections::BTreeSet::insert(&mut found, (other.recorded_at_ms, session_id));
+        }
+    }
+    Ok(Iterator::collect(Iterator::map(IntoIterator::into_iter(found), |(_, id)| id)))
 }
 
 /// One session's usage half, without its chain.
@@ -175,6 +211,7 @@ pub(crate) fn usage_half(
     home: &Path,
     handle: &str,
     launch_stories: HashMap<String, String>,
+    peers: &[String],
     scope: &CallerScope,
 ) -> Result<UsageHalf, String> {
     let handle = handle.trim();
@@ -188,7 +225,12 @@ pub(crate) fn usage_half(
     let session_id = session_read::resolve_session(&store, None, &input)?.session_id;
     let mut half = half_of(home, &store, session_id, &launch_stories, scope)?;
     if let Some(record) = half.record.as_ref() {
-        for earlier in earlier_sessions(&store, record)? {
+        // A story's chain is its handoff chain; a no-story session's is its listed thread.
+        let mut earlier = earlier_sessions(&store, record)?;
+        if std::vec::Vec::is_empty(&earlier) {
+            earlier = listed_no_story(&store, record, peers)?;
+        }
+        for earlier in earlier {
             half.earlier.push(half_of(home, &store, earlier, &launch_stories, scope)?);
         }
     }
@@ -387,12 +429,20 @@ pub async fn read(
     home: &Path,
     params: &Params,
     launch_stories: HashMap<String, String>,
+    peers: &[String],
     scope: &CallerScope,
 ) -> Result<Value, String> {
     crate::shared::invoke_stats::metric_count("session_record.read");
     let (owned_home, handle, owned_scope) = (home.to_owned(), params.handle.clone(), scope.clone());
+    let owned_peers = <[String]>::to_vec(peers);
     let half = crate::commands::await_blocking("session_record", move || {
-        usage_half(&owned_home, &handle, launch_stories, &owned_scope)
+        usage_half(
+            &owned_home,
+            &handle,
+            launch_stories,
+            &owned_peers,
+            &owned_scope,
+        )
     })
     .await?;
     let story = half.report.sessions.iter().find_map(|s| s.story.as_ref().map(|s| s.id.clone()));
@@ -410,10 +460,11 @@ pub async fn read(
 pub async fn current(
     params: &Params,
     launch_stories: HashMap<String, String>,
+    peers: &[String],
     scope: &CallerScope,
 ) -> Result<Value, String> {
     let home = crate::commands::paths::codesense_home_dir().ok_or("no CodeSense home directory")?;
-    read(&home, params, launch_stories, scope).await
+    read(&home, params, launch_stories, peers, scope).await
 }
 
 #[cfg(test)]

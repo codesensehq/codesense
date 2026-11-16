@@ -2091,6 +2091,18 @@ pub fn launch_stories<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> HashMap<S
         .unwrap_or_default()
 }
 
+/// The other sessions the registry lists of the same saved agent with no story, by launch
+/// handle, beside the one launched under `handle` ([`crate::commands::agent_inbox::no_story_peers`]).
+/// Empty when the registry is not running.
+pub fn no_story_peers<R: tauri::Runtime>(app: &tauri::AppHandle<R>, handle: &str) -> Vec<String> {
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    use tauri::Manager;
+    let Some(launch) = app.try_state::<DashboardLaunchState>() else {
+        return vec![];
+    };
+    crate::commands::agent_inbox::no_story_peers(&DashboardLaunchState::snapshot(&launch), handle)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use codesense_pty_core::protocol::UsageSpoolRecord;

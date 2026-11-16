@@ -203,7 +203,14 @@ pub async fn session_record<R: tauri::Runtime>(
     page: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let scope = crate::context_repo::caller_scope::for_management_view(&app, page.as_deref(), frame_id.as_deref())?;
-    session_usage::agent_record::current(&params, session_usage::launch_stories(&app), &scope).await
+    let peers = session_usage::no_story_peers(&app, &params.handle);
+    session_usage::agent_record::current(
+        &params,
+        session_usage::launch_stories(&app),
+        &peers,
+        &scope,
+    )
+    .await
 }
 
 /// Many stories' cached totals, shared with the MCP story_totals verb.
