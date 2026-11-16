@@ -221,7 +221,7 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
 test("no foreman-* path inside an agent-config tree is writable, in three layouts", () => {
   // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
   // any agent's skills; the agent-config trees are denied for that reason.
-  const userHome = "/Users/someone";
+  const userHome = "/home/someone";
   for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
     const root = path.dirname(home);
     for (const target of [
