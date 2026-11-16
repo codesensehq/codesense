@@ -2428,7 +2428,11 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// (dashboard_stream/hub.rs), whose sequence counter is the unambiguous `next_seq`. Their
 /// targets are the in-memory `TopicRegistry`, its delta logs and sets, an atomic counter and
 /// two maps; none calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_551;
+/// Its review fixes add 6 more, as CI measured: the per-topic hold map's `.get(..)`,
+/// `.get_mut(..)`, `.remove(..)` and `.retain(..)` in `TopicRegistry::release`,
+/// `release_owner` and `hold_count`, and `.is_ok_and(..)` on the two map locks in
+/// `DashboardStreamHub`. All of them are std map and lock calls; none calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_557;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
