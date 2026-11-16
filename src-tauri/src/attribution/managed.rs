@@ -235,7 +235,6 @@ impl Managed {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
