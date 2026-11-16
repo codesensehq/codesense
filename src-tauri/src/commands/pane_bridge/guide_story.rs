@@ -18,7 +18,8 @@ use super::{path_str, OpenTarget};
 
 const STORIES: &str = "stories";
 
-/// An existing `.md` file under `stories/` of a synced team's content root, named by an
+/// An existing `.md` file under `stories/` of a synced team's `content` root (not another folder
+/// the index lists for the team), named by an
 /// absolute path with no `.` or `..`. `team` is refused: the path alone says where it is.
 pub(crate) fn resolve(
     roots: &[IndexRoot],
@@ -38,7 +39,11 @@ pub(crate) fn resolve(
     }
     let root = roots
         .iter()
-        .filter(|root| root.layer == Layer::Team && file.starts_with(&root.dir))
+        .filter(|root| {
+            root.layer == Layer::Team
+                && root.dir.ends_with("content")
+                && file.starts_with(&root.dir)
+        })
         .max_by_key(|root| root.dir.components().count())
         .ok_or_else(refused)?;
     let (Some(org), Some(team)) = (root.org.clone(), root.team.clone()) else {
@@ -222,6 +227,18 @@ mod tests {
         write(&fx.team.join("storiesx/e/S-2.md"), b"x");
         write(&fx.team.join("e/stories/S-3.md"), b"x");
         write(&fx.team.join("stories/e/notes.txt"), b"x");
+        // A collection folder the index lists as a team root is not the team's content.
+        let collection = fx.f.path("parent", "notes");
+        write(&collection.join(STORY), b"x");
+        let mut roots = fx.roots.clone();
+        roots.push(IndexRoot {
+            dir: collection.clone(),
+            org: Some("acme/ctx".into()),
+            team: Some("parent".into()),
+            layer: Layer::Team,
+        });
+        let in_collection = lossy(&collection.join(STORY));
+        assert_eq!(resolve(&roots, &in_collection, None).unwrap_err(), MISSING);
         for path in [
             "README.md",
             "storiesx/e/S-2.md",
@@ -264,10 +281,16 @@ mod tests {
     fn a_dot_dot_escape_is_refused() {
         let fx = fx();
         assert!(guide_open(&fx, &story(&fx)).is_ok());
-        let out = lossy(
-            &fx.team
-                .join("stories/../../../../../../../elsewhere/secret.md"),
-        );
+        // Climb from `stories/` to the fixture's base, whatever its depth.
+        let depth = fx
+            .team
+            .strip_prefix(base(&fx))
+            .unwrap()
+            .components()
+            .count()
+            + 1;
+        let up = "../".repeat(depth);
+        let out = lossy(&fx.team.join(format!("stories/{up}elsewhere/secret.md")));
         assert!(Path::new(&out).is_file(), "the escape reaches a real file");
         for path in [
             out,
@@ -320,22 +343,16 @@ mod tests {
         std::fs::create_dir_all(fx.team.join("stories/e/dir.md")).unwrap();
         let dir = lossy(&fx.team.join("stories/e/dir.md"));
         assert_eq!(guide_open(&fx, &dir).unwrap_err(), MISSING);
-        // Opening leaves the file as it was, and the page earns no capability beyond the one
-        // its pin already carried: the grant is a resolver, not a verb.
+        // Opening leaves the file as it was.
         assert_eq!(std::fs::read(fx.team.join(STORY)).unwrap(), before);
-        let guide = lossy(&fx.docs.join(GUIDE_PAGE));
-        assert_eq!(
-            foreman_launch::grant_in(&fx.pages, &fx.docs, &guide).as_deref(),
-            Some(foreman_launch::CAPABILITY)
-        );
-        // Refused looks like missing: the same text for a path that is not there and one that
-        // is there but out of reach.
-        let outside = lossy(&base(&fx).join("elsewhere/secret.md"));
-        let nothing = lossy(&base(&fx).join("elsewhere/nothing.md"));
-        assert_eq!(
-            guide_open(&fx, &outside).unwrap_err(),
-            guide_open(&fx, &nothing).unwrap_err()
-        );
+        // Refused looks like missing: a story that is not there and paths in the same root that
+        // are refused give the same text, so the answer tells nothing about what exists.
+        let absent = guide_open(&fx, &lossy(&missing)).unwrap_err();
+        for refused in ["README.md", "storiesx/e/S-2.md", "stories/e/notes.txt"] {
+            write(&fx.team.join(refused), b"x");
+            let path = lossy(&fx.team.join(refused));
+            assert_eq!(guide_open(&fx, &path).unwrap_err(), absent, "{refused}");
+        }
     }
 
     #[test]
@@ -361,5 +378,88 @@ mod tests {
         assert!(guide_open(&fx, &lossy(&fx.team.join("README.md"))).is_err());
         // And the grant widens nothing: the scope refuses the story after the open too.
         assert!(!fx.f.scope.allows(Path::new(&story)));
+    }
+
+    #[test]
+    fn the_command_admits_only_the_guides_own_top_level_frame() {
+        use crate::context_repo::caller_scope::tests::AppFixture;
+        use crate::dashboard_stream::frame::{
+            FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameStore, FrameTeam,
+        };
+        use std::sync::Arc;
+        use tauri::Manager;
+        let f = AppFixture::new();
+        f.app.manage(f.fixture.service());
+        let docs = crate::context_repo::codesense_docs::docs_root(
+            &f.fixture.home,
+            &crate::domain::Principal::from(1u64),
+        );
+        let guide = docs.join(GUIDE_PAGE);
+        write(&guide, GUIDE_BYTES);
+        let other = docs.join("getting-started/content/other/index.html");
+        write(&other, GUIDE_BYTES);
+        let story = lossy(
+            &f.fixture
+                .write("parent", "content/stories/e/S-1.md", "story"),
+        );
+        let pages = [pin(GUIDE_PAGE, GUIDE_BYTES)];
+        let store = f.app.state::<Arc<FrameStore>>();
+        let held = || vec![foreman_launch::CAPABILITY.to_string()];
+        let mint = |slot: &str, document: &Path, message: Option<FrameMessage>, grant| {
+            store.mint_with_grant(
+                9321,
+                FrameGrant {
+                    frame_id: String::new(),
+                    principal: "1".into(),
+                    dashboard: lossy(document),
+                    slot: slot.into(),
+                    team: Some(FrameTeam {
+                        org: "acme/ctx".into(),
+                        team: "child".into(),
+                    }),
+                    scope: "team".into(),
+                },
+                lossy(&f.fixture.path("child", "content")),
+                lossy(document),
+                lossy(document.parent().unwrap()),
+                FramePolicy::default(),
+                message,
+                grant,
+                FrameCallerKind::Team,
+            )
+        };
+        let top = mint("right-pane", &guide, None, held());
+        let child = mint(
+            "message",
+            &guide,
+            Some(FrameMessage {
+                org: "acme/ctx".into(),
+                team: "child".into(),
+                message_id: 1,
+            }),
+            held(),
+        );
+        store.link_child(&child.frame_id, &top.frame_id).unwrap();
+        let baseline = mint("baseline", &guide, None, held());
+        let elsewhere = mint("right-pane", &other, None, held());
+        let ungranted = mint("right-pane", &guide, None, Vec::new());
+        let open = |frame: &crate::dashboard_stream::frame::FrameRecord| {
+            tauri::async_runtime::block_on(super::super::open_target_for_frame(
+                f.app.handle(),
+                frame.document_path.clone(),
+                story.clone(),
+                None,
+                Some(frame.frame_id.clone()),
+                &pages,
+            ))
+        };
+        assert_eq!(open(&top).unwrap().path, story);
+        // A child frame, a baseline view, another page and a frame without the grant its bytes
+        // earned all take the scoped route, which refuses this story.
+        for refused in [&child, &baseline, &elsewhere, &ungranted] {
+            assert_eq!(open(refused).unwrap_err(), MISSING, "{}", refused.frame_id);
+        }
+        // The open changed nothing about the frame.
+        assert_eq!(store.by_id(&top.frame_id).unwrap().effective_grant, held());
     }
 }

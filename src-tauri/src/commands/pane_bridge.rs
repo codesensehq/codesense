@@ -290,6 +290,7 @@ pub(crate) fn resolve_open_target_granted(
 async fn holds_guide_grant<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     frame_id: Option<&str>,
+    pages: &[crate::verbs::foreman_launch::Page],
 ) -> bool {
     use crate::dashboard_stream::frame::FrameStore;
     use tauri::Manager;
@@ -299,8 +300,16 @@ async fn holds_guide_grant<R: tauri::Runtime>(
     let Some(frame) = FrameStore::by_id(&frames, id) else {
         return false;
     };
-    // The cheap check first, so the common page never resolves the docs checkout.
+    // The page's own top-level frame only, as the pin was earned at mint: never a child, never a
+    // baseline view (which renders a committed blob), and never a frame that lacks the grant
+    // its bytes earned. The cheap checks come first, so the common page never resolves the docs
+    // checkout.
     if frame.parent_frame.is_some()
+        || frame.grant.slot == "baseline"
+        || !frame
+            .effective_grant
+            .iter()
+            .any(|held| held == crate::verbs::foreman_launch::CAPABILITY)
         || !path_str(Path::new(&frame.document_path))
             .ends_with(crate::verbs::foreman_launch::GUIDE_PAGE)
     {
@@ -310,7 +319,7 @@ async fn holds_guide_grant<R: tauri::Runtime>(
         return false;
     };
     let docs_root = crate::context_repo::codesense_docs::docs_root(&home, &principal.into());
-    crate::verbs::foreman_launch::is_guide_page(&docs_root, &frame.document_path)
+    crate::verbs::foreman_launch::is_guide_page_in(pages, &docs_root, &frame.document_path)
 }
 
 /// `codesense.context()`: the content root (org, team, layer) the page at
@@ -337,14 +346,35 @@ pub async fn bridge_resolve_open_target<R: tauri::Runtime>(
     team: Option<String>,
     frame_id: Option<String>,
 ) -> Result<OpenTarget, String> {
+    open_target_for_frame(
+        &app,
+        page,
+        path,
+        team,
+        frame_id,
+        crate::verbs::foreman_launch::PAGES,
+    )
+    .await
+}
+
+/// [`bridge_resolve_open_target`] with the page list the setup page is pinned in.
+async fn open_target_for_frame<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    page: String,
+    path: String,
+    team: Option<String>,
+    frame_id: Option<String>,
+    pages: &[crate::verbs::foreman_launch::Page],
+) -> Result<OpenTarget, String> {
     use crate::context_repo::caller_scope::CallerScope;
-    let guide = holds_guide_grant(&app, frame_id.as_deref()).await;
+    let guide = holds_guide_grant(app, frame_id.as_deref(), pages).await;
     // The setup page's route never reads a scope, so none is built for it.
     let scope = if guide {
         CallerScope::Unknown
     } else {
-        crate::context_repo::caller_scope::for_page(&app, Some(&page), frame_id.as_deref())?
+        crate::context_repo::caller_scope::for_page(app, Some(&page), frame_id.as_deref())?
     };
+    let app = app.clone();
     super::await_blocking("bridge_resolve_open_target", move || {
         let roots = crate::context_query::known_roots(&app);
         resolve_open_target_granted(guide, &roots, &page, &path, team.as_deref(), &scope)
