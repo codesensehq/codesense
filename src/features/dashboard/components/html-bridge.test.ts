@@ -4,10 +4,13 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { setDashboardLaunchController, type DashboardLaunchController } from "./dashboard-launch";
 import { liveHub } from "../lib/live-hub";
+import { VERB_REGISTRY } from "../lib/verb-registry.generated";
 import type { AgentPinsOp } from "@/tauri/commands";
 
 const mockGetDependencyStatus = vi.fn();
 const mockAnalyze = vi.fn();
+const mockSessionTextWatch = vi.fn(async () => undefined);
+const mockSessionTextUnwatch = vi.fn(async () => undefined);
 const mockApplyMetadataEdit = vi.fn();
 const mockRouteFileToContext = vi.fn();
 const mockCreateFile = vi.fn();
@@ -110,6 +113,8 @@ vi.mock("@/tauri/commands", () => ({
   listAgentUpdates: (...a: unknown[]) => mockListAgentUpdates(...a),
   sendRoleMessage: (...a: unknown[]) => mockSendRoleMessage(...a),
   agentReadSessions: (...a: unknown[]) => mockAgentReadSessions(...a),
+  sessionTextWatch: (...a: unknown[]) => mockSessionTextWatch(...(a as [])),
+  sessionTextUnwatch: (...a: unknown[]) => mockSessionTextUnwatch(...(a as [])),
   agentReadAgent: (...a: unknown[]) => mockAgentReadAgent(...a),
   agentReadInbox: (...a: unknown[]) => mockAgentReadInbox(...a),
   listInboxRollup: () => mockListInboxRollup(),
@@ -295,6 +300,12 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
+      "inbox.pin",
+      "inbox.pins",
+      "inbox.reorderPins",
+      "inbox.replacePin",
+      "inbox.restorePin",
+      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -331,7 +342,9 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "records.setFields",
       "records.write",
       "reorderPins",
+      "replacePin",
       "replyAsHuman",
+      "restorePin",
       "roles",
       "routeToContext",
       "routine",
@@ -356,6 +369,8 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "sessionRecord",
       "sessionUsage",
       "sessions",
+      "sessions.unwatchText",
+      "sessions.watchText",
       "setField",
       "setHumanStatus",
       "setModelRate",
@@ -399,6 +414,18 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       /must be an object/,
     );
     expect(READ_VERBS).toContain("queryContext");
+  });
+
+  it("runs each namespaced pin verb with its flat verb's handler", () => {
+    const spaced = VERB_REGISTRY.map((verb) => verb.name).filter((name) =>
+      name.startsWith("inbox."),
+    );
+    expect(spaced.length).toBeGreaterThan(0);
+    for (const name of spaced) {
+      expect(HTML_BRIDGE_ALLOWLIST[name], name).toBe(
+        HTML_BRIDGE_ALLOWLIST[name.slice("inbox.".length)],
+      );
+    }
   });
 
   it("does NOT expose the reserved LD-2 proxyFetch yet", () => {
@@ -2014,6 +2041,70 @@ describe("agents read model verbs", () => {
     expect(READ_VERBS).toContain("pins");
   });
 
+  it("restorePin hands the engine a restore of that message in the doc's team", async () => {
+    mockAgentPins.mockReset();
+    mockAgentPins.mockResolvedValue({
+      status: "pins",
+      org: "acme",
+      team: "default",
+      agentId: "acme/default/dev",
+      storyId: "DEMO-1",
+      pins: [{ messageId: 7, position: 0 }],
+      outcome: "restored",
+    });
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    const done = (await runBridgeCommand("restorePin", { ...thread, messageId: 7 }, DOC)) as {
+      outcome: string;
+    };
+    expect(done.outcome).toBe("restored");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "restore",
+      messageId: 7,
+    });
+    await expect(
+      runBridgeCommand("restorePin", { ...thread, messageId: "7" }, DOC),
+    ).rejects.toThrow(/messageId/);
+    expect(METADATA_ACTION_VERBS).toContain("restorePin");
+  });
+
+  it("replacePin hands the engine a replace in the chosen pin's place, and restorePin with replacing its undo", async () => {
+    mockAgentPins.mockReset();
+    mockAgentPins.mockResolvedValue({
+      status: "pins",
+      org: "acme",
+      team: "default",
+      agentId: "acme/default/dev",
+      storyId: "DEMO-1",
+      pins: [{ messageId: 9, position: 0 }],
+      outcome: "replaced",
+    });
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    const done = (await runBridgeCommand(
+      "replacePin",
+      { ...thread, messageId: 9, replaces: 7 },
+      DOC,
+    )) as { outcome: string };
+    expect(done.outcome).toBe("replaced");
+    expect(mockAgentPins).toHaveBeenCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "replace",
+      messageId: 9,
+      replaces: 7,
+    });
+    await runBridgeCommand("restorePin", { ...thread, messageId: 7, replacing: 9 }, DOC);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(TEAM, "acme/default/dev", "DEMO-1", {
+      op: "restore",
+      messageId: 7,
+      replacing: 9,
+    });
+    await expect(runBridgeCommand("replacePin", { ...thread, messageId: 9 }, DOC)).rejects.toThrow(
+      /replaces/,
+    );
+    await expect(
+      runBridgeCommand("restorePin", { ...thread, messageId: 7, replacing: "9" }, DOC),
+    ).rejects.toThrow(/replacing/);
+    expect(METADATA_ACTION_VERBS).toContain("replacePin");
+  });
+
   it("refuses a pins call with no thread, a bad message id or a bad position", async () => {
     mockAgentPins.mockReset();
     await expect(runBridgeCommand("pins", {}, DOC)).rejects.toThrow(/pins: \{agentId\}/);
@@ -2077,6 +2168,17 @@ describe("agents read model verbs", () => {
     expect(unsubscribe).toHaveBeenCalledWith("pins", {
       viewKey: "pins:acme/default:acme/default/dev:DEMO-1",
     });
+  });
+
+  it("a messageDelivery subscription takes the frame's granted view, as the inbox does", async () => {
+    const subscribe = vi.fn(async () => ({ topic: "messageDelivery", rev: 1, snapshot: [] }));
+    await runBridgeCommand(
+      "subscribe",
+      { topic: "messageDelivery" },
+      { ...DOC, liveFrame: async () => ({ subscribe }) as never },
+    );
+    expect(mockAgentPinsPrepareView).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledWith("messageDelivery", undefined, undefined);
   });
 
   it("a page on the pins topic prepares no view: pins has no pages to turn", async () => {
@@ -3172,5 +3274,76 @@ describe("human-inbox surfaces", () => {
       ).rejects.toThrow(/markRead:.*org.*team.*together/);
     }
     expect(mockMarkInboxMessagesRead).not.toHaveBeenCalled();
+  });
+});
+
+describe("sessions.watchText: a page hears a session's assistant prose (onSessionText)", () => {
+  async function textFrame(
+    scope: "open" | "team",
+    grants: string[],
+    team = { org: "acme", team: "a" },
+  ) {
+    const { frameFixture } = await import("../../../../tests/support/fixtures/frame");
+    const frame = frameFixture({
+      documentPath: "/ctx/acme/a/content/pages/agent.html",
+      contentRoot: "/ctx/acme/a/content",
+      slot: "file-nav",
+    });
+    frame.grant.team = team;
+    frame.grant.scope = scope;
+    (frame as { effectiveGrant?: string[] }).effectiveGrant = grants;
+    const watchText = vi.fn();
+    const unwatchText = vi.fn();
+    const ctx = {
+      frame,
+      frameGrant: frame.grant,
+      liveFrame: async () => ({ watchText, unwatchText }) as never,
+    };
+    return { ctx, watchText, unwatchText };
+  }
+  const session = (sessionId: string, team: { org: string; team: string } | null) =>
+    ({ sessionId, handle: `h-${sessionId}`, team }) as never;
+
+  beforeEach(() => {
+    mockSessionTextWatch.mockClear();
+    mockSessionTextUnwatch.mockClear();
+    mockAgentReadSessions.mockResolvedValue([
+      session("s-own", { org: "acme", team: "a" }),
+      session("s-other", { org: "acme", team: "b" }),
+    ]);
+  });
+
+  it("starts the stream for a session in the page's own team, and stops it", async () => {
+    const { ctx, watchText, unwatchText } = await textFrame("team", ["sessions:read"]);
+    await runBridgeCommand("sessions.watchText", { sessionId: "s-own" }, ctx);
+    expect(watchText).toHaveBeenCalledWith("s-own");
+    await runBridgeCommand("sessions.unwatchText", { sessionId: "s-own" }, ctx);
+    expect(unwatchText).toHaveBeenCalledWith("s-own");
+  });
+
+  it("denies another team's session, whatever the grant's scope", async () => {
+    for (const scope of ["team", "open"] as const) {
+      const { ctx, watchText } = await textFrame(scope, ["sessions:read"]);
+      await expect(
+        runBridgeCommand("sessions.watchText", { sessionId: "s-other" }, ctx),
+      ).rejects.toThrow("denied: session team");
+      expect(watchText).not.toHaveBeenCalled();
+    }
+    expect(mockSessionTextWatch).not.toHaveBeenCalled();
+  });
+
+  it("denies a page without sessions:read, and an unknown session", async () => {
+    const bare = await textFrame("team", []);
+    await expect(
+      runBridgeCommand("sessions.watchText", { sessionId: "s-own" }, bare.ctx),
+    ).rejects.toThrow("denied: grant");
+    const granted = await textFrame("team", ["sessions:read"]);
+    await expect(
+      runBridgeCommand("sessions.watchText", { sessionId: "s-gone" }, granted.ctx),
+    ).rejects.toThrow("not_found");
+    await expect(runBridgeCommand("sessions.watchText", {}, granted.ctx)).rejects.toThrow(
+      /sessionId/,
+    );
+    expect(mockSessionTextWatch).not.toHaveBeenCalled();
   });
 });

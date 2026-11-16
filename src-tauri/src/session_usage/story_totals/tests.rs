@@ -795,6 +795,33 @@ async fn h1_every_basis_a_session_resolves_by_marks_its_story() {
     assert!(ids.iter().all(|id| refreshing(home, id)));
 }
 
+/// A story read that applies its story's queued usage (as the record line's read does after each
+/// usage notice) marks the story: a read stores no totals, so only the totals compute may skip its
+/// own mark.
+#[tokio::test]
+async fn a_story_read_that_applies_queued_usage_marks_the_story() {
+    let (dir, mut s) = store();
+    let home = dir.path();
+    let ids = vec!["SV-READ-1".to_owned()];
+    seed_session(&mut s, home, "SV-READ-1", "reader", true);
+    let computed = fake_computed(home, &ids);
+    sweep_sources(&computed, home, now_ms()).unwrap();
+    computed
+        .conn
+        .execute("UPDATE story_totals SET dirty_since_ms = NULL, dirty_at_ms = NULL", [])
+        .unwrap();
+    assert!(!refreshing(home, "SV-READ-1"));
+
+    let usage = event("reader-e2", "reader", "gpt-6-sol", 1_790_000_000_500, Tokens { input: 1, ..Default::default() });
+    s.ingest(&[usage]).unwrap();
+    let queued: i64 = s.conn.query_row("SELECT count(*) FROM source_event", [], |r| r.get(0)).unwrap();
+    assert!(queued > 0, "new usage queues its session");
+    let params: story_changes::Params =
+        serde_json::from_value(serde_json::json!({"storyId":"SV-READ-1","only":["sessions"]})).unwrap();
+    story_changes::read(home, &params, &CallerScope::Human).await.unwrap();
+    assert!(refreshing(home, "SV-READ-1"), "the read dequeued the story's usage without marking it");
+}
+
 /// M1: a commit on a branch a story followed marks it whatever the branch is named, and a merge
 /// whose second parent is that branch's tip marks it whatever its subject says.
 #[test]

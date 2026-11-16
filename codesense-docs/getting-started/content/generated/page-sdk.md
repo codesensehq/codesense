@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 113 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 123 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -455,6 +455,17 @@ onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscr
 Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
 record's `sessionIds` to hear only about that agent's session.
 
+## Surface: onSessionText
+
+```ts
+onSessionText(
+      sessionId: string,
+      cb: (text: { kind: "prose" | "final"; turn: string; key: string; text: string } | null, error?: unknown) => void,
+    ): Unsubscribe;
+```
+
+A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused.
+
 ## Surface: onPasteTargetChanged
 
 ```ts
@@ -879,6 +890,419 @@ read · inbox:read:team · MCP twin inbox_list
 
 Class: read; default grant: inbox:read:team; MCP twin: inbox_list.
 
+## VerbMethods: inbox.pin
+
+```ts
+"inbox.pin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      preview?: {
+        chart?: {
+          kind: "segments";
+          label: string;
+          segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+          [key: string]: unknown;
+        } | {
+          kind: "progress";
+          label: string;
+          percent: number;
+          [key: string]: unknown;
+        } | {
+          kind: "stack";
+          label: string;
+          parts: Array<{
+            label: string;
+            value: number;
+            [key: string]: unknown;
+          }>;
+          [key: string]: unknown;
+        };
+        lines?: string[];
+        shortName?: string;
+        status?: "on-track" | "running" | "needs-you" | "not-updating";
+        unit?: string;
+        value?: string;
+      };
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
+## VerbMethods: inbox.pins
+
+```ts
+"inbox.pins"(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:read:team
+
+Class: read; default grant: inbox:read:team; MCP twin: Agents read their pins in the result of the pin tool; pages read any thread of their team.
+
+## VerbMethods: inbox.reorderPins
+
+```ts
+"inbox.reorderPins"(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thread's pins; an agent places a pin with the pin tool's position.
+
+## VerbMethods: inbox.replacePin
+
+```ts
+"inbox.replacePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin.
+
+## VerbMethods: inbox.restorePin
+
+```ts
+"inbox.restorePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replacing?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
+## VerbMethods: inbox.unpin
+
+```ts
+"inbox.unpin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
+
 ## VerbMethods: inboxRollup
 
 ```ts
@@ -1204,7 +1628,7 @@ pin(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1267,7 +1691,7 @@ pins(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1769,7 +2193,7 @@ reorderPins(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1820,6 +2244,71 @@ metadata · inbox:write
 
 Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thread's pins; an agent places a pin with the pin tool's position.
 
+## VerbMethods: replacePin
+
+```ts
+replacePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: The person replaces a pin at the cap; an agent's pin tool refuses a fourth pin.
+
 ## VerbMethods: replyAsHuman
 
 ```ts
@@ -1833,6 +2322,71 @@ replyAsHuman(args?: {
 send · inbox:write · confirmable · MCP twin reply
 
 Class: send; default grant: inbox:write; MCP twin: reply.
+
+## VerbMethods: restorePin
+
+```ts
+restorePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replacing?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write · MCP twin pin
+
+Class: metadata; default grant: inbox:write; MCP twin: pin.
 
 ## VerbMethods: roles
 
@@ -2125,6 +2679,30 @@ read · sessions:read · MCP twin list_sessions
 
 Class: read; default grant: sessions:read; MCP twin: list_sessions.
 
+## VerbMethods: sessions.unwatchText
+
+```ts
+"sessions.unwatchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+```
+
+read · sessions:read
+
+Class: read; default grant: sessions:read; MCP twin: A page hears a session's assistant prose as it is written; agents read a session's turns with session_read.
+
+## VerbMethods: sessions.watchText
+
+```ts
+"sessions.watchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+```
+
+read · sessions:read
+
+Class: read; default grant: sessions:read; MCP twin: A page hears a session's assistant prose as it is written; agents read a session's turns with session_read.
+
 ## VerbMethods: setField
 
 ```ts
@@ -2403,7 +2981,7 @@ unpin(args: {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;

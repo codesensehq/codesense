@@ -324,12 +324,16 @@ describe("TerminalSlot owns a slot, never a terminal (I3)", () => {
     const view = render(<TerminalSlot sessionId="s1" display={DISPLAY} active manager={manager} />);
     await restored();
     view.unmount();
+    const writes = vi.spyOn(manager.terminal("s1")!, "write");
     fake.server.produce("s1", "while parked\r\n");
     await parsed();
+    // A parked display parses nothing.
+    expect(writes).not.toHaveBeenCalled();
     render(<TerminalSlot sessionId="s1" display={DISPLAY} active manager={manager} />);
     // Attached in a layout effect: before the browser paints the first frame.
     const view2 = document.querySelector(".cs-terminal-display");
     expect(view2?.parentElement?.id).not.toBe("cs-terminal-parking");
+    await parsed();
     expect(manager.terminal("s1")!.buffer.active.getLine(0)?.translateToString(true)).toBe(
       "while parked",
     );

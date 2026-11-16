@@ -261,6 +261,107 @@ test.describe("the agent's chat at any pane size", () => {
   }
 });
 
+/** The design's measure of a short pane: the thread keeps this much room (and this many lines
+ *  of message text, at the text's own line height) with the lead's 2 pins showing. */
+const ROOM = [
+  { w: 250, h: 250, px: 122, lines: 7 },
+  { w: 900, h: 250, px: 174, lines: 10 },
+  // The taller sizes keep the room they had.
+  { w: 300, h: 700, px: 443, lines: 0 },
+  { w: 640, h: 480, px: 257, lines: 0 },
+] as const;
+
+test.describe("the thread keeps its room", () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  for (const size of ROOM) {
+    test(`${size.w} × ${size.h}: the thread is at least ${size.px} px${size.lines ? ` and ${size.lines} lines` : ""}, beside the pins and composer`, async ({
+      page,
+    }) => {
+      await expand(page, BUG);
+      await openInbox(page, AGENT_TAB);
+      await page.evaluate(
+        ({ tabId, w, h }) => {
+          const el = document.querySelector<HTMLElement>(`[data-testid="inbox-split-${tabId}"]`)!;
+          Object.assign(el.style, { flex: "none", width: `${w}px`, height: `${h}px` });
+        },
+        { tabId: AGENT_TAB, w: size.w, h: size.h },
+      );
+      const chat = page.locator(paneOf(AGENT_TAB));
+      await expect(chat).toHaveAttribute("data-width", /.+/);
+      const pins = chat.locator('[data-testid^="chat-overlay-pin-"]');
+      await expect(pins).toHaveCount(2);
+      const room = await chat.evaluate((root) => {
+        const wrap = root.querySelector<HTMLElement>(".ibx-scrollwrap")!;
+        const text = root.querySelector<HTMLElement>(".ibx-m .bub")!;
+        const strip = root.querySelector<HTMLElement>(".ibx-ov-pins")!;
+        return {
+          // What the strip had to fit, for a failure to say why it wrapped.
+          strip: {
+            width: strip.clientWidth,
+            chips: [
+              ...strip.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]'),
+            ].map((chip) => Math.round(chip.getBoundingClientRect().width * 10) / 10),
+          },
+          px: wrap.getBoundingClientRect().height,
+          lines:
+            wrap.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight),
+          rows: new Set(
+            [...root.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]')].map(
+              (pin) => pin.offsetTop,
+            ),
+          ).size,
+        };
+      });
+      expect(room.px, JSON.stringify(room.strip)).toBeGreaterThanOrEqual(size.px);
+      expect(room.lines).toBeGreaterThanOrEqual(size.lines);
+      // On the one-line strip, both pins share one row.
+      if (size.w === 250) expect(room.rows).toBe(1);
+      await expect(chat.locator(".ibx-comp textarea")).toBeInViewport();
+    });
+  }
+});
+
+test.describe("the one-line pins strip", () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  test("a value as long as a preview allows wraps the strip rather than overflow or clip it", async ({
+    page,
+  }) => {
+    await expand(page, BUG);
+    await openInbox(page, AGENT_TAB);
+    await page.evaluate(
+      ({ tabId }) => {
+        const el = document.querySelector<HTMLElement>(`[data-testid="inbox-split-${tabId}"]`)!;
+        Object.assign(el.style, { flex: "none", width: "250px", height: "250px" });
+      },
+      { tabId: AGENT_TAB },
+    );
+    const chat = page.locator(paneOf(AGENT_TAB));
+    const pins = chat.locator('[data-testid^="chat-overlay-pin-"]');
+    await expect(pins).toHaveCount(2);
+    // A preview value may be 32 characters (the engine's cap).
+    await pins.first().evaluate((pin) => {
+      pin.querySelector<HTMLElement>(".ibx-pk-v b")!.textContent = "W".repeat(32);
+    });
+    const fit = await chat.evaluate((root) => {
+      const strip = root.querySelector<HTMLElement>(".ibx-ov-pins")!;
+      const chips = [...strip.querySelectorAll<HTMLElement>('[data-testid^="chat-overlay-pin-"]')];
+      return {
+        stripOverflows: strip.scrollWidth > strip.clientWidth + 1,
+        chatOverflows: root.scrollWidth > root.clientWidth + 1,
+        clipped: chips.some((chip) => {
+          const value = chip.querySelector<HTMLElement>(".ibx-pk-v")!.getBoundingClientRect();
+          const box = chip.getBoundingClientRect();
+          return value.right > box.right + 1 || box.right > strip.getBoundingClientRect().right + 1;
+        }),
+        rows: new Set(chips.map((chip) => chip.offsetTop)).size,
+      };
+    });
+    expect(fit).toEqual({ stripOverflows: false, chatOverflows: false, clipped: false, rows: 2 });
+  });
+});
+
 test.describe("every agent's chat entry, and none for a headless run", () => {
   test("a headless run in the agent list has no chat icon; a running agent does", async ({
     page,

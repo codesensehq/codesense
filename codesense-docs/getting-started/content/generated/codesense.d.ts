@@ -381,6 +381,11 @@ declare namespace CodesenseSdk {
     /** Runs `cb` when an agent's session record may have changed. Re-read `sessionRecord`. Pass the
      * record's `sessionIds` to hear only about that agent's session. */
     onSessionRecordChanged(cb: () => void, sessionIds?: string | string[]): Unsubscribe;
+    /** A session's assistant prose as it is written, then exactly one final message per turn (the last prose after the turn's last tool call); never a tool call or the model's thinking. Needs `sessions:read`, and only a session of the page's own team; a refusal comes as `cb(null, error)`. A local Claude or Codex session; another CLI's session, or a remote one, is refused. */
+    onSessionText(
+      sessionId: string,
+      cb: (text: { kind: "prose" | "final"; turn: string; key: string; text: string } | null, error?: unknown) => void,
+    ): Unsubscribe;
     /** Runs `cb` when the answer to canPasteToTerminal() flips between true and false.
      * Re-read then. */
     onPasteTargetChanged(cb: () => void): Unsubscribe;
@@ -442,7 +447,9 @@ declare namespace CodesenseSdk {
   }
   /** The page's live reads: the roster, the inbox, activity and a session's usage. */
   interface ChatReads {
-    on(event: "sessions" | "inbox" | "activity", listener: () => void): () => void;
+    on(event: "sessions" | "inbox" | "activity" | "delivery", listener: () => void): () => void;
+    /** A sent message's own `messageDelivery` row, where the page subscribes to that topic: its Queued and Delivered marks follow it (the chat listens for a `delivery` event). Without it the marks follow the lead's roster row. */
+    delivery?(messageId: string | number): { state: "queued" | "delivered"; deliveredAtMs?: number | null } | null;
     sessions(): Promise<unknown>;
     latestSessions(): Array<Record<string, unknown>>;
     usage(args: { sessionId: string }): Promise<unknown>;
@@ -497,6 +504,8 @@ declare namespace CodesenseSdk {
     busyAtSend: boolean;
     lead: ChatLeadRow | null | undefined;
     newestLeadAt?: number;
+    /** The message's own `messageDelivery` row, when the host pushes the topic: it decides then. */
+    delivery?: { state: "queued" | "delivered"; deliveredAtMs?: number | null } | null;
   }
   /** Who the chat talks to: rows of the roster, what its thread reads, and where a message goes while it is away. */
   interface ChatTarget {
@@ -515,6 +524,8 @@ declare namespace CodesenseSdk {
     bindLaunched?: boolean;
     /** A failed launch keeps every message it did not send, the held ones too, so one Retry sends them in order. */
     keepUnsent?: boolean;
+    /** Read at each send (Enter, Send, a page chip, `post`). A `next` chip is the peer's own suggested reply, so it always goes to the peer. A recipient takes the message straight to its handle with `transport.send`, never through the launch: the box clears only once it is sent, a failure keeps the text and shows an alert row, and its bubble says "To <name>" in its meta line. `null` sends to the peer as without it. */
+    recipient?(): { handle: string; name: string } | null;
   }
   /** A header or head slot's paint: nodes are replaced only when sig changes. */
   interface ChatPaint {
@@ -532,7 +543,10 @@ declare namespace CodesenseSdk {
     layout?: {
       head?(state: ChatState): ChatPaint;
       source?: string;
-      composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string };
+      /** `label` names the input while it is given (a recipient's name); without it, or `null`, the input is named by `composerLabel`. */
+      composer?(state: ChatState): { placeholder?: string; hint?: string; send?: string; label?: string };
+      /** The page's own control in the composer, above the box (a "To" chip): called once with the slot's element; the function it returns runs on unmount. A filled slot grows the composer past its 96px; an empty one takes no room. */
+      composerSlot?(element: HTMLElement): (() => void) | void;
       composerRows?: string;
       composerLabel?: string;
       logLabel?: string;
@@ -549,17 +563,44 @@ declare namespace CodesenseSdk {
     copy?: Record<string, unknown>;
     /** One-tap messages above the composer. */
     chips?: Array<{ label: string; text: string; /** A pencil beside the chip puts its text in the composer instead of sending it. */ edit?: boolean }>;
-    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
+    /** Opt-in avatars. A lead's or another agent's message shows its sender's avatar beside the meta line at the start of a run, and a run of messages from one sender is one meta line; the person's own messages carry no avatar. The meta line names the sender, so the avatar is hidden from screen readers; a `name` that doesn't contain the line's name is read once before it. `true` draws initials (through `kit.avatar`) from the sender's name; a function answers per message: `src` draws that image, `face` (a built-in face ref) and `name` go to `kit.avatar`, and `label` is the name on the meta line. Unset, the thread is unchanged. */
     faces?: boolean | ((row: ChatRow) => { src?: string; face?: string; name?: string; label?: string } | null | undefined);
     /** The agent's trailing `Next:` line (`core.parseNext`) becomes chips after its newest message and is left out of the message's text; `edit` adds each chip's pencil. Off by default. */
     next?: boolean | { edit?: boolean };
-    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the peer's current step while it runs, else `Working…`. */
+    /** The working row under the thread (off by default): `text(state)` is the page's own line (for example an act in a terminal tab), else the live lead's prose (`onSessionText`, when the host offers it for that session: the latest chunk's last sentence on one line, its whole text in the title, not announced chunk by chunk, until the turn's final message or the lead's next message), else the peer's current step while it runs, else `Working…`. */
     activity?: boolean | { text?(state: ChatState): string | null | undefined };
+    /** The chat links its stylesheet (`/kit/v1/chat.css`, every rule under the chat's `.cs-chat` root) once per page. `false` keeps the page's own chat rules. Each mount takes its own element ids: the first chat on a page keeps the plain ones (`sv-composer-input`, `sv-status`, …), the next carry `-2`, `-3`; unmount gives the ids back. Default `true`. */
+    styles?: boolean;
+    /** The person pins a message into its agent thread, through the page (the pins verbs). Each message gets a Pin in its action row (shown on hover and while focus is inside it); pinned, it is Unpin with a "Pinned by" tag. The cap is shared with the agent: at the cap every Pin is dimmed ahead of time and a click says whose pins fill the list; nothing is replaced. With `replace: true`, Pin at the cap is instead Pin…, which opens a chooser under the message of which pin to replace: choosing one calls `change('replace', messageId, {replaces})`, which puts the message in that pin's place, and its Undo calls `change('restore', replacedId, {replacing: messageId})`, which brings both back. A refusal the engine gives (the verbs' `invalid` reply) rejects with `refused: true`, so an Undo that can't happen goes away instead of offering Try again. `mark(messageId | null)` tells the page which of its pins the chooser's current row would replace; `title(pin)` names a pin as the page's pins do (else its preview's `shortName`, else its message). An unpin offers Undo (`restore`) until the next pin, unpin or Esc. `pins()` is the thread's list now; `change` resolves the new list or rejects; `subscribe(fn)` repaints when the list changes; `showPins()` moves focus to the page's pins; `name(pinnedBy)` names an agent. */
+    onPin?: {
+      pins(): ReadonlyArray<ChatPin>;
+      change(
+        action: "pin" | "unpin" | "restore" | "replace",
+        messageId: number | string,
+        options?: { replaces?: number | string; replacing?: number | string },
+      ): Promise<ReadonlyArray<ChatPin>>;
+      subscribe?(listener: () => void): () => void;
+      showPins?(): void;
+      name?(pinnedBy: string): string;
+      replace?: boolean;
+      mark?(messageId: number | string | null): void;
+      title?(pin: ChatPin): string | null | undefined;
+    };
     /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
     timers?: { slowMs: number; failMs: number };
     /** Builds the launch prompt from the first message. Default: the text itself. */
     card?(text: string): string;
     done?: boolean;
+    /** A send state the page keeps across mounts (`kit.chat.createSendState`). The send state (messages and their marks, the outbox, the launch and its timers, the cards answered from the page) survives an unmount and a new mount; the composer text, the typing row and the card drafts belong to the mount and start empty on the next one. The mount attaches to it and detaches on unmount. Without it the mount makes its own and ends it on unmount. */
+    send?: ChatSendState;
+  }
+  /** A pin as `onPin.pins()` lists it: the pins verbs' row. `pinnedAtMs` and `preview` draw the replace chooser's rows. */
+  interface ChatPin {
+    messageId: number | string;
+    pinnedBy: string;
+    pinnedAtMs?: number;
+    preview?: { shortName?: string; value?: string; status?: "on-track" | "running" | "needs-you" | "not-updating"; [key: string]: unknown };
+    [key: string]: unknown;
   }
   /** What a layout or header callback sees. */
   interface ChatState {
@@ -584,12 +625,58 @@ declare namespace CodesenseSdk {
     threadSettled(): boolean;
     thread(): ChatRow[];
     setDone(value: boolean): void;
+    /** Paints the chat again after a change in the page's own state, such as a recipient picked in the composer slot. */
+    repaint(): void;
     subscribe(listener: () => void): () => void;
     [member: string]: unknown;
+  }
+  /** What `createSendState` takes: the mount's own options for the verbs, reads, bounds, launch prompt and words, and the peer from `targetOf`. */
+  interface ChatSendStateOptions {
+    transport: ChatTransport;
+    reads: ChatReads;
+    target: ChatTarget;
+    storyId?: string | null;
+    leadRole?: string | null;
+    /** Bounds a launch: slow after slowMs, failed after failMs. Default 20 s and 120 s. */
+    timers?: { slowMs: number; failMs: number };
+    /** Builds the launch prompt from the first message. Default: the text itself. */
+    card?(text: string): string;
+    /** The clock the launch's timers use. Default: the window's. */
+    clock?: { now(): number; setTimeout(fn: () => void, ms: number): unknown; clearTimeout(id: unknown): void };
+    /** The window the unload guard is added to. Default `window`. */
+    win?: Window;
+    /** The page's own words over the chat's (as the mount's `copy`): the unload warnings are read from it. */
+    copy?: Record<string, unknown>;
+  }
+  /** The launch controller a chat sends through. */
+  interface ChatLaunch {
+    readonly state: "idle" | "starting" | "slow" | "failed" | "joined";
+    /** `to` and `messageId` are set on a message sent to a recipient. */
+    readonly messages: Array<{ id: number; text: string; mark: string | null; to?: { handle: string; name: string }; messageId?: string | number }>;
+    /** True while the send state still has work: a launch starting or failed, or a message held, kept or in flight. */
+    unsettled(): boolean;
+    /** The session the launch opened, or null until it names one. */
+    sessionId(): string | null;
+    /** Takes the launch's changes in place of the previous listener; the returned function detaches it (no listener, no emit). */
+    attach(listener: () => void): () => void;
+    [member: string]: unknown;
+  }
+  /** What a chat has sent or asked to send, kept outside its DOM. It ends with the page, through `dispose()`, never on a hide. */
+  interface ChatSendState {
+    readonly launch: ChatLaunch;
+    readonly cards: Map<string | number, { phase: "pending" | "error" | "answered"; text: string; at?: number; failure?: string }>;
+    unsettled(): boolean;
+    /** A mounted chat's render takes the launch's changes; the returned function hands them back, and the state listens to the roster only while it has work. */
+    attach(render: () => void): () => void;
+    dispose(): void;
   }
   /** `/kit/v1/chat.js`'s `kit.chat`. The marks rule and the card parser (`core`) are DOM-free: `/kit/v1/chat-core.js` is the same code as an ES module. */
   interface KitChat {
     mount(element: HTMLElement, options: ChatMountOptions): ChatHandle;
+    /** Makes the send state a page keeps across mounts (the `send` mount option). */
+    createSendState(options: ChatSendStateOptions): ChatSendState;
+    /** The peer a chat talks to: `target` when the page gives one, else the story's lead rows. */
+    targetOf(options: { target?: ChatTarget | null; storyId?: string | null; leadRole?: string | null }): ChatTarget;
     /** Keeps a chat log at the newest message while you are at the bottom. `win` is the window whose resize and timers it uses; `reset()` re-pins after the log is rebuilt. */
     pinToBottom(
       log: HTMLElement,
@@ -617,6 +704,52 @@ declare namespace CodesenseSdk {
         cardId: string | number,
         thread: readonly ChatThreadRow[] | null | undefined,
       ): { text: string; at: number } | null;
+      /** A thread shows at most this many pins, the person's and its agent's together. */
+      PIN_CAP: number;
+      /** The first sentence of a message's first non-empty line. */
+      pinFirstSentence(text: string): string;
+      /** "you" for the person, else the agent's name. */
+      pinWho(pinnedBy: string, nameOf: (pinnedBy: string) => string): string;
+      /** The dimmed Pin's accessible name at the cap: "3 of 3 pinned". */
+      pinCapLabel(count: number): string;
+      /** The note at the cap: whose pins fill the list, the most first. */
+      pinCapNote(pins: ReadonlyArray<{ pinnedBy: string }>, nameOf: (pinnedBy: string) => string): string;
+      /** A message named by its first words. */
+      pinFirstWords(text: string, words?: number): string;
+      /** What the polite live region says after a pin, an unpin or an Undo. */
+      pinLiveText(done: "pinned" | "unpinned" | "restored", title: string, count: number): string;
+      /** What a pin of this message is called: an HTML message by its summary, `<title>`, first heading, else "Dashboard from <sender>"; any other by its summary, else its first sentence. */
+      pinTitleOf(m: { text?: string | null; contentType?: string | null; summary?: string | null }, sender: string): string;
+      /** Pin…'s accessible name and tooltip at the cap: "Pin, replacing one (3 of 3 pinned)". */
+      pinReplaceLabel(count: number): string;
+      /** The replace chooser's heading, which names its group. */
+      pinChooserHeading(count: number): string;
+      /** A chooser row's line: who pinned it, and when. */
+      pinPinnedAtLine(who: string, at: string): string;
+      /** The note and live line after a replace. */
+      pinReplacedText(who: string, title: string): string;
+      /** A row the agent added while the chooser was open, before the person arrives on it. */
+      pinNewRowText(title: string): string;
+      /** What changed in the list while the chooser was open. */
+      pinListChangeText(added: readonly string[], left: readonly string[]): string;
+      /** The agent pinned this message while the chooser was open. */
+      pinPinnedMeanwhileText(who: string): string;
+      /** A replace chooser opened on `pins`: the first row current, the pins it opened on known. */
+      pinChooserOpen<P extends { messageId: number }>(pins: readonly P[]): PinChooserState<P>;
+      /** The row a key moves the chooser's current row to, or null for any other key. */
+      pinChooserStep(key: string, at: number, count: number, fromChange: boolean): number | null;
+      /** The person arrived on a row: current and known, and a failed replace's line goes. */
+      pinChooserArrive<S extends PinChooserState<{ messageId: number }>>(state: S, id: number): S;
+      /** Choose a row: replace it if arrived on, else arrive on it first and say it is new. */
+      pinChooserChoose<S extends PinChooserState<{ messageId: number }>, P extends { messageId: number }>(state: S, pin: P, titleOf: (pin: P) => string): { state: S; replace: boolean };
+      /** Follow the live list: null when nothing changed, {pinned} when the agent pinned this message, else the next state. */
+      pinChooserSync<S extends PinChooserState<P>, P extends { messageId: number }>(state: S, pins: readonly P[], messageId: number, titleOf: (pin: P) => string): { pinned: P } | { state: S } | null;
+      /** The chooser's room line below the cap, else null. */
+      pinChooserRoom(count: number): string | null;
+      PIN_REPLACE_FAILED: string;
+      PIN_ROOM_NOW: string;
+      PIN_UNDO_FULL: string;
+      PIN_UNDO_GONE: string;
     };
     thread: {
       mergeThread(...lists: unknown[]): ChatRow[];
@@ -624,6 +757,15 @@ declare namespace CodesenseSdk {
       newestFrom(rows: ChatRow[], leadHandles: Set<string>): number;
       rowsOf(answer: unknown): ChatRow[];
     };
+  }
+
+  /** The replace chooser's state: the pins it opened on plus the rows arrived on since, the list as last drawn, the current row, what changed, a failed replace. */
+  interface PinChooserState<P extends { messageId: number } = { messageId: number }> {
+    known: ReadonlySet<number>;
+    last: readonly P[];
+    current: number | null;
+    change: string | null;
+    error: string | null;
   }
 
   interface VirtualList<Row extends HubRow = HubRow> {
@@ -1203,6 +1345,371 @@ declare namespace CodesenseSdk {
       conversation?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.pin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      position?: number;
+      preview?: {
+        chart?: {
+          kind: "segments";
+          label: string;
+          segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+          [key: string]: unknown;
+        } | {
+          kind: "progress";
+          label: string;
+          percent: number;
+          [key: string]: unknown;
+        } | {
+          kind: "stack";
+          label: string;
+          parts: Array<{
+            label: string;
+            value: number;
+            [key: string]: unknown;
+          }>;
+          [key: string]: unknown;
+        };
+        lines?: string[];
+        shortName?: string;
+        status?: "on-track" | "running" | "needs-you" | "not-updating";
+        unit?: string;
+        value?: string;
+      };
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:read:team */
+    "inbox.pins"(args: {
+      agentId: string;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    "inbox.reorderPins"(args: {
+      agentId: string;
+      messageIds: number[];
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    "inbox.replacePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.restorePin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replacing?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write · MCP twin pin */
+    "inbox.unpin"(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:read:all-teams */
     inboxRollup(args?: Record<string, unknown>): Promise<unknown>;
     /** spawn · sessions:read */
@@ -1380,7 +1887,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1435,7 +1942,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1735,7 +2242,64 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
+    /** metadata · inbox:write */
+    replacePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replaces: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;
@@ -1786,6 +2350,63 @@ declare namespace CodesenseSdk {
       text?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write · MCP twin pin */
+    restorePin(args: {
+      agentId: string;
+      messageId: number;
+      org?: string;
+      replacing?: number;
+      storyId?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      agentId: string;
+      org: string;
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
+      pins: Array<{
+        messageId: number;
+        pinnedAtMs: number;
+        pinnedBy: string;
+        position: number;
+        preview?: {
+          chart?: {
+            kind: "segments";
+            label: string;
+            segments: Array<"on-track" | "running" | "needs-you" | "not-updating">;
+            [key: string]: unknown;
+          } | {
+            kind: "progress";
+            label: string;
+            percent: number;
+            [key: string]: unknown;
+          } | {
+            kind: "stack";
+            label: string;
+            parts: Array<{
+              label: string;
+              value: number;
+              [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+          };
+          lines?: string[];
+          shortName?: string;
+          status?: "on-track" | "running" | "needs-you" | "not-updating";
+          unit?: string;
+          value?: string;
+        };
+        previewAtMs?: number;
+        [key: string]: unknown;
+      }>;
+      status: "pins";
+      storyId: string;
+      team: string;
+      [key: string]: unknown;
+    } | {
+      message: string;
+      status: "invalid";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:read:team · MCP twin role_state */
     roles(args?: Record<string, unknown>): Promise<unknown>;
     /** metadata · context:write */
@@ -1885,6 +2506,14 @@ declare namespace CodesenseSdk {
     sessionUsage(args?: Record<string, unknown>): Promise<unknown>;
     /** read · sessions:read · MCP twin list_sessions */
     sessions(args?: Record<string, unknown>): Promise<Array<Record<string, unknown>>>;
+    /** read · sessions:read */
+    "sessions.unwatchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
+    /** read · sessions:read */
+    "sessions.watchText"(args: {
+      sessionId: string;
+    }): Promise<unknown>;
     /** metadata · context:write */
     setField(args: {
       field?: string;
@@ -2031,7 +2660,7 @@ declare namespace CodesenseSdk {
     }): Promise<{
       agentId: string;
       org: string;
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
         messageId: number;
         pinnedAtMs: number;

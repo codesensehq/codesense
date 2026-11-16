@@ -173,6 +173,16 @@ fn an_unknown_or_empty_handle_is_refused() {
     assert!(empty.err().unwrap().contains("handle must not be empty"));
 }
 
+#[tokio::test]
+async fn a_record_read_moves_its_counter_even_when_the_handle_is_refused() {
+    let (dir, _store) = store();
+    let before = crate::shared::invoke_stats::metric_total("session_record.read");
+    let params = Params { handle: "nobody".into() };
+    let refused = read(dir.path(), &params, HashMap::new(), &CallerScope::Human).await;
+    assert!(refused.err().unwrap().contains("unknown session"));
+    assert!(crate::shared::invoke_stats::metric_total("session_record.read") > before);
+}
+
 /// A session of the saved agent `agent` on `story`, recorded at `at` with one priced call of
 /// `input` tokens.
 fn chain_session(dir: &Path, handle: &str, agent: &str, story: &str, at: i64, input: u64) {
@@ -384,4 +394,39 @@ fn a_chain_with_nothing_priced_has_no_cost() {
     assert_eq!(record["unpricedModels"], json!(["no-price"]));
     let why = record["unavailable"]["cost"].as_str().unwrap();
     assert!(!why.contains("priced part"), "{why}");
+}
+
+#[test]
+fn a_thread_lists_every_recorded_session_of_its_agent_and_story_ended_ones_included() {
+    let (dir, store) = store();
+    chain_session(dir.path(), "dev-1", "dev@3", "STORY-A", AT, 100);
+    chain_session(dir.path(), "dev-2", "dev@4", "STORY-A", AT + 1_000, 100);
+    chain_session(dir.path(), "qa-1", "qa@1", "STORY-A", AT + 500, 100);
+    chain_session(dir.path(), "dev-other", "dev@3", "STORY-B", AT + 700, 100);
+    // A key that only shares a prefix with the agent is another agent.
+    chain_session(dir.path(), "devops-1", "devops@1", "STORY-A", AT + 800, 100);
+    let found = thread_sessions(&store, "dev@9", "STORY-A").unwrap();
+    assert_eq!(
+        found,
+        vec![
+            ThreadSession {
+                session_id: "tab-dev-1".into(),
+                handle: Some("dev-1".into())
+            },
+            ThreadSession {
+                session_id: "tab-dev-2".into(),
+                handle: Some("dev-2".into())
+            },
+        ]
+    );
+    // A thread with no story reads no record: nothing bounds an agent's no-story sessions.
+    let mut store_w = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    let mut none = SessionRecord::new("tab-loose");
+    none.handle = Some("loose".into());
+    none.agent = Some("dev@3".into());
+    store_w.write_session_record(&none).unwrap();
+    assert_eq!(thread_sessions(&store, "dev", "").unwrap(), vec![]);
+    assert_eq!(thread_sessions(&store, "", "STORY-A").unwrap(), vec![]);
+    let empty = tempfile::tempdir().unwrap();
+    assert_eq!(thread_sessions_in(empty.path(), "dev", "STORY-A").unwrap(), vec![]);
 }

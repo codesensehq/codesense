@@ -32,6 +32,9 @@ export default defineConfig({
     navigationTimeout: 60_000,
   },
   timeout: 90_000,
+  // A cold boot on a CI runner can take longer than the 5 s default to draw its first view:
+  // assertions wait as long as actions do there.
+  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     {

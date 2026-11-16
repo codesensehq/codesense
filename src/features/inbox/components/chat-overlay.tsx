@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, SquareTerminal, X } from "lucide-react";
 
+import { isForemanAgent, openForeman } from "@/features/foreman/open-foreman";
+import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-thread";
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
@@ -21,21 +23,27 @@ import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
 import { useOrgStore } from "@/shared/stores/org-store";
-import { markInboxMessageRead, type AgentSessionRow } from "@/tauri/commands";
+import { markInboxMessageRead, type AgentPin, type AgentSessionRow } from "@/tauri/commands";
 
-import { goToSession } from "../actions";
+import type { ConversationMessage } from "../api";
+import { goToSession, openStory } from "../actions";
 import { useAgentConversation } from "../hooks/use-agent-conversation";
 import { useAgentPins } from "../hooks/use-agent-pins";
+import { usePersonPins } from "../hooks/use-person-pins";
+import { capLabel, pinTitleOf, quoteOf, whoPinned } from "../lib/person-pins";
 import { useDocumentVisible } from "../hooks/use-document-visible";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
+import { useMessageDelivery } from "../hooks/use-message-delivery";
 import { useSessionInbox } from "../hooks/use-session-inbox";
+import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
+import { createDeliveryTracker } from "../lib/delivery-marks";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
-import { HUMAN, msgKey, sameTeam } from "../model";
+import { HUMAN, formatClock, labelOf, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
 import { GroupChatPane, type GroupRoom } from "./group-chat";
 import { Ico, InboxLoading, MessageBody, ReadFailure, StaleNotice } from "./primitives";
-import { PinPreview } from "./pin-preview";
+import { PinPreview, type OwnPinCard } from "./pin-preview";
 import { Conversation } from "./threads-lens";
 
 /**
@@ -88,13 +96,34 @@ export function ChatOverlay({
   const tall = layout.height === "tall";
 
   // The chat's team is fixed while it shows this session, as the quick chat's is.
+  const chatKey = JSON.stringify([teamKey, sessionId]);
   const { messages, home, team, teamMessages, conversation, dir, roles } = useAgentConversation({
     data,
     source,
     handle,
     teamKey,
-    chatKey: JSON.stringify([teamKey, sessionId]),
+    chatKey,
   });
+  // Queued or Delivered on what you send here, by the kit's rule: each message's own
+  // messageDelivery row where the host pushes it, else the lead's sessions() row.
+  const lead = sessions?.find((s) => s.handle === handle) ?? null;
+  // The thread is the saved agent and story the session was launched with, as the engine keys
+  // it: the launch's agent, else the one its tab says it runs.
+  const pinAgent = lead?.agent ?? agentKeyOfRevision(row?.agentRevision);
+  const pinStory = row?.story ?? lead?.story ?? null;
+  // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too), the same
+  // pins (the page's team) and its one tab as the full view.
+  const foreman = isForemanAgent(pinAgent);
+  const thread = useForemanThread(foreman && handle ? handle : null, conversation);
+  const pinTeam = foreman ? FOREMAN_TEAM : (team ?? home);
+  const delivery = useMessageDelivery(team ?? home);
+  const [tracked, setTracked] = useState({ chatKey, tracker: createDeliveryTracker() });
+  if (tracked.chatKey !== chatKey) setTracked({ chatKey, tracker: createDeliveryTracker() });
+  const tracker = tracked.tracker;
+  // What the chat opens on is history: the tracker reads only once the thread has loaded.
+  if (data !== null) tracker.observe(conversation, handle, lead);
+  const marks = (m: ConversationMessage) =>
+    tracker.markOf(m, lead, !team || sameTeam(m.team, team) ? (delivery.get(m.id) ?? null) : null);
   const view: InboxView = useMemo(
     () => ({
       me: HUMAN,
@@ -141,8 +170,7 @@ export function ChatOverlay({
   }, [composeRequest, composeHandled, loaded, sessionId]);
 
   // The room this session shares with the rest of its workspace: ⌘⌥G flips the chat to it.
-  const listed = sessions?.find((s) => s.handle === handle);
-  const workspaceId = listed?.chatWorkspaceId ?? row?.chatWorkspaceId;
+  const workspaceId = lead?.chatWorkspaceId ?? row?.chatWorkspaceId;
   const room: GroupRoom | null = workspaceId
     ? {
         workspaceId,
@@ -150,8 +178,8 @@ export function ChatOverlay({
           {
             handle,
             name,
-            unread: listed?.groupUnread ?? row?.groupUnread ?? 0,
-            readId: listed?.groupReadId ?? row?.groupReadId ?? 0,
+            unread: lead?.groupUnread ?? row?.groupUnread ?? 0,
+            readId: lead?.groupReadId ?? row?.groupReadId ?? 0,
           },
         ],
       }
@@ -182,22 +210,59 @@ export function ChatOverlay({
     return () => cancelAnimationFrame(frame);
   }, [groupRequest, groupHandled, loaded, roomKnown, hasRoom, sessionId]);
 
-  // The thread is the saved agent and story the session was launched with, as the engine keys
-  // it: the launch's agent, else the one its tab says it runs.
-  const { pins } = useAgentPins(
-    team ?? home,
-    listed?.agent ?? agentKeyOfRevision(row?.agentRevision),
-    row?.story ?? listed?.story ?? null,
-  );
+  const {
+    pins,
+    error: pinsError,
+    apply,
+    retry: retryPins,
+  } = useAgentPins(pinTeam, pinAgent, pinStory);
+  const senderOf = (m: ConversationMessage) => labelOf(dir, m.from);
+  // A pin is named as its message: an HTML one by its summary, title or heading, never markup.
+  // The pinned message: for the Foreman, from its merged thread (earlier sessions' mail too),
+  // else the rest of its mail (a lead's or a role's), in the Foreman's pin team.
+  const pinnedMessage = (id: number) =>
+    foreman
+      ? (thread.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        messages.find((x) => x.id === id && sameTeam(x.team, FOREMAN_TEAM)) ??
+        null)
+      : (messages.find((x) => x.id === id && (!team || sameTeam(x.team, team))) ?? null);
   const pinTitle = (id: number) => {
-    const m = messages.find((x) => x.id === id && (!team || sameTeam(x.team, team)));
-    return m?.summary || m?.text.split("\n")[0] || `Pin ${id}`;
+    const m = pinnedMessage(id);
+    return m ? pinTitleOf(m, senderOf(m)) : `Pin ${id}`;
+  };
+  // A pin sent without a preview (the person's) shows its message: quoted text or a page name.
+  const ownCard = (p: AgentPin): OwnPinCard | null => {
+    const m = pinnedMessage(p.messageId);
+    if (p.preview || !m) return null;
+    const who = senderOf(m);
+    const at = formatClock(m.createdAtMs);
+    if (m.contentType === "html") return { kind: "name", meta: `Dashboard from ${who} · ${at}` };
+    const pinnedBy = whoPinned(p.pinnedBy, (from) => labelOf(dir, from));
+    return {
+      kind: "quote",
+      meta: `${who} · ${at} · Pinned by ${pinnedBy}`,
+      rest: quoteOf(m, who).rest,
+    };
   };
   const opened = pins.find((p) => p.messageId === openPin) ?? null;
-  const openedMessage = opened
-    ? (messages.find((m) => m.id === opened.messageId && (!team || sameTeam(m.team, team))) ?? null)
-    : null;
+  const openedMessage = opened ? pinnedMessage(opened.messageId) : null;
   const pinRefs = useRef(new Map<number, HTMLButtonElement>());
+  // The person pins this chat's messages into the same thread: Show pins goes to the strip.
+  const personPins = usePersonPins({
+    team: pinTeam,
+    agentId: pinAgent,
+    storyId: pinStory,
+    pins,
+    apply,
+    sender: senderOf,
+    labelOf: (from) => labelOf(dir, from),
+    titleOf: (p) => p.preview?.shortName || pinTitle(p.messageId),
+    ownOf: (p) => ownCard(p)?.kind ?? null,
+    onShowPins: () => {
+      const first = pins[0];
+      if (first) pinRefs.current.get(first.messageId)?.focus();
+    },
+  });
   const closePin = () => {
     const id = openPin;
     setOpenPin(null);
@@ -207,6 +272,12 @@ export function ChatOverlay({
   // the chat's place.
   const pinShape = opened && tall ? "line" : layout.pins;
   const sheetInPlace = opened !== null && !tall;
+  // In the chat's place the sheet leaves the composer: the person can still write (the
+  // design: "the composer stays"), the room's as the chat's. A read that failed or is loading
+  // has no composer to keep.
+  const composerOnly = sheetInPlace && Boolean(data);
+  // A small or short pane: the one-row composer.
+  const compact = layout.width === "XS" || layout.height === "short";
 
   // The team's own agent page (teams.yml `agent_page:`); a team without one has no Full view.
   const agentPage = useOrgStore((state) =>
@@ -235,18 +306,55 @@ export function ChatOverlay({
 
   const now = useNow(visible, 60_000);
   const statusWord = status ? agentStatusWords(status, subagents) : null;
-  // The model, cost and files fields wait on a per-agent session record read.
-  const recordText: Partial<Record<OverlayRecordField, string | null>> = {
-    time: formatElapsed(row?.startedAtMs ?? null, now),
-    story: row?.story ?? null,
+  // The model, cost and files come from the agent's session record; a fact it does not have
+  // is left out, never guessed.
+  const facts = useSessionRecord(handle || null, sessionId);
+  const storyId = row?.story ?? facts?.story ?? null;
+  // A figure the record has only in part says so ("≥"), with the record's reason as its title.
+  type RecordPart = { text: string; title?: string };
+  const partial = (text: string, why: string | null): RecordPart =>
+    why ? { text: `≥ ${text}`, title: why } : { text };
+  const recordText: Partial<Record<OverlayRecordField, RecordPart | null>> = {
+    model: facts?.model ? { text: modelLabel(facts.model) } : null,
+    cost: facts?.costUsd != null ? partial(formatCost(facts.costUsd), facts.costPartial) : null,
+    files: facts?.files
+      ? partial(`${facts.files} ${facts.files === 1 ? "file" : "files"}`, facts.filesPartial)
+      : null,
+    time: ((t) => (t ? { text: t } : null))(formatElapsed(row?.startedAtMs ?? null, now)),
   };
-  const recordParts = [
-    ...(layout.statusInRecord && statusWord ? [statusWord] : []),
-    ...layout.recordFields.map((f) => recordText[f]).filter((v): v is string => !!v),
+  const recordParts: RecordPart[] = [
+    ...(layout.statusInRecord && statusWord ? [{ text: statusWord }] : []),
+    ...layout.recordFields
+      .filter((f) => f !== "story")
+      .map((f) => recordText[f])
+      .filter((v): v is RecordPart => !!v),
   ];
-  const record = recordParts.length > 0 && (
+  const record = (recordParts.length > 0 || storyId) && (
     <span className="ibx-ov-record" data-testid="chat-overlay-record">
-      {recordParts.join(" · ")}
+      {recordParts.map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && " · "}
+          {part.title ? <span title={part.title}>{part.text}</span> : part.text}
+        </Fragment>
+      ))}
+      {storyId && (
+        <>
+          {recordParts.length > 0 && " · "}
+          {/* The story's page, where its file opens. */}
+          <a
+            href="#"
+            role="link"
+            className="ibx-ov-story"
+            onClick={(e) => {
+              e.preventDefault();
+              void openStory(storyId);
+            }}
+          >
+            {storyId}
+            <span aria-hidden> ↗</span>
+          </a>
+        </>
+      )}
     </span>
   );
   const button = (label: string, icon: typeof X, onClick: () => void, title = label) => (
@@ -271,10 +379,18 @@ export function ChatOverlay({
         data-record={layout.record}
         data-pins={pinShape}
         data-avatars={layout.avatars ? "true" : "false"}
+        data-text={layout.textPx}
         style={{ ...style, fontSize: layout.textPx }}
         onKeyDown={(e) => {
           const t = e.target as HTMLElement;
-          if (e.key !== "Escape" || e.defaultPrevented || t.matches("input, textarea")) return;
+          if (e.key !== "Escape") return;
+          // From the composer (which leaves the box on Escape), it also closes an open pin when
+          // there is no draft to lose.
+          if (t.matches("input, textarea")) {
+            if (opened && (t as HTMLTextAreaElement).value === "") closePin();
+            return;
+          }
+          if (e.defaultPrevented) return;
           e.preventDefault();
           if (opened) closePin();
           else if (groupShown) setGroup((g) => ({ ...g, shown: false }));
@@ -300,12 +416,14 @@ export function ChatOverlay({
               toTerminal,
               keyHint ? `Terminal (${keyHint} brings the chat back)` : "Terminal",
             )}
-            {agentPage &&
-              team &&
-              handle &&
-              button("Full view", Maximize2, () =>
-                openAgentFullView({ org: team.org, team: team.team, handle, page: agentPage }),
-              )}
+            {foreman
+              ? button("Full view", Maximize2, openForeman)
+              : agentPage &&
+                team &&
+                handle &&
+                button("Full view", Maximize2, () =>
+                  openAgentFullView({ org: team.org, team: team.team, handle, page: agentPage }),
+                )}
           </div>
           {layout.head === "two-line" && statusWord && (
             <div className="ibx-ov-now">
@@ -315,8 +433,27 @@ export function ChatOverlay({
           )}
           {layout.record === "own-line" && record}
         </header>
+        {pinsError && pins.length === 0 && (
+          <div
+            className="ibx-ov-pins ibx-ov-pins-failed"
+            data-shape={pinShape}
+            role="alert"
+            data-testid="chat-overlay-pins-failed"
+          >
+            <span>Couldn't read pins</span>
+            <span aria-hidden>·</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={retryPins}>
+              Retry
+            </button>
+          </div>
+        )}
         {pins.length > 0 && (
-          <div className="ibx-ov-pins" data-shape={pinShape} role="group" aria-label="Pinned">
+          <div
+            className="ibx-ov-pins"
+            data-shape={pinShape}
+            role="group"
+            aria-label={`Pinned, ${capLabel(pins.length).replace(" pinned", "")}`}
+          >
             {pins.map((p) => (
               <PinPreview
                 key={p.messageId}
@@ -327,6 +464,9 @@ export function ChatOverlay({
                 pin={p}
                 shape={pinShape}
                 title={pinTitle(p.messageId)}
+                own={ownCard(p)}
+                fresh={personPins?.fresh === p.messageId}
+                replacing={personPins?.replacing === p.messageId}
                 tall={tall}
                 open={p.messageId === openPin}
                 onOpen={() => setOpenPin(p.messageId === openPin ? null : p.messageId)}
@@ -361,8 +501,10 @@ export function ChatOverlay({
             </div>
           </section>
         )}
-        {error && data && <StaleNotice error={error} onRetry={() => void reload()} />}
-        {!sheetInPlace && (
+        {error && data && (
+          <StaleNotice error={error} onRetry={() => void reload()} what="the chat" />
+        )}
+        {(!sheetInPlace || composerOnly) && (
           // Keyed by session: no draft or recipient carries into another session's chat.
           <div className="ibx-body ibx-ov-chat" key={sessionId}>
             {error && !data ? (
@@ -376,17 +518,23 @@ export function ChatOverlay({
                 focusRequest={group.focus}
                 visible={visible}
                 human
+                threadHidden={composerOnly}
               />
             ) : (
               <Conversation
-                thread={{ key: handle, messages: conversation }}
+                thread={{ key: handle, messages: thread }}
                 request={null}
                 defaultTo={handle}
                 quick
+                avatars={layout.avatars}
+                compact={compact}
+                threadHidden={composerOnly}
+                marks={marks}
+                pins={personPins}
+                // The placeholder and the route hint already say where a message goes.
                 empty={
                   <div className="ibx-empty" data-testid="chat-overlay-empty">
                     <strong>No messages yet</strong>
-                    What you send lands in {name}&apos;s inbox.
                   </div>
                 }
               />

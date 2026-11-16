@@ -48,6 +48,8 @@ export interface RawTeamEntry {
   landing_page?: string;
   /** Mirrors Rust `RawTeamEntry.agent_page`: the team's agent page, relative to its content root. */
   agent_page?: string;
+  /** Mirrors Rust `RawTeamEntry.story_page`: the page a story file opens in, relative to its content root. */
+  story_page?: string;
 }
 
 export interface RawTeamsYml {

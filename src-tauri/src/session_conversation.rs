@@ -157,6 +157,41 @@ fn reader_of(cli: AgentCli) -> LogReader {
     (output.session_log, format)
 }
 
+/// The interactive session log of a local session and its transcript format, found as the
+/// capture finds it (its record's native id and config home): what the assistant-prose stream
+/// (`session_text`) tails. `None` for a CLI whose log has no prose parser, a session with no
+/// record or native id yet, or no log on this Mac.
+pub(crate) fn prose_session_log(
+    session_id: &str,
+) -> Option<(PathBuf, agent_cli::TranscriptFormat)> {
+    let Ok(store_path) = crate::session_usage::store_path() else {
+        return None;
+    };
+    let Ok(store) = UsageStore::open(&store_path) else {
+        return None;
+    };
+    let Ok(Some(record)) = store.read_session_record(session_id) else {
+        return None;
+    };
+    let Ok(cli) = record.cli.as_deref()?.parse::<AgentCli>() else {
+        return None;
+    };
+    let (Some(locate), Some(format)) = reader_of(cli) else {
+        return None;
+    };
+    if !agent_cli::prose::streams(format) {
+        return None;
+    }
+    let native = record.native_session_id.as_deref()?;
+    let env = |key: &str| std::env::var_os(key);
+    let home = record
+        .config_home
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| agent_cli::descriptor(cli).native_home(&env))?;
+    locate(&home, native).map(|path| (path, format))
+}
+
 /// Why a CLI's conversation is not read.
 fn no_reader_reason(cli: AgentCli) -> String {
     format!("CodeSense has no session-log reader for {cli}")
@@ -937,12 +972,15 @@ pub fn note_checkpoint(session_id: &str) {
 pub fn note_hook(session_id: &str, event: codesense_pty_core::activity::Event) {
     use codesense_pty_core::activity::Event;
     if matches!(event, Event::Stopped | Event::Failed | Event::Interrupted) {
+        // The prose stream ends its turn at once; only the stored capture is debounced.
+        crate::session_text::note_turn_end(session_id);
         note_checkpoint(session_id);
     }
 }
 
 /// `session_id` ended (its process exited, its tab was removed, or its headless run finished).
 pub fn note_end(session_id: &str) {
+    crate::session_text::note_end(session_id);
     note(session_id, Trigger::End);
 }
 

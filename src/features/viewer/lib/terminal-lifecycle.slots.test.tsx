@@ -235,6 +235,12 @@ async function expectParked(
   await wait(hiddenMs);
   act(unpark);
   await flush();
+  // A tab behind the active one stays parked: it replays when it is shown.
+  for (const id of ["shell", "claude", "codex"]) {
+    if (!sessions.includes(id)) continue;
+    act(() => s().setActiveTerminalTab(TEAM, id, A));
+    await flush();
+  }
 
   expect(h.created).toBe(SESSIONS.length);
   expect(h.disposed).toBe(0);

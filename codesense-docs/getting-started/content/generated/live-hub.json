@@ -1,6 +1,6 @@
 {
   "counts": {
-    "builtins": 16,
+    "builtins": 17,
     "families": 1
   },
   "topics": [
@@ -439,6 +439,10 @@
               "description": "untyped (Value)",
               "sourceExpression": "created_at"
             },
+            "toldAtMs": {
+              "description": "untyped (Value)",
+              "sourceExpression": "told_at"
+            },
             "message": {
               "description": "untyped (Value)",
               "sourceExpression": "bridge"
@@ -763,6 +767,44 @@
       "rows": [
         {
           "description": "untyped (Value)"
+        }
+      ]
+    },
+    {
+      "name": "messageDelivery",
+      "rows": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "untyped (Value)",
+              "sourceExpression": "delivery_key(team,m.id)"
+            },
+            "messageId": {
+              "description": "untyped (Value)",
+              "sourceExpression": "m.id"
+            },
+            "team": {
+              "description": "untyped (Value)",
+              "sourceExpression": "team"
+            },
+            "to": {
+              "description": "untyped (Value)",
+              "sourceExpression": "m.to"
+            },
+            "state": {
+              "description": "untyped (Value)",
+              "sourceExpression": "state"
+            },
+            "toldAtMs": {
+              "description": "untyped (Value)",
+              "sourceExpression": "m.told_at_ms"
+            },
+            "deliveredAtMs": {
+              "description": "untyped (Value)",
+              "sourceExpression": "delivered_at"
+            }
+          }
         }
       ]
     }
@@ -1101,19 +1143,19 @@
     "admitsSource": "\n    let key = key.split(\"|\").next().unwrap_or(key);\n    key == \"all\" || scope == Some(key)\n"
   },
   "sources": {
-    "src-tauri/src/live_hub/projection.rs": "607f16894f79b18975ef38adcfa51c66c3e214ad6b088f46e0459475b34418e2",
+    "src-tauri/src/live_hub/projection.rs": "a601d043a3c6aac0ea49d9ff52add09e66ee62635ebaeea04767997fda990e04",
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
-    "src-tauri/src/live_hub/mod.rs": "2aa8c18996026926ab1ac6f7de87ed2e1afd6d84f5ed6f93c78ffb91534be91f",
+    "src-tauri/src/live_hub/mod.rs": "cac9de8e12fa15e3f17461e5463872ed4dbfff711f6bae814957204d634480c9",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
-    "src-tauri/src/mcp/session_list.rs": "94bed4633747fb7396ad4f6a8e986929f3909219102eabf27de62d05350eb332",
+    "src-tauri/src/mcp/session_list.rs": "6e9b55c5d09a90efa260b3be00fad790a314d8da8fabe071746a6a8582d3b6b3",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",
     "src-tauri/src/live_hub/agent_list/fields.rs": "0e6d5d02a04c2e620fc4e754c5ab140cfe687eae3f3494fabdd1f44ad07416a8",
     "src-tauri/src/live_hub/effective_status.rs": "4c975cc197d37d6f0890ec4905b3db0a3b56b2deae669797bf28c284787aa2ca",
-    "src-tauri/src/live_hub/inbox.rs": "cbea9f4ec93f4fd10ac7e0ceeb97c8a307dd4e9cc40d849eeb2b706ef2bdf263",
+    "src-tauri/src/live_hub/inbox.rs": "772d9628e1bbef221a48061aa1fa28ae4379ec0dbec48bfbe36e07e72de7b967",
     "src-tauri/src/live_hub/agent_list/rows.rs": "86be0bbd951d279e47bd938be31f1f5a4f8c70e24c0fc9e2db4fd9d07fa6dce2",
     "src-tauri/src/live_hub/agent_list/views.rs": "0fbc27242d28517476f53c8395fab13ba460850539003dd7d5bea97b685c5ebf",
     "src-tauri/src/records/projection.rs": "ff7eb296d7dc0ec988570db058eca494c34009e9ffca8ef7de1c65d2d064d913",
-    "src/features/dashboard/lib/live-hub.ts": "8e399c46d4940cf8643435ad6052ef97e373e48f900595341c75b5efabbcb7e6",
+    "src/features/dashboard/lib/live-hub.ts": "41feb5d0fb6c987d242b8ad580759c917aecc14b306b67874728772aa1231419",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7"
   },
   "untypedTopics": [
@@ -1133,6 +1175,7 @@
     "prefs",
     "storyTotals",
     "pins",
+    "messageDelivery",
     "ui:<slotId>"
   ]
 }

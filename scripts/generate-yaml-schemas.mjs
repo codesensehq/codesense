@@ -283,6 +283,14 @@ people: []
           "The team's agent page, relative to its content folder (no `..`, no hidden file or folder): the page an agent's Full view opens, with the session named in the URL fragment (`#session=<handle>`). Set it by editing teams.yml. Unset: the team's agents show no Full view.",
       },
       {
+        name: "story_page",
+        type: "string",
+        required: false,
+        default: null,
+        description:
+          "The team's story page, relative to its content folder (no `..`, no hidden file or folder): the page a story file (an `.md` whose `type` is story, bug or spike) opens in, with the story's path in the URL fragment (`#story=<path>`). Set it by editing teams.yml. Unset: such a file opens as markdown.",
+      },
+      {
         name: "description",
         type: "string",
         required: false,
