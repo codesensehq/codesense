@@ -2,8 +2,9 @@
 // Shared by the two sealed Cargo exports (MCP reference, live-data contract).
 import { execFileSync, spawnSync } from "node:child_process";
 
-// `gen:docs:check:pr` sets the env var: story PRs never re-export, so the PR gate tolerates
-// input-only and inherited drift. Strict `gen:docs:check` (the wave) leaves it unset.
+// `gen:docs:check:pr` sets the env var: the PR gate tolerates input-only and inherited drift,
+// whether a PR left the exports alone or re-exported before main moved inputs it did not touch.
+// Strict `gen:docs:check` (the wave) leaves it unset.
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
@@ -62,6 +63,13 @@ export function exportsUntouchedSinceMain(root, exportFiles) {
     return false;
   }
 }
+
+// A PR that re-exported is held to the strict check, yet main may since have changed inputs the
+// PR never touched (another PR's tool edit). Then the PR's export matched its own inputs and the
+// drift is main's, refreshed in the next docs wave like any inherited drift. True when the PR left
+// every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
+export const driftInheritedFromMain = (root, driftedInputs) =>
+  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);
 
 const mergeBase = (root) => {
   try {
