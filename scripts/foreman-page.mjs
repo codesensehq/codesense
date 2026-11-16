@@ -57,10 +57,9 @@ const FORBIDDEN_KEY = /(^|[^a-z])(point|points|envelope|budget)([^a-z]|$)|\$/i;
 const PRIVATE_TEXT = [
   [/\b[A-Z]{2,}-[A-Z]{2,}-\d+[a-z]?\b/, "a tracker story id"],
   [/\/Users\/|~\/\.codesense/, "a local path"],
-  // A team's own `design/<id>/…` files, which the kit reads at run time, are built from an id,
-  // and its agent pages sit at `dashboards/agent-pages/<page>.html` in the team's content.
+  // A team's own `design/<id>/…` files, which the kit reads at run time, are built from an id.
   [
-    /\breviews\/|\bdashboards\/(?!agent-pages\/[a-z-]+\.html')|\bdesign\/(?!\$\{)|scripts\/story-view/,
+    /\b(?:dashboards|reviews)\/|\bdesign\/(?!\$\{)|scripts\/story-view/,
     "a path in the kit's repository",
   ],
   [/sha256:[0-9a-f]{64}/, "a source file's hash"],

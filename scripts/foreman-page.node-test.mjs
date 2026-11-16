@@ -245,7 +245,6 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
     ["const s='see AB-CD-27';\n", "tracker story id"],
     ["const s='dashboards/x/y.js';\n", "path in the kit's repository"],
     ["const s='design/AB-1/mockups.html';\n", "path in the kit's repository"],
-    ["const s='dashboards/agent-pages/../x.js';\n", "path in the kit's repository"],
     [`const s='sha256:${"b".repeat(64)}';\n`, "source file's hash"],
   ];
   for (const [line, message] of cases)
@@ -253,12 +252,8 @@ test("a vendored kit that keeps a comment, or names a tracker id, repository pat
       change(VENDORED, (text) => `${text}${line}`);
       reports(check(root), message);
     });
-  // A team's own design file, built from an id at run time, is the kit's job, not a leak, and
-  // so is a team's agent page in its content.
-  for (const line of [
-    "const s=`design/${id}/qa/trace.md`;\n",
-    "const s='dashboards/agent-pages/foreman.html';\n",
-  ])
+  // A team's own design file, built from an id at run time, is the kit's job, not a leak.
+  for (const line of ["const s=`design/${id}/qa/trace.md`;\n"])
     scratch((change, root) => {
       change(VENDORED, (text) => `${text}${line}`);
       assert.ok(!check(root).some((problem) => problem.includes("repository")));
