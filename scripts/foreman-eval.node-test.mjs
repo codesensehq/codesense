@@ -268,8 +268,9 @@ test("fixture: an inherited GIT_DIR (as in a git hook) never reaches the real re
 });
 
 test("fixture: no temp path has a foreman-* part, so the pack's worktree rules never match it", async () => {
-  // `//**/foreman-*/**` matches a foreman-* directory anywhere: a sandbox under one would open
-  // home, HOME, the gh shim and origin to the agent's edits.
+  // The worktree rules are bounded to a foreman-* directory beside home at launch; in an
+  // unbounded `//**/foreman-*/**` form, a sandbox under a foreman-* dir would open home, HOME,
+  // the gh shim and origin to the agent's edits.
   const fx = await createFixture({ handoff: true });
   try {
     const parts = (p) => p.split(path.sep);
@@ -1603,7 +1604,11 @@ test("claude driver: launches with the agent's own prompt, permissions and model
   assert.ok(argv.includes("--strict-mcp-config"));
   assert.equal(flag("--add-dir"), "..");
   const settings = JSON.parse(flag("--settings"));
-  assert.deepEqual(settings.permissions, agent.permissions.claude);
+  // The app's launch-time expansion: `{{launch_parent}}` is home's parent, the fixture root.
+  assert.ok(!JSON.stringify(settings).includes("{{launch_parent}}"));
+  assert.ok(settings.permissions.allow.includes(`Edit(/${fx.root}/foreman-*/**)`));
+  assert.ok(settings.permissions.allow.includes(`Write(/${fx.root}/foreman-*.msg)`));
+  assert.deepEqual(settings.permissions.deny, agent.permissions.claude.deny);
   assert.equal(settings.env.HOME, fx.env.HOME, "the agent's shell keeps the sandbox HOME");
   assert.equal(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
   assert.equal(

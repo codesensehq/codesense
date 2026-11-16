@@ -210,8 +210,10 @@ Run both from the story's worktree:
 const KEYS = ["foreman_team", "git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
-// Every eval temp dir starts with this. It must never be `foreman-*`: the pack's worktree rule
-// `//**/foreman-*/**` would then match the whole sandbox (home, HOME, the gh shim, origin).
+// Every eval temp dir starts with this. It is never `foreman-*`: the pack's worktree rules are
+// bounded at launch to a foreman-* directory beside home (`//{{launch_parent}}/foreman-*/**`),
+// and an unbounded `//**/foreman-*/**` form would match the whole sandbox under such a dir
+// (home, HOME, the gh shim, origin).
 export const TMP_PREFIX = "fm-eval";
 
 // The roots of the fixtures not yet torn down: a runner ended by a signal removes them on exit.

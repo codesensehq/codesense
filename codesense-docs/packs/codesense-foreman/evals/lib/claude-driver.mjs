@@ -20,6 +20,7 @@ import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
 import { URL } from "node:url";
 import { parse } from "yaml";
+import { expandLaunchParent } from "../../../../../scripts/lib/launch-parent.mjs";
 import { InfraError } from "./errors.mjs";
 import { packDir } from "./floor.mjs";
 
@@ -236,7 +237,10 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
     const host = await startHost(fx, { github: caseDef.fixture?.git_access === "github-mcp", inbox });
     const session = randomUUID();
     const self = fx.config.self;
-    const settings = { permissions: agent.permissions.claude, env: { ...agent.env, HOME: fx.env.HOME } };
+    const home = path.join(fx.root, "home");
+    // The rules as the app writes them for a launch in home: `{{launch_parent}}` expanded.
+    const { permissions } = expandLaunchParent({ permissions: agent.permissions.claude }, home).content;
+    const settings = { permissions, env: { ...agent.env, HOME: fx.env.HOME } };
     const env = {
       ...Object.fromEntries(Object.entries(fx.env).filter(([k]) => !OUTER.test(k))),
       // The CLI's own sign-in lives under the real HOME; the agent's shell gets the sandbox's
@@ -277,7 +281,7 @@ export function claudeDriver({ model, bin = "claude", timeoutMs = TURN_TIMEOUT_M
         ];
         let turn;
         try {
-          turn = await runGroup(bin, args, { cwd: path.join(fx.root, "home"), env, timeoutMs });
+          turn = await runGroup(bin, args, { cwd: home, env, timeoutMs });
         } catch (e) {
           throw fail(`could not start ${bin}: ${e.message}`);
         }
