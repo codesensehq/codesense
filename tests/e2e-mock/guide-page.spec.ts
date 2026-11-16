@@ -740,9 +740,10 @@ test("the guide's message rows show the guide's avatar, once for a run, and the 
   }
 });
 
-const STORY_PATH = "orgs/acme-context/web/content/stories/ACME-1.md";
+// The guide writes the story at `<orgRoot>/<team>/content/stories/<id>.md`, and describe_setup returns an absolute orgRoot.
+const STORY_PATH = "/data/acme/.codesense/orgs/acme-context/web/content/stories/ACME-1.md";
 
-test("a story line in the guide's reply opens that story, once, with the person's own team", async ({
+test("a story line in the guide's reply opens that story by its absolute path, once, with no team", async ({
   page,
 }) => {
   const { live, calls, inbox } = await open(page);
@@ -757,7 +758,6 @@ test("a story line in the guide's reply opens that story, once, with the person'
   await expect.poll(async () => (await calls("openFile")).length).toBe(1);
   expect((await calls("openFile"))[0].args).toEqual({
     path: STORY_PATH,
-    team: "web",
     newTab: true,
   });
   // The same row on the next change, or a row the person already read, opens nothing more.
@@ -769,10 +769,21 @@ test("a story line in the guide's reply opens that story, once, with the person'
 test("a story line the page can't trust opens nothing", async ({ page }) => {
   const { live, calls } = await open(page);
   await live([
-    lead(2, `story: ACME-1 · orgs/acme-context/web/content/stories/../../../x/ACME-1.md`),
-    lead(3, `story: ACME-1 · orgs/acme-context/web/content/stories/ACME-2.md`),
-    lead(4, `story: ACME-1 · orgs/acme-context/web/content/notes/ACME-1.md`),
-    lead(5, `story: ACME-1 · orgs/codesense-docs/getting-started/content/stories/ACME-1.md`),
+    lead(
+      2,
+      `story: ACME-1 · /data/acme/.codesense/orgs/acme-context/web/content/stories/../../../x/ACME-1.md`,
+    ),
+    lead(
+      3,
+      `story: ACME-1 · /data/acme/.codesense/orgs/acme-context/web/content/stories/ACME-2.md`,
+    ),
+    lead(4, `story: ACME-1 · /data/acme/.codesense/orgs/acme-context/web/content/notes/ACME-1.md`),
+    lead(
+      5,
+      `story: ACME-1 · /data/acme/.codesense/orgs/codesense-docs/getting-started/content/stories/ACME-1.md`,
+    ),
+    // A relative path is not what the guide sends; Rust checks the root, the page only checks the shape.
+    lead(8, `story: ACME-1 · orgs/acme-context/web/content/stories/ACME-1.md`),
     lead(6, `Created.\n  story: ACME-1 · ${STORY_PATH} and more`),
     human(7, `story: ACME-1 · ${STORY_PATH}`),
   ]);
