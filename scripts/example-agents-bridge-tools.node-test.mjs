@@ -15,6 +15,12 @@ const served = new Set(
 const ALWAYS = ["read_messages", "reply", "signal_done"];
 // A name the skills mention that the app doesn't serve yet: left out of the list, on purpose.
 const NOT_SERVED = ["search_brain"];
+// A served name a source mentions only to forbid it, per agent, with the reason.
+const EXCLUDED = {
+  // cited-retrieval and while-you-were-away both tell it not to use signal_progress (it is
+  // transient). The routine forbids read_messages too, which stays: every agent needs it.
+  reviewer: ["signal_progress"],
+};
 
 const AGENTS = ["machine-setup", "manager", "reviewer"];
 // The docs pages that show an example agent's whole agent.yaml.
@@ -68,9 +74,15 @@ for (const id of AGENTS) {
     assert.ok(Array.isArray(list), "mcp.bridge_tools is declared");
     assert.equal(new Set(list).size, list.length, "no name twice");
     for (const name of list) assert.ok(served.has(name), `${name} is in mcp-tools.json`);
+    const excluded = EXCLUDED[id] ?? [];
     const named = new Set([...ALWAYS, ...texts.flatMap(toolsIn)]);
+    for (const name of excluded) {
+      assert.ok(named.has(name), `${name} is still named in a source, so its exclusion is needed`);
+      named.delete(name);
+    }
     assert.deepEqual([...list].sort(), [...named].sort());
-    for (const name of NOT_SERVED) assert.ok(!list.includes(name), `${name} is not served yet`);
+    for (const name of [...NOT_SERVED, ...excluded])
+      assert.ok(!list.includes(name), `${name} is left out`);
   });
 
   test(`${id}: every docs page that shows its agent.yaml shows the list`, () => {

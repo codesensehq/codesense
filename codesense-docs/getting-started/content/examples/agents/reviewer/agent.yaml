@@ -7,7 +7,8 @@ startup:
   - CLAUDE.md
   - .claude/skills/cited-retrieval/
 default_prompt: Use cited-retrieval to answer requests with durable team evidence. Scheduled review tasks supply their own window and publication instructions.
-# The bridge tools cited-retrieval and its routine call. A Claude agent with a list is denied the rest.
+# The bridge tools cited-retrieval and its routine call (not signal_progress, which both
+# forbid). A Claude agent with a list is denied the rest.
 mcp:
   bridge_tools:
     - query_context
@@ -19,7 +20,6 @@ mcp:
     - inbox_list
     - read_messages
     - reply
-    - signal_progress
     - signal_done
     - routine_result
     - routine_publish_result
