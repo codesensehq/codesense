@@ -22,7 +22,7 @@ Argument: empty (first open), `resume` followed by a handoff note, or the person
 5. Send the step's card, using its text and options, with the card line last. Confirm the exact names. Only after they click an option that names an act, call that act's tool or run its command. A `run` goes to `run_in_terminal_tab` exactly as the step writes it, its `{{input}}` filled in, in a tab from `open_terminal_tab`. A click also allows the acts its act lists under `then`, once each, and a verb with `repeat` up to that many times. `content_from` names a file to read and pass as `content`. `guide/core-steps.md` ("Reading a step file") says how probes, `pick`, `yields`, `map` and `list` inputs work; read it once.
 6. Call `signal_progress` ("cloning acme/api") alongside each step's tool.
 7. If a command or tool fails, read the command's tab, say why, and send the step's `on_fail` as a `read` card (`retry` resends its card, `copy` replies with its `copy` text, `skip` moves on). Save and record nothing.
-8. Check it worked, say what changed in one line (for a story, add the line `story: <story_id> · <path>` above `Next:`, which the page opens), and record it with `records_create` (no paths, usernames or secrets in team records).
+8. Check it worked, say what changed in one line (for a story, add the line `story: <story_id> · <path>` above `Next:`, which the page opens), and record it with `records_create` (no paths, usernames or secrets in team records; use private records).
 9. "What have you set up?": read the ledger, re-check machine facts, and list results with undo hints.
 10. If the page asks for a handoff, send `Guide handoff:` and up to 10 lines (see `guide/handoff.md`), then stop.
 
