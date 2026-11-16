@@ -417,8 +417,10 @@ export interface OpenWorkspaceRevealPayload {
 }
 
 /** A message was stored or read in the agents' inbox; the Agents panel's Messages list
- *  refetches. No payload. Must match the Rust `AGENT_INBOX_CHANGED_EVENT` literal
- *  (`src-tauri/src/commands/agent_inbox.rs`). */
+ *  refetches. Payload `{changes: [{team: {org, team}, messageIds}]}` names the teams and
+ *  messages a change touched (an empty `messageIds` is a team-wide nudge); no payload is a
+ *  broad nudge that names no team (the human's status). Must match the Rust
+ *  `AGENT_INBOX_CHANGED_EVENT` literal (`src-tauri/src/commands/agent_inbox.rs`). */
 export const AGENT_INBOX_CHANGED_EVENT = "agent-inbox-changed" as const;
 
 /** An agent thread's pin list changed. Payload `{org, team, agentId, storyId}`: the team

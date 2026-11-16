@@ -17,6 +17,9 @@ pub(crate) mod history;
 pub(crate) mod install;
 pub(crate) mod launch;
 pub(crate) mod managed;
+pub(crate) mod metrics_db;
+#[cfg(test)]
+mod metrics_db_tests;
 #[cfg(test)]
 mod measurement;
 pub mod prefs;

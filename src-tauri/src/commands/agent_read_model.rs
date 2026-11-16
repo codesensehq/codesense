@@ -147,8 +147,15 @@ pub struct InboxQuery {
     /// instances, and every reply under them.
     #[serde(default, alias = "agent_id")]
     pub agent_id: Option<String>,
+    /// With `agentId`: the thread of that saved agent (any revision) and this story, as its
+    /// pins are keyed, so a successor finds its predecessor's mail: every listed session of
+    /// it and every recorded one, ended ones included. Empty is the agent's no-story thread:
+    /// its listed sessions only. `sessionId` then names a seat (a session that has not
+    /// ended), and the thread's other seats are left out. Not the agent's role queue.
+    #[serde(default, alias = "story_id")]
+    pub story_id: Option<String>,
     /// A session (a `list_sessions` handle or a session id): what it sent and received,
-    /// and every reply under them.
+    /// and every reply under them. With `agentId` and `storyId`, the seat of that thread.
     #[serde(default, alias = "session_id")]
     pub session_id: Option<String>,
     /// A role (any role name, usually a saved Agent's id): messages to and from it, and replies.
@@ -208,12 +215,28 @@ pub(crate) async fn inbox_matching(
     // as an agent or session filter it names nothing, as a role filter does below.
     let not_human = |v: &String| !v.eq_ignore_ascii_case(HUMAN);
     let mut addresses: Vec<String> = Vec::new();
-    if let Some(agent) = trimmed(&query.agent_id).filter(not_human) {
-        addresses.extend(instances_of(sessions, &agent).into_iter().map(|s| s.handle));
-        addresses.insert(0, agent);
-    }
-    if let Some(session) = trimmed(&query.session_id).filter(not_human) {
-        addresses.extend(session_handle(host, &session).filter(not_human));
+    let mut thread_sessions: Option<Vec<String>> = None;
+    let agent = trimmed(&query.agent_id).filter(not_human);
+    match (agent, query.story_id.as_deref()) {
+        // A thread: its sessions, the session filter naming its seat.
+        (Some(agent), Some(story)) => {
+            let thread = crate::weft::pins::ThreadKey::new(&agent, Some(story))
+                .map_err(|e| e.to_string())?;
+            let known = InboxHost::sessions(host).await?;
+            let seat = trimmed(&query.session_id);
+            let seats = thread_addresses(host, &known, &thread, seat.as_deref()).await?;
+            thread_sessions = Some(seats.addresses.clone());
+            addresses.extend(seats.addresses);
+        }
+        (agent, _) => {
+            if let Some(agent) = agent {
+                addresses.extend(instances_of(sessions, &agent).into_iter().map(|s| s.handle));
+                addresses.insert(0, agent);
+            }
+            if let Some(session) = trimmed(&query.session_id).filter(not_human) {
+                addresses.extend(session_handle(host, &session).filter(not_human));
+            }
+        }
     }
     // `role:x` (the Reply-To spelling) reads the queue `x`, as every write keys it.
     if let Some(role) = trimmed(&query.role) {
@@ -242,6 +265,7 @@ pub(crate) async fn inbox_matching(
     if query.has_filter() && addresses.is_empty() {
         view.messages.clear();
     }
+    view.thread_sessions = thread_sessions;
     view.messages.retain(|m| keep(m));
     if let Some(kind) = query.kind {
         view.messages.retain(|m| m.kind == kind);
@@ -1317,22 +1341,23 @@ pub(crate) struct ThreadInboxDto {
     pub messages: Vec<ConversationMessage>,
 }
 
-/// [`ThreadInboxDto`] for saved agent `agent_id` (any revision) and story `story_id`
-/// (empty: launched with no story). `seat`, a handle or tab session id of the thread, leaves
-/// out the thread's other seats while it is one itself ([`KnownSession::is_seat`]: listed
-/// and not ended, an offline or startup-stuck one included): two seats of one saved agent
-/// on one story share a thread, and neither is the other's conversation. A seat that has
-/// ended (exited, crashed) or is not the thread's leaves no one out. A view: it marks
-/// nothing read.
-pub(crate) async fn thread_inbox(
+/// The addresses one thread's mail is read by: every recorded and listed session of it
+/// (handles and tab session ids), less the thread's other seats while `seat` is one; the
+/// handles among them; and the handle that names the thread (see [`ThreadInboxDto`]).
+pub(crate) struct ThreadAddresses {
+    pub addresses: Vec<String>,
+    pub handles: Vec<String>,
+    pub handle: String,
+}
+
+/// [`ThreadAddresses`] of `thread` against the roster `sessions`, with `seat` as
+/// [`thread_inbox`] takes it. The thread read and the inbox's thread filter share it.
+pub(crate) async fn thread_addresses(
     host: &dyn InboxHost,
-    agent_id: &str,
-    story_id: &str,
+    sessions: &KnownSessions,
+    thread: &crate::weft::pins::ThreadKey,
     seat: Option<&str>,
-) -> Result<ThreadInboxDto, String> {
-    let thread = crate::weft::pins::ThreadKey::new(agent_id, Some(story_id))
-        .map_err(|e| e.to_string())?;
-    let sessions = InboxHost::sessions(host).await?;
+) -> Result<ThreadAddresses, String> {
     // The roster's sessions launched on this thread, from one read of the launch registry.
     let listed: Vec<String> = sessions.iter().map(|known| known.handle.clone()).collect();
     let launched = host.launch_threads(&listed).await;
@@ -1342,7 +1367,7 @@ pub(crate) async fn thread_inbox(
         .filter(|(_, launch)| {
             launch.as_ref().is_some_and(|(agent, story)| {
                 Result::ok(crate::weft::pins::ThreadKey::new(agent, story.as_deref())).as_ref()
-                    == Some(&thread)
+                    == Some(thread)
             })
         })
         .map(|(known, _)| known.clone())
@@ -1352,7 +1377,7 @@ pub(crate) async fn thread_inbox(
     let recorded = if str::is_empty(&thread.story_id) {
         Vec::new()
     } else {
-        host.thread_sessions(&thread).await?
+        host.thread_sessions(thread).await?
     };
     let member = |handle: &str| members.iter().any(|m| m.handle == handle);
     let own = seat
@@ -1412,6 +1437,34 @@ pub(crate) async fn thread_inbox(
         })
         .or_else(|| <[String]>::last(&handles).cloned())
         .unwrap_or_default();
+    Ok(ThreadAddresses {
+        addresses,
+        handles,
+        handle,
+    })
+}
+
+/// [`ThreadInboxDto`] for saved agent `agent_id` (any revision) and story `story_id`
+/// (empty: launched with no story). `seat`, a handle or tab session id of the thread, leaves
+/// out the thread's other seats while it is one itself ([`KnownSession::is_seat`]: listed
+/// and not ended, an offline or startup-stuck one included): two seats of one saved agent
+/// on one story share a thread, and neither is the other's conversation. A seat that has
+/// ended (exited, crashed) or is not the thread's leaves no one out. A view: it marks
+/// nothing read.
+pub(crate) async fn thread_inbox(
+    host: &dyn InboxHost,
+    agent_id: &str,
+    story_id: &str,
+    seat: Option<&str>,
+) -> Result<ThreadInboxDto, String> {
+    let thread = crate::weft::pins::ThreadKey::new(agent_id, Some(story_id))
+        .map_err(|e| e.to_string())?;
+    let sessions = InboxHost::sessions(host).await?;
+    let ThreadAddresses {
+        addresses,
+        handles,
+        handle,
+    } = thread_addresses(host, &sessions, &thread, seat).await?;
     let also = match std::string::String::as_str(&handle) {
         "" => None,
         handle => crate::commands::agent_inbox::handle_team(host, handle).await,

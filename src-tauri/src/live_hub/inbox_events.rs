@@ -33,4 +33,8 @@ impl InboxEvent {
             message_ids: message_ids.into_iter().collect(),
         }
     }
+    /// The `agent-inbox-changed` notice for this event: its team and the messages it touched.
+    pub fn as_inbox_changes(&self) -> Vec<(LaunchTeam, Vec<i64>)> {
+        vec![(self.team.clone(), self.message_ids.clone())]
+    }
 }

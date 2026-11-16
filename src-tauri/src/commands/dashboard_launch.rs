@@ -3807,6 +3807,7 @@ pub(crate) fn record_from_launch(
         (record.run_id.is_none(), "runId", "the launch belongs to no run"),
         (record.story_id.is_none(), "storyId", "the launch belongs to no story"),
         (record.worktree.is_none(), "worktree", "the launch has no managed worktree"),
+        (record.bridge_tools.is_none() && facts.agent.is_some(), "bridgeTools", "the agent declares no bridge_tools list, so every tool is allowed"),
     ] {
         if missing {
             record.unavailable(field, reason);
@@ -4682,7 +4683,7 @@ pub(crate) async fn launch_headless_session(
             agent.cli_version.as_deref(),
             &launch_args,
             agent.launch.mcp_allow.clone(),
-            agent.launch.effective_bridge_tools.clone(),
+            agent.launch.recorded_bridge_tools(),
             agent.revision_label(),
             agent.manifest_hash.clone(),
             &cwd,
@@ -9236,7 +9237,7 @@ mod tests {
             Some("2.5.0"),
             &args,
             Some(vec!["codesense".into()]),
-            vec!["signal_done".into()],
+            Some(vec!["signal_done".into()]),
             "acme/dev/worker@3".into(),
             "hash-1".into(),
             "/work/wt",
@@ -9299,6 +9300,13 @@ mod tests {
         let open: Vec<_> = r.unavailable.keys().map(String::as_str).collect();
         assert_eq!(open, ["account", "branch"]);
         assert!(r.config_home.as_deref().is_some_and(|h| h.ends_with(".claude")), "{:?}", r.config_home);
+
+        // An agent that declares no bridge tool list records none, never a snapshot of
+        // today's tools, and says why.
+        let unlisted = crate::session_usage::record::LaunchFacts { bridge_tools: None, ..facts };
+        let r = record_from_launch("sess-1", &snapshot, owner.as_ref(), &unlisted);
+        assert_eq!(r.bridge_tools, None);
+        assert!(r.unavailable["bridgeTools"].contains("every tool"), "{:?}", r.unavailable);
     }
 
     /// Under managed Claude settings that send usage elsewhere, a Claude launch's record says its
@@ -9373,7 +9381,7 @@ mod tests {
         let none = BTreeMap::new();
         let base = |cli| {
             crate::session_usage::record::LaunchFacts::new(
-                cli, None, &[], None, vec![], "a@1".into(), "h".into(), "/w",
+                cli, None, &[], None, None, "a@1".into(), "h".into(), "/w",
             )
         };
         // The launch's own variables (a scoped Codex home) win; others are ignored.
@@ -9432,7 +9440,7 @@ mod tests {
         let codex = codesense_pty_core::agent_cli::AgentCli::Codex;
         let facts = |cli, native: &str| {
             crate::session_usage::record::LaunchFacts::new(
-                cli, None, &["--session-id".to_owned(), native.to_owned()], None, vec![], "a@1".into(), "h".into(), "/w",
+                cli, None, &["--session-id".to_owned(), native.to_owned()], None, None, "a@1".into(), "h".into(), "/w",
             )
         };
         let launch = |session: &str, facts, account_home: Option<&str>| {

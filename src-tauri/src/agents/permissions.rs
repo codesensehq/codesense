@@ -32,6 +32,8 @@
 //! The entries are generated launch files: never published back and never
 //! written into the published context or a shared settings file.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Map, Value};
 
 use super::manifest::{json_hash, GeneratedEntry, GeneratedTarget};
@@ -122,11 +124,66 @@ pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
         agent.permissions.as_ref().and_then(|p| p.claude.as_ref()),
         mode,
     );
+    if let Some(tools) = &agent.mcp.bridge_tools {
+        let deny = entry.content["permissions"]["deny"]
+            .as_array_mut()
+            .expect("generated Claude permissions carry a deny list");
+        for rule in claude_bridge_tool_denies(tools) {
+            if !deny.iter().any(|existing| existing == &rule) {
+                deny.push(json!(rule));
+            }
+        }
+        entry.hash = json_hash(&entry.content);
+    }
     if mode == LaunchMode::Headless && agent.is_escalating() {
         entry.content[CLAUDE_SKIP_BYPASS_PROMPT] = json!(true);
         entry.hash = json_hash(&entry.content);
     }
     entry
+}
+
+/// One Claude `deny` rule for each served bridge tool `tools` leaves out, the always-on
+/// ones excepted, in name order. Per tool, never `mcp__codesense__*`: in Claude a deny
+/// beats any allow, so a wildcard would also block the always-on tools. A denied tool is
+/// hidden from the model and refused if called.
+pub fn claude_bridge_tool_denies(tools: &[String]) -> Vec<String> {
+    let always_on = denied_list_keeps();
+    super::resolve::served_bridge_tools()
+        .iter()
+        .filter(|name| !tools.contains(name) && !always_on.contains(*name))
+        .map(|name| format!("mcp__{BRIDGE_SERVER}__{name}"))
+        .collect()
+}
+
+/// The bridge tools a launch on `runtime` can call whatever its `bridge_tools` list says.
+/// For a CLI whose adapter denies each left-out tool (Claude): its required and routine
+/// allows and the tools every agent is allowed, so a list can never take away
+/// `signal_done`, `read_messages` or `reply`. Other runtimes enforce the list as written
+/// and keep none.
+pub fn always_on_bridge_tools(runtime: AgentCli) -> BTreeSet<String> {
+    if codesense_pty_core::agent_cli::adapter(runtime).denies_unlisted_bridge_tools() {
+        denied_list_keeps()
+    } else {
+        BTreeSet::new()
+    }
+}
+
+/// The bridge tools a per-tool deny list never denies: Claude's required and routine
+/// allows and the tools every agent is allowed.
+fn denied_list_keeps() -> BTreeSet<String> {
+    let qualified = format!("mcp__{BRIDGE_SERVER}__");
+    CLAUDE_REQUIRED_ALLOW
+        .iter()
+        .chain(CLAUDE_ROUTINE_ALLOW)
+        .filter_map(|tool| tool.strip_prefix(qualified.as_str()))
+        .map(str::to_string)
+        .chain(
+            bridge_tool_allow_patterns()
+                .iter()
+                .filter_map(|pattern| pattern.strip_prefix("codesense_"))
+                .map(str::to_string),
+        )
+        .collect()
 }
 
 fn claude_permissions(
@@ -174,6 +231,59 @@ fn claude_permissions(
         json!({ "permissions": Value::Object(body) }),
         required,
     )
+}
+
+/// The Claude setting that sets each skill's listing by name; `"off"` turns one off.
+pub const CLAUDE_SKILL_OVERRIDES: &str = "skillOverrides";
+
+/// Turn off, in Claude launch settings `content`, every skill in `found` that `listed`
+/// does not name. A skill already overridden keeps its entry; nothing is turned on, so
+/// a listed skill keeps its own settings.
+pub fn turn_off_unlisted_skills<'a>(
+    content: &mut Value,
+    listed: &[String],
+    found: impl IntoIterator<Item = &'a str>,
+) {
+    let mut off = found
+        .into_iter()
+        .filter(|name| !listed.iter().any(|skill| skill == name))
+        .peekable();
+    if off.peek().is_none() {
+        return;
+    }
+    let Some(body) = content.as_object_mut() else {
+        return;
+    };
+    let overrides = body
+        .entry(CLAUDE_SKILL_OVERRIDES)
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(overrides) = overrides.as_object_mut() {
+        for name in off {
+            overrides
+                .entry(name.to_string())
+                .or_insert_with(|| json!("off"));
+        }
+    }
+}
+
+/// Turn off, in `manifest`'s launch settings, every skill its files provide to `runtime`
+/// that `listed` does not name, and rehash. The launch adds the skills it finds in its
+/// workspace ([`super::launch::apply_generated`]).
+pub fn turn_off_unlisted_manifest_skills(
+    manifest: &mut super::manifest::StartupManifest,
+    runtime: AgentCli,
+    listed: &[String],
+) {
+    let found = super::provides::derive(runtime, manifest).skills;
+    for entry in manifest
+        .generated
+        .iter_mut()
+        .filter(|entry| entry.target == GeneratedTarget::LaunchSettings)
+    {
+        turn_off_unlisted_skills(&mut entry.content, listed, found.iter().map(String::as_str));
+        entry.hash = json_hash(&entry.content);
+    }
+    manifest.manifest_hash = manifest.compute_hash();
 }
 
 /// Whether a Claude `deny` or `ask` rule would block a required tool: the
@@ -468,6 +578,7 @@ mod tests {
             avatar: None,
             allow_wake: false,
             resume_after_restart: false,
+            skill_allowlist: None,
             budget_usd: None,
             revision: 1,
             archived_at: None,
@@ -768,6 +879,67 @@ mod tests {
         );
         assert_eq!(entry.hash, json_hash(&entry.content));
         assert_eq!(entry.hash, hash, "hash");
+    }
+
+    #[test]
+    fn a_claude_bridge_tool_list_denies_each_other_served_tool() {
+        let unrestricted = one(&agent(AgentCli::Claude, None), LaunchMode::Headless);
+        assert_eq!(unrestricted.content["permissions"]["deny"], json!([]));
+
+        let mut listed = agent(
+            AgentCli::Claude,
+            claude_perms(ClaudePermissions {
+                deny: vec!["WebFetch".into()],
+                ..ClaudePermissions::default()
+            }),
+        );
+        listed.mcp.bridge_tools = Some(vec!["notes_read".into()]);
+        let e = one(&listed, LaunchMode::Headless);
+        assert_eq!(e.hash, json_hash(&e.content));
+        let deny: Vec<&str> = e.content["permissions"]["deny"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| rule.as_str().unwrap())
+            .collect();
+        // The agent's own rules first, then one rule per left-out tool, never a wildcard.
+        assert_eq!(deny[0], "WebFetch");
+        assert!(!deny.contains(&"mcp__codesense__*"));
+        assert!(!deny.contains(&"mcp__codesense__notes_read"));
+        assert!(deny.contains(&"mcp__codesense__codesense_overview"));
+        for kept in [
+            "signal_done",
+            "read_messages",
+            "reply",
+            "react",
+            "routine_done",
+        ] {
+            assert!(
+                !deny.contains(&format!("mcp__codesense__{kept}").as_str()),
+                "{kept}"
+            );
+        }
+        assert!(!deny.iter().any(|rule| blocks_required(rule)));
+        assert_eq!(
+            deny.len() - 1,
+            claude_bridge_tool_denies(&["notes_read".to_string()]).len()
+        );
+
+        // An empty list keeps only the always-on tools.
+        listed.mcp.bridge_tools = Some(Vec::new());
+        let none = one(&listed, LaunchMode::Foreground);
+        let denied = none.content["permissions"]["deny"]
+            .as_array()
+            .unwrap()
+            .len();
+        let always_on = always_on_bridge_tools(AgentCli::Claude);
+        assert_eq!(
+            denied - 1,
+            crate::agents::resolve::served_bridge_tools()
+                .difference(&always_on)
+                .count()
+        );
+        assert!(always_on_bridge_tools(AgentCli::Codex).is_empty());
     }
 
     #[test]

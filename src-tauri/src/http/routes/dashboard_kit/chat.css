@@ -15,6 +15,7 @@
 .cs-chat .msg .meta{font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
 .cs-chat .msg .who{display:flex;align-items:center}
 .cs-chat .msg .body{white-space:pre-wrap;overflow-wrap:anywhere;padding:7px 11px;border-radius:var(--cs-radius-lg);background:var(--cs-surface);border:1px solid var(--cs-border)}
+.cs-chat .msg .body[data-html]{white-space:normal}.cs-chat .msg .body .html-open{margin-top:6px}.cs-chat .msg .body .html-slot{margin-top:8px}.cs-chat .msg .body .html-slot iframe{display:block;width:100%;min-height:240px;border:1px solid var(--cs-border);border-radius:var(--cs-radius-sm);background:var(--cs-bg)}.cs-chat .msg .body .html-t{font-weight:600}.cs-chat .msg .body .html-from{color:var(--cs-muted-fg);font-size:var(--cs-text-xs)}
 .cs-chat .msg.you .body{background:color-mix(in srgb,var(--cs-accent) 10%,var(--cs-bg))}
 /* A message's inline markdown (chat/inline.js): code is set in the mono face on the inset; strong and em keep the browser's weight and slant. */
 .cs-chat .msg .body code{padding:0 3px;border-radius:var(--cs-radius-sm);background:var(--cs-inset);font-family:var(--cs-font-mono);font-size:.92em}

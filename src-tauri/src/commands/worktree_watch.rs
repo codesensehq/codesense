@@ -38,7 +38,14 @@ pub async fn lazy_attach_worktree_watch(
         let state = app.state::<WorktreeWatchState>();
         let cwd_path = PathBuf::from(&cwd);
         let app_for_emit = app.clone();
+        // The listing keys its cache by the worktree's top level, resolved; an inset can be
+        // opened on a subfolder, so resolve the top level once here.
+        let facts_key =
+            super::worktree_probe::cache_key(&super::worktree_probe::worktree_top(&cwd_path));
         let emit = move |change: WorktreeFileChange| {
+            // The watch already drops .git, node_modules, target and dist paths before this
+            // point, so a build's churn never reaches here.
+            super::worktree_probe::invalidate_worktree(&facts_key);
             if let Err(e) = app_for_emit.emit("worktree-file-change", change) {
                 warn!(target: "worktree_watch", "worktree-file-change emit failed: {e}");
             }
