@@ -33,7 +33,7 @@ import {createComposer} from './composer.js';
 import {pinToBottom} from './pin.js';
 import {rovingThread} from './roving.js';
 import {linkChatStyles,mountIds}from './mount-ids.js';
-import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,pinTitleOf,pinWho} from './chat-core.js';
+import {cardAnswer,createMarkLatch,parseCard,parseCardLine,parseNext,PIN_CAP,pinCapLabel,pinCapNote,pinLiveText,pinReplaceLabel,htmlNameOf,pinTitleOf,pinWho} from './chat-core.js';
 import {createPinReplace} from './pin-replace.js';
 import {cardNode} from './card.js';
 import {inlineNodes} from './inline.js';
@@ -200,10 +200,15 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // A face name the line doesn't show (a person's name beside a role word) is said once before it, as a sighted reader gets it from the face; one that holds the line's name (an emoji before it, another case) adds nothing. The visible line is unchanged.
  const holds=(name,who)=>String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
  const whoLine=(info,who,meta)=>info?h('div',{class:'who'},faceNode(info),holds(info.name,who)?null:h('span',{class:'sr'},`${info.name}, `),meta):meta;
+ // An HTML message is a page the chat doesn't draw: it shows by name (summary, <title>, first heading, as a pin names it) and sender, never as its source.
+ const htmlName=(item,who)=>{
+  const from=copy.row.htmlFrom(who),name=htmlNameOf({text:item.said||item.text,summary:item.summary});
+  return name?[h('div',{class:'html-t'},name),h('div',{class:'html-from'},from)]:[from];
+ };
  const bubble=(item,side,first=true,info=null)=>{
   const pin=item.pin?item.pin.make():null,who=info&&info.label||item.who;
   return h('div',{class:`msg ${side}${pin&&pin.pinned?' pinned':''}`,'data-mid':item.id===undefined?null:String(item.id),'data-run':faces?(first?'start':'cont'):null},
-   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`,item.label?h('span',{'data-row-label':''},` · ${item.label}`):null)):null,pin?pin.acts:null,h('div',{class:'body'},item.contentType==='html'?item.text:inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
+   first?whoLine(info,who,h('div',{class:'meta'},`${who} · ${timeLabel(item.at)}`,item.label?h('span',{'data-row-label':''},` · ${item.label}`):null)):null,pin?pin.acts:null,item.contentType==='html'?h('div',{class:'body','data-html':'1'},htmlName(item,who)):h('div',{class:'body'},inlineNodes(item.text)),item.note?h('div',{class:'note'},item.note):null,item.mark?h('div',{class:'mark','data-mark':item.markKey},item.mark):null,pin?pin.tag:null,pin?pin.foot:null);
  };
  const typing=()=>h('div',{class:'msg lead typing','data-typing':'1'},face('working',copy.row.typing),h('span',{class:'dots','aria-hidden':'true'},h('i'),h('i'),h('i')),h('span',{class:'sr'},copy.row.typing));
  const termButton=id=>{const on=Boolean(terminalTarget());return h('button',{type:'button',class:'btn sm quiet term',id,'data-term':'1',disabled:on?null:'',onclick:showTerminal},on?copy.terminal:copy.terminalOff);};
