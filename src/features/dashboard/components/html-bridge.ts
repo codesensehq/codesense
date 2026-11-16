@@ -16,6 +16,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
 import { VERB_REGISTRY } from "../lib/verb-registry.generated";
+import { threadOf } from "@/features/inbox/lib/chat-core";
 import { liveHub, type HubFrame } from "../lib/live-hub";
 import { openMessageTab } from "@/features/weft/components/inbox-message-dashboard";
 import { buildMessageViewerUrl, HTML_FRAME_ALLOW } from "@/shared/lib/viewer-file-type";
@@ -235,10 +236,10 @@ async function subscriptionView(
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
     if (!prepare) {
-      // The host's view key for the thread (`live_hub::pins::view_key` and
-      // `ThreadKey::new`): the saved agent is the id before `@`.
-      const agent = agentId.split("@")[0].trim();
-      return { viewKey: `pins:${team.org}/${team.team}:${agent}:${storyId?.trim() ?? ""}` };
+      // The host's view key for the thread (`live_hub::pins::view_key`), keyed by the one
+      // thread rule (`threadOf`, as `ThreadKey::new` keys it).
+      const thread = threadOf(agentId, storyId);
+      return { viewKey: `pins:${team.org}/${team.team}:${thread.agentId}:${thread.storyId}` };
     }
     return { viewKey: await agentPinsPrepareView(team, agentId, storyId) };
   }
