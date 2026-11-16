@@ -38,6 +38,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
   const ready = Promise.all(
     (["global", "principal"] as const).map(async (scope) => {
       const view = await configurationPrepare("prefs", principal, undefined, scope);
+      // Seeded even once disposed: the hub then owns the host's hold and releases it.
+      hub.seed(view);
       if (disposed) return;
       const commit = (snapshot: HubSnapshot) => {
         if (disposed) return;
@@ -53,7 +55,6 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
         if (!shown) return;
         commit(snapshot);
       };
-      hub.seed(view);
       commit(view);
       const frame = hub.attach(
         `native:prefs:${scope}:${owner}`,

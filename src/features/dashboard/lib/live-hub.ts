@@ -327,11 +327,6 @@ function patchRows(
   return next;
 }
 
-/**
- * `delta` with each patch rebuilt into the full row it makes of `current`'s row, so every
- * reader downstream gets full rows. `undefined` when `current` lacks a patched row: a patch is
- * never applied to a guess. Neither `current` nor its rows change.
- */
 /** The full row `patch` makes of `base`, as a new object. */
 export function patchedRow(base: HubRow, { set, unset }: RowPatch): HubRow {
   const row: HubRow = { ...base, ...set };
@@ -339,6 +334,11 @@ export function patchedRow(base: HubRow, { set, unset }: RowPatch): HubRow {
   return row;
 }
 
+/**
+ * `delta` with each patch rebuilt into the full row it makes of `current`'s row, so every
+ * reader downstream gets full rows. `undefined` when `current` lacks a patched row: a patch is
+ * never applied to a guess. Neither `current` nor its rows change.
+ */
 function withFullRows(current: HubSnapshot, delta: HubDelta): HubDelta | undefined {
   if (!delta.patches?.length) return delta;
   const index = rowIndexes.get(current);
@@ -723,8 +723,10 @@ export class LiveHub {
    *  without one it is kept among the unheld views. */
   seed(snapshot: HubSnapshot, holder?: HubFrame) {
     const key = keyOf(snapshot.topic, snapshot.viewKey);
-    if (this.noteHold(key, snapshot.hold) && (this.views.get(key)?.rev ?? -1) <= snapshot.rev)
-      this.views.set(key, snapshot);
+    // The hold generation is the hub's to keep; the cached view frames and pages read has none.
+    const { hold, ...view } = snapshot;
+    if (this.noteHold(key, hold) && (this.views.get(key)?.rev ?? -1) <= view.rev)
+      this.views.set(key, view);
     const frame = holder && this.handles.get(holder);
     if (frame && !frame.disposed) {
       frame.seeded.add(key);
@@ -1241,8 +1243,12 @@ export class LiveHub {
       current && delta.rev === current.rev + 1 ? withFullRows(current, delta) : undefined;
     const gap = !full;
     if (gap) {
-      this.views.delete(key);
-      this.unheld.delete(key);
+      // A held view is read again by its holders; an unheld one leaves the cache, and so
+      // releases its host hold, since nothing would re-read it.
+      if (this.holders.has(key)) {
+        this.views.delete(key);
+        this.unheld.delete(key);
+      } else this.evict(key);
     } else
       this.views.set(
         key,

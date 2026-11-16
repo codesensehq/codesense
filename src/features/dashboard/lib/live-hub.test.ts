@@ -3111,3 +3111,34 @@ it("start drops an earlier page's holds before the first read, and forgets views
     local.dispose();
   }
 });
+
+it("keeps the host's hold generation out of the views frames read", async () => {
+  const { local } = holdingHub();
+  try {
+    const frame = local.attach("page", "all", () => {}, true);
+    const reply = await frame.subscribe("sessions");
+    expect(reply).not.toHaveProperty("hold");
+    local.seed({ topic: "agentDefinitions", viewKey: "all", rev: 1, snapshot: [], hold: 9 });
+    expect(await frame.subscribe("agentDefinitions")).not.toHaveProperty("hold");
+  } finally {
+    local.dispose();
+  }
+});
+
+it("a gap on an unheld view drops it from the cache and releases its host hold", async () => {
+  const { local, release } = holdingHub();
+  try {
+    await local.snapshot("messageDelivery", "team:o/a");
+    local.receive({
+      topic: "messageDelivery",
+      viewKey: "team:o/a",
+      rev: 9,
+      upserts: [],
+      removes: [],
+    });
+    expect(internals(local).views.has(JSON.stringify(["messageDelivery", "team:o/a"]))).toBe(false);
+    expect(release.mock.calls).toEqual([["messageDelivery", "team:o/a", 1]]);
+  } finally {
+    local.dispose();
+  }
+});

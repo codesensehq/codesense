@@ -2409,8 +2409,8 @@ const MAX_UNRESOLVED_PATHS: usize = 278;
 /// `emit_inbox_changed` (agent_inbox.rs), `.ok()` in `changed_count_teams`
 /// (live_hub/inbox.rs) and `committed.is_empty()` in `live_hub/mod.rs`. None calls a write
 /// primitive.
-/// The live hub's field patches and held views add 10 more (CI's census). The new calls on
-/// ambiguous names are `projections.hold(..)` in `subscribe_held` (live_hub/mod.rs),
+/// The live hub's field patches and held views: CI's census measured +10. The candidates,
+/// new calls on ambiguous names, are `projections.hold(..)` in `subscribe_held` (live_hub/mod.rs),
 /// `agent_definitions::prepare_held` and `configuration::prepare_held`; `.release(..)` in
 /// `live_hub_release` and `.deliver(..)` in `publish` (live_hub/mod.rs); `.as_str()` on the
 /// row id and changed fields in `WireDelta::from` (live_hub/projection.rs) and on the window

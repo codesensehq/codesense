@@ -74,8 +74,9 @@ export async function readAgentDefinitions(detailKey?: string): Promise<void> {
     visible,
     sequence,
   );
-  if (started !== generation || sequence !== readSequence) return;
+  // Seeded even when superseded: the hub then owns the host's hold and releases it.
   liveHub.seed(view);
+  if (started !== generation || sequence !== readSequence) return;
   // Explicit reads also prime navigation before its tab is revealed.
   const snapshot = await liveHub.snapshot(TOPIC, view.viewKey);
   if (started !== generation || sequence !== readSequence) return;
@@ -118,7 +119,12 @@ export function showAgentDefinitions(shown: boolean): void {
   if (!shown) {
     frame?.visible(false);
     // Stop resolving the selected detail while its retained tab is hidden.
-    if (key) void agentDefinitionsPrepare(undefined, undefined, false, ++readSequence);
+    if (key)
+      void agentDefinitionsPrepare(undefined, undefined, false, ++readSequence).then(
+        // The hub owns the host's hold on the prepared view, and releases it when it goes.
+        (view) => liveHub.seed(view),
+        () => {},
+      );
     return;
   }
   const store = useAgentsStore.getState();
