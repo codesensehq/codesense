@@ -244,8 +244,8 @@ async fn pins_in(
                     Err(other) => return Err(other),
                 },
                 PinOp::Reorder { message_ids } => {
-                    pins::pins_reorder(store, &thread, &message_ids)?;
-                    (None, true)
+                    let moved = pins::pins_reorder(store, &thread, &message_ids)?;
+                    (None, moved)
                 }
             };
             Ok(Ok((outcome, changed, pins::pins_list(store, &thread)?)))

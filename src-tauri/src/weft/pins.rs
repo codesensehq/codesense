@@ -577,12 +577,13 @@ fn restore(
 }
 
 /// Put `thread`'s shown pins in `message_ids` order. The ids must be exactly the pins
-/// [`pins_list`] returns, each once.
+/// [`pins_list`] returns, each once. True when the order changed: asking for the order it
+/// already has writes nothing.
 pub fn pins_reorder(
     store: &WeftStore,
     thread: &ThreadKey,
     message_ids: &[i64],
-) -> WvWriteResult<()> {
+) -> WvWriteResult<bool> {
     let mut conn = WeftStore::conn(store)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (live, gone) = ordered(&tx, thread)?;
@@ -595,11 +596,14 @@ pub fn pins_reorder(
             "messageIds must list every pinned message of the thread exactly once",
         ));
     }
+    if message_ids == &live[..] {
+        return Ok(false);
+    }
     let mut order = message_ids.to_vec();
     order.extend(gone);
     renumber(&tx, thread, &order)?;
     rusqlite::Transaction::commit(tx)?;
-    Ok(())
+    Ok(true)
 }
 
 /// `thread`'s shown pins (live, at most [`PIN_CAP`]) in list order, numbered from 0, each
@@ -999,8 +1003,12 @@ mod tests {
         for id in [a, b, c] {
             pin_add(&store, &t, id, "human", None, None).unwrap();
         }
-        pins_reorder(&store, &t, &[c, a, b]).unwrap();
+        assert!(pins_reorder(&store, &t, &[c, a, b]).unwrap());
         assert_eq!(ids(&store, &t), vec![c, a, b]);
+        assert!(
+            !pins_reorder(&store, &t, &[c, a, b]).unwrap(),
+            "the order it already has is no change"
+        );
         for bad in [vec![c, a], vec![c, a, b, b], vec![c, a, 999], vec![]] {
             assert!(pins_reorder(&store, &t, &bad).is_err(), "{bad:?}");
         }
