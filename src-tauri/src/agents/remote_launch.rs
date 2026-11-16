@@ -55,6 +55,15 @@ pub(crate) fn prepare(
                 .into(),
         );
     }
+    if launch.generated.iter().any(|entry| {
+        entry.id == super::permissions::CLAUDE_SETTINGS_ID
+            && super::permissions::holds_launch_parent(&entry.content)
+    }) {
+        return Err(format!(
+            "{} rules are expanded only for launches on this Mac; remove them or launch locally",
+            super::permissions::LAUNCH_PARENT_TOKEN
+        ));
+    }
     if !launch.manifest.errors.is_empty() {
         return Err(format!(
             "saved-Agent startup manifest is invalid: {}",
@@ -280,6 +289,49 @@ mod tests {
                 assert_eq!(captured.startup.settings["sandbox_mode"], "read-only");
                 assert_eq!(captured.startup.args, definition.args);
                 assert!(captured.mcp_allow.is_empty());
+            }
+        }
+    }
+
+    /// The session server writes settings as given, so a `{{launch_parent}}` rule would reach
+    /// a remote machine unexpanded: a deny holding it would match nothing there.
+    #[test]
+    fn a_remote_launch_refuses_launch_parent_rules() {
+        let root = tempfile::tempdir().unwrap();
+        team_content(root.path(), &alice());
+        for (index, (allow, deny)) in [
+            (vec![], vec!["Edit(//{{launch_parent}}/x/**)"]),
+            (vec!["Read(//{{launch_parent}}/x/**)"], vec![]),
+            (vec!["Read(//**/x/**)"], vec!["Edit(//**/.git/**)"]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut definition = draft(&format!("remote-parent-{index}"), AgentCli::Claude);
+            definition.mcp.servers.clear();
+            definition.permissions = Some(
+                serde_json::from_value(
+                    serde_json::json!({"claude": {"allow": allow, "deny": deny}}),
+                )
+                .unwrap(),
+            );
+            let key = save(root.path(), &alice(), definition);
+            let result = prepare(
+                root.path(),
+                &alice(),
+                &key,
+                ORG.into(),
+                TEAM.into(),
+                "prepared".into(),
+            );
+            if index < 2 {
+                let error = result.expect_err("a remote launch must not send the token unexpanded");
+                assert!(
+                    error.contains("{{launch_parent}}") && error.contains("this Mac"),
+                    "{error}"
+                );
+            } else {
+                assert!(result.is_ok(), "{result:?}");
             }
         }
     }
