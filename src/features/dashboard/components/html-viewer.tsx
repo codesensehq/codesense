@@ -579,6 +579,9 @@ export function HtmlViewer({
   useEffect(() => {
     scrollYRef.current = initialScrollY;
   }, [filePath, initialScrollY]);
+  // Set while the frame is hidden: the engine drops a hidden box's scroll offset and the shim
+  // reports the clamped top, which must not replace the position to restore on show.
+  const holdScrollRef = useRef(false);
 
   // SW-SD-1: correlation for the parent→doc snapshot-request round-trip. The
   // parent owns the id here (mirror of the doc shim's `_n`/`_p`, now on the
@@ -1735,7 +1738,7 @@ export function HtmlViewer({
         return;
       }
       if (type === "codesense:scroll") {
-        if (Number.isFinite(data.y)) scrollYRef.current = data.y;
+        if (Number.isFinite(data.y) && !holdScrollRef.current) scrollYRef.current = data.y;
         return;
       }
 
@@ -2334,6 +2337,14 @@ export function HtmlViewer({
   // across the postMessage boundary. The injected script registers its
   // restore listener at parse time (script is prepended), so it is ready by
   // the time `load` fires. Buffered replacements inherit the outgoing offset.
+  const postRestoreScroll = useCallback(
+    (y: number) => {
+      const message = { type: "codesense:restore-scroll", y };
+      if (live) postToFrame(endpoint(), message);
+      else endpoint()?.contentWindow?.postMessage(message, "*");
+    },
+    [endpoint, postToFrame, live],
+  );
   const handleIframeLoad = useCallback(() => {
     loadedDocumentKey.current = currentDocumentKey.current;
     // A new iframe inherits the host origin until navigation commits. Recover a
@@ -2346,13 +2357,23 @@ export function HtmlViewer({
     // One frame owner: explicit fragment/route wins, then saved reading position, then top.
     // The frame owns fragment positioning; host restoration must yield on every such load.
     if (hashRef.current || routeRef.current.hash) return;
-    if (live) postToFrame(endpoint(), { type: "codesense:restore-scroll", y: scrollYRef.current });
-    else
-      endpoint()?.contentWindow?.postMessage(
-        { type: "codesense:restore-scroll", y: scrollYRef.current },
-        "*",
-      );
-  }, [rejectCaptures, viewerUrl, endpoint, postToFrame, live, requestReadyAgain, applyPendingHash]);
+    postRestoreScroll(scrollYRef.current);
+  }, [rejectCaptures, viewerUrl, endpoint, postRestoreScroll, requestReadyAgain, applyPendingHash]);
+
+  // A tab switch hides the frame without reloading it, so `handleIframeLoad` never runs again:
+  // put the position back when the frame is shown again. Unlike a load, the document is the same
+  // one the user scrolled after any fragment applied, so a fragment or route doesn't skip it.
+  const prevFrameShown = useRef(frameShown);
+  useEffect(() => {
+    if (prevFrameShown.current === frameShown) return;
+    prevFrameShown.current = frameShown;
+    if (!frameShown) {
+      holdScrollRef.current = true;
+    } else if (holdScrollRef.current) {
+      holdScrollRef.current = false;
+      postRestoreScroll(scrollYRef.current);
+    }
+  }, [frameShown, postRestoreScroll]);
 
   // SW-FX-38: route through the shared `closeActiveFileTab` primitive — a
   // slug-less workspace (repoPath null) must STILL close its tab; `repoPath`
