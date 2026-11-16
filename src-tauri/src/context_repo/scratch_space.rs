@@ -26,7 +26,8 @@ use std::path::{Path, PathBuf};
 use super::org_slug::validate_org_slug;
 use super::path::{
     path_to_team_config_dir, path_to_team_content_dir, path_to_team_libraries_dir,
-    path_to_team_notes_dir, path_to_team_panes_dir, path_to_user_home,
+    path_to_team_notes_dir, path_to_team_panes_dir, path_to_user_home, CONFIG_DIR, LIBRARIES_DIR,
+    NOTES_DIR, PANES_DIR, TEAM_CONTENT_DIR,
 };
 use crate::content_engine::is_safe_logical_name;
 use crate::domain::Principal;
@@ -143,6 +144,18 @@ pub struct ScratchOrgSpace {
     /// `<repo>` — the team-layout leaf of the space.
     leaf: String,
 }
+
+/// The folders a space's layout creates under its root: one per
+/// [`ScratchOrgSpace`] accessor. Below a one-segment org's space these are its
+/// own; any other folder there is a `<slug>/<repo>` org's space.
+const SPACE_LAYOUT_DIRS: [&str; 6] = [
+    TEAM_CONTENT_DIR,
+    NOTES_DIR,
+    CONFIG_DIR,
+    PANES_DIR,
+    LIBRARIES_DIR,
+    ROUTINE_RUNS_DIR,
+];
 
 impl ScratchOrgSpace {
     fn at(
@@ -815,6 +828,41 @@ pub enum ScratchLocation {
 /// ASCII case. `None` outside every scratch repo. Symlinks are NOT followed:
 /// see [`write_refusal`] for the check that resolves them.
 pub fn scratch_location(path: &Path) -> Option<ScratchLocation> {
+    let rest = scratch_parts(path)?;
+    Some(match rest.as_slice() {
+        [first, ..] if first == ALL_ORGS_DIR => ScratchLocation::AllOrgs,
+        [first, owner, repo, ..] if first == ORGS_DIR => {
+            ScratchLocation::Org(format!("{owner}/{repo}"))
+        }
+        _ => ScratchLocation::Repo,
+    })
+}
+
+/// Whether `path` lies in an org space other than `org_slug`'s, compared by path
+/// segments, so a one-segment slug works too. `orgs/` and the folders above the
+/// org's own space are not another org's. Lexical and case-insensitive, like
+/// [`scratch_location`].
+pub fn in_other_org_space(path: &Path, org_slug: &str) -> bool {
+    let Some(rest) = scratch_parts(path) else {
+        return false;
+    };
+    let [first, space @ ..] = rest.as_slice() else {
+        return false;
+    };
+    if first != ORGS_DIR {
+        return false;
+    }
+    let own: Vec<String> = org_slug.split('/').map(str::to_ascii_lowercase).collect();
+    let Some(inside) = space.strip_prefix(own.as_slice()) else {
+        return !own.starts_with(space);
+    };
+    // `orgs/<slug>/` of a one-segment org also holds every `<slug>/<repo>` org's space.
+    matches!(inside, [dir, _, ..] if own.len() == 1 && !SPACE_LAYOUT_DIRS.contains(&&**dir))
+}
+
+/// `path`'s lowercased, lexically normalised components below
+/// `…/users/<profile>/scratch/`; `None` outside every scratch repo.
+fn scratch_parts(path: &Path) -> Option<Vec<String>> {
     use std::path::Component;
     let mut parts: Vec<String> = Vec::new();
     for component in path.components() {
@@ -829,14 +877,7 @@ pub fn scratch_location(path: &Path) -> Option<ScratchLocation> {
     let at = parts
         .windows(3)
         .position(|w| w[0] == super::path::USERS_DIR && w[2] == SCRATCH_DIR)?;
-    let rest = &parts[at + 3..];
-    Some(match rest {
-        [first, ..] if first == ALL_ORGS_DIR => ScratchLocation::AllOrgs,
-        [first, owner, repo, ..] if first == ORGS_DIR => {
-            ScratchLocation::Org(format!("{owner}/{repo}"))
-        }
-        _ => ScratchLocation::Repo,
-    })
+    Some(parts.split_off(at + 3))
 }
 
 /// `path` with its deepest existing ancestor resolved through symlinks and the

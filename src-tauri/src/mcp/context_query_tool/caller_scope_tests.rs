@@ -252,3 +252,69 @@ fn inherited_native_markdown_query_uses_viewer_host_but_retains_parent_source_pa
         .iter()
         .any(|r| r.file_name == "secret.md"));
 }
+
+fn file_names(
+    service: &crate::context_query::ContextIndexService,
+    query: serde_json::Value,
+    viewer: &Viewer,
+) -> Vec<String> {
+    let query: ContextQuery = serde_json::from_value(query).unwrap();
+    let mut names: Vec<String> = run_as(service, &query, viewer)
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| row.file_name)
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_team_callers_query_returns_nothing_from_another_org() {
+    use crate::context_repo::caller_scope::tests::Fixture;
+    let f = Fixture::new();
+    let other = f.other_org();
+    let service = f.service_with([f.roots(), other.roots.clone()].concat());
+    let viewer = Viewer {
+        scope: f.scope.clone(),
+        ..Default::default()
+    };
+    let other_org = json!({"where":{"orgs":["globex/ctx"]}});
+    assert_eq!(
+        file_names(&service, other_org.clone(), &Viewer::default()),
+        ["notes.md", "plan.md"]
+    );
+    assert!(file_names(&service, other_org, &viewer).is_empty());
+    for file in [&other.team_file, &other.private_file] {
+        let at = |path: &std::path::Path| {
+            let query: ContextQuery =
+                serde_json::from_value(json!({"where":{"pathPrefix": path}})).unwrap();
+            serde_json::to_value(run_as(&service, &query, &viewer).unwrap()).unwrap()
+        };
+        assert_eq!(at(file), at(&file.with_file_name("missing.md")), "{file:?}");
+    }
+    let docs = json!({"where":{"orgs":["codesense/docs"]}});
+    assert_eq!(
+        file_names(&service, docs.clone(), &Viewer::default()),
+        ["fake.md", "fake.md", "fake.md", "guide.md"]
+    );
+    assert_eq!(file_names(&service, docs, &viewer), ["guide.md"]);
+}
+
+#[test]
+fn a_team_callers_query_still_returns_the_placed_docs() {
+    use crate::context_repo::caller_scope::tests::Fixture;
+    let f = Fixture::new();
+    let other = f.other_org();
+    let service = f.service_with([f.roots(), other.roots.clone()].concat());
+    let viewer = Viewer {
+        scope: f.scope.clone(),
+        ..Default::default()
+    };
+    let names = file_names(
+        &service,
+        json!({"where":{"orgs":["codesense/docs"],"pathPrefix": other.docs_file}}),
+        &viewer,
+    );
+    assert_eq!(names, ["guide.md"]);
+}
