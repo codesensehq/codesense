@@ -397,6 +397,13 @@ fn prepared_configuration_views_are_held() {
     };
     assert_eq!(count(&held.view.view_key), 1);
     assert_eq!(count(&unheld.view_key), 0);
+    // A paused configuration source updates only views with a scoped subscription, as the
+    // webview's frames always open them.
+    let live = |key: &str, id: &str| {
+        super::super::subscribe(app.handle(), "prefs", key, None, Some(id), None).unwrap();
+    };
+    live(&held.view.view_key, "native:prefs:global:held");
+    live(&unheld.view_key, "native:prefs:principal:unheld");
     let emitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
     let seen = emitted.clone();
     app.listen("codesense:delta", move |event| {
