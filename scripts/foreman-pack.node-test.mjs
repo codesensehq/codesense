@@ -403,7 +403,7 @@ test("stories: confirm in one card, then a foreman-* worktree and a PR, or the n
     "docs team",
     "stories live in a team",
     "offer setup",
-    "`Options: `Create`, `Change`, `Not now``",
+    "Options: `Create`, `Change`, `Not now`",
     "`git remote`",
     "`git worktree list`",
     "`story-create`",
@@ -448,7 +448,7 @@ test("setup: offer once, launch the guide on a yes, resume, and take it back wit
     "list_orgs_teams",
     "list_source_repos",
     "offer setup once",
-    "`Options: `Set up now`, `Not now``",
+    "Options: `Set up now`, `Not now`",
     "`setup-ledger`",
     // The docs team's guide, by its key, in the docs team: a bare id would resolve in the
     // Foreman's own team once it re-homes there.

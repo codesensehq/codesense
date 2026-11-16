@@ -11,6 +11,9 @@ const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
 const { fixtureFor, CONFIG, HANDBACK_PREFIX, HANDBACK_ROLE, SETUP_LAUNCH, SETUP_STEPS } =
   await lib("fixture");
 const { loadExtraCases, grade } = await lib("graders");
+const { parseCard } = await import(
+  new URL("../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js", import.meta.url)
+);
 
 const extra = loadExtraCases();
 const caseOf = (id) => extra.find((c) => c.id === id);
@@ -367,10 +370,25 @@ test("foreman.md teaches the one card format the page renders as buttons", () =>
     new URL("../codesense-docs/packs/codesense-foreman/foreman.md", import.meta.url),
     "utf8",
   );
-  assert.match(spec, /last line `Options: `A`, `B``/);
-  assert.match(spec, /`Options: `Set up now`, `Not now``/);
-  assert.match(spec, /`Options: `Create`, `Change`, `Not now``/);
   assert.doesNotMatch(spec, /Set up now · Not now|Create · Change · Not now/);
+  // Review bdd32a: each card line, copied literally from the spec, is one the page parses: no
+  // outer backticks around it, so it starts `Options:`.
+  const lines = [
+    ...spec.matchAll(/(?<!`)Options: (?:`[^`]+`(?:, )?)+(?:\. My pick: [^.;)]*)?/g),
+  ].map((m) => m[0]);
+  assert.deepEqual(
+    lines.map((line) => parseCard(`Question?\n${line}`)?.options),
+    [
+      ["A", "B"],
+      ["Create", "Change", "Not now"],
+      ["Set up now", "Not now"],
+    ],
+    lines.join("\n"),
+  );
+  assert.equal(parseCard(`Question?\n${lines[0]}`).pick, "A");
+  assert.doesNotMatch(spec, /`Options:/, "no card line is wrapped in backticks");
+  assert.match(spec, /why not lower down/);
+  assert.match(spec, /your pick/);
 });
 
 test("the hand-back goes to the team the launching Foreman runs in, which the guide can look up", () => {
