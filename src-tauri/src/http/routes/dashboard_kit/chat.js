@@ -1024,7 +1024,7 @@
     return svg;
   }
   function createPinReplace({ onPin, state, live, list, nameOf, titleOf, ownOf, idOf, copy, render, pinNow }) {
-    let open = null, marked = null, focusWant = false;
+    let open = null, marked = null, focusWant = false, reveal = false;
     const el = () => open && open.node;
     const mark = (id) => {
       if (id === marked) return;
@@ -1043,6 +1043,7 @@
       open = { ...pinChooserOpen(pins), item, node: h("div", { class: "pin-chooser", id: idOf(item.id), role: "group", "aria-labelledby": idOf(item.id) + "-h" }) };
       open.node.addEventListener("keydown", onKey);
       focusWant = true;
+      reveal = true;
     }
     function sync() {
       if (!open) return;
@@ -1181,6 +1182,10 @@
       if (!open || !open.node.isConnected) return;
       const had = was || within();
       paint();
+      if (reveal) {
+        reveal = false;
+        if (typeof open.node.scrollIntoView === "function") open.node.scrollIntoView({ block: "nearest" });
+      }
       if (!had && !focusWant) return;
       focusWant = false;
       const target = open.room ? el().querySelector(".room-pin") : open.current !== null ? rowEl(open.current) : el().querySelector(".chg");

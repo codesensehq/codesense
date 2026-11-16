@@ -224,3 +224,59 @@ test("the source-repos step verifies done after each of its own acts, so a re-ru
   for (const [act, attachment] of Object.entries(after))
     assert.equal(map[attachment], s.verify.expect, `${act} leaves the step ${map[attachment]}`);
 });
+
+// `read_content_file` is how a step reads a file in the team's content: `git-access` reads its
+// own `tools/git-access.md`. Its handler passes `path` and `maxBytes` to the file surface,
+// whose snapshot writes the result's keys.
+test("read_content_file: the registry takes its params struct's arguments and returns the snapshot's keys", () => {
+  const handler = rust("mcp/handler.rs");
+  const at = handler.indexOf("pub struct ReadContentFileParams");
+  const params = structs(
+    handler.slice(handler.lastIndexOf("\n#[", at), at + 100),
+  ).ReadContentFileParams.map((f) => f.name);
+  assert.deepEqual(PROBE_TOOLS.read_content_file.params, params);
+  const keys = jsonKeys(fnBody(rust("commands/file_surface.rs"), "pub(crate) fn read_snapshot("));
+  for (const field of PROBE_TOOLS.read_content_file.fields)
+    assert.ok(keys.has(field), `read_content_file writes no ${field}`);
+  assert.deepEqual([...PROBE_TOOLS.read_content_file.fields].sort(), [
+    "bytesUrl",
+    "sha256",
+    "size",
+    "text",
+    "truncated",
+  ]);
+});
+
+const PROBE_ENV = "mcp/probe_environment.rs";
+
+test("probe_environment: the registry takes its params struct's arguments", () => {
+  const params = structs(rust(PROBE_ENV)).ProbeEnvironmentParams.map((f) => f.name);
+  assert.deepEqual([...PROBE_TOOLS.probe_environment.params].sort(), [...params].sort());
+});
+
+test("probe_environment: every registry field is a key its report writes", () => {
+  const keys = jsonKeys(
+    fnBody(rust(PROBE_ENV), "pub fn build_report(") +
+      fnBody(rust(PROBE_ENV), "fn git_repo_report(") +
+      fnBody(rust(PROBE_ENV), "pub fn parse_gh_auth(") +
+      fnBody(rust(PROBE_ENV), "pub fn probe_gh_auth("),
+  );
+  for (const field of PROBE_TOOLS.probe_environment.fields)
+    for (const key of field.replace(/\[\]/g, "").split("."))
+      assert.ok(key === "*" || keys.has(key), `probe_environment writes no ${key} (${field})`);
+});
+
+test("the guide's agents allow the tools the setup steps use to read and run", () => {
+  for (const runtime of ["claude", "codex", "opencode"]) {
+    const agent = readFileSync(
+      join(PACKS_ROOT, `codesense-guide/agents/guide-${runtime}/agent.yaml`),
+      "utf8",
+    );
+    for (const tool of ["clone_repo", "open_terminal_tab", "read_terminal_tab"])
+      assert.match(
+        agent,
+        new RegExp(`^\\s*- (?:mcp__codesense__)?${tool}$`, "m"),
+        `${runtime} ${tool}`,
+      );
+  }
+});

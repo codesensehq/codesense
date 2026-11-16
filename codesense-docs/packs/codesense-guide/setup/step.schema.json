@@ -43,6 +43,29 @@
       }
     },
     "act": { "type": "array", "items": { "$ref": "#/$defs/act" } },
+    "on_fail": {
+      "description": "What the guide shows when an act's command or tool fails: the text, a read card with these buttons (retry sends the step's card again, copy replies with the copy text to copy, skip moves on) and nothing is saved or recorded. It may name inputs as {{name}}.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "options"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "copy": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "do"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "do": { "enum": ["retry", "copy", "skip"] }
+            }
+          }
+        }
+      }
+    },
     "inputs": {
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },

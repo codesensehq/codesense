@@ -145,17 +145,29 @@ fn real_writers_and_scratch_ingress_feed_owned_versioned_views() {
         ))
         .unwrap();
 
-    let initial = prepare(app.handle(), home.path(), &principal, "profile", Some(org)).unwrap();
+    // Prepared as the webview prepares them, so the window holds both views.
+    let initial = prepare_held(
+        app.handle(),
+        home.path(),
+        &principal,
+        "profile",
+        Some(org),
+        Some("main"),
+    )
+    .unwrap()
+    .view;
     assert!(initial.snapshot.is_empty());
     let key = initial.view_key.clone();
-    let workspace = prepare(
+    let workspace = prepare_held(
         app.handle(),
         home.path(),
         &principal,
         "workspaceConfig",
         None,
+        Some("main"),
     )
-    .unwrap();
+    .unwrap()
+    .view;
     let initial_views = json!([initial, workspace]);
     let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
     use tauri::Listener;

@@ -1195,3 +1195,63 @@ fn recreated_agent_recovers_retained_archived_routine_facts() {
         1
     );
 }
+
+#[test]
+fn prepared_views_are_held() {
+    use crate::routines::test_support::launch_app;
+    use tauri::Listener;
+    let (home, caller, key) = fixture();
+    let app = launch_app(home.path());
+    app.manage(super::super::LiveHub::default());
+    // The webview seeds the catalog it prepares; a prepare for nobody's cache holds nothing.
+    let held = prepare_held(
+        app.handle(),
+        &caller,
+        "native",
+        Scope::Native,
+        Some(key.to_string()),
+        true,
+        1,
+        Some("main"),
+    )
+    .unwrap();
+    assert!(held.hold.is_some());
+    let unheld = prepare(
+        app.handle(),
+        &caller,
+        "frame",
+        Scope::Page(Some((ORG.into(), TEAM.into()))),
+        None,
+        true,
+        0,
+    )
+    .unwrap();
+    let hub = app.state::<super::super::LiveHub>();
+    let count = |key: &str| hub.model.lock().unwrap().projections.hold_count(TOPIC, key);
+    assert_eq!(count(&held.view.view_key), 1);
+    assert_eq!(count(&unheld.view_key), 0);
+    let emitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let seen = emitted.clone();
+    app.listen("codesense:delta", move |event| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    let change = save(&caller, &key, "Renamed while held");
+    hub.model
+        .lock()
+        .unwrap()
+        .agent_definitions
+        .note(&change.key, change.revision.is_none());
+    refresh(app.handle(), &caller).unwrap();
+    let emitted = emitted.lock().unwrap();
+    assert!(
+        emitted
+            .iter()
+            .any(|delta| delta["viewKey"] == held.view.view_key.as_str()),
+        "the held catalog still hears a later change"
+    );
+    assert!(!emitted
+        .iter()
+        .any(|delta| delta["viewKey"] == unheld.view_key.as_str()));
+}

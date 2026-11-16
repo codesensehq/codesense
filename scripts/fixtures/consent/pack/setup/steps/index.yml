@@ -1,5 +1,5 @@
 step_format: 1
 steps:
-  - { id: gh-installed, title: Install gh }
-  - { id: gh-auth, title: Sign in to GitHub with gh, needs: [gh-installed] }
   - { id: repos, title: Add your repos }
+  - { id: git-access, title: Let agents reach your git host, needs: [repos] }
+  - { id: clone, title: Clone your repos, needs: [repos, git-access] }

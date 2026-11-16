@@ -46,8 +46,21 @@ fn managed_prefs_writers_file_ingress_and_principal_boundaries_feed_live_consume
     crate::commands::scratch_watch::register_configuration_file_watch(app.handle(), &state, &path);
     watcher.unwatch(&data).unwrap();
     let principal = Principal::from(42u64);
-    let global = prepare(app.handle(), &data, &principal, "prefs", Some("global")).unwrap();
-    let owned = prepare(app.handle(), &data, &principal, "prefs", Some("principal")).unwrap();
+    // Prepared as the webview prepares them, so the window holds both views.
+    let held = |scope| {
+        prepare_held(
+            app.handle(),
+            &data,
+            &principal,
+            "prefs",
+            Some(scope),
+            Some("main"),
+        )
+        .unwrap()
+        .view
+    };
+    let global = held("global");
+    let owned = held("principal");
     let initial = json!([global, owned]);
     let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
     for channel in ["codesense:delta", "codesense:subscription-delta"] {
@@ -338,4 +351,80 @@ fn shortcut_reset_removes_the_disk_key_and_committed_row_without_losing_another_
         .snapshot
         .iter()
         .any(|row| row["value"] == "CmdOrCtrl+Alt+9"));
+}
+
+#[test]
+fn prepared_configuration_views_are_held() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("users/42")).unwrap();
+    let profile = crate::commands::local_profile::LocalProfileState::load(home.path()).unwrap();
+    profile.select("42", None).unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(profile)
+        .manage(crate::commands::watch::WatcherState::default())
+        .manage(super::super::LiveHub::default())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let path = home.path().join("app-state.json");
+    std::fs::write(&path, r#"{"viewer":{"settings":{"editorLineWrap":"on"}}}"#).unwrap();
+    let principal = Principal::from(42u64);
+    // The webview seeds the view it prepares; a prepare for nobody's cache holds nothing.
+    let held = prepare_held(
+        app.handle(),
+        home.path(),
+        &principal,
+        "prefs",
+        Some("global"),
+        Some("main"),
+    )
+    .unwrap();
+    assert!(held.hold.is_some());
+    let unheld = prepare(
+        app.handle(),
+        home.path(),
+        &principal,
+        "prefs",
+        Some("principal"),
+    )
+    .unwrap();
+    let hub = app.state::<super::super::LiveHub>();
+    let count = |key: &str| {
+        hub.model
+            .lock()
+            .unwrap()
+            .projections
+            .hold_count("prefs", key)
+    };
+    assert_eq!(count(&held.view.view_key), 1);
+    assert_eq!(count(&unheld.view_key), 0);
+    let emitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let seen = emitted.clone();
+    app.listen("codesense:delta", move |event| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    // One write that changes a global setting and a principal's policy.
+    crate::commands::system::write_app_state(
+        app.handle(),
+        &path,
+        Some("42"),
+        r#"{"viewer":{"settings":{"editorLineWrap":"off"}},"dashboardPolicy":{"preset":"team-safe"}}"#,
+        true,
+    )
+    .unwrap();
+    assert!(
+        hub.snapshot(&unheld.view_key, "prefs").unwrap().rev > unheld.rev,
+        "the unheld view changed too"
+    );
+    let emitted = emitted.lock().unwrap();
+    assert!(
+        emitted
+            .iter()
+            .any(|delta| delta["viewKey"] == held.view.view_key.as_str()),
+        "the held view still hears a later change"
+    );
+    assert!(!emitted
+        .iter()
+        .any(|delta| delta["viewKey"] == unheld.view_key.as_str()));
 }

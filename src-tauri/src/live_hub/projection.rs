@@ -40,6 +40,104 @@ pub struct Delta {
     pub base_rev: Option<u64>,
     #[serde(skip)]
     arrivals: BTreeSet<String>,
+    /// For each upserted row the view already held, the top-level fields it set or dropped.
+    /// Only the `codesense:delta` emit reads it ([`WireDelta`]); every other reader sees full rows.
+    #[serde(skip)]
+    changed: BTreeMap<String, Changed>,
+}
+/// The top-level fields an updated row set (changed or added) and dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Changed {
+    pub set: Vec<String>,
+    pub unset: Vec<String>,
+}
+/// The fields `next` sets or drops against `prior`, when both are objects.
+fn changed_fields(prior: &Value, next: &Value) -> Option<Changed> {
+    let (Value::Object(prior), Value::Object(next)) = (prior, next) else {
+        return None;
+    };
+    Some(Changed {
+        set: next
+            .iter()
+            .filter(|(field, value)| prior.get(*field) != Some(*value))
+            .map(|(field, _)| field.clone())
+            .collect(),
+        unset: prior
+            .keys()
+            .filter(|field| !next.contains_key(*field))
+            .cloned()
+            .collect(),
+    })
+}
+/// Topics whose default read is one page, so a reader may not hold a changed row's base.
+pub(crate) fn paged(topic: &str) -> bool {
+    matches!(topic, "inbox" | "records" | "files" | "stories")
+}
+/// One updated row on the wire: the fields it set, with their values, and the ones it dropped.
+/// Not RFC 7386 merge-patch: rows carry real `null`s, so a dropped field is named in `unset`.
+#[derive(Clone, Debug, Serialize)]
+pub struct RowPatch<'a> {
+    pub id: &'a str,
+    pub set: BTreeMap<&'a str, &'a Value>,
+    pub unset: &'a [String],
+}
+/// How a [`Delta`] goes out on `codesense:delta` to the host `LiveHub`: a row the view already
+/// held goes as a [`RowPatch`] and an arrival as a full row. The host rebuilds full rows before
+/// any page sees them, so subscription deltas, replies, replay and the page SDK keep full rows.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireDelta<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<&'a Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'a str>,
+    pub topic: &'a str,
+    pub view_key: &'a str,
+    pub rev: u64,
+    pub upserts: Vec<&'a Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<RowPatch<'a>>,
+    pub removes: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+}
+impl<'a> From<&'a Delta> for WireDelta<'a> {
+    fn from(delta: &'a Delta) -> Self {
+        let mut upserts = Vec::new();
+        let mut patches = Vec::new();
+        for row in &delta.upserts {
+            let id = row["id"].as_str().unwrap_or_default();
+            match delta.changed.get(id) {
+                Some(changed) if !paged(&delta.topic) => patches.push(RowPatch {
+                    id,
+                    set: changed
+                        .set
+                        .iter()
+                        .map(|field| (field.as_str(), &row[field.as_str()]))
+                        .collect(),
+                    unset: &changed.unset,
+                }),
+                _ => upserts.push(row),
+            }
+        }
+        Self {
+            actor: delta.actor.as_ref(),
+            cursor: delta.cursor.as_ref(),
+            kind: delta.kind.as_deref(),
+            topic: &delta.topic,
+            view_key: &delta.view_key,
+            rev: delta.rev,
+            upserts,
+            patches,
+            removes: &delta.removes,
+            request_id: delta.request_id.as_deref(),
+            total: delta.total,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +153,15 @@ pub struct SubscriptionReply {
     pub total: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+}
+/// A view handed to the webview with the generation of the hold it took ([`TopicRegistry::hold`]),
+/// which the webview passes back to `live_hub_release`.
+#[derive(Clone, Debug, Serialize)]
+pub struct Held<T> {
+    #[serde(flatten)]
+    pub view: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<u64>,
 }
 impl From<Snapshot> for SubscriptionReply {
     fn from(s: Snapshot) -> Self {
@@ -84,6 +191,7 @@ impl View {
         removes: Vec<String>,
         request_id: Option<String>,
         arrivals: BTreeSet<String>,
+        changed: BTreeMap<String, Changed>,
     ) -> Option<Delta> {
         if upserts.is_empty() && removes.is_empty() {
             return None;
@@ -102,6 +210,7 @@ impl View {
             total: None,
             base_rev: None,
             arrivals,
+            changed,
         };
         self.log.push_back(delta.clone());
         if self.log.len() > RETAINED_DELTAS {
@@ -208,10 +317,20 @@ impl CachedProjection {
             .filter(|id| !view.rows.contains_key(*id))
             .cloned()
             .collect();
+        let mut changed = BTreeMap::new();
         let upserts = next
             .iter()
             .filter(|(id, row)| view.rows.get(*id) != Some(*row))
-            .map(|(_, row)| row.clone())
+            .map(|(id, row)| {
+                if let Some(fields) = view
+                    .rows
+                    .get(id)
+                    .and_then(|prior| changed_fields(prior, row))
+                {
+                    changed.insert(id.clone(), fields);
+                }
+                row.clone()
+            })
             .collect();
         let removes = view
             .rows
@@ -220,7 +339,7 @@ impl CachedProjection {
             .cloned()
             .collect();
         view.rows = next;
-        view.commit(&self.topic, key, upserts, removes, None, arrivals)
+        view.commit(&self.topic, key, upserts, removes, None, arrivals, changed)
     }
     fn replay(&mut self, key: &str, since: Option<u64>) -> Option<Vec<Delta>> {
         self.ensure_view(key);
@@ -259,6 +378,7 @@ impl CachedProjection {
         for (key, view) in &mut self.views {
             let mut upserts = Vec::new();
             let mut removes = Vec::new();
+            let mut changed = BTreeMap::new();
             for id in &affected {
                 let next = self
                     .rows
@@ -267,7 +387,11 @@ impl CachedProjection {
                     .map(|(_, row)| row);
                 match next {
                     Some(row) if view.rows.get(id) != Some(row) => {
-                        view.rows.insert(id.clone(), row.clone());
+                        if let Some(prior) = view.rows.insert(id.clone(), row.clone()) {
+                            if let Some(fields) = changed_fields(&prior, row) {
+                                changed.insert(id.clone(), fields);
+                            }
+                        }
                         upserts.push(row.clone());
                     }
                     None if view.rows.remove(id).is_some() => removes.push(id.clone()),
@@ -281,6 +405,7 @@ impl CachedProjection {
                 removes,
                 request_id.clone(),
                 arrivals.clone(),
+                changed,
             ) {
                 deltas.push(delta);
             }
@@ -331,6 +456,11 @@ struct Subscription {
 pub struct TopicRegistry {
     topics: BTreeMap<String, CachedProjection>,
     subscriptions: BTreeMap<String, Subscription>,
+    /// The views a webview holds a cached copy of: (topic, view key) → owner window label → the
+    /// generation of its latest hold. The hold count is the number of owners.
+    held: BTreeMap<(String, String), BTreeMap<String, u64>>,
+    /// The last hold generation issued; every hold takes a new one.
+    hold_generation: u64,
 }
 impl Default for TopicRegistry {
     fn default() -> Self {
@@ -358,6 +488,8 @@ impl Default for TopicRegistry {
             .map(|t| (t.into(), CachedProjection::new(t)))
             .collect(),
             subscriptions: BTreeMap::new(),
+            held: BTreeMap::new(),
+            hold_generation: 0,
         }
     }
 }
@@ -446,7 +578,7 @@ impl TopicRegistry {
             });
         }
         let mut snapshot = p.snapshot(key);
-        if matches!(topic, "inbox" | "records" | "files" | "stories") {
+        if paged(topic) {
             let total = snapshot.snapshot.len();
             snapshot.snapshot.truncate(PAGE_SIZE);
             snapshot.cursor = cursor_for(&snapshot.snapshot, &p.ordered(key), topic, None);
@@ -507,11 +639,7 @@ impl TopicRegistry {
             }
         }
         let total = full.snapshot.len();
-        let selected = select(
-            &full.snapshot,
-            window,
-            matches!(topic, "inbox" | "records" | "files" | "stories"),
-        );
+        let selected = select(&full.snapshot, window, paged(topic));
         let cursor = cursor_for(&selected, &full.snapshot, topic, window);
         let loaded = selected
             .iter()
@@ -536,8 +664,7 @@ impl TopicRegistry {
             rev: full.rev,
             snapshot: Some(selected),
             deltas: None,
-            total: (window.is_some() || matches!(topic, "inbox" | "records" | "files" | "stories"))
-                .then_some(total),
+            total: (window.is_some() || paged(topic)).then_some(total),
             cursor,
         })
     }
@@ -664,6 +791,49 @@ impl TopicRegistry {
             .values()
             .any(|s| s.topic == topic && s.key == key)
     }
+    /// `owner` holds a cached copy of (topic, key), so its deltas must reach it. Holding it
+    /// again is the same hold under a new generation: the count does not stack.
+    pub fn hold(&mut self, topic: &str, key: &str, owner: &str) -> u64 {
+        self.hold_generation += 1;
+        self.held
+            .entry((topic.to_owned(), key.to_owned()))
+            .or_default()
+            .insert(owner.to_owned(), self.hold_generation);
+        self.hold_generation
+    }
+    /// Drop `owner`'s hold on (topic, key) taken at `generation` or before. A release older
+    /// than the owner's latest hold is late, and keeps the newer hold.
+    pub fn release(&mut self, topic: &str, key: &str, owner: &str, generation: u64) {
+        let view = (topic.to_owned(), key.to_owned());
+        let Some(owners) = self.held.get_mut(&view) else {
+            return;
+        };
+        if owners.get(owner).is_some_and(|held| *held <= generation) {
+            owners.remove(owner);
+        }
+        if owners.is_empty() {
+            self.held.remove(&view);
+        }
+    }
+    /// Drop every hold `owner` has (its window closed or its page reloaded). Returns the last
+    /// generation issued: every hold the owner took up to it is gone.
+    pub fn release_owner(&mut self, owner: &str) -> u64 {
+        self.held.retain(|_, owners| {
+            owners.remove(owner);
+            !owners.is_empty()
+        });
+        self.hold_generation
+    }
+    /// How many owners hold (topic, key).
+    pub fn hold_count(&self, topic: &str, key: &str) -> usize {
+        self.held
+            .get(&(topic.to_owned(), key.to_owned()))
+            .map_or(0, |owners| owners.len())
+    }
+    /// Whether anyone reads (topic, key): an owner holds it or a scoped subscription follows it.
+    pub fn is_watched(&self, topic: &str, key: &str) -> bool {
+        self.hold_count(topic, key) > 0 || self.has_view_subscribers(topic, key)
+    }
     /// The topic and view key subscription `id` follows.
     pub fn subscription_view(&self, id: &str) -> Option<(String, String)> {
         self.subscriptions
@@ -711,6 +881,7 @@ impl TopicRegistry {
                     total: Some(view.rows.len()),
                     base_rev: None,
                     arrivals: BTreeSet::new(),
+                    changed: BTreeMap::new(),
                 },
             ));
         }
@@ -860,6 +1031,7 @@ fn update_subscription(
         total: Some(s.total),
         base_rev: Some(s.rev),
         arrivals: BTreeSet::new(),
+        changed: BTreeMap::new(),
     }
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Saved definitions and account-dependent views, shared by native UI and pages.
-use super::projection::{Delta, Snapshot, TopicRegistry};
+use super::projection::{Delta, Held, Snapshot, TopicRegistry};
 use crate::agents::{self, service, AgentKey, AgentRevisionRef};
 use crate::commands::{
     agents::{AgentDetailView, AgentRow},
@@ -671,6 +671,21 @@ pub(crate) fn prepare<R: tauri::Runtime>(
     visible: bool,
     sequence: u64,
 ) -> Result<Snapshot, String> {
+    prepare_held(app, caller, owner, scope, selected, visible, sequence, None).map(|held| held.view)
+}
+/// [`prepare`], and the webview window `holder` that seeds the view holds it, taken under the
+/// lock that builds the snapshot.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_held<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    caller: &Caller,
+    owner: &str,
+    scope: Scope,
+    selected: Option<String>,
+    visible: bool,
+    sequence: u64,
+    holder: Option<&str>,
+) -> Result<Held<Snapshot>, String> {
     if crate::commands::local_profile::active(app).is_ok_and(|p| p.principal != caller.principal) {
         return Err("unavailable: profile changed".into());
     }
@@ -682,7 +697,7 @@ pub(crate) fn prepare<R: tauri::Runtime>(
             projections,
             ..
         } = &mut *model;
-        agent_definitions.open(
+        let (snapshot, deltas) = agent_definitions.open(
             projections,
             caller,
             owner,
@@ -690,7 +705,16 @@ pub(crate) fn prepare<R: tauri::Runtime>(
             selected,
             visible,
             sequence,
-        )?
+        )?;
+        let hold =
+            holder.map(|window| projections.hold(&snapshot.topic, &snapshot.view_key, window));
+        (
+            Held {
+                view: snapshot,
+                hold,
+            },
+            deltas,
+        )
     };
     super::publish(app, deltas);
     Ok(snapshot)
@@ -888,11 +912,12 @@ pub(crate) fn note_path<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn agent_definitions_prepare(
     app: tauri::AppHandle,
+    owner_window: tauri::Window,
     frame_id: Option<String>,
     detail_key: Option<String>,
     visible: Option<bool>,
     sequence: Option<u64>,
-) -> Result<Snapshot, String> {
+) -> Result<Held<Snapshot>, String> {
     let (home, principal) = crate::commands::route_to_context::resolve_ambient(&app).await?;
     let caller = Caller {
         home,
@@ -929,8 +954,9 @@ pub async fn agent_definitions_prepare(
     } else {
         ("native".into(), Scope::Native)
     };
+    let holder = owner_window.label().to_owned();
     crate::commands::await_blocking("agent_definitions.prepare", move || {
-        prepare(
+        prepare_held(
             &app,
             &caller,
             &owner,
@@ -938,6 +964,7 @@ pub async fn agent_definitions_prepare(
             detail_key,
             visible.unwrap_or(true),
             sequence.unwrap_or(0),
+            Some(holder.as_str()),
         )
     })
     .await

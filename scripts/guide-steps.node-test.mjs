@@ -12,21 +12,22 @@ import { stepErrors, stepRuleErrors } from "./lib/pack-steps.mjs";
 
 const PACK = join(PACKS_ROOT, "codesense-guide");
 
-// DESIGN section 4.1, as data.
-const ghInstalled = () => ({
+// Two steps in DESIGN section 4.1's shape, as data: one that checks and opens a page, one that runs
+// a command and waits for it.
+const toolStep = () => ({
   step_format: 1,
-  id: "gh-installed",
-  title: "Install gh",
-  summary: "Lets agents talk to GitHub with your own login.",
+  id: "tool-check",
+  title: "Check a tool",
+  summary: "Checks that a tool is set up.",
   probe: [
     {
       id: "version",
-      check: { tool: "probe_environment", check: "gh_version" },
-      map: { present: "done", absent: "missing" },
+      check: { tool: "probe_environment", envNames: ["EDITOR"] },
+      map: { found: "done", none: "missing", unreadable: "unknown" },
     },
   ],
   ask: {
-    text: "**Install gh?** I'll open the download page.",
+    text: "**Check it?** I'll open the download page.",
     options: [
       { label: "Do it", act: "open" },
       { label: "Not now", act: "none" },
@@ -36,39 +37,34 @@ const ghInstalled = () => ({
     {
       id: "open",
       consent: "install-or-sign-in",
-      what: "open cli.github.com",
+      what: "open the download page",
       where: "your browser",
-      why: "so agents can use GitHub as you",
-      open_url: "https://cli.github.com",
+      why: "so agents can use it as you",
+      open_url: "https://example.com/download",
     },
   ],
   verify: { probe: "version", expect: "done" },
-  record: { scope: "machine", fields: { tool: "gh" }, secret: "never" },
-  undo: "Uninstall gh the way you installed it.",
+  record: { scope: "machine", fields: { tool: "editor" }, secret: "never" },
+  undo: "Uninstall it the way you installed it.",
 });
 
-const ghAuth = () => ({
+const runStep = () => ({
   step_format: 1,
-  id: "gh-auth",
-  title: "Sign in to GitHub with gh",
-  summary: "Lets agents read issues, clone repos and open pull requests with your own login.",
-  needs: ["gh-installed"],
+  id: "tool-run",
+  title: "Run a command",
+  summary: "Runs one command and waits for it.",
+  needs: ["tool-check"],
   when: { any_source_repo_host: "github.com" },
   probe: [
     {
       id: "status",
-      check: { tool: "probe_environment", check: "gh_auth", host: "github.com" },
-      yields: { account: "account" },
-      map: {
-        signed_in: "done",
-        signed_out: "missing",
-        token_expired: "partial",
-        gh_missing: "unknown",
-      },
+      check: { tool: "probe_environment", envNames: ["EDITOR"] },
+      yields: { account: "gh_auth.account" },
+      map: { found: "done", none: "missing", unreadable: "unknown" },
     },
   ],
   ask: {
-    text: "**Sign in to GitHub?** You sign in in your browser; I never see your password or token.",
+    text: "**Run it?** It runs in a terminal tab you can watch.",
     options: [
       { label: "Do it", act: "sign-in" },
       { label: "Not now", act: "none" },
@@ -78,11 +74,11 @@ const ghAuth = () => ({
     {
       id: "sign-in",
       consent: "install-or-sign-in",
-      what: "gh auth login --web, GitHub's own sign-in",
+      what: "run git status",
       where: "a terminal tab on this Mac, then your browser",
-      why: "so agents can read issues, clone repos and open pull requests as you",
+      why: "so you can see it",
       run: {
-        cmd: "gh auth login --hostname github.com --git-protocol https --web",
+        cmd: "git status",
         in: "terminal_tab",
       },
       wait: { until: "tab_exit", then: "verify", timeout: "10m" },
@@ -94,7 +90,7 @@ const ghAuth = () => ({
     fields: { host: "github.com", account: "{{probe.status.account}}" },
     secret: "never",
   },
-  undo: "Run `gh auth logout --hostname github.com`. CodeSense stored nothing.",
+  undo: "Nothing to undo.",
 });
 
 const teamStep = () => ({
@@ -164,7 +160,7 @@ test("the guide pack's own steps and index are clean", () => {
 });
 
 test("good steps pass, in order", () => {
-  assert.deepEqual(check([ghInstalled(), ghAuth(), teamStep()]), []);
+  assert.deepEqual(check([toolStep(), runStep(), teamStep()]), []);
 });
 
 test("a folder with no index is not a step pack", () => {
@@ -177,44 +173,44 @@ test("a folder with no index is not a step pack", () => {
 });
 
 test("a step without undo, with an unknown key or with step_format 2 is refused", () => {
-  const noUndo = ghInstalled();
+  const noUndo = toolStep();
   delete noUndo.undo;
   has(check([noUndo]), "must have required property 'undo'");
-  has(check([{ ...ghInstalled(), surprise: true }]), "must NOT have additional properties");
-  has(check([{ ...ghInstalled(), step_format: 2 }]), "must be equal to constant");
+  has(check([{ ...toolStep(), surprise: true }]), "must NOT have additional properties");
+  has(check([{ ...toolStep(), step_format: 2 }]), "must be equal to constant");
 });
 
 test("an id that is not [a-z0-9-], a missing record or a multi-line undo is refused", () => {
-  has(check([{ ...ghInstalled(), id: "Gh_Installed" }]), "must match pattern");
-  const noRecord = ghInstalled();
+  has(check([{ ...toolStep(), id: "Gh_Installed" }]), "must match pattern");
+  const noRecord = toolStep();
   delete noRecord.record;
   has(check([noRecord]), "must have required property 'record'");
-  has(check([{ ...ghInstalled(), undo: "one\ntwo" }]), "/undo must match pattern");
+  has(check([{ ...toolStep(), undo: "one\ntwo" }]), "/undo must match pattern");
 });
 
 test("secret: never is required, with that fixed value", () => {
-  const step = ghInstalled();
+  const step = toolStep();
   step.record.secret = "sometimes";
   has(check([step]), "/record/secret");
-  const missing = ghInstalled();
+  const missing = toolStep();
   delete missing.record.secret;
   has(check([missing]), "must have required property 'secret'");
 });
 
 test("an act has exactly one of verb, run and open_url, and a known consent class", () => {
-  const two = ghAuth();
+  const two = runStep();
   two.act[0].open_url = "https://example.com";
-  has(check([ghInstalled(), two]), "must match exactly one schema in oneOf");
-  const none = ghInstalled();
+  has(check([toolStep(), two]), "must match exactly one schema in oneOf");
+  const none = toolStep();
   delete none.act[0].open_url;
   has(check([none]), "must match exactly one schema in oneOf");
-  const odd = ghInstalled();
+  const odd = toolStep();
   odd.act[0].consent = "do-whatever";
   has(check([odd]), "must be equal to one of the allowed values");
 });
 
 test("an external-write act is refused, whatever the step says", () => {
-  const step = ghInstalled();
+  const step = toolStep();
   step.act[0].consent = "external-write";
   has(check([step]), "external-write, which setup refuses");
 });
@@ -256,72 +252,70 @@ test("a team ledger record may not name or hold a path, username or secret", () 
 });
 
 test("needs must name earlier steps; the index and the files must agree", () => {
+  has(check([runStep(), toolStep()]), "tool-run needs tool-check, which is not an earlier entry");
   has(
-    check([ghAuth(), ghInstalled()]),
-    "gh-auth needs gh-installed, which is not an earlier entry",
-  );
-  has(
-    check([ghInstalled()], { index: INDEX_OF([ghInstalled(), { id: "ghost", title: "Ghost" }]) }),
+    check([toolStep()], { index: INDEX_OF([toolStep(), { id: "ghost", title: "Ghost" }]) }),
     "setup/steps/ghost.yml: listed in index.yml but missing",
   );
   has(
-    check([ghInstalled()], { extra: { "stray.yml": "id: stray\n" } }),
+    check([toolStep()], { extra: { "stray.yml": "id: stray\n" } }),
     "setup/steps/stray.yml: not listed in index.yml",
   );
   has(
-    check([ghInstalled()], { index: INDEX_OF([{ ...ghInstalled(), title: "Another title" }]) }),
+    check([toolStep()], { index: INDEX_OF([{ ...toolStep(), title: "Another title" }]) }),
     "title differs from the index",
   );
   has(
-    check([ghInstalled(), ghAuth()], {
+    check([toolStep(), runStep()], {
       index: {
         step_format: 1,
         steps: [
-          { id: "gh-installed", title: "Install gh" },
-          { id: "gh-auth", title: "Sign in to GitHub with gh" },
+          { id: "tool-check", title: "Check a tool" },
+          { id: "tool-run", title: "Run a command" },
         ],
       },
     }),
     "needs differ from the index",
   );
   has(
-    check([ghInstalled()], {
+    check([toolStep()], {
       index: {
         step_format: 1,
         steps: [
-          { id: "gh-installed", title: "Install gh" },
-          { id: "gh-installed", title: "Install gh" },
+          { id: "tool-check", title: "Check a tool" },
+          { id: "tool-check", title: "Check a tool" },
         ],
       },
     }),
-    "duplicate step gh-installed",
+    "duplicate step tool-check",
   );
 });
 
 test("the card, the acts and the probes agree", () => {
-  const unknownAct = ghInstalled();
+  const unknownAct = toolStep();
   unknownAct.ask.options[0].act = "nope";
   has(check([unknownAct]), "names unknown act nope");
 
-  const noDecline = ghInstalled();
+  const noDecline = toolStep();
   noDecline.ask.options = [{ label: "Do it", act: "open" }];
   has(check([noDecline]), 'needs a "none" option');
 
-  const noCard = ghInstalled();
+  const noCard = toolStep();
   delete noCard.ask;
   has(check([noCard]), "needs an ask card");
 
-  const badVerify = ghInstalled();
+  const badVerify = toolStep();
   badVerify.verify.probe = "nope";
   has(check([badVerify]), "verify names unknown probe nope");
 
-  const twice = ghInstalled();
+  const twice = toolStep();
   twice.act.push({ ...twice.act[0] });
   has(check([twice]), "duplicate act id");
 });
 
-test("a command and its folder are fixed: no template at all, not even a probe result", () => {
+test("a command and its folder are fixed: no probe result, and only an input a shell reads as a word", () => {
   const step = teamStep();
+  step.inputs.team.pattern = "^.+$";
   step.act = [
     {
       id: "create",
@@ -336,19 +330,19 @@ test("a command and its folder are fixed: no template at all, not even a probe r
     check([step]),
     "act create builds its command from {{team}}; a run command and its folder are fixed",
   );
-  const probed = ghAuth();
+  const probed = runStep();
   probed.act[0].run.cmd = "echo {{probe.status.account}}";
-  has(check([ghInstalled(), probed]), "builds its command from {{probe.status.account}}");
-  const folder = ghAuth();
+  has(check([toolStep(), probed]), "builds its command from {{probe.status.account}}");
+  const folder = runStep();
   folder.act[0].run.cwd = "{{probe.repo.path}}";
-  has(check([ghInstalled(), folder]), "builds its command from {{probe.repo.path}}");
-  assert.deepEqual(check([ghInstalled(), ghAuth()]), []);
+  has(check([toolStep(), folder]), "builds its command from {{probe.repo.path}}");
+  assert.deepEqual(check([toolStep(), runStep()]), []);
 });
 
 test("a read act neither runs a command nor calls a setup verb", () => {
-  const runs = ghAuth();
+  const runs = runStep();
   runs.act[0].consent = "read";
-  has(check([ghInstalled(), runs]), `act ${runs.act[0].id} is read but runs a command`);
+  has(check([toolStep(), runs]), `act ${runs.act[0].id} is read but runs a command`);
   const verb = teamStep();
   verb.act[0].consent = "read";
   has(check([verb]), `act ${verb.act[0].id} is read but calls create_team, a setup verb`);
@@ -356,7 +350,7 @@ test("a read act neither runs a command nor calls a setup verb", () => {
 
 test("a .yaml step file is reported, not skipped", () => {
   has(
-    check([ghInstalled()], { extra: { "team.yaml": "id: team\n" } }),
+    check([toolStep()], { extra: { "team.yaml": "id: team\n" } }),
     "setup/steps/team.yaml: a step file ends in .yml; this one is never read",
   );
 });
@@ -374,7 +368,7 @@ test("a template must be an input or a probe result; an input pattern must compi
 });
 
 test("stepRuleErrors on its own names the file it was given", () => {
-  const step = ghInstalled();
+  const step = toolStep();
   step.act[0].consent = "external-write";
   assert.ok(stepRuleErrors(step, "x.yml").every((e) => e.startsWith("x.yml:")));
 });
@@ -384,12 +378,12 @@ test("the pack build refuses a pack whose step is bad, and writes nothing", () =
   try {
     const copy = join(dir, "codesense-guide");
     cpSync(PACK, copy, { recursive: true });
-    const bad = ghInstalled();
+    const bad = toolStep();
     delete bad.undo;
-    writeFileSync(join(copy, "setup/steps/gh-installed.yml"), stringify(bad));
-    writeFileSync(join(copy, "setup/steps/index.yml"), stringify(INDEX_OF([ghInstalled()])));
+    writeFileSync(join(copy, "setup/steps/tool-check.yml"), stringify(bad));
+    writeFileSync(join(copy, "setup/steps/index.yml"), stringify(INDEX_OF([toolStep()])));
     const { errors, written } = buildPack(copy, { check: false });
-    has(errors, "setup/steps/gh-installed.yml");
+    has(errors, "setup/steps/tool-check.yml");
     assert.deepEqual(written, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -633,4 +627,14 @@ test("a list input is passed whole, as the list, never inside a longer string", 
   const inRow = step("{{repos}}");
   inRow.record.fields = { created: "repos {{repos}}" };
   has(check([inRow]), 'input repos is a list; pass it whole as "{{repos}}"');
+});
+
+test("a probe on a tool the registry doesn't list is a lint error", () => {
+  const step = teamStep();
+  step.probe[0].check = { tool: "list_machines" };
+  has(
+    check([step]),
+    "probe teams uses list_machines, which is not in the probe registry; add it from its Rust",
+  );
+  assert.deepEqual(check([teamStep()]), []);
 });

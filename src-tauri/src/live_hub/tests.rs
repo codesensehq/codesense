@@ -285,14 +285,9 @@ fn publish_counts_delta_bytes_per_topic_but_not_inbox_and_folds_ui_topics() {
     let mut deltas = Vec::new();
     for (topic, key) in [("messageDelivery", "all"), ("ui:x", "team:a"), ("inbox", "all")] {
         let rows = vec![(Some(key.to_owned()), json!({"id": "r1"}))];
-        deltas.extend(
-            hub.model
-                .lock()
-                .unwrap()
-                .projections
-                .replace_view(topic, key, rows)
-                .unwrap(),
-        );
+        let mut model = hub.model.lock().unwrap();
+        model.projections.hold(topic, key, "main");
+        deltas.extend(model.projections.replace_view(topic, key, rows).unwrap());
     }
     let names = [
         "live_hub.delta.bytes.messageDelivery",
@@ -2434,4 +2429,362 @@ async fn hub_readers_proceed_while_inbox_prep_runs_off_lock() {
         .messages
         .iter()
         .any(|m| m.message_id == new_id && m.text == "new"));
+}
+
+/// A hub on the mock runtime, for the publish tests.
+fn hub_app() -> tauri::App<tauri::test::MockRuntime> {
+    use super::*;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(super::LiveHub::default());
+    app
+}
+
+/// Every `codesense:delta` payload `app` emits from now on.
+fn emitted_deltas(
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+    use super::*;
+    let emitted = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let seen = emitted.clone();
+    app.listen("codesense:delta", move |event| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    emitted
+}
+
+/// The default read a window's LiveHub makes of (topic, key), holding it for `owner`.
+fn read_held(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    topic: &str,
+    key: &str,
+    owner: &str,
+) -> super::Held<SubscriptionReply> {
+    use super::*;
+    super::subscribe_held(app.handle(), topic, key, None, None, None, Some(owner)).unwrap()
+}
+
+fn hold_count(app: &tauri::App<tauri::test::MockRuntime>, topic: &str, key: &str) -> usize {
+    use super::*;
+    app.state::<super::LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .hold_count(topic, key)
+}
+
+#[test]
+fn status_only_change_emits_a_delta_under_1kb() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let app = hub_app();
+    let hub = app.state::<LiveHub>();
+    let session = |i: usize, state: &str| {
+        (
+            None,
+            json!({"id": format!("s{i:02}"), "state": state, "detail": "x".repeat(2048)}),
+        )
+    };
+    let rows = |running: Option<usize>| -> Vec<_> {
+        (0..22)
+            .map(|i| {
+                session(
+                    i,
+                    if running == Some(i) {
+                        "running"
+                    } else {
+                        "idle"
+                    },
+                )
+            })
+            .collect()
+    };
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .replace("sessions", rows(None), None)
+        .unwrap();
+    // Held, so the gate cannot pass this vacuously by sending nothing.
+    read_held(&app, "sessions", "all", "main");
+    let emitted = emitted_deltas(&app);
+    let before = metric_total("live_hub.delta.bytes.sessions");
+    let deltas = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .replace("sessions", rows(Some(3)), None)
+        .unwrap();
+    publish(app.handle(), deltas);
+    let moved = metric_total("live_hub.delta.bytes.sessions") - before;
+    let emitted = emitted.lock().unwrap();
+    assert_eq!(emitted.len(), 1, "the held view hears the change");
+    assert!(
+        moved > 0 && moved < 1024,
+        "{moved} bytes for one status change"
+    );
+    assert_eq!(
+        emitted[0]["patches"],
+        json!([{"id": "s03", "set": {"state": "running"}, "unset": []}])
+    );
+    assert_eq!(emitted[0]["upserts"], json!([]));
+    // The hub keeps full rows: a snapshot and a replay of the same change carry the whole row.
+    let replay = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .subscribe("sessions", "all", Some(0))
+        .unwrap();
+    assert_eq!(
+        replay.deltas.unwrap()[0].upserts[0]["detail"],
+        json!("x".repeat(2048))
+    );
+    drop(emitted);
+
+    // The golden the host LiveHub replays: a field set to null, a dropped field, an arrival
+    // and a remove, in one delta. A small topic keeps it readable.
+    let pin = |id: &str, order: u64, note: Option<serde_json::Value>| {
+        let mut row = json!({"id": id, "label": id.to_uppercase(), "order": order});
+        if let Some(note) = note {
+            row["note"] = note;
+        }
+        (None, row)
+    };
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .replace(
+            "pins",
+            vec![
+                pin("a", 1, Some(json!("keep"))),
+                pin("b", 2, Some(json!("drop me"))),
+                pin("c", 3, None),
+            ],
+            None,
+        )
+        .unwrap();
+    let initial = read_held(&app, "pins", "all", "main").view;
+    let emitted = emitted_deltas(&app);
+    let deltas = hub
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .replace(
+            "pins",
+            vec![
+                pin("a", 1, Some(serde_json::Value::Null)),
+                pin("b", 2, None),
+                pin("d", 4, None),
+            ],
+            None,
+        )
+        .unwrap();
+    publish(app.handle(), deltas);
+    let wire = emitted.lock().unwrap().clone();
+    assert_eq!(
+        wire[0]["patches"],
+        json!([
+            {"id": "a", "set": {"note": null}, "unset": []},
+            {"id": "b", "set": {}, "unset": ["note"]}
+        ])
+    );
+    assert_eq!(
+        wire[0]["upserts"],
+        json!([{"id": "d", "label": "D", "order": 4}])
+    );
+    assert_eq!(wire[0]["removes"], json!(["c"]));
+    let trace = json!({
+        "initial": initial,
+        "deltas": wire,
+        "final": hub.snapshot("all", "pins").unwrap(),
+    });
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../src/features/dashboard/lib/delta-patch-trace.json");
+    if std::env::var_os("UPDATE_DELTA_PATCH_TRACE").is_some() {
+        std::fs::write(
+            &fixture,
+            serde_json::to_string_pretty(&trace).unwrap() + "\n",
+        )
+        .unwrap();
+    } else {
+        let expected: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&fixture).unwrap()).unwrap();
+        assert_eq!(
+            trace, expected,
+            "the host replays the hub's real patch wire"
+        );
+    }
+}
+
+#[test]
+fn publish_skips_views_no_reader_holds_including_message_delivery() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    let app = hub_app();
+    let hub = app.state::<LiveHub>();
+    let emitted = emitted_deltas(&app);
+    let change = |id: &str| {
+        hub.model
+            .lock()
+            .unwrap()
+            .projections
+            .replace_view(
+                "messageDelivery",
+                "team:acme/dev",
+                vec![(Some("team:acme/dev".to_owned()), json!({"id": id}))],
+            )
+            .unwrap()
+    };
+    let unheld = metric_total("live_hub.delta.unheld");
+    publish(app.handle(), change("m1"));
+    assert!(emitted.lock().unwrap().is_empty(), "nobody holds the view");
+    assert!(metric_total("live_hub.delta.unheld") > unheld);
+
+    // A scoped subscription hears its own subscription deltas, not the webview's cache feed.
+    super::subscribe(
+        app.handle(),
+        "messageDelivery",
+        "team:acme/dev",
+        None,
+        Some("page:delivery"),
+        None,
+    )
+    .unwrap();
+    publish(app.handle(), change("m2"));
+    assert!(emitted.lock().unwrap().is_empty());
+
+    read_held(&app, "messageDelivery", "team:acme/dev", "main");
+    publish(app.handle(), change("m3"));
+    let emitted = emitted.lock().unwrap();
+    assert_eq!(emitted.len(), 1, "a held view hears its changes");
+    assert_eq!(emitted[0]["topic"], "messageDelivery");
+}
+
+#[tokio::test]
+async fn hydration_sends_no_delivery_rows_without_a_holder() {
+    use super::*;
+    use crate::shared::invoke_stats::metric_total;
+    use crate::weft::{inbox as ledger, WeftStore};
+    let (app, host) = delivery_hub(&["active"]);
+    let store = WeftStore::open(host.path("active")).unwrap();
+    for text in ["one", "two"] {
+        ledger::inbox_insert(&store, "human", "H2", text, None, None, None, None, None).unwrap();
+    }
+    let hub = app.state::<LiveHub>();
+    let hub: &LiveHub = &hub;
+    // A page read the delivery view and let it go: the hub keeps it, and nobody holds it.
+    assert!(delivery_rows(hub, "active").is_empty());
+    let emitted = emitted_deltas(&app);
+    let unheld = metric_total("live_hub.delta.unheld");
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(delivery_rows(hub, "active").len(), 2);
+    assert!(
+        hub.snapshot("team:acme/active", "messageDelivery")
+            .unwrap()
+            .rev
+            > 0,
+        "hydration changed the view"
+    );
+    assert!(emitted
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|delta| delta["topic"] != "messageDelivery"));
+    assert!(metric_total("live_hub.delta.unheld") > unheld);
+}
+
+#[test]
+fn holds_are_idempotent_per_owner() {
+    use super::*;
+    let app = hub_app();
+    let first = read_held(&app, "pins", "all", "main").hold.unwrap();
+    let second = read_held(&app, "pins", "all", "main").hold.unwrap();
+    assert!(second > first);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "a re-read does not stack"
+    );
+    let release = |generation| {
+        app.state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .projections
+            .release("pins", "all", "main", generation)
+    };
+    release(first);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "a late release keeps the newer hold"
+    );
+    release(second);
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+    // A scoped subscription takes no hold.
+    super::subscribe(app.handle(), "pins", "all", None, Some("page:pins"), None).unwrap();
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+    assert!(app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .is_watched("pins", "all"));
+}
+
+#[test]
+fn drop_window_releases_default_view_holds() {
+    use super::*;
+    let app = hub_app();
+    for owner in ["main", "other"] {
+        read_held(&app, "pins", "all", owner);
+    }
+    read_held(&app, "pins", "team:acme/dev", "main");
+    assert_eq!(hold_count(&app, "pins", "all"), 2);
+    drop_window(app.handle(), "main");
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "another window's hold survives"
+    );
+    assert_eq!(hold_count(&app, "pins", "team:acme/dev"), 0);
+    drop_window(app.handle(), "other");
+    assert_eq!(hold_count(&app, "pins", "all"), 0);
+}
+
+#[test]
+fn reload_releases_the_owners_holds() {
+    use super::*;
+    let app = hub_app();
+    read_held(&app, "pins", "all", "main");
+    let last = read_held(&app, "sessions", "all", "main").hold.unwrap();
+    read_held(&app, "pins", "all", "other");
+    let through = app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .projections
+        .release_owner("main");
+    assert!(
+        through > last,
+        "every hold the reloaded page took is at or before the mark"
+    );
+    assert_eq!(hold_count(&app, "sessions", "all"), 0);
+    assert_eq!(
+        hold_count(&app, "pins", "all"),
+        1,
+        "another window's hold survives"
+    );
 }
