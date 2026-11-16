@@ -76,7 +76,8 @@ limits:
 panel:
   tabs: null
 # The copy for the blocks the Foreman page mounts: title and empty for each, and the words its
-# blocks read. `scripts/foreman-page.mjs --check` fails when the kit reads one this lacks.
+# blocks read. `scripts/foreman-page.mjs --check` fails when this lacks a key of the kit's own config
+# (recorded in vendor/config-keys.json at --vendor) or one the vendored build names directly.
 blocks:
   identity:
     title: Identity

@@ -6,7 +6,7 @@
 //
 //   node scripts/foreman-page.mjs --check            drift check (build time, in `gen:docs:check`)
 //   node scripts/foreman-page.mjs --write            rebuild the page from the vendored kit
-//   node scripts/foreman-page.mjs --vendor <file> --kit-rev <n>
+//   node scripts/foreman-page.mjs --vendor <file> --kit-rev <n> --kit-config <kit's story-view.yml>
 //                                                    vendor a kit build, then rebuild the page
 //
 // The checks, each of which fails the build:
@@ -35,10 +35,13 @@ const PACK = "codesense-docs/packs/codesense-foreman";
 export const VENDORED = `${PACK}/vendor/story-view.js`;
 export const CONFIG = `${PACK}/story-view.yml`;
 export const PACK_YML = `${PACK}/pack.yml`;
+// The kit config's keys the Foreman page can read, recorded by --vendor from the kit's own
+// story-view.yml: most are read through a local name, which no scan of the build sees.
+export const CONFIG_KEYS = `${PACK}/vendor/config-keys.json`;
 // The page's path inside the placed docs checkout: the key of its `PAGES` entry.
 export const PAGE = "getting-started/content/foreman/index.html";
 // Every file the drift check reads.
-export const FILES = [VENDORED, CONFIG, PACK_YML, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS];
+export const FILES = [VENDORED, CONFIG, CONFIG_KEYS, PACK_YML, `${DOCS_ROOT}/${PAGE}`, LAUNCH_RS];
 
 // What the page declares. `foreman.launch` is not here: the app mints it from the page's bytes.
 export const CAPABILITIES = [
@@ -209,8 +212,7 @@ export function configReads(body) {
   const paths = new Set();
   for (const match of body.matchAll(/\bconfig\.(foreman|timers)((?:\.[A-Za-z_$][\w$]*)+)/g))
     paths.add(`${match[1]}${match[2]}`);
-  const template = /\bFOREMAN_TEMPLATE=`([^`]*)`/.exec(body)?.[1] ?? "";
-  const ids = new Set([...template.matchAll(/data-block="([a-z][a-z0-9-]*)"/g)].map((m) => m[1]));
+  const ids = templateBlocks(body);
   for (const id of ids) paths.add(`blocks.${id}.title`).add(`blocks.${id}.empty`);
   for (const match of body.matchAll(/\bblocks(?:\.([a-z][\w$]*)|\[(['"])([a-z][a-z0-9-]*)\2\])/g)) {
     const id = match[1] ?? match[3];
@@ -218,6 +220,30 @@ export function configReads(body) {
     if (ids.has(id)) paths.add(`blocks.${id}${chain}`);
   }
   return [...paths].sort();
+}
+
+const leaves = (value, prefix) =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? Object.entries(value).flatMap(([key, child]) => leaves(child, `${prefix}.${key}`))
+    : [prefix];
+
+/** The Foreman template's blocks, as the build `body` mounts them. */
+const templateBlocks = (body) => {
+  const template = /\bFOREMAN_TEMPLATE=`([^`]*)`/.exec(body)?.[1] ?? "";
+  return new Set([...template.matchAll(/data-block="([a-z][a-z0-9-]*)"/g)].map((m) => m[1]));
+};
+
+/**
+ * Every leaf key of the kit's own config (`kit`) under `foreman`, `timers` and the `blocks:`
+ * entries of the blocks the Foreman template in `body` mounts. An array is one leaf.
+ */
+export function kitConfigKeys(kit, body) {
+  const roots = [
+    ["foreman", kit.foreman],
+    ["timers", kit.timers],
+    ...[...templateBlocks(body)].map((id) => [`blocks.${id}`, kit.blocks?.[id]]),
+  ];
+  return roots.flatMap(([at, value]) => (value === undefined ? [] : leaves(value, at))).sort();
 }
 
 export function pageText(vendored) {
@@ -273,7 +299,8 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
     out.push(
       `${VENDORED}: the baked-in config differs from ${CONFIG}; rebuild the kit with that config`,
     );
-  for (const path of configReads(kit.body))
+  const kitKeys = JSON.parse(read(CONFIG_KEYS, root));
+  for (const path of new Set([...configReads(kit.body), ...kitKeys]))
     if (at(config, path) === undefined)
       out.push(
         `${CONFIG}: no "${path}", which the vendored kit reads; add it from the kit's own story-view.yml`,
@@ -339,15 +366,22 @@ function main(argv) {
   if (mode === "--vendor") {
     const source = argv[1];
     const kitRev = Number(argv[argv.indexOf("--kit-rev") + 1]);
-    if (!source || !Number.isInteger(kitRev) || kitRev < 1)
-      throw new Error("usage: --vendor <built story-view.js> --kit-rev <n>");
+    const kitConfig = argv.includes("--kit-config") ? argv[argv.indexOf("--kit-config") + 1] : null;
+    if (!source || !Number.isInteger(kitRev) || kitRev < 1 || !kitConfig)
+      throw new Error(
+        "usage: --vendor <built story-view.js> --kit-rev <n> --kit-config <the kit's own story-view.yml>",
+      );
     // A kit build may arrive with a header of its own (a re-vendor of a vendored file).
     const raw = readFileSync(source, "utf8");
     const body = publicBuild(parseVendored(raw)?.body ?? raw);
     writeFileSync(join(ROOT, VENDORED), vendoredText(body, kitRev));
+    const keys = kitConfigKeys(parse(readFileSync(kitConfig, "utf8")), body);
+    writeFileSync(join(ROOT, CONFIG_KEYS), `${JSON.stringify(keys, null, 2)}\n`);
     writeFileSync(join(ROOT, PACK_YML), packWithKit(read(PACK_YML), kitRev, sha256(body)));
   } else if (mode !== "--write")
-    throw new Error("usage: foreman-page.mjs --check | --write | --vendor <file> --kit-rev <n>");
+    throw new Error(
+      "usage: foreman-page.mjs --check | --write | --vendor <file> --kit-rev <n> --kit-config <yml>",
+    );
   const page = pageText(read(VENDORED));
   writeFileSync(join(ROOT, DOCS_ROOT, PAGE), page);
   const sha = sha256(page);

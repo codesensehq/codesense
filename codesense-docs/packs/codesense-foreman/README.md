@@ -38,8 +38,12 @@ answers for it.
   hash or `kit_rev`;
 - the config baked into the kit differs from `story-view.yml`, the config has a budget or point
   key or a team's id;
-- the vendored kit reads a config key the config lacks: any `foreman.*` or `timers.*` key, or the
-  `blocks:` entry (its `title`, `empty` and the words it reads) of a block the Foreman page mounts;
+- the config lacks a key the Foreman page can read: a key `vendor/config-keys.json` records (every
+  leaf of the kit's own config under `foreman`, `timers` and the `blocks:` entries of the blocks the
+  Foreman page mounts, written by `--vendor`), or a `config.foreman.*` or `config.timers.*` chain,
+  or a mounted block's `title` or `empty`, that the vendored build names directly. The record
+  covers the keys the kit reads through a local name, which no scan of the build sees; the file
+  must exist;
 - the vendored kit keeps a comment other than its config markers, or names a tracker story id, a
   local path, a path in the kit's own repository or a source file's hash;
 - the page is not exactly the template with the vendored build inlined;
@@ -59,23 +63,25 @@ The kit is built in its own repository, from a merged commit, with the public co
    Then, in a scratch copy of the kit at that commit (never committed there), copy this folder's
    `story-view.yml` over the kit's, run `node build.mjs`, and run the kit's tests and
    `node check.mjs` on that build. `check.mjs` compares the kit's dashboard manifest with its team
-   value, so point that value at the public config's `team` for the run. Step 3's check fails if
-   the build reads a key this config lacks, so a key the kit added since the last vendor can't be
-   dropped silently.
+   value, so point that value at the public config's `team` for the run. Step 2 records the kit's
+   own keys, and step 3's check fails on any this config lacks, so a key the kit added since the
+   last vendor can't be dropped silently.
 2. In a worktree of this repository:
 
    ```sh
-   node scripts/foreman-page.mjs --vendor <the built story-view.js> --kit-rev <n>
+   node scripts/foreman-page.mjs --vendor <the built story-view.js> --kit-rev <n> \
+     --kit-config <the kit's own story-view.yml at that commit>
    ```
 
    This drops the build's comments (they describe the kit's own source tree; a parser finds them,
    and the step fails if the code changed), writes `vendor/story-view.js` with
-   its header, updates the `kit:` block in `pack.yml`, rebuilds the page and writes the page's new
+   its header, writes `vendor/config-keys.json` from the kit's own config, updates the `kit:` block
+   in `pack.yml`, rebuilds the page and writes the page's new
    hash into its `PAGES` entry. `<n>` is the kit's `template` number from its config; raise it when
    the kit's own changelog says its page contract changed. `--write` alone rebuilds the page from
    the vendored file.
 3. Run `pnpm check:foreman-page` and `node --test scripts/foreman-page.node-test.mjs`. Commit the
-   vendored file, `pack.yml`, the page and `foreman_launch.rs` together. A change to the page's
+   vendored file, `vendor/config-keys.json`, `pack.yml`, the page and `foreman_launch.rs` together. A change to the page's
    declared capabilities is an edit to `CAPABILITIES` in `scripts/foreman-page.mjs`, then `--write`.
 4. Record which kit commit went public, and its `kit_rev`, in the kit's own changelog. The pull
    request here names neither the kit's repository nor its commit.
