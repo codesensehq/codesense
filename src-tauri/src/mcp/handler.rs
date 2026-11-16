@@ -6637,6 +6637,7 @@ impl CodesenseHandler {
                 commands::workspace_open::team_workspace_preflight(
                     &self.app_handle,
                     &scope,
+                    params.org.as_deref(),
                     params.team.as_deref(),
                 )
                 .await

@@ -196,7 +196,21 @@ test("setup-stopped: the ledger is read in the asking turn, and one reply comes"
 
 test("launch form: the guide, the visible-unfocused mode, the Foreman's own handle and a /codesense-setup prompt", async () => {
   const id = "setup-handback";
-  await red(id, launchWith({ ...LAUNCH, agent: "builtin/claude" }), /expected guide-claude/);
+  await red(
+    id,
+    launchWith({ ...LAUNCH, agent: "builtin/claude" }),
+    /expected codesense\/docs\/getting-started\/guide-claude/,
+  );
+  await red(
+    id,
+    launchWith({ ...LAUNCH, agent: "guide-claude" }),
+    /expected codesense\/docs\/getting-started\/guide-claude/,
+  );
+  await red(
+    id,
+    launchWith({ ...LAUNCH, team: "acme" }),
+    /expected codesense\/docs\/getting-started/,
+  );
   await red(id, launchWith({ ...LAUNCH, mode: "focused" }), /expected visible-unfocused/);
   await red(id, launchWith({ ...LAUNCH, name: "Onboarding" }), /expected Setup/);
   await red(id, launchWith({ ...LAUNCH, launched_by: "someone" }), /launched_by is someone/);

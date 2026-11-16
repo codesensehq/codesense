@@ -89,7 +89,8 @@ test("the page declares the capabilities it calls, machines:read for the setup r
 test("the public config names the Foreman and its guide and no team, budget or point key", () => {
   const config = parse(readFileSync(join(ROOT, CONFIG), "utf8"));
   assert.equal(config.foreman.role, "codesense-foreman");
-  assert.deepEqual(config.foreman.agents, ["foreman-claude"]);
+  // The docs team's key, the only Foreman the launch grant allows (`foreman_launch.rs`).
+  assert.deepEqual(config.foreman.agents, ["codesense/docs/getting-started/foreman-claude"]);
   assert.deepEqual(config.foreman.guides, ["guide-claude"]);
   assert.equal(config.team, config.foreman.docs.team);
   assert.ok(!/point|envelope|budget|\$/i.test(Object.keys(config).join(" ")));

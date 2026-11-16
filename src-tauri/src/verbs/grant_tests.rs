@@ -521,7 +521,7 @@ fn a_foreman_page_launches_only_the_foreman_and_its_guide() {
     };
     let target = json!({"kind":"team-workspace","name":"foreman"});
     for agent in [
-        "foreman-claude",
+        foreman_launch::FOREMAN_KEY,
         "guide-claude",
         "guide-codex",
         "guide-opencode",
@@ -538,6 +538,8 @@ fn a_foreman_page_launches_only_the_foreman_and_its_guide() {
     for args in [
         json!({"target": target, "agent": "dev-worker-claude"}),
         json!({"target": target, "agent": "builtin/foreman-claude"}),
+        // A bare Foreman id would run whatever a team or the personal space defines so.
+        json!({"target": target, "agent": "foreman-claude"}),
         json!({"target": target}),
     ] {
         assert_eq!(open(&record, args), denied);
