@@ -970,13 +970,14 @@ describe("HtmlViewer scroll kept when its tab is hidden and shown again", () => 
 
   async function renderShown(pendingHash?: string) {
     mockGetHttpApiPort.mockResolvedValue(9123);
-    render(
+    const element = (hash?: string) => (
       <HtmlViewer
         filePath="/repo/_bmad-output/docs/long.html"
         teamContentPath="/repo"
-        pendingHash={pendingHash}
-      />,
+        pendingHash={hash}
+      />
     );
+    const { rerender } = render(element(pendingHash));
     await waitFor(() => {
       expect(document.querySelector("iframe")?.getAttribute("src")).toContain(origin);
     });
@@ -987,7 +988,7 @@ describe("HtmlViewer scroll kept when its tab is hidden and shown again", () => 
         source: stub.fakeWindow,
       }),
     );
-    return stub;
+    return { ...stub, requestHash: (hash: string) => rerender(element(hash)) };
   }
 
   function scrollTo(source: Window, y: number) {
@@ -1045,7 +1046,20 @@ describe("HtmlViewer scroll kept when its tab is hidden and shown again", () => 
     act(() => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    expect(restores(postMessage).every(([m]) => m.y === 640)).toBe(true);
+    expect(restores(postMessage)).toEqual([]);
+  });
+
+  it("lets a fragment requested with the show win over the old position", async () => {
+    const { iframe, fakeWindow, postMessage, requestHash } = await renderShown();
+    Object.assign(fakeWindow, { location: { href: "" } });
+    fireEvent.load(iframe);
+    scrollTo(fakeWindow, 640);
+    report(0, 0);
+    act(() => {
+      requestHash("#section-3");
+    });
+    report(800, 600);
+    expect(restores(postMessage).filter(([m]) => m.y === 640)).toEqual([]);
   });
 });
 
