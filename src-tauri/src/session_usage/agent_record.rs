@@ -59,6 +59,64 @@ fn session_for_handle(store: &UsageStore, handle: &str) -> Result<Option<String>
     Ok(None)
 }
 
+/// A `session_record` row of the thread of saved agent `?2` (the id before `@`) and story `?1`:
+/// any revision of the agent continues its threads.
+const THREAD_MATCH: &str =
+    "story_id = ?1 AND (agent = ?2 OR substr(agent, 1, length(?2) + 1) = ?2 || '@')";
+
+/// One recorded session of a thread: its tab session and the handle it was launched under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThreadSession {
+    pub session_id: String,
+    pub handle: Option<String>,
+}
+
+/// Every recorded session of saved agent `agent` (any revision) on `story`, oldest first,
+/// ended ones included: the sessions whose mail makes the thread. No story, none: a saved
+/// agent's no-story sessions have nothing that bounds them (every one it ever launched), so
+/// a no-story thread is its listed sessions only.
+pub(crate) fn thread_sessions(
+    store: &UsageStore,
+    agent: &str,
+    story: &str,
+) -> Result<Vec<ThreadSession>, String> {
+    let key = agent.split('@').next().unwrap_or(agent).trim();
+    let story = story.trim();
+    if str::is_empty(key) || str::is_empty(story) {
+        return Ok(vec![]);
+    }
+    let mut stmt = rusqlite::Connection::prepare(
+        &store.conn,
+        &format!(
+            "SELECT session_id, handle FROM session_record
+             WHERE {THREAD_MATCH} ORDER BY recorded_at_ms, session_id"
+        ),
+    )
+    .map_err(super::db_err)?;
+    let rows = stmt
+        .query_map(rusqlite::params![story, key], |row| {
+            Ok(ThreadSession {
+                session_id: row.get(0)?,
+                handle: row.get(1)?,
+            })
+        })
+        .map_err(super::db_err)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(super::db_err)
+}
+
+/// [`thread_sessions`] from the usage store under `home`; a home with no store has none.
+pub(crate) fn thread_sessions_in(
+    home: &Path,
+    agent: &str,
+    story: &str,
+) -> Result<Vec<ThreadSession>, String> {
+    let path = home.join("usage.sqlite");
+    if !Path::exists(&path) {
+        return Ok(vec![]);
+    }
+    thread_sessions(&UsageStore::open(&path)?, agent, story)
+}
+
 /// The earlier sessions of the same saved agent and story as `record`, oldest first. A session
 /// with no agent or no story has no chain.
 fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<String>, String> {
@@ -68,10 +126,11 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
     let key = agent.split('@').next().unwrap_or(agent);
     let mut stmt = rusqlite::Connection::prepare(
         &store.conn,
-        "SELECT session_id FROM session_record
-         WHERE story_id = ?1 AND (agent = ?2 OR substr(agent, 1, length(?2) + 1) = ?2 || '@')
-           AND recorded_at_ms < ?3 AND session_id != ?4
-         ORDER BY recorded_at_ms, session_id",
+        &format!(
+            "SELECT session_id FROM session_record
+             WHERE {THREAD_MATCH} AND recorded_at_ms < ?3 AND session_id != ?4
+             ORDER BY recorded_at_ms, session_id"
+        ),
     )
     .map_err(super::db_err)?;
     let rows = stmt

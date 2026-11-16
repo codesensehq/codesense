@@ -185,6 +185,7 @@ pub(crate) fn row(
         expiring: false,
         session: Some(format!("sess-{handle}")),
         failed: false,
+        crashed: false,
     }
 }
 

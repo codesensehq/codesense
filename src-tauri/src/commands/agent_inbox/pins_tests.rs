@@ -213,6 +213,63 @@ async fn every_session_of_the_same_agent_and_story_shares_one_thread() {
 }
 
 #[tokio::test]
+async fn a_successor_pins_its_predecessors_mail_and_a_concurrent_seat_pins_only_its_own() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    let first = mail(&fake, "S1", "human", "from the first session").await;
+    let second = mail(&fake, "S2", "human", "from the second session").await;
+    // Two seats run at once: neither pins the other's mail.
+    let other_seat = pin_request(&*fake, Some("S2"), first, None, None, false)
+        .await
+        .unwrap();
+    assert!(matches!(&other_seat, PinResult::Invalid { message } if message.contains("no message")));
+    // Once the first has ended, its successor's thread holds its mail: the successor pins it.
+    fake.end("H1");
+    let pinned = pin_request(&*fake, Some("S2"), first, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(listed(&pinned), vec![first]);
+    let both = pin_request(&*fake, Some("S2"), second, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(listed(&both), vec![first, second]);
+}
+
+#[tokio::test]
+async fn a_successor_restores_and_updates_the_preview_of_its_predecessors_pin() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    fake.launched_from("H2", "acme/default/claude-dev@4", Some("DEMO-1"));
+    let first = mail(&fake, "S1", "human", "the first session's view").await;
+    pin_request(&*fake, Some("S1"), first, None, None, false)
+        .await
+        .unwrap();
+    pin_request(&*fake, Some("S1"), first, None, None, true)
+        .await
+        .unwrap();
+    fake.end("H1");
+    // The successor undoes its predecessor's unpin, then gives the pin a preview.
+    let restored = pin_request(&*fake, Some("S2"), first, None, None, PinChange::Restore)
+        .await
+        .unwrap();
+    assert_eq!(listed(&restored), vec![first]);
+    let preview = PinPreview {
+        short_name: Some("View".into()),
+        value: Some("3 of 5".into()),
+        status: Some(PinStatus::Running),
+        ..PinPreview::default()
+    };
+    let updated = pin_request(&*fake, Some("S2"), first, None, Some(preview.clone()), false)
+        .await
+        .unwrap();
+    match &updated {
+        PinResult::Pins { list, .. } => assert_eq!(list.pins[0].preview, Some(preview)),
+        other => panic!("expected pins, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_successor_on_a_new_revision_continues_the_thread_and_other_stories_do_not() {
     let fake = FakeHost::new();
     fake.launched_from("H1", "acme/default/claude-dev@3", Some("DEMO-1"));
@@ -493,4 +550,44 @@ async fn a_replace_of_a_pin_that_left_is_refused_names_the_list_and_fires_nothin
         other => panic!("expected invalid, got {other:?}"),
     }
     assert_eq!(fake.pin_events().len(), before);
+}
+
+#[tokio::test]
+async fn a_message_frame_pins_only_into_its_senders_thread() {
+    let fake = FakeHost::new();
+    fake.launched_from("H1", AGENT, Some("DEMO-1"));
+    let view = mail(&fake, "S1", "human", "a view").await;
+    let team = launch_team("default");
+    let pin = PinOp::Pin {
+        message_id: view,
+        position: None,
+        preview: None,
+    };
+    // Its sender's thread, on a new revision of the same saved agent: the pin lands.
+    let revision = "acme/default/claude-dev@9";
+    let own = pins_from_frame(&*fake, &team, revision, Some("DEMO-1"), pin.clone(), "H1")
+        .await
+        .unwrap();
+    assert_eq!(listed(&own), vec![view]);
+    // Another story, another agent: refused, and nothing changes there.
+    for (agent, story) in [(AGENT, Some("DEMO-2")), ("acme/default/other", Some("DEMO-1"))] {
+        let other = pins_from_frame(&*fake, &team, agent, story, pin.clone(), "H1")
+            .await
+            .unwrap();
+        assert!(
+            matches!(&other, PinResult::Invalid { message } if message.contains("its sender's thread")),
+            "{other:?}"
+        );
+    }
+    // A sender with no saved-agent thread pins nowhere.
+    let loose = pins_from_frame(&*fake, &team, AGENT, Some("DEMO-1"), pin.clone(), "H2")
+        .await
+        .unwrap();
+    assert!(matches!(&loose, PinResult::Invalid { message } if message.contains("saved Agent")));
+    // A read is not a write: a frame reads any thread of its team.
+    let read = pins_from_frame(&*fake, &team, AGENT, Some("DEMO-2"), PinOp::Read, "H1")
+        .await
+        .unwrap();
+    assert!(matches!(read, PinResult::Pins { .. }));
+    assert_eq!(listed(&human(&fake, Some("DEMO-2"), PinOp::Read).await), Vec::<i64>::new());
 }

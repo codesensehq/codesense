@@ -2382,8 +2382,9 @@ fn the_retired_preview_has_no_writer_exception() {
 /// external-crate constructors and parsers: none has a body in this app-source
 /// graph, so none reaches a write primitive. A rise means the resolver lost track
 /// of something: run with `X1_PRINT_UNRESOLVED=1` and read the list. The ceiling
-/// is a growth tripwire; raise it only after reviewing every added site.
-const MAX_UNRESOLVED_PATHS: usize = 277;
+/// is a growth tripwire; raise it only after reviewing every added site. 278: the
+/// shared-read handoff map in `commands/worktree_probe.rs` adds one `HashMap::new()`.
+const MAX_UNRESOLVED_PATHS: usize = 278;
 /// The most method calls that several crate types define and that resolve to
 /// none of them, because the caller names none of those types (`.name()`, `.id()`
 /// on a value whose type is inferred). This is the walk's main blind spot; the
@@ -2398,11 +2399,12 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// exceptions or slack.
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
-/// primitive.
-/// The census after the metrics-db timer and the bounded, shared worktree reads is 6_520 (CI's
-/// count): 24 more method calls in `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and
-/// `commands/worktree.rs`; none reaches a sink.
-const MAX_UNRESOLVED_METHODS: usize = 6_520;
+/// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
+/// of which calls a write primitive.
+/// The metrics-db timer and the bounded, shared worktree reads add 24 more method calls in
+/// `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and `commands/worktree.rs`; none
+/// reaches a sink. Set to CI's census on the merge with main.
+const MAX_UNRESOLVED_METHODS: usize = 6_525;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

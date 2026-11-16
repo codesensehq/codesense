@@ -87,6 +87,7 @@ pub(super) fn desktop() -> DesktopCli {
         launch_notes: |_| Vec::new(),
         permission_display: None,
         enforces_bridge_tool_allowlist: false,
+        enforces_skill_allowlist: true,
         headless_settings,
         native_permission_rules: None,
         status_line: Some(StatusLineInstall {

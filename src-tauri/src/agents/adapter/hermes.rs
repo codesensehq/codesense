@@ -59,6 +59,7 @@ pub(super) fn desktop() -> DesktopCli {
         },
         // Pinned 0.22.5 hook-only deferred-call denial and allowed control are proven.
         enforces_bridge_tool_allowlist: true,
+        enforces_skill_allowlist: false,
         launch_notes,
         permission_display: Some(permission_display),
         headless_settings,

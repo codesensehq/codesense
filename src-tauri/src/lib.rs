@@ -1318,6 +1318,7 @@ pub fn run() {
             commands::agent_read_model::agent_read_roles,
             commands::agent_read_model::send_inbox_as_human,
             commands::agent_read_model::list_session_inbox,
+            commands::agent_read_model::list_thread_inbox,
             commands::agent_read_model::list_inbox_rollup,
             commands::data_read_model::routine_read_list,
             commands::data_read_model::routine_read_get,
