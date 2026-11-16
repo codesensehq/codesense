@@ -173,10 +173,11 @@ permissions:
       - Bash(gh pr create --head foreman/* --title * --body *)
       # Claude never matches a `../` file rule, so these are absolute globs (`//` is the root,
       # live probe, 2026-11-16). They match a foreman-* directory anywhere, and Write creates
-      # missing parents, so Write can make a foreman-* dir anywhere: the agent-config trees are
-      # denied below for that reason, and `Edit(./**)` keeps home read-only (a deny beats an
-      # allow). The Foreman can run a script it writes through `sh stories/*.sh`; the guardrail
-      # for that is review and protected main.
+      # missing parents, so Write can make a foreman-* dir anywhere: the agent-config trees and
+      # CodeSense's agent configs are denied below for that reason, and `Edit(./**)` keeps home
+      # read-only (a deny beats an allow). Those denies are defence in depth against a direct
+      # edit only. The Foreman can still run a script it writes through `sh stories/*.sh`, and
+      # that script can write anywhere; the guardrail for that is review and protected main.
       - Read(//**/foreman-*/**)
       - Edit(//**/foreman-*/**)
       - Write(//**/foreman-*/**)
@@ -191,10 +192,15 @@ permissions:
       - Edit(//**/foreman-*/.git)
       - Edit(//**/foreman-*/.git/**)
       # No agent's skills, settings or instructions, in a worktree or anywhere else: another
-      # agent loads them on its own.
+      # agent loads them on its own. That includes CodeSense's agent configs, the Foreman's own
+      # rules and routines among them.
       - Edit(//**/.claude/**)
       - Edit(//**/.agents/**)
       - Edit(//**/.codex/**)
+      - Edit(//**/.hermes/**)
+      - Edit(//**/.opencode/**)
+      - Edit(//**/.config/opencode/**)
+      - Edit(//**/config/agents/**)
       # Nothing between the worktree and its one allowed subcommand, nothing after the
       # pushed branch or the removed worktree, nothing more on a new worktree. (A trailing
       # ` *` needs one more word (live probe, 2026-11-13), so these end in one extra ` *`.)
@@ -256,4 +262,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 5
+revision: 6

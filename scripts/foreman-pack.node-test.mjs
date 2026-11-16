@@ -218,7 +218,7 @@ test("edits are denied in home and allowed in a foreman-* worktree, in three lay
   }
 });
 
-test("no foreman-* path inside an agent-config tree is writable, in three layouts", () => {
+test("no foreman-* path inside an agent-config or agent tree is writable, in three layouts", () => {
   // Write creates missing parents, so the worktree allow would reach a `foreman-*` dir under
   // any agent's skills; the agent-config trees are denied for that reason.
   const userHome = "/home/someone";
@@ -229,6 +229,14 @@ test("no foreman-* path inside an agent-config tree is writable, in three layout
       path.join(userHome, ".codex/skills/foreman-x/SKILL.md"),
       path.join(userHome, ".claude/skills/foreman-x/SKILL.md"),
       path.join(root, "foreman-fix-docs-9f2a/.claude/settings.json"),
+      // CodeSense's own agent configs: the Foreman's, its routines, any foreman-* agent.
+      path.join(root, "team/config/agents/foreman-claude/agent.yaml"),
+      path.join(root, "team/config/agents/foreman-claude/routines/x/routine.yml"),
+      // The other runtimes' config trees CodeSense stages.
+      path.join(userHome, ".hermes/skills/foreman-x/SKILL.md"),
+      path.join(userHome, ".opencode/agent/foreman-x.md"),
+      path.join(root, "repo/.opencode/skills/foreman-x/SKILL.md"),
+      path.join(userHome, ".config/opencode/skills/foreman-x/SKILL.md"),
     ]) {
       assert.equal(writeDenied(home, target), true, `${home}: ${target} is denied`);
       for (const tool of ["Edit", "Write"])
