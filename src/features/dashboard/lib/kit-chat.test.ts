@@ -1186,8 +1186,10 @@ describe("kit.chat activity: the live lead's prose from onSessionText", () => {
     expect(offs).toEqual(["s1", "s2"]);
   });
 
-  it("two chats watching one session: tearing one down leaves the other its prose", async () => {
-    // The host's stream for a session holds while any chat subscribes to it.
+  it("two chats on one session each keep their own subscription: tearing one down leaves the other its prose", async () => {
+    // The host double keeps every subscriber, so this guards that each chat removes only its
+    // own callback. The one-watch-per-frame refcount is in live-hub-shim.test.ts: the shim
+    // runs in a node vm there, and this jsdom suite replaces window.codesense wholesale.
     const subs = new Map<string, Set<(text: Prose, error?: unknown) => void>>();
     (window as unknown as { codesense: Record<string, unknown> }).codesense.onSessionText = (
       sessionId: string,
