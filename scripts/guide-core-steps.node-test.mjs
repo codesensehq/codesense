@@ -11,7 +11,8 @@ import { PACKS_ROOT, buildPack } from "./pack-build.mjs";
 import { PROBE_TOOLS, SETUP_VERBS, stepErrors } from "./lib/pack-steps.mjs";
 
 const PACK = join(PACKS_ROOT, "codesense-guide");
-const IDS = ["context-repo", "team", "product", "source-repos"];
+const BASE = ["context-repo", "team", "product", "source-repos"];
+const IDS = [...BASE, "git-access", "clone"];
 const step = (id) => parse(readFileSync(join(PACK, `setup/steps/${id}.yml`), "utf8"));
 const index = () => parse(readFileSync(join(PACK, "setup/steps/index.yml"), "utf8"));
 const allActs = () => IDS.flatMap((id) => step(id).act.map((act) => ({ id, act })));
@@ -25,6 +26,7 @@ const WRITES = {
   set_active_team: { org: "org", team: "team" },
   add_source_repo: { org: "org", team: "team" },
   attach_source_repo_path: { org: "org", team: "team" },
+  clone_repo: { org: "org", team: "team" },
   create_content_file: { path: "path" },
   set_epic_repos: { epicFilePath: "path" },
 };
@@ -83,8 +85,8 @@ test("a probe reads what its tool returns, with the user's org and team for the 
   assert.deepEqual(ledger.pick, { "rows[].fields.step": "product", "rows[].fields.state": "done" });
 });
 
-test("no core step clones, runs a command, writes outside or skips its card", () => {
-  for (const { id, act } of allActs()) {
+test("no base step clones, runs a command, writes outside or skips its card", () => {
+  for (const { id, act } of allActs().filter((a) => BASE.includes(a.id))) {
     assert.notEqual(act.verb?.tool, "clone_repo", `${id}/${act.id}`);
     assert.ok(!act.run && !act.open_url, `${id}/${act.id} is a verb act`);
     assert.equal(act.consent, "local-write", `${id}/${act.id}`);
@@ -105,7 +107,8 @@ test("each step asks one card, and Not now writes nothing", () => {
         act.some((a) => a.id === option.act),
         `${id}: ${option.label}`,
       );
-    assert.ok(ask.options.length <= 3, `${id} offers at most three buttons`);
+    // git-access offers one button per way to reach the host (frame E), the rest at most three.
+    assert.ok(ask.options.length <= (id === "git-access" ? 5 : 3), `${id} offers few buttons`);
   }
 });
 
@@ -275,7 +278,39 @@ const TABLE = {
     },
     rerun: { repos: "unattached" },
   },
+  // Done by the file it writes, never by the read that gates the write.
+  "git-access": {
+    before: [{}, { note: "unreadable" }, { note: "none" }],
+    after: Object.fromEntries(
+      ["check-credentials", "check-gh-cli", "check-mcp-server", "check-token-tool"].map((a) => [
+        a,
+        { note: "found" },
+      ]),
+    ),
+    // The read gates the write; the write goes to the team the `team` step switched to (this
+    // step needs it, and reads the same org and team), so it doesn't switch again.
+    calls: Object.fromEntries(
+      ["check-credentials", "check-gh-cli", "check-mcp-server", "check-token-tool"].map((a) => [
+        a,
+        ["run_in_terminal_tab", "create_content_file"],
+      ]),
+    ),
+    relies: "team",
+    rerun: { note: "found" },
+  },
+  // One repo with no clone keeps the step open; a bound clone that is gone is missing again.
+  clone: {
+    before: [{}, { repos: "unattached" }, { repos: "missing" }],
+    after: { "clone-repo": { repos: "attached" }, "bind-clone": { repos: "attached" } },
+    calls: { "clone-repo": ["clone_repo"], "bind-clone": ["attach_source_repo_path"] },
+    rerun: { repos: "attached" },
+  },
 };
+/** Whether `id` needs `target`, directly or through the steps it needs. */
+function needsStep(id, target) {
+  const needs = index().steps.find((e) => e.id === id)?.needs ?? [];
+  return needs.includes(target) || needs.some((n) => needsStep(n, target));
+}
 const RANK = ["unknown", "missing", "partial", "done"];
 
 /** The step's state from what its verify probes read: the most-done of them. */
@@ -303,18 +338,36 @@ test("the step table: each card is offered until done, each act ends done, and a
       const own = s.act.find((a) => a.id === act);
       const chain = [own, ...(own.then ?? []).map((n) => s.act.find((a) => a.id === n))];
       assert.deepEqual(
-        chain.map((a) => a.verb.tool),
+        chain.map((a) => a.verb?.tool ?? "run_in_terminal_tab"),
         row.calls[act],
         `${id}/${act}`,
       );
       const write = chain.findIndex((a) =>
-        ["create_content_file", "set_epic_repos"].includes(a.verb.tool),
+        ["create_content_file", "set_epic_repos"].includes(a.verb?.tool),
       );
       const switched = chain.findIndex(
-        (a) => a.verb.tool === "set_active_team" || a.verb.args?.activate === true,
+        (a) => a.verb?.tool === "set_active_team" || a.verb?.args?.activate === true,
       );
-      if (write >= 0)
+      if (write >= 0 && !row.relies)
         assert.ok(switched >= 0 && switched < write, `${id}/${act} switches team before it writes`);
+      if (write >= 0 && row.relies) {
+        // No switch of its own: the write's team is the one the `team` step made active.
+        assert.equal(switched, -1, `${id}/${act} relies on ${row.relies}, so it doesn't switch`);
+        assert.ok(needsStep(id, row.relies), `${id} needs ${row.relies}`);
+        assert.match(
+          chain[write].verb.args.path,
+          /^\{\{probe\.repos\.org_root\}\}\/\{\{probe\.repos\.team\}\}\/content\//,
+        );
+        const probe = s.probe.find((p) => p.id === "repos");
+        const theirs = step(row.relies).probe.find((p) => p.id === "teams");
+        assert.deepEqual(
+          probe.pick,
+          theirs.pick,
+          `${id} reads the same org and team as ${row.relies}`,
+        );
+        assert.equal(probe.yields.org_root, theirs.yields.org_root);
+        assert.equal(probe.yields.team, theirs.yields.team);
+      }
     }
   }
 });

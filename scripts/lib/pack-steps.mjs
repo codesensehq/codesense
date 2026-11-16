@@ -70,7 +70,7 @@ export const SETUP_VERBS = [
 // values, those values. The fields come from the Rust, not the tool's description, and
 // `probe-tools.node-test.mjs` reads the handlers to hold them there. A probe on a tool listed
 // here takes only those arguments, and picks, yields and maps only those fields and values. A
-// tool the guide's steps don't probe yet is unlisted; its probe is checked when it is added.
+// probe on a tool that isn't listed is a lint error: it is added here, from the Rust, first.
 export const PROBE_TOOLS = {
   // `describe_setup` takes no arguments; its `data` is `SetupState` (`mcp/setup_tools.rs`).
   // A repo's `attachment` is `attached`, `missing` (bound, the clone is gone) or `unattached`.
@@ -119,6 +119,33 @@ export const PROBE_TOOLS = {
   // `read_epic_repos` answers with the epic's `owner/repo` list, and fails when the path is not
   // an epic the session can read.
   read_epic_repos: { params: ["epicFilePath"], fields: ["[]"] },
+  // `read_content_file` reads one file of the session's own team content; a file that isn't
+  // there is a tool error. `text` is absent for a binary file and `bytesUrl` only for a large or
+  // binary one (`file_surface.rs` `read_snapshot`).
+  read_content_file: {
+    params: ["path", "maxBytes"],
+    fields: ["text", "bytesUrl", "size", "truncated", "sha256"],
+  },
+  // `probe_environment` (`mcp/probe_environment.rs`): `clis` maps each agent CLI to its fields,
+  // `env_set` each asked name to a bool, and `git_repo` is there only when `gitRepoPath` is
+  // given. No field is a secret and none holds a token.
+  probe_environment: {
+    params: ["gitRepoPath", "envNames"],
+    fields: [
+      "clis.*",
+      "git.available",
+      "git.version",
+      "gh_version",
+      "gh_auth.signed_in",
+      "gh_auth.account",
+      "gh_auth.scopes[]",
+      "gh_auth.reason",
+      "git_repo.path",
+      "git_repo.exists",
+      "git_repo.is_repo",
+      "env_set.*",
+    ],
+  },
 };
 
 // What a probe reads, before its map turns it into a state: `found` (its pick matched an
@@ -145,6 +172,54 @@ const PATH_ARGS = { create_content_file: "path", set_epic_repos: "epicFilePath" 
 const PRIVATE_KEY = /path|dir|folder|home|user|account|token|secret|password|credential|key/i;
 const PRIVATE_VALUE =
   /^~|^\/|\/(?:Users|home)\/|\{\{[^}]*(?:path|user|account|token|secret)[^}]*\}\}/i;
+
+// One piece of a pattern a typed command may take: a character class whose members are
+// letters, digits and `._/` (a range only within a-z, A-Z or 0-9, a `-` only first or last,
+// so no range can span punctuation), or one such character, with an optional quantifier.
+// Anything else (a wildcard, a group, an alternation, a negated class, a space, a symbol a
+// shell reads) is more than a word, so the rule is on the pattern's shape and not on what it
+// happens to match.
+const CLASS_MEMBER = "(?:[A-Z]-[A-Z]|[a-z]-[a-z]|[0-9]-[0-9]|[A-Za-z0-9._/])";
+const WORD_ATOM = `(?:\\[-?${CLASS_MEMBER}+-?\\]|\\\\\\.|[A-Za-z0-9_/-])(?:[+*?]|\\{\\d+(?:,\\d*)?\\})?`;
+const WORD_PATTERN = new RegExp(`^\\^?(?:${WORD_ATOM})+\\$?$`);
+
+/** Whether an input pattern can match text with a shell metacharacter in it. */
+export function unsafeInput(pattern) {
+  try {
+    new RegExp(pattern);
+  } catch {
+    return true;
+  }
+  return !WORD_PATTERN.test(pattern);
+}
+
+/**
+ * The value each `{{input}}` took in `command`, if it is the act's `cmd`: the same text, with
+ * each input replaced by one value its pattern matches. `inputs` gives each name's pattern; a
+ * command with none is exact. Gives `{name: value}`, or `undefined` when the command is not it.
+ */
+export function commandInputs(cmd, command, inputs) {
+  if (typeof command !== "string") return undefined;
+  if (!inputs) return command === cmd ? {} : undefined;
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+  const parts = cmd.split(/\{\{\s*([^}\s]+)\s*\}\}/);
+  const names = [];
+  const body = parts
+    .map((part, i) => {
+      if (i % 2 === 0) return escape(part);
+      names.push(part);
+      const pattern = (inputs[part] ?? "^$").replace(/^\^/, "").replace(/\$$/, "");
+      return `(?<g${names.length - 1}>${pattern})`;
+    })
+    .join("");
+  const found = new RegExp(`^${body}$`).exec(command);
+  if (!found) return undefined;
+  return Object.fromEntries(names.map((name, i) => [name, found.groups[`g${i}`]]));
+}
+
+/** Whether `command` is the act's `cmd`, with each `{{input}}` filled by a value it matches. */
+export const commandMatches = (cmd, command, inputs) =>
+  commandInputs(cmd, command, inputs) !== undefined;
 
 /** Every `{{a.b}}` template in a value, as its dotted name. */
 function templates(value) {
@@ -196,6 +271,10 @@ export function stepRuleErrors(step, where) {
   for (const probe of step.probe ?? []) {
     const { tool, ...args } = probe.check;
     const known = PROBE_TOOLS[tool];
+    if (!known)
+      errors.push(
+        `${where}: probe ${probe.id} uses ${tool}, which is not in the probe registry; add it from its Rust`,
+      );
     if (known) {
       for (const arg of Object.keys(args))
         if (!known.params.includes(arg))
@@ -283,6 +362,13 @@ export function stepRuleErrors(step, where) {
     }
   }
 
+  for (const name of templates(step.on_fail))
+    if (!(name in (step.inputs ?? {})))
+      errors.push(`${where}: on_fail uses {{${name}}}, which is not an input`);
+  for (const option of step.on_fail?.options ?? [])
+    if (option.do === "copy" && !step.on_fail.copy)
+      errors.push(`${where}: on_fail offers "${option.label}" but has no copy text`);
+
   const options = step.ask?.options ?? [];
   for (const option of options)
     if (option.act !== "none" && !actIds.includes(option.act))
@@ -307,12 +393,18 @@ export function stepRuleErrors(step, where) {
   }
   for (const act of acts) {
     // The one place outside text becomes a command is the engine's `clone_repo`. A step's
-    // own command and its folder are fixed: not even a probe result (a git remote, a branch
-    // name, an account name) goes into them, since those can hold shell syntax.
-    for (const name of templates({ cmd: act.run?.cmd, cwd: act.run?.cwd }))
-      errors.push(
-        `${where}: act ${act.id} builds its command from {{${name}}}; a run command and its folder are fixed`,
-      );
+    // own command and its folder hold no probe result (a git remote, a branch name, an
+    // account name can hold shell syntax). A command may take an input, once the input's
+    // pattern can match nothing a shell reads: the guide types it as one line, and the
+    // consent check matches it against that pattern.
+    for (const name of templates({ cmd: act.run?.cmd, cwd: act.run?.cwd })) {
+      const spec = step.inputs?.[name];
+      const inFolder = templates({ cwd: act.run?.cwd }).includes(name);
+      if (!spec || inFolder || unsafeInput(spec.pattern))
+        errors.push(
+          `${where}: act ${act.id} builds its command from {{${name}}}; a run command and its folder are fixed`,
+        );
+    }
     for (const name of templates({ verb: act.verb, open_url: act.open_url })) {
       const root = name.split(".")[0];
       if (root !== "probe" && !inputs.includes(root))
@@ -426,8 +518,9 @@ export function stepErrors(dir) {
  * `steps`, the ids the index lists, and `allowances`, `"<step>/<act>"` to the act's consent
  * class and the verbs it may call, each with how many times, and for a `run` act the one
  * command it may type. An act allows its own verb (`repeat` times, default once) and the
- * verbs of the acts it `then`-runs. A step file that doesn't read is left out; the pack
- * build reports it.
+ * verbs of the acts it `then`-runs. A command with `{{input}}` templates also carries
+ * `inputs`, each input's pattern, so the check can match the typed command. A step file that
+ * doesn't read is left out; the pack build reports it.
  */
 export function actAllowances(dir) {
   const allowances = new Map();
@@ -447,8 +540,25 @@ export function actAllowances(dir) {
     }
     const acts = step?.act ?? [];
     const own = (act) => {
-      if (act.verb) return [{ verb: act.verb.tool, uses: act.repeat ?? 1 }];
-      if (act.run) return [{ verb: "run_in_terminal_tab", uses: 1, cmd: act.run.cmd }];
+      if (act.verb) {
+        // A literal `content` is fixed by the step file, so the write must carry exactly it.
+        const content = act.verb.args?.content;
+        const fixed = typeof content === "string" && templates(content).length === 0;
+        return [{ verb: act.verb.tool, uses: act.repeat ?? 1, ...(fixed ? { content } : {}) }];
+      }
+      if (act.run) {
+        // A command that takes inputs is matched against each input's own pattern.
+        const names = [...new Set(templates(act.run.cmd))];
+        const inputs = Object.fromEntries(names.map((n) => [n, step.inputs?.[n]?.pattern ?? "^$"]));
+        return [
+          {
+            verb: "run_in_terminal_tab",
+            uses: 1,
+            cmd: act.run.cmd,
+            ...(names.length ? { inputs } : {}),
+          },
+        ];
+      }
       return [];
     };
     for (const act of acts) {
