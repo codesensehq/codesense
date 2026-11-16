@@ -17,8 +17,8 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
  *  - restore (opt-in) runs in a `useLayoutEffect` BEFORE paint, so there is no
  *    scroll-top flash.
  *
- * A warm team stays mounted but its box is hidden, and an engine drops a hidden box's scroll
- * offset: the tracked value is put back when the owning team is shown again.
+ * A warm team or an inactive tab stays mounted but its box is hidden, and an engine drops a hidden
+ * box's scroll offset: the tracked value is put back when the owning team or the box is shown again.
  *
  * Reading `scrollTop` at unmount-cleanup time is unreliable (the node may be
  * detached), so we track it live via the listener and write the tracked value.
@@ -73,11 +73,29 @@ export function useScrollSnapshot(opts: {
       restoredRef.current = true;
     }
     lastRef.current = el.scrollTop;
+    // A hidden box (an inactive kept-alive tab, `display:none`) loses its offset in the engine and
+    // may report the reset as a scroll: ignore it and put the tracked offset back once shown again.
+    let hidden = false;
     const onScroll = () => {
-      lastRef.current = el.scrollTop;
+      if (!hidden) lastRef.current = el.scrollTop;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    const observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver((entries) => {
+            const box = entries[entries.length - 1]?.contentRect;
+            if (!box) return;
+            if (box.width === 0 && box.height === 0) {
+              hidden = true;
+            } else if (hidden) {
+              hidden = false;
+              el.scrollTop = lastRef.current;
+            }
+          })
+        : null;
+    observer?.observe(el);
     return () => {
+      observer?.disconnect();
       el.removeEventListener("scroll", onScroll);
       // `viewKey` + `last` are captured together in this closure, so the write
       // always targets the key the tracked value belongs to.
