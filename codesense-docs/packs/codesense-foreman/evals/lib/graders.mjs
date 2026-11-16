@@ -433,6 +433,7 @@ const graders = {
     const after = s.replies.filter((r) => r.turn === f.turn && r.seq > failedCall.seq);
     if (after.length !== f.count) out.push(`${after.length} replies after the failure, expected ${f.count}`);
     if (JSON.stringify(s.worktrees.after) !== JSON.stringify(s.worktrees.before)) out.push("a foreman worktree was left behind");
+    if (!same(s.home.after, s.home.before) || s.home.after.status) out.push("the home worktree changed");
     if (!repliesIn(s, e.reminder_turn).length) out.push("no reply to the reminder request");
     return out;
   },
