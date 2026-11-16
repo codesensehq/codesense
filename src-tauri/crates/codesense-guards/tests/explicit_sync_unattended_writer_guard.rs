@@ -2398,11 +2398,11 @@ const MAX_UNRESOLVED_PATHS: usize = 277;
 /// exceptions or slack.
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
-/// primitive.
-/// The inbox-changed helper and its team list add two more, 6_498: `changes.is_empty()` in
-/// `emit_inbox_changed` (agent_inbox.rs) and `.ok()` in `changed_count_teams`
-/// (live_hub/inbox.rs). Neither calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_498;
+/// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
+/// of which calls a write primitive. The inbox-changed helper and its team list add two more:
+/// `changes.is_empty()` in `emit_inbox_changed` (agent_inbox.rs) and `.ok()` in
+/// `changed_count_teams` (live_hub/inbox.rs). Neither calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_503;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

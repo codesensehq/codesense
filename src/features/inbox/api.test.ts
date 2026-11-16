@@ -8,7 +8,9 @@ import {
   isCommandUnavailable,
   loadInboxRollup,
   loadSessionInbox,
+  loadThreadInbox,
   sendAsHuman,
+  threadReadKey,
   wireRecipient,
 } from "./api";
 import { FX } from "./fixtures";
@@ -23,6 +25,40 @@ describe("inbox api", () => {
       source: "live",
     });
     expect(invoke).toHaveBeenCalledWith("list_session_inbox", { handle: "h" });
+  });
+
+  it("reads a thread by its key, and the seat's own inbox on a backend without the thread read", async () => {
+    const key = threadReadKey("acme/t/dev", null, "S1");
+    invoke.mockResolvedValue({
+      handle: "dev-1",
+      roles: [],
+      messages: [],
+      sessions: [],
+      addresses: [],
+    });
+    await loadThreadInbox(key);
+    expect(invoke).toHaveBeenLastCalledWith("list_thread_inbox", {
+      agentId: "acme/t/dev",
+      storyId: "",
+      session: "S1",
+    });
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "list_thread_inbox"
+        ? Promise.reject("Command list_thread_inbox not found")
+        : Promise.resolve({ handle: "dev-1", roles: [], messages: [] }),
+    );
+    await expect(loadThreadInbox(key)).resolves.toMatchObject({
+      source: "live",
+      dto: { handle: "dev-1" },
+    });
+    expect(invoke).toHaveBeenLastCalledWith("list_session_inbox", { handle: "S1" });
+    // Any other failure is the read's (only the thread read fails: the app's background asks answer).
+    invoke.mockImplementation((cmd?: string) =>
+      cmd === "list_thread_inbox"
+        ? Promise.reject(new Error("database is locked"))
+        : Promise.resolve(undefined),
+    );
+    await expect(loadThreadInbox(key)).rejects.toThrow(/locked/);
   });
 
   it("falls back to the demo data only when the command is unknown", async () => {

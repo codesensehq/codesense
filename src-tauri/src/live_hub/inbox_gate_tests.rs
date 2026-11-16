@@ -48,6 +48,7 @@ fn row(handle: &str, name: &str, state: SessionState) -> SessionListRow {
         expiring: false,
         session: Some(format!("tab-{handle}")),
         failed: false,
+        crashed: false,
     }
 }
 

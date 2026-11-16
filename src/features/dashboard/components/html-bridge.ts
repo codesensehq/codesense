@@ -244,7 +244,8 @@ async function subscriptionView(
   }
   if (args.topic === "agentDefinitions") {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
+    // The view key names this frame: it holds the view until it goes or rekeys.
+    liveHub.seed(view, (await ctx?.liveFrame?.()) ?? undefined);
     return { viewKey: view.viewKey };
   }
   if (args.order === "status") return { order: "status" as const };
@@ -578,6 +579,11 @@ function optionalMessageKind(value: unknown): MessageKind | undefined {
   if (value === "needs-you" || value === "update") return value;
   throw new Error("inbox: kind, if present, must be 'needs-you' or 'update'");
 }
+
+/** A pin write's caller beyond the person: the sender of the HTML message calling, whose
+ *  writes the engine keeps to that sender's own thread. A page passes nothing. */
+const frameSender = (ctx: BridgeContext | undefined): [string] | [] =>
+  ctx?.message?.sender ? [ctx.message.sender] : [];
 
 /** The agent thread a pins call names: a saved agent id and an optional story id. */
 function pinThread(
@@ -934,8 +940,8 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // The prepared view applies the calling frame's grant to the shared catalog.
   agents: async (_args, ctx) => {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
     const frame = await ctx?.liveFrame?.();
+    liveHub.seed(view, frame ?? undefined);
     const snapshot = frame
       ? await frame.subscribe("agentDefinitions", undefined, { viewKey: view.viewKey })
       : view;
@@ -974,6 +980,14 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "inbox: sessionId must be a non-empty string",
     );
     if (sessionId) query.sessionId = sessionId;
+    // A saved agent's thread (the pins' key): every listed session of the agent on the story
+    // and every recorded one, ended ones included; an empty story is the agent's no-story
+    // thread, its listed sessions only. sessionId then names the seat.
+    if (a.storyId !== undefined) {
+      if (typeof a.storyId !== "string") throw new Error("inbox: storyId must be a string");
+      if (!agentId) throw new Error("inbox: storyId needs agentId");
+      query.storyId = a.storyId.trim();
+    }
     const conversation = optionalNonEmptyString(
       a.conversation,
       "inbox: conversation must be a non-empty string",
@@ -1485,12 +1499,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     }
     const preview = a.preview as AgentPinPreview | undefined;
     return inboxWrite(ctx, "pin", a, (team) =>
-      agentPins(team, agentId, storyId, {
-        op: "pin",
-        messageId: id,
-        position,
-        ...(preview ? { preview } : {}),
-      }),
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "pin", messageId: id, position, ...(preview ? { preview } : {}) },
+        ...frameSender(ctx),
+      ),
     );
   },
   unpin: async (args, ctx) => {
@@ -1498,7 +1513,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const { agentId, storyId } = pinThread(a, "unpin");
     const id = messageId(a.messageId, "unpin");
     return inboxWrite(ctx, "unpin", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }),
+      agentPins(team, agentId, storyId, { op: "unpin", messageId: id }, ...frameSender(ctx)),
     );
   },
   // The Undo of an unpin: the pin comes back as it was (who pinned it, when, its preview).
@@ -1510,11 +1525,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const replacing =
       a.replacing == null ? undefined : messageId(a.replacing, "restorePin: replacing");
     return inboxWrite(ctx, "restorePin", a, (team) =>
-      agentPins(team, agentId, storyId, {
-        op: "restore",
-        messageId: id,
-        ...(replacing === undefined ? {} : { replacing }),
-      }),
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "restore", messageId: id, ...(replacing === undefined ? {} : { replacing }) },
+        ...frameSender(ctx),
+      ),
     );
   },
   // At the cap, the person pins a message in place of a pin they choose, in one step.
@@ -1525,7 +1542,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     if (a.replaces == null) throw new Error("replacePin: {replaces} must name the pin to replace");
     const replaces = messageId(a.replaces, "replacePin: replaces");
     return inboxWrite(ctx, "replacePin", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "replace", messageId: id, replaces }),
+      agentPins(
+        team,
+        agentId,
+        storyId,
+        { op: "replace", messageId: id, replaces },
+        ...frameSender(ctx),
+      ),
     );
   },
   reorderPins: async (args, ctx) => {
@@ -1536,7 +1559,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     }
     const messageIds = a.messageIds.map((id) => messageId(id, "reorderPins"));
     return inboxWrite(ctx, "reorderPins", a, (team) =>
-      agentPins(team, agentId, storyId, { op: "reorder", messageIds }),
+      agentPins(team, agentId, storyId, { op: "reorder", messageIds }, ...frameSender(ctx)),
     );
   },
   dismiss_agent_mark: async (args, ctx) => {
@@ -2620,6 +2643,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // UNfilled; the capability is injected server-side (`viewer.rs`) into every live
   // render, not via this map.
 };
+// The pin verbs are registered as `inbox.<verb>` too; each runs its flat verb's handler.
+for (const verb of VERB_REGISTRY) {
+  const flat = verb.name.startsWith("inbox.") ? verb.name.slice("inbox.".length) : null;
+  if (flat && Object.prototype.hasOwnProperty.call(HTML_BRIDGE_ALLOWLIST, flat)) {
+    HTML_BRIDGE_ALLOWLIST[verb.name] = HTML_BRIDGE_ALLOWLIST[flat];
+  }
+}
 
 // Contract views derived from the native registry. Admission is owned by Rust.
 export const READ_VERBS: readonly string[] = VERB_REGISTRY.filter((v) => !v.action).map(

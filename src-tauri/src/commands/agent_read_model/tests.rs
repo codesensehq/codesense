@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use super::*;
 use crate::commands::agent_inbox::{KnownSession, KnownSessions};
 use crate::mcp::session_list::SessionState;
+use crate::session_usage::agent_record::ThreadSession;
 use crate::weft::inbox;
 use crate::weft::role_state::RoleDeliveryState;
 
@@ -30,6 +31,12 @@ struct FakeHost {
     remote_online: std::sync::atomic::AtomicBool,
     projected: Mutex<Option<InboxView>>,
     role_dirs: Mutex<std::collections::HashMap<String, PathBuf>>,
+    /// The saved agent and story each handle was launched with (`launch_thread`).
+    threads: Mutex<std::collections::HashMap<String, (String, Option<String>)>>,
+    /// What the usage store recorded per thread (`thread_sessions`), keyed `agent|story`.
+    recorded: Mutex<std::collections::HashMap<String, Vec<ThreadSession>>>,
+    /// Listed sessions' `(running, ended)` in place of running and not ended.
+    states: Mutex<std::collections::HashMap<String, (bool, bool)>>,
 }
 
 impl FakeHost {
@@ -38,6 +45,9 @@ impl FakeHost {
             dir: tempfile::tempdir().unwrap(),
             projected: Mutex::default(),
             role_dirs: Mutex::default(),
+            threads: Mutex::default(),
+            recorded: Mutex::default(),
+            states: Mutex::default(),
             changed: Mutex::default(),
             events: Mutex::default(),
             queued: Mutex::default(),
@@ -166,12 +176,27 @@ impl InboxHost for FakeHost {
         // `missing` is synced but its inbox was never written: it is skipped, not created.
         Ok(vec![team("default"), team("design"), team("missing")])
     }
+    async fn launch_thread(&self, handle: &str) -> Option<(String, Option<String>)> {
+        self.threads.lock().unwrap().get(handle).cloned()
+    }
+    async fn thread_sessions(
+        &self,
+        thread: &crate::weft::pins::ThreadKey,
+    ) -> Result<Vec<ThreadSession>, String> {
+        let key = format!("{}|{}", thread.agent_id, thread.story_id);
+        Ok(self.recorded.lock().unwrap().get(&key).cloned().unwrap_or_default())
+    }
     async fn sessions(&self) -> Result<KnownSessions, String> {
-        let session = |handle: &str, session: &str, name: &str| KnownSession {
-            handle: handle.into(),
-            session: Some(session.into()),
-            name: name.into(),
-            running: true,
+        let states = self.states.lock().unwrap().clone();
+        let session = |handle: &str, session: &str, name: &str| {
+            let (running, ended) = states.get(handle).copied().unwrap_or((true, false));
+            KnownSession {
+                handle: handle.into(),
+                session: Some(session.into()),
+                name: name.into(),
+                running,
+                ended,
+            }
         };
         let mut sessions = vec![
             session("H1", "S1", "Manager"),
@@ -187,6 +212,7 @@ impl InboxHost for FakeHost {
                     session: Some(record.target.session.as_str().to_string()),
                     name: "Remote worker".into(),
                     running: self.remote_online.load(std::sync::atomic::Ordering::SeqCst),
+                    ended: false,
                 }),
         );
         Ok(KnownSessions::new(sessions))
@@ -237,6 +263,7 @@ fn row(handle: &str, name: &str, agent: Option<&str>) -> SessionListRow {
         expiring: false,
         session: None,
         failed: false,
+        crashed: false,
     }
 }
 
@@ -2126,6 +2153,7 @@ async fn role_registration_and_zero_claim_release_reproject_inferred_kind() {
         session: Some("S1".into()),
         name: "Manager".into(),
         running: true,
+        ended: false,
     }]);
     let mut projection = InboxProjection::default();
     let batch = read_batch(host.path("default"), true, vec![])
@@ -2589,4 +2617,218 @@ async fn an_agent_pages_full_bodies_backwards_without_gaps_or_duplicates() {
         pages > 120 / AGENT_INBOX_LIMIT as usize + 1,
         "the budget ended pages early"
     );
+}
+
+/// A thread's sessions for [`thread_inbox`]: `launched` are roster handles launched on
+/// `REVIEWER@<rev>` + `STORY-1`; `recorded` are the usage store's `(session id, handle)`.
+fn thread_of(host: &FakeHost, launched: &[(&str, &str)], recorded: &[(&str, &str)]) {
+    for (handle, revision) in launched {
+        host.threads.lock().unwrap().insert(
+            (*handle).into(),
+            (format!("{REVIEWER}@{revision}"), Some("STORY-1".into())),
+        );
+    }
+    host.recorded.lock().unwrap().insert(
+        format!("{REVIEWER}|STORY-1"),
+        recorded
+            .iter()
+            .map(|(session, handle)| ThreadSession {
+                session_id: (*session).into(),
+                handle: Some((*handle).into()),
+            })
+            .collect(),
+    );
+}
+
+fn texts(view: &ThreadInboxDto) -> Vec<&str> {
+    view.messages.iter().map(|m| m.text.as_str()).collect()
+}
+
+#[tokio::test]
+async fn a_successor_reads_its_predecessors_mail_though_the_roster_no_longer_lists_it() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    let design = host.store("design");
+    // H0 (tab S0) ended and left the roster; H1 is its successor on a new revision.
+    insert(&default, HUMAN, "H0", "to the first session", None);
+    insert(&default, "H0", HUMAN, "first answer", None);
+    insert(&design, "S0", HUMAN, "by its tab session, in another team", None);
+    insert(&default, "H1", HUMAN, "second answer", None);
+    insert(&default, "H2", HUMAN, "not this thread", None);
+    thread_of(&host, &[("H1", "4")], &[("S0", "H0"), ("S1", "H1")]);
+
+    let view = thread_inbox(&*host, &format!("{REVIEWER}@9"), "STORY-1", Some("H1"))
+        .await
+        .unwrap();
+    assert_eq!((view.agent_id.as_str(), view.story_id.as_str()), (REVIEWER, "STORY-1"));
+    assert_eq!(view.handle, "H1");
+    assert_eq!(view.sessions, vec!["H0".to_string(), "H1".to_string()]);
+    assert_eq!(view.addresses, vec!["S0", "H0", "S1", "H1"]);
+    let got = texts(&view);
+    for want in [
+        "to the first session",
+        "first answer",
+        "by its tab session, in another team",
+        "second answer",
+    ] {
+        assert!(got.contains(&want), "{want:?} missing from {got:?}");
+    }
+    assert!(!got.contains(&"not this thread"));
+    // With no seat it is the same thread, and the newest running session names it.
+    let unseated = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    assert_eq!(unseated.handle, "H1");
+    assert_eq!(texts(&unseated).len(), got.len());
+}
+
+#[tokio::test]
+async fn a_seat_leaves_out_a_concurrent_running_seat_and_no_seat_holds_both() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H1", HUMAN, "seat one", None);
+    insert(&default, "H3", HUMAN, "seat three", None);
+    insert(&default, "H0", HUMAN, "ended predecessor", None);
+    thread_of(&host, &[("H1", "1"), ("H3", "1")], &[("S0", "H0"), ("S1", "H1"), ("S3", "H3")]);
+
+    let one = thread_inbox(&*host, REVIEWER, "STORY-1", Some("S1")).await.unwrap();
+    assert_eq!(one.handle, "H1");
+    let got = texts(&one);
+    assert!(got.contains(&"seat one") && got.contains(&"ended predecessor"), "{got:?}");
+    assert!(!got.contains(&"seat three"), "a concurrent seat's mail: {got:?}");
+    assert!(!one.sessions.contains(&"H3".to_string()));
+
+    let both = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    let got = texts(&both);
+    assert!(got.contains(&"seat one") && got.contains(&"seat three"), "{got:?}");
+    // A seat that is not the thread's leaves no one out.
+    let stranger = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H2")).await.unwrap();
+    assert_eq!(texts(&stranger).len(), got.len());
+}
+
+#[tokio::test]
+async fn a_recorded_handle_the_roster_now_holds_for_another_thread_is_not_this_threads() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    // An ended session of the thread ran under handle H2, which the roster now gives to
+    // a session that is not the thread's: H2's mail is that session's.
+    insert(&default, "H2", HUMAN, "the new holder of H2", None);
+    insert(&default, "S-old", HUMAN, "the ended session, by its tab", None);
+    thread_of(&host, &[], &[("S-old", "H2")]);
+
+    let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    assert_eq!(texts(&view), vec!["the ended session, by its tab"]);
+    assert!(view.sessions.is_empty());
+    assert_eq!(view.addresses, vec!["S-old"]);
+}
+
+#[tokio::test]
+async fn a_thread_with_no_session_is_empty_and_no_saved_agent_is_refused() {
+    let host = FakeHost::new();
+    let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    assert_eq!((view.handle.as_str(), view.messages.len()), ("", 0));
+    assert!(thread_inbox(&*host, " @3", "STORY-1", None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_crashed_seat_has_ended_and_an_offline_one_is_still_the_seat() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H1", HUMAN, "seat one", None);
+    insert(&default, "H3", HUMAN, "seat three", None);
+    thread_of(&host, &[("H1", "1"), ("H3", "1")], &[("S1", "H1"), ("S3", "H3")]);
+    let set = |handle: &str, running: bool, ended: bool| {
+        host.states.lock().unwrap().insert(handle.into(), (running, ended));
+    };
+
+    // A crashed concurrent seat has ended: its mail is the thread's, the opened seat's too.
+    set("H3", true, true);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert!(texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+    // A crashed opened seat is no seat: nothing is left out, so the live seat's replies show.
+    host.states.lock().unwrap().clear();
+    set("H1", true, true);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert!(texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+    assert_eq!(got.handle, "H3", "the seat that has not ended names the thread");
+    // An opened seat on an offline machine has not ended: it is still the seat.
+    host.states.lock().unwrap().clear();
+    set("H1", false, false);
+    let got = thread_inbox(&*host, REVIEWER, "STORY-1", Some("H1")).await.unwrap();
+    assert_eq!(got.handle, "H1");
+    assert!(!texts(&got).contains(&"seat three"), "{:?}", texts(&got));
+}
+
+#[tokio::test]
+async fn a_thread_with_no_seat_listed_is_named_by_its_newest_recorded_session() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H-old", HUMAN, "the newest recorded", None);
+    // H3 is listed on the thread but crashed, and has no record: it is no seat.
+    thread_of(&host, &[("H3", "1")], &[("S-older", "H-older"), ("S-old", "H-old")]);
+    host.states.lock().unwrap().insert("H3".into(), (true, true));
+    let view = thread_inbox(&*host, REVIEWER, "STORY-1", None).await.unwrap();
+    assert_eq!(view.handle, "H-old");
+    assert_eq!(view.sessions, vec!["H-older", "H-old", "H3"]);
+}
+
+#[tokio::test]
+async fn a_thread_with_no_story_is_its_listed_sessions_only() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    insert(&default, "H1", HUMAN, "listed, no story", None);
+    host.threads
+        .lock()
+        .unwrap()
+        .insert("H1".into(), (format!("{REVIEWER}@1"), None));
+    // An off-roster session the store recorded with no story is not read.
+    insert(&default, "H-gone", HUMAN, "an old no-story session", None);
+    host.recorded.lock().unwrap().insert(
+        format!("{REVIEWER}|"),
+        vec![ThreadSession {
+            session_id: "S-gone".into(),
+            handle: Some("H-gone".into()),
+        }],
+    );
+    let view = thread_inbox(&*host, REVIEWER, "", None).await.unwrap();
+    assert_eq!(texts(&view), vec!["listed, no story"]);
+    assert_eq!(view.addresses, vec!["H1", "S1"]);
+    assert_eq!(view.handle, "H1");
+}
+
+#[tokio::test]
+async fn the_inbox_with_a_story_reads_the_agents_thread_in_its_team_with_the_session_as_seat() {
+    let host = FakeHost::new();
+    let default = host.store("default");
+    let design = host.store("design");
+    let old = insert(&default, "H0", HUMAN, "the ended predecessor", None);
+    let one = insert(&default, "H1", HUMAN, "seat one", None);
+    insert(&default, "H3", HUMAN, "seat three", None);
+    insert(&default, "H2", HUMAN, "not this thread", None);
+    // Another team's mail stays in its team: the inbox reads one team.
+    insert(&design, "H1", HUMAN, "in design", None);
+    thread_of(&host, &[("H1", "1"), ("H3", "1")], &[("S0", "H0"), ("S1", "H1"), ("S3", "H3")]);
+    let read = |story: Option<&str>, session: Option<&str>| {
+        let query = InboxQuery {
+            agent_id: Some(format!("{REVIEWER}@7")),
+            story_id: story.map(str::to_owned),
+            session_id: session.map(str::to_owned),
+            ..Default::default()
+        };
+        let host = host.clone();
+        async move { inbox(&*host, &team("default"), &query, &listed()).await.unwrap() }
+    };
+    let seat = read(Some("STORY-1"), Some("S1")).await;
+    assert_eq!(ids(&seat), vec![one, old]);
+    // The thread's handles come with it, so a page draws its predecessors' mail as the agent's.
+    assert_eq!(
+        seat.thread_sessions,
+        Some(vec!["S0".to_string(), "H0".to_string(), "S1".to_string(), "H1".to_string()])
+    );
+    assert_eq!(read(None, None).await.thread_sessions, None);
+    // No seat: the whole thread.
+    assert_eq!(read(Some("STORY-1"), None).await.messages.len(), 3);
+    // A thread with no session reads nothing, not every message in scope.
+    assert!(read(Some("STORY-2"), None).await.messages.is_empty());
+    // Without a story, agentId keeps its meaning: the agent's role inbox and running instances.
+    let agent = read(None, None).await;
+    assert!(!ids(&agent).contains(&old));
 }

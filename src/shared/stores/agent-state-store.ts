@@ -80,8 +80,6 @@ export interface AgentLaunch {
 }
 
 interface AgentStateStore {
-  /** Output can precede the first provider observation, especially for headless runs. */
-  outputAtBySession: Record<string, number>;
   /** Display-only ordering against a later turn; managed task outcomes stay intact. */
   completionSeqBySession: Record<string, number>;
   /** Optional host ordering proof; absent for older producers and local safety nets. */
@@ -93,7 +91,8 @@ interface AgentStateStore {
   ) => { accepted: boolean; historical: boolean; repeated: boolean };
   activityBySession: Record<string, SessionActivity>;
   recordActivity: (snapshot: ActivitySnapshot, sentAt: number, receivedAt?: number) => boolean;
-  /** Fresh output from an admitted current stream; never snapshot replay. */
+  /** Fresh output from an admitted current stream; never snapshot replay. Kept in
+   *  {@link getSessionActivityAt}, never in the store. */
   recordOutput: (sessionId: string, at?: number) => void;
   activityUnavailable: (
     sessions: Iterable<string>,
@@ -170,6 +169,16 @@ const resetAt = new Map<string, number>();
 let processAgentSeq = 0;
 const processAgentVersion = new Map<string, number>();
 const retiredActivity = new Map<string, ActivitySnapshot["identity"]>();
+/** When each session last showed activity (epoch ms): an admitted hook or MCP signal, a host
+ *  revision's age, or live output, which can precede any record. Activity ticks about once a
+ *  second per session and nothing renders from it, so it lives outside the store: a tick
+ *  copies no map and wakes no subscriber. Liveness probes and snapshot polls never refresh it. */
+const activityAt = new Map<string, number>();
+
+/** When `sessionId` last showed activity (epoch ms), if it has. */
+export function getSessionActivityAt(sessionId: string): number | undefined {
+  return activityAt.get(sessionId);
+}
 function retireActivity(id: string, snapshot: ActivitySnapshot | null | undefined): void {
   if (!snapshot) return;
   retiredActivity.delete(id);
@@ -267,7 +276,7 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
       if (current?.t1 != null && current.t1.seq > sentAt) return s;
       const next = advanceSessionAgent(current, input, ++seq);
       if (next === current) return s;
-      if (input.tier === 1) next.activityAt = Date.now();
+      if (input.tier === 1) activityAt.set(sessionId, Date.now());
       if (
         input.tier === 1 &&
         input.signal.kind === "claude-hook" &&
@@ -296,7 +305,6 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
     });
 
   type Keyed =
-    | "outputAtBySession"
     | "completionSeqBySession"
     | "completionActivityBySession"
     | "activityBySession"
@@ -308,7 +316,6 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
     | "relaunchBySession"
     | "processAgentBySession";
   const ALL: readonly Keyed[] = [
-    "outputAtBySession",
     "completionSeqBySession",
     "completionActivityBySession",
     "activityBySession",
@@ -322,6 +329,7 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
   ];
   const drop = (sessionIds: Iterable<string>, keys: readonly Keyed[] = ALL) => {
     const ids = [...sessionIds];
+    if (keys === ALL) for (const id of ids) activityAt.delete(id);
     set((s) => {
       const next: Partial<Pick<AgentStateStore, Keyed>> = {};
       for (const key of keys) {
@@ -336,7 +344,6 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
   };
 
   return {
-    outputAtBySession: {},
     completionSeqBySession: {},
     completionActivityBySession: {},
     recordTaskCompletion: (sessionId, activityCompletion) => {
@@ -407,12 +414,10 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
                 ...(firstTool ? { toolOpen: snapshot.toolOpen } : {}),
               }
             : previous;
+        const at = firstAge ? snapshotActivityAt(enriched, receivedAt) : undefined;
+        if (at !== undefined) activityAt.set(id, freshestActivity(activityAt.get(id), at)!);
         set((s) => {
           const record = s.bySession[id];
-          const activityAt = freshestActivity(
-            record?.activityAt,
-            firstAge ? snapshotActivityAt(enriched, receivedAt) : undefined,
-          );
           const clearTools =
             firstTool && snapshot.toolOpen === false && record?.openTools !== undefined;
           return {
@@ -420,17 +425,8 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
               ...s.activityBySession,
               [id]: { ...activity, snapshot: enriched, freshness: "current" },
             },
-            ...(record && (activityAt !== record.activityAt || clearTools)
-              ? {
-                  bySession: {
-                    ...s.bySession,
-                    [id]: {
-                      ...record,
-                      activityAt,
-                      openTools: clearTools ? undefined : record.openTools,
-                    },
-                  },
-                }
+            ...(record && clearTools
+              ? { bySession: { ...s.bySession, [id]: { ...record, openTools: undefined } } }
               : {}),
           };
         });
@@ -465,6 +461,12 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
         }));
         return true;
       }
+      const at = freshestActivity(
+        sameLife ? activityAt.get(id) : undefined,
+        snapshotActivityAt(snapshot, receivedAt),
+      );
+      if (at === undefined) activityAt.delete(id);
+      else activityAt.set(id, at);
       const record: SessionAgentRecord = {
         hostTurn: isObservedHostTurn(snapshot)
           ? {
@@ -480,10 +482,6 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
           snapshot.state === "needs-permission" && snapshot.reason === "blocked"
             ? "blocked"
             : snapshot.state,
-        activityAt: freshestActivity(
-          sameLife ? existing?.activityAt : undefined,
-          snapshotActivityAt(snapshot, receivedAt),
-        ),
         openTools:
           sameLife && snapshot.state === "working" && snapshot.toolOpen !== false
             ? (existing?.openTools ??
@@ -506,32 +504,22 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
               ),
             }
           : {}),
-        ...(!sameLife
-          ? {
-              outputAtBySession: Object.fromEntries(
-                Object.entries(s.outputAtBySession).filter(([sessionId]) => sessionId !== id),
-              ),
-            }
-          : {}),
       }));
       return true;
     },
-    recordOutput: (sessionId, at = Date.now()) =>
-      set((s) => {
-        const record = s.bySession[sessionId];
-        if (!Number.isFinite(at) || at < 0 || pruned.has(sessionId) || sessionId in s.exitBySession)
-          return s;
-        // Output can be high volume: bound updates to once a second. This is far
-        // finer than the one-minute stall poll without rendering per byte chunk.
-        const known = freshestActivity(record?.activityAt, s.outputAtBySession[sessionId]);
-        if (known !== undefined && at - known < 1000) return s;
-        return {
-          outputAtBySession: { ...s.outputAtBySession, [sessionId]: at },
-          ...(record
-            ? { bySession: { ...s.bySession, [sessionId]: { ...record, activityAt: at } } }
-            : {}),
-        };
-      }),
+    recordOutput: (sessionId, at = Date.now()) => {
+      if (
+        !Number.isFinite(at) ||
+        at < 0 ||
+        pruned.has(sessionId) ||
+        sessionId in get().exitBySession
+      )
+        return;
+      // Output can be high volume: bound updates to once a second.
+      const known = activityAt.get(sessionId);
+      if (known !== undefined && at - known < 1000) return;
+      activityAt.set(sessionId, at);
+    },
     activityUnavailable: (sessions, freshness = "unavailable") =>
       set((s) => {
         const next = { ...s.activityBySession };
@@ -632,10 +620,10 @@ export const useAgentStateStore = create<AgentStateStore>((set, get) => {
       pruned.delete(sessionId);
       resetAt.set(sessionId, ++seq);
       processAgentVersion.delete(sessionId);
+      activityAt.delete(sessionId);
       drop(
         [sessionId],
         [
-          "outputAtBySession",
           "activityBySession",
           "bySession",
           "exitBySession",
@@ -660,7 +648,7 @@ export function pruneAgentSessions(sessionIds: Iterable<string>): void {
 
 /** What a respawn retires for one session once its new process started. */
 export interface AgentSessionSnapshot {
-  outputAt?: number;
+  activityAt?: number;
   activity?: SessionActivity;
   processAgent?: string;
   processAgentVersion?: number;
@@ -674,7 +662,7 @@ export interface AgentSessionSnapshot {
 export function snapshotAgentSession(sessionId: string): AgentSessionSnapshot {
   const s = useAgentStateStore.getState();
   return {
-    outputAt: s.outputAtBySession[sessionId],
+    activityAt: activityAt.get(sessionId),
     activity: s.activityBySession[sessionId],
     processAgent: s.processAgentBySession[sessionId],
     processAgentVersion: processAgentVersion.get(sessionId),
@@ -694,11 +682,11 @@ export function retireAgentSession(sessionId: string, snap: AgentSessionSnapshot
   retireActivity(sessionId, snap.activity?.snapshot);
   pruned.delete(sessionId);
   resetAt.set(sessionId, ++seq);
+  if (activityAt.get(sessionId) === snap.activityAt) activityAt.delete(sessionId);
   useAgentStateStore.setState((s) => {
     const next: Partial<AgentStateStore> = {};
     const retire = <
       K extends
-        | "outputAtBySession"
         | "activityBySession"
         | "processAgentBySession"
         | "bySession"
@@ -716,7 +704,6 @@ export function retireAgentSession(sessionId: string, snap: AgentSessionSnapshot
       (next as Record<string, unknown>)[key] = copy;
     };
     retire("bySession", snap.record);
-    retire("outputAtBySession", snap.outputAt);
     retire("activityBySession", snap.activity);
     if (processAgentVersion.get(sessionId) === snap.processAgentVersion) {
       retire("processAgentBySession", snap.processAgent);
@@ -826,4 +813,5 @@ export function resetPrunedAgentSessionsForTests(): void {
   resetAt.clear();
   processAgentVersion.clear();
   retiredActivity.clear();
+  activityAt.clear();
 }

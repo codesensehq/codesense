@@ -179,6 +179,7 @@ impl ViewParts {
             conversations: self.conversations.as_ref().clone(),
             has_more: false,
             matched: 0,
+            thread_sessions: None,
         }
     }
 }

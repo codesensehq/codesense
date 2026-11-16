@@ -102,6 +102,7 @@ impl InboxHost for FakeInbox {
                     session: None,
                     name: h.into(),
                     running: true,
+                    ended: false,
                 })
                 .collect(),
         ))
