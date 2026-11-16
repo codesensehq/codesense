@@ -963,3 +963,85 @@ it("applies the stories delta cursor on both sides of the page boundary", async 
   });
   expect(changed.mock.calls.at(-1)?.[0].cursor).toBeUndefined();
 });
+
+it("gives each pins thread in a frame its own subscription, so no thread's watcher sees another's pins", async () => {
+  // The host keys a pins view by thread (`pins:{org}/{team}:{agent}:{story}`).
+  const viewOf = (args: Record<string, unknown>) =>
+    `pins:acme/core:${String(args.agentId).split("@")[0]}:${String(args.storyId ?? "")}`;
+  const s = shim(undefined, false, false, (verb, args) =>
+    verb === "subscribe"
+      ? {
+          topic: "pins",
+          viewKey: viewOf(args),
+          rev: 1,
+          snapshot: [{ id: "1", messageId: 1, message: { text: `secret of ${args.agentId}` } }],
+        }
+      : null,
+  );
+  s.show(true);
+  const a = vi.fn();
+  const b = vi.fn();
+  await s.codesense.subscribe("pins", { agentId: "acme/core/a", storyId: "S-1", onChange: a });
+  await s.codesense.subscribe("pins", { agentId: "acme/core/b", storyId: "S-2", onChange: b });
+  const asked = s.invoke.mock.calls.filter(([verb]) => verb === "subscribe").map(([, x]) => x);
+  expect(asked.map((x) => [x.agentId, x.storyId])).toEqual([
+    ["acme/core/a", "S-1"],
+    ["acme/core/b", "S-2"],
+  ]);
+  const texts = (fn: ReturnType<typeof vi.fn>) =>
+    fn.mock.calls.flatMap(([value]) =>
+      value.snapshot.map((row: { message: { text: string } }) => row.message.text),
+    );
+  expect(texts(a)).toEqual(["secret of acme/core/a"]);
+  expect(texts(b)).toEqual(["secret of acme/core/b"]);
+  // A delta reaches only its own thread's watcher.
+  s.message({
+    type: "codesense:delta",
+    topic: "pins",
+    viewKey: "pins:acme/core:acme/core/a:S-1",
+    rev: 2,
+    upserts: [{ id: "2", messageId: 2, message: { text: "new secret of a" } }],
+    removes: [],
+  });
+  expect(texts(a)).toContain("new secret of a");
+  expect(texts(b)).not.toContain("new secret of a");
+  // Unsubscribing one thread leaves the other subscribed.
+  await s.codesense.unsubscribe("pins", a, { agentId: "acme/core/a", storyId: "S-1" });
+  const left = s.invoke.mock.calls.filter(([verb]) => verb === "unsubscribe").map(([, x]) => x);
+  expect(left.map((x) => x.agentId)).toEqual(["acme/core/a"]);
+  s.message({
+    type: "codesense:delta",
+    topic: "pins",
+    viewKey: "pins:acme/core:acme/core/b:S-2",
+    rev: 2,
+    upserts: [{ id: "3", messageId: 3, message: { text: "new secret of b" } }],
+    removes: [],
+  });
+  expect(texts(b)).toContain("new secret of b");
+});
+
+it("seeds a pins subscription from the first paint only when the paint is its own thread's", async () => {
+  const paint = {
+    topic: "pins",
+    viewKey: "pins:acme/core:acme/core/a:S-1",
+    rev: 1,
+    snapshot: [{ id: "1", messageId: 1, message: { text: "secret of a" } }],
+  };
+  const s = shim(paint, false, false, (verb, args) =>
+    verb === "subscribe"
+      ? {
+          topic: "pins",
+          viewKey: `pins:acme/core:${args.agentId}:${args.storyId}`,
+          rev: 1,
+          snapshot: [],
+        }
+      : null,
+  );
+  s.show(true);
+  const b = vi.fn();
+  await s.codesense.subscribe("pins", { agentId: "acme/core/b", storyId: "S-2", onChange: b });
+  const seen = b.mock.calls.flatMap(([value]) =>
+    value.snapshot.map((row: { message: { text: string } }) => row.message.text),
+  );
+  expect(seen).not.toContain("secret of a");
+});
