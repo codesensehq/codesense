@@ -154,9 +154,9 @@ pub struct CodesenseHandler {
     /// relay child. Shared by rmcp's clones for this connection.
     caller_session: Arc<std::sync::RwLock<Option<super::local_identity::Binding>>>,
     local_tools: Arc<std::sync::Mutex<super::local_tools::ConnectionState>>,
-    /// The bridge tools this connection's agent may call, from its launch record at
-    /// initialize; `None` for every tool. Shared by rmcp's clones for this connection.
-    caller_bridge_tools: Arc<std::sync::RwLock<Option<BTreeSet<String>>>>,
+    /// The bridge tools this connection's agent may call, from its launch record.
+    /// Shared by rmcp's clones for this connection.
+    caller_bridge_tools: Arc<std::sync::RwLock<CallerBridgeTools>>,
     /// The kernel-verified process on the other end of the local
     /// MCP socket (the agent's bridge). A tool that acts for "your own
     /// session" binds its `sessionId` to it.
@@ -218,6 +218,17 @@ impl CodesenseHandler {
             local_peer: None,
             tool_router: Self::served_tool_router(),
         }
+    }
+
+    /// The bridge tools this connection's agent may call, read from its launch record
+    /// until one is found.
+    async fn allowed_bridge_tools(&self) -> CallerBridgeTools {
+        let session = self
+            .remote_authority
+            .is_none()
+            .then(|| self.connection_session())
+            .flatten();
+        known_bridge_tools(&self.caller_bridge_tools, session, recorded_bridge_tools).await
     }
 
     /// The verified tab this connection speaks for; an unbound MCP caller has none.
@@ -10240,20 +10251,7 @@ impl CodesenseHandler {
                 None,
             ));
         }
-        // By-name dispatch needs the target in the caller's bridge tool list too, as a
-        // direct call would (Claude's per-tool denies can't see the inner name).
-        if self
-            .caller_bridge_tools
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(name))
-        {
-            return Err(ErrorData::invalid_params(
-                format!("tool '{name}' is not in this agent's bridge_tools"),
-                None,
-            ));
-        }
+        refuse_unlisted(&self.allowed_bridge_tools().await, name)?;
         // `arguments` is typed as `Map<String, Value>` so JsonSchema emits
         // `type: "object"` and strict clients serialize it as an object.
         // Serde-decode would already reject anything non-object/non-null before
@@ -15258,24 +15256,8 @@ impl ServerHandler for CodesenseHandler {
             context.peer.set_peer_info(request);
         }
         // An agent launched with a bridge tool list is told only about the tools it can call.
-        let allowed = match self
-            .remote_authority
-            .is_none()
-            .then(|| self.connection_session())
-            .flatten()
-        {
-            Some(session) => commands::await_blocking("mcp.caller_tools", move || {
-                Ok(recorded_bridge_tools(&session))
-            })
-            .await
-            .unwrap_or(None),
-            None => None,
-        };
-        *self
-            .caller_bridge_tools
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = allowed.clone();
-        Ok(server_info(&server_instructions(allowed.as_ref())))
+        let allowed = self.allowed_bridge_tools().await;
+        Ok(server_info(&server_instructions(allowed.only())))
     }
 
     async fn on_initialized(&self, _: rmcp::service::NotificationContext<RoleServer>) {
@@ -15491,20 +15473,99 @@ pub(crate) fn server_instructions(allowed: Option<&BTreeSet<String>>) -> String 
     text
 }
 
+/// What a connection knows of the bridge tools its agent may call.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum CallerBridgeTools {
+    /// No launch record read yet (none written, or the read failed): every tool, and the
+    /// next by-name call reads again.
+    #[default]
+    Unknown,
+    /// Every tool: the launch declared no list, or CodeSense did not launch the CLI.
+    All,
+    /// Only these: the launch declared a list.
+    Only(BTreeSet<String>),
+}
+
+impl CallerBridgeTools {
+    /// The tools, when a list limits them.
+    fn only(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            Self::Only(tools) => Some(tools),
+            Self::Unknown | Self::All => None,
+        }
+    }
+}
+
+/// Refuses a by-name call to `name` that the caller's list leaves out, as a direct call
+/// would be (Claude's per-tool denies can't see the inner name).
+fn refuse_unlisted(allowed: &CallerBridgeTools, name: &str) -> Result<(), ErrorData> {
+    if allowed.only().is_some_and(|tools| !tools.contains(name)) {
+        return Err(ErrorData::invalid_params(
+            format!("tool '{name}' is not in this agent's bridge_tools"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+/// `state`, or what `read` finds for `session` while `state` is still unknown. A failed
+/// read is logged and stays unknown.
+async fn known_bridge_tools(
+    state: &std::sync::RwLock<CallerBridgeTools>,
+    session: Option<String>,
+    read: impl FnOnce(&str) -> Result<CallerBridgeTools, String> + Send + 'static,
+) -> CallerBridgeTools {
+    let known = state
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let Some(session) = session.filter(|_| known == CallerBridgeTools::Unknown) else {
+        return known;
+    };
+    let label = session.clone();
+    match commands::await_blocking("mcp.caller_tools", move || read(&session)).await {
+        Ok(found) => {
+            *state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = found.clone();
+            found
+        }
+        Err(error) => {
+            log::warn!("bridge tools of session {label}: {error}");
+            CallerBridgeTools::Unknown
+        }
+    }
+}
+
 /// The bridge tools the agent launched as `session` may call, from its launch record.
-/// `None` when the record names no list (a hand-started CLI, an unknown session) or
-/// predates Claude enforcing one (an empty Claude list: a Claude list now always
-/// carries its always-on tools); either may call every tool.
-fn recorded_bridge_tools(session: &str) -> Option<BTreeSet<String>> {
-    let path = crate::session_usage::store_path().ok()?;
-    let record = crate::session_usage::UsageStore::open(&path)
-        .ok()?
-        .read_session_record(session)
-        .ok()??;
-    let tools = record.bridge_tools?;
-    let claude =
-        record.cli.as_deref() == Some(codesense_pty_core::agent_cli::AgentCli::Claude.as_str());
-    (!(claude && tools.is_empty())).then(|| tools.into_iter().collect())
+fn recorded_bridge_tools(session: &str) -> Result<CallerBridgeTools, String> {
+    let path = crate::session_usage::store_path()?;
+    bridge_tools_in(&crate::session_usage::UsageStore::open(&path)?, session)
+}
+
+/// What `store`'s launch record of `session` allows: `Unknown` with no record; `All`
+/// when it names no list (an unrestricted launch, a hand-started CLI) or predates a
+/// runtime that denies left-out tools enforcing one (its empty list: such a list now
+/// always carries the tools it keeps).
+fn bridge_tools_in(
+    store: &crate::session_usage::UsageStore,
+    session: &str,
+) -> Result<CallerBridgeTools, String> {
+    let Some(record) = store.read_session_record(session)? else {
+        return Ok(CallerBridgeTools::Unknown);
+    };
+    let keeps_tools = record
+        .cli
+        .as_deref()
+        .and_then(|cli| cli.parse::<codesense_pty_core::agent_cli::AgentCli>().ok())
+        .is_some_and(|cli| {
+            codesense_pty_core::agent_cli::adapter(cli).denies_unlisted_bridge_tools()
+        });
+    Ok(match record.bridge_tools {
+        None => CallerBridgeTools::All,
+        Some(tools) if tools.is_empty() && keeps_tools => CallerBridgeTools::All,
+        Some(tools) => CallerBridgeTools::Only(tools.into_iter().collect()),
+    })
 }
 
 /// The viewer state's fields, as `get_viewer_state` and `set_viewer_state` tell them.
@@ -18433,6 +18494,107 @@ pub(crate) mod tests {
         let authoring = server_instructions(Some(&BTreeSet::from(["validate_story".to_string()])));
         assert!(authoring.contains("Authoring CodeSense content"));
         assert!(!authoring.contains("Finishing a task"));
+    }
+
+    /// By-name dispatch refuses a target the caller's list leaves out, as a direct call
+    /// would be; an always-on target passes, and so does any target for a caller with no
+    /// list. A known list is never read again.
+    #[tokio::test]
+    async fn by_name_dispatch_refuses_a_target_outside_the_callers_bridge_tools() {
+        let mut tools = crate::agents::permissions::always_on_bridge_tools(
+            codesense_pty_core::agent_cli::AgentCli::Claude,
+        );
+        tools.insert("notes_read".to_string());
+        let state = std::sync::RwLock::new(CallerBridgeTools::Only(tools));
+        let allowed = known_bridge_tools(&state, Some("sess-1".into()), |_| {
+            unreachable!("read again")
+        })
+        .await;
+        let refused = refuse_unlisted(&allowed, "codesense_overview").unwrap_err();
+        assert_eq!(refused.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            refused.message,
+            "tool 'codesense_overview' is not in this agent's bridge_tools"
+        );
+        for target in ["notes_read", "signal_done", "read_messages", "reply"] {
+            assert!(refuse_unlisted(&allowed, target).is_ok(), "{target}");
+        }
+        for open in [CallerBridgeTools::All, CallerBridgeTools::Unknown] {
+            assert!(refuse_unlisted(&open, "codesense_overview").is_ok());
+        }
+        let strict = CallerBridgeTools::Only(BTreeSet::new());
+        assert!(refuse_unlisted(&strict, "signal_done").is_err());
+    }
+
+    /// A connection with no list yet reads its launch record again on each by-name call
+    /// until one says, and keeps what it says; a failed read stays unknown.
+    #[tokio::test]
+    async fn an_unknown_caller_list_is_read_until_its_launch_record_says() {
+        let state = std::sync::RwLock::new(CallerBridgeTools::Unknown);
+        let unknown = CallerBridgeTools::Unknown;
+        assert_eq!(
+            known_bridge_tools(&state, None, |_| unreachable!("no session")).await,
+            unknown
+        );
+        assert_eq!(
+            known_bridge_tools(&state, Some("sess-1".into()), |_| Err("store busy".into())).await,
+            unknown
+        );
+        let no_record = |_: &str| Ok(CallerBridgeTools::Unknown);
+        assert_eq!(
+            known_bridge_tools(&state, Some("sess-1".into()), no_record).await,
+            unknown
+        );
+        let only = CallerBridgeTools::Only(BTreeSet::from(["notes_read".to_string()]));
+        let found = only.clone();
+        assert_eq!(
+            known_bridge_tools(&state, Some("sess-1".into()), move |session| {
+                assert_eq!(session, "sess-1");
+                Ok(found)
+            })
+            .await,
+            only
+        );
+        assert_eq!(*state.read().unwrap(), only);
+    }
+
+    /// A launch record's list, read back: none for a session with no record; every tool for
+    /// an unrestricted launch and for an empty Claude list written before Claude enforced
+    /// one; a non-Claude empty list allows none; a Claude list allows what it names.
+    #[test]
+    fn a_launch_record_gives_the_caller_its_bridge_tools() {
+        use crate::session_usage::{record::SessionRecord, UsageStore};
+        let dir = tempfile::tempdir().unwrap();
+        let store = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+        let write = |session: &str, cli: &str, tools: Option<Vec<&str>>| {
+            let mut record = SessionRecord::new(session);
+            record.cli = Some(cli.into());
+            record.bridge_tools = tools.map(|tools| tools.into_iter().map(Into::into).collect());
+            store.write_session_record(&record).unwrap();
+        };
+        write("legacy-claude", "claude", Some(vec![]));
+        write("strict-codex", "codex", Some(vec![]));
+        write(
+            "listed-claude",
+            "claude",
+            Some(vec!["notes_read", "signal_done"]),
+        );
+        write("unrestricted", "claude", None);
+        let read = |session: &str| bridge_tools_in(&store, session).unwrap();
+        assert_eq!(read("never-launched"), CallerBridgeTools::Unknown);
+        assert_eq!(read("unrestricted"), CallerBridgeTools::All);
+        assert_eq!(read("legacy-claude"), CallerBridgeTools::All);
+        assert_eq!(
+            read("strict-codex"),
+            CallerBridgeTools::Only(BTreeSet::new())
+        );
+        assert_eq!(
+            read("listed-claude"),
+            CallerBridgeTools::Only(BTreeSet::from([
+                "notes_read".to_string(),
+                "signal_done".to_string()
+            ]))
+        );
     }
 
     #[test]

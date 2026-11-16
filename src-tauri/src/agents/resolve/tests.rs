@@ -158,6 +158,13 @@ fn bridge_tool_launch_profile_follows_the_runtime_capability() {
                 .effective_bridge_tools
                 .contains(&"signal_done".into())),
         }
+        // A launch record keeps a list only when the agent declared one.
+        assert_eq!(
+            profile.recorded_bridge_tools(),
+            tools
+                .as_ref()
+                .map(|_| profile.effective_bridge_tools.clone())
+        );
 
         // Claude enforces the list too, and keeps its always-on tools whatever it says.
         let mut definition = draft("bridge-reviewer", AgentCli::Claude);
@@ -176,6 +183,7 @@ fn bridge_tool_launch_profile_follows_the_runtime_capability() {
                 .contains(&"codesense_overview".into()),
             tools.is_none()
         );
+        assert_eq!(profile.recorded_bridge_tools().is_some(), tools.is_some());
     }
 }
 

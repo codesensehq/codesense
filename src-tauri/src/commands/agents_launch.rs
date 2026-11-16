@@ -516,7 +516,7 @@ pub async fn agent_launch_prepare(
                     resolved_binary.version.as_deref(),
                     &prepared.launch.args,
                     prepared.launch.mcp_allow.clone(),
-                    prepared.launch.effective_bridge_tools.clone(),
+                    prepared.launch.recorded_bridge_tools(),
                     prepared.agent.clone(),
                     prepared.manifest_hash.clone(),
                     &recorded.to_string_lossy(),
