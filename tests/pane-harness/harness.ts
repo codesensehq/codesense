@@ -97,6 +97,10 @@ export type MountedPane = {
   focus: () => Promise<void>;
   writeUi: (patch: Record<string, unknown>) => Promise<void>;
   setTeam: (org: string, team: string) => Promise<void>;
+  /** The host's CLI layout: `shared`, `console` (full screen) or `viewer` (CLI hidden). */
+  layoutMode: () => Promise<string | null>;
+  /** Give the active team a foreground tile (after `setTeam`) and set the CLI layout. */
+  seedForegroundTile: (layoutMode: "shared" | "viewer") => Promise<void>;
   /** Flush every frame, as quitting does, waiting at most `deadlineMs`. */
   flush: (deadlineMs?: number) => Promise<void>;
   setTheme: (theme: PaneTheme) => Promise<void>;
@@ -283,6 +287,8 @@ export const test = base.extend<
         focus: () => control("focus"),
         writeUi: (patch) => page.evaluate((p) => (window as any).writeUi(p), patch),
         setTeam: (org, team) => control("setTeam", org, team),
+        layoutMode: () => control("layoutMode") as Promise<string | null>,
+        seedForegroundTile: (layoutMode) => control("seedForegroundTile", layoutMode),
         flush: (deadlineMs = 500) => control("flushAll", deadlineMs),
         setTheme: (theme) => control("setTheme", theme),
         sendIntent: (intent) => control("sendIntent", intent),

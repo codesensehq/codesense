@@ -118,6 +118,11 @@ describe("isDispatchable", () => {
       for (const a of SHORTCUT_ACTIONS) expect(isDispatchable(a, state()), a.id).toBe(true);
     });
 
+    it("keeps ⌘I (Toggle Agent Inbox) blocked: the rail it opens is a CLI change", () => {
+      expect(isDispatchable(registered("viewer.toggle-agent-inbox"), inPopup())).toBe(false);
+      expect(isDispatchable(registered("viewer.toggle-agent-inbox"), state())).toBe(true);
+    });
+
     it("blocks ⌘[ / ⌘] back and forward and ⌘⇧[ / ⌘⇧] tab cycling", () => {
       for (const id of [
         "nav.context-back",
