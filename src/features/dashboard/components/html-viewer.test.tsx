@@ -17,7 +17,7 @@ import { FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode } from "react";
-import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent, act } from "@testing-library/react";
 import { HtmlViewer, NETWORK_PROBLEM_GRACE_MS } from "./html-viewer";
 
 // All mocks referenced inside `vi.mock` factories are created via `vi.hoisted`
@@ -936,6 +936,116 @@ describe("HtmlViewer scroll capture/restore", () => {
       { type: "codesense:restore-scroll", y: 0 },
       "http://f-test.localhost:9123",
     );
+  });
+});
+
+describe("HtmlViewer scroll kept when its tab is hidden and shown again", () => {
+  const origin = "http://f-test.localhost:9123";
+  let report: (width: number, height: number) => void;
+
+  beforeEach(() => {
+    class StubObserver {
+      constructor(cb: IntersectionObserverCallback) {
+        report = (width, height) =>
+          act(() => {
+            cb(
+              [{ boundingClientRect: { width, height } } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          });
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", StubObserver);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function renderShown(pendingHash?: string) {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    render(
+      <HtmlViewer
+        filePath="/repo/_bmad-output/docs/long.html"
+        teamContentPath="/repo"
+        pendingHash={pendingHash}
+      />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector("iframe")?.getAttribute("src")).toContain(origin);
+    });
+    const stub = stubContentWindow();
+    window.dispatchEvent(
+      new FrameMessageEvent("message", {
+        data: { type: "codesense:ready" },
+        source: stub.fakeWindow,
+      }),
+    );
+    return stub;
+  }
+
+  function scrollTo(source: Window, y: number) {
+    act(() => {
+      window.dispatchEvent(
+        new FrameMessageEvent("message", { data: { type: "codesense:scroll", y }, source }),
+      );
+    });
+  }
+
+  const restores = (postMessage: ReturnType<typeof vi.fn>) =>
+    postMessage.mock.calls.filter(([m]) => m?.type === "codesense:restore-scroll");
+
+  it("puts the scroll position back when the tab is shown again", async () => {
+    const { fakeWindow, postMessage } = await renderShown();
+    scrollTo(fakeWindow, 640);
+    report(0, 0);
+    report(800, 600);
+    expect(postMessage).toHaveBeenCalledWith({ type: "codesense:restore-scroll", y: 640 }, origin);
+  });
+
+  it("puts the scroll position back for a frame opened with a fragment", async () => {
+    const { fakeWindow, postMessage } = await renderShown("#section-3");
+    scrollTo(fakeWindow, 640);
+    report(0, 0);
+    report(800, 600);
+    expect(postMessage).toHaveBeenCalledWith({ type: "codesense:restore-scroll", y: 640 }, origin);
+  });
+
+  it("ignores a top-of-page report that lands after the tab is shown", async () => {
+    const { fakeWindow, postMessage } = await renderShown();
+    scrollTo(fakeWindow, 640);
+    report(0, 0);
+    act(() => {
+      report(800, 600);
+      window.dispatchEvent(
+        new FrameMessageEvent("message", {
+          data: { type: "codesense:scroll", y: 0 },
+          source: fakeWindow,
+        }),
+      );
+    });
+    expect(restores(postMessage).map(([m]) => m.y)).toEqual([640]);
+  });
+
+  it("keeps the position when only the app window is hidden and shown", async () => {
+    const { fakeWindow, postMessage } = await renderShown();
+    scrollTo(fakeWindow, 640);
+    const state = vi.spyOn(document, "visibilityState", "get");
+    state.mockReturnValue("hidden");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    state.mockReturnValue("visible");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(restores(postMessage).every(([m]) => m.y === 640)).toBe(true);
   });
 });
 
