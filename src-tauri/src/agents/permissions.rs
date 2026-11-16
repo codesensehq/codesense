@@ -8,6 +8,12 @@
 //! that blocks one of those still applies as written; the launch warnings
 //! ([`super::launch_check`]) say so, using [`blocks_required`].
 //!
+//! One exception: a Claude `Read`, `Edit`, `Write` or `NotebookEdit` rule whose path
+//! starts `//{{launch_parent}}/` gets the launch folder's parent, as an absolute path,
+//! when the launch writes its settings file ([`expand_launch_parent`]). It fails
+//! closed: an allow that can't be expanded exactly is dropped, and a deny or ask is
+//! kept as written (matching nothing) when it can't be expanded at all.
+//!
 //! Each runtime gets one [`GeneratedTarget::LaunchSettings`] entry, which its
 //! descriptor's `launch_settings` delivers:
 //!
@@ -33,7 +39,9 @@
 //! written into the published context or a shared settings file.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use super::manifest::{json_hash, GeneratedEntry, GeneratedTarget};
@@ -296,6 +304,164 @@ pub fn blocks_required(rule: &str) -> bool {
         || rule == "*"
         || rule == server
         || rule == format!("{server}__*")
+}
+
+/// The launch-time token a Claude file rule's path may start with: `Edit(//{{launch_parent}}/x/**)`
+/// becomes `Edit(//<parent>/x/**)`, `<parent>` being the launch folder's parent as an absolute
+/// path without its leading `/`.
+pub const LAUNCH_PARENT_TOKEN: &str = "{{launch_parent}}";
+
+/// The Claude rule lists the token is looked for in. Only an allow grants anything.
+const LAUNCH_PARENT_LISTS: [&str; 3] = ["allow", "deny", "ask"];
+
+/// The Claude tools whose rules take a path the token may start.
+const LAUNCH_PARENT_FILE_TOOLS: [&str; 4] = ["Read", "Edit", "Write", "NotebookEdit"];
+
+/// Characters a parent can't hold in any expanded rule: the rule's own syntax and the
+/// glob escape.
+const RULE_SYNTAX_CHARS: [char; 3] = ['(', ')', '\\'];
+
+/// Glob characters, which make an expanded rule match more than the parent: never in an
+/// allow, and in a deny or ask only ever a wider restriction.
+const GLOB_CHARS: [char; 6] = ['*', '?', '[', ']', '{', '}'];
+
+/// Why a rule holding [`LAUNCH_PARENT_TOKEN`] was not expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnexpandedReason {
+    /// The token is not the whole first segment after a leading `//` of a file rule.
+    Position,
+    /// The launch folder is not an absolute UTF-8 path with a parent and no `.`, `..` or
+    /// empty segment.
+    Cwd,
+    /// The parent holds a character the rule can't hold literally.
+    Parent,
+}
+
+/// A rule holding [`LAUNCH_PARENT_TOKEN`] that [`expand_launch_parent`] did not expand.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnexpandedRule {
+    /// `allow`, `deny` or `ask`.
+    pub list: &'static str,
+    pub rule: String,
+    /// An allow is dropped; a deny or ask is kept as written, so it matches nothing.
+    pub dropped: bool,
+    pub reason: UnexpandedReason,
+}
+
+/// What [`expand_launch_parent`] made of a launch's Claude settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaunchParentExpansion {
+    pub content: Value,
+    pub unexpanded: Vec<UnexpandedRule>,
+}
+
+/// Claude settings `content` with each [`LAUNCH_PARENT_TOKEN`] rule expanded for a launch in
+/// `cwd`, and every rule that was not. Rules without the token and every other key are
+/// kept verbatim. Fails closed: an allow that can't be expanded, or whose parent holds a
+/// glob or rule character, is dropped; a deny or ask is expanded unless the token is
+/// misplaced, `cwd` is unusable or the parent holds a rule character, and is otherwise
+/// kept as written. The same rules are in `scripts/lib/launch-parent.mjs`.
+pub fn expand_launch_parent(content: &Value, cwd: &Path) -> LaunchParentExpansion {
+    let parent = launch_parent(cwd);
+    let mut content = content.clone();
+    let mut unexpanded = Vec::new();
+    for list in LAUNCH_PARENT_LISTS {
+        let Some(rules) = content
+            .get_mut("permissions")
+            .and_then(|permissions| permissions.get_mut(list))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        let narrows = list != "allow";
+        rules.retain_mut(|rule| {
+            let Some(text) = rule
+                .as_str()
+                .filter(|text| text.contains(LAUNCH_PARENT_TOKEN))
+            else {
+                return true;
+            };
+            match expand_rule(text, parent.as_deref(), narrows) {
+                Ok(expanded) => {
+                    *rule = Value::String(expanded);
+                    true
+                }
+                Err(reason) => {
+                    unexpanded.push(UnexpandedRule {
+                        list,
+                        rule: text.to_string(),
+                        dropped: !narrows,
+                        reason,
+                    });
+                    narrows
+                }
+            }
+        });
+    }
+    LaunchParentExpansion {
+        content,
+        unexpanded,
+    }
+}
+
+/// Whether any Claude rule in settings `content` holds [`LAUNCH_PARENT_TOKEN`].
+pub fn holds_launch_parent(content: &Value) -> bool {
+    LAUNCH_PARENT_LISTS.iter().any(|list| {
+        content["permissions"][list]
+            .as_array()
+            .is_some_and(|rules| {
+                rules
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|rule| rule.contains(LAUNCH_PARENT_TOKEN))
+            })
+    })
+}
+
+/// The parent of launch folder `cwd` without its leading `/` (empty for `/`), or `None`
+/// when `cwd` is not an absolute UTF-8 path with a parent and no `.`, `..` or empty segment.
+/// The folder is taken as given, never resolved.
+fn launch_parent(cwd: &Path) -> Option<String> {
+    let path = cwd.to_str()?.strip_prefix('/')?.trim_end_matches('/');
+    let segments: Vec<&str> = path.split('/').collect();
+    if path.is_empty() || segments.iter().any(|s| matches!(*s, "" | "." | "..")) {
+        return None;
+    }
+    Some(segments[..segments.len() - 1].join("/"))
+}
+
+/// `rule` with its one token expanded to `parent`; a rule that `narrows` (deny, ask) may take
+/// a parent with glob characters.
+fn expand_rule(
+    rule: &str,
+    parent: Option<&str>,
+    narrows: bool,
+) -> Result<String, UnexpandedReason> {
+    let rest = LAUNCH_PARENT_FILE_TOOLS
+        .iter()
+        .find_map(|tool| {
+            rule.strip_prefix(tool)?
+                .strip_prefix("(//")?
+                .strip_prefix(LAUNCH_PARENT_TOKEN)
+        })
+        .filter(|rest| {
+            (rest.starts_with('/') || *rest == ")")
+                && rest.ends_with(')')
+                && !rest.contains(LAUNCH_PARENT_TOKEN)
+        })
+        .ok_or(UnexpandedReason::Position)?;
+    let parent = parent.ok_or(UnexpandedReason::Cwd)?;
+    let refused = |c: char| RULE_SYNTAX_CHARS.contains(&c) || (!narrows && GLOB_CHARS.contains(&c));
+    if parent.contains(refused) {
+        return Err(UnexpandedReason::Parent);
+    }
+    let head = &rule[..rule.len() - LAUNCH_PARENT_TOKEN.len() - rest.len()];
+    Ok(match rest.strip_prefix('/').filter(|_| parent.is_empty()) {
+        // A parent of `/`: `//foreman-*`, never `///foreman-*`.
+        Some(rest) => format!("{head}{rest}"),
+        None => format!("{head}{parent}{rest}"),
+    })
 }
 
 /// A Codex agent's launch settings: its approval and sandbox keys, each passed as its own

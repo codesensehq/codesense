@@ -670,7 +670,9 @@ pub fn apply_generated(
         match entry.target {
             GeneratedTarget::LaunchSettings => match &descriptor.launch_settings {
                 LaunchSettings::Flag(flag) => {
-                    let mut content = entry.content.clone();
+                    // First, so a token in the agent's own settings flag stays literal.
+                    let mut content =
+                        permissions::expand_launch_parent(&entry.content, cwd).content;
                     if launch
                         .manifest
                         .essentials

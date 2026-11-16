@@ -1789,7 +1789,9 @@ fn launch_parent_expands_in_the_written_settings_file_only() {
     // `//` and the parent without its leading `/`: the absolute parent after one more `/`.
     assert!(rules(&written, "allow").contains(&format!("Edit(/{parent}/foreman-*/**)")));
     assert!(rules(&written, "deny").contains(&format!("Edit(/{parent}/foreman-*/.git/**)")));
-    assert!(!written.to_string().contains(permissions::LAUNCH_PARENT_TOKEN));
+    assert!(!written
+        .to_string()
+        .contains(permissions::LAUNCH_PARENT_TOKEN));
     // The expansion works on a copy: the generated entry and its hashes keep the token.
     let generated = launch.generated[0].content.to_string();
     assert!(generated.contains("Edit(//{{launch_parent}}/foreman-*/**)"));
@@ -1839,6 +1841,8 @@ fn a_claude_relaunch_keeps_the_expanded_launch_parent_rules() {
     assert!(edit.is_none());
     let rewritten = read_json(&file);
     assert!(rules(&rewritten, "allow").contains(&expanded));
-    assert!(!rewritten.to_string().contains(permissions::LAUNCH_PARENT_TOKEN));
+    assert!(!rewritten
+        .to_string()
+        .contains(permissions::LAUNCH_PARENT_TOKEN));
     forget_launch_env(&session);
 }
