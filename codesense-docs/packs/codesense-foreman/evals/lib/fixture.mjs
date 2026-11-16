@@ -210,6 +210,10 @@ Run both from the story's worktree:
 const KEYS = ["foreman_team", "git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
+// Every eval temp dir starts with this. It must never be `foreman-*`: the pack's worktree rule
+// `//**/foreman-*/**` would then match the whole sandbox (home, HOME, the gh shim, origin).
+export const TMP_PREFIX = "fm-eval";
+
 // The fixture a case asks for.
 export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 
@@ -218,7 +222,7 @@ export const fixtureFor = (caseDef) => createFixture(caseDef.fixture ?? {});
 let template;
 function repos() {
   if (template) return template;
-  const dir = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-template-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-template-`));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !DROPPED.test(k))), ...GIT_ENV, HOME: dir };
   const gitOk = (args, cwd = path.join(dir, "home")) => {
@@ -276,7 +280,7 @@ export async function createFixture(options = {}) {
     guide: options.guide,
     foremanTeam: options.foreman_team === "user" ? { org: CONFIG.team, team: CONFIG.team } : DOCS,
   };
-  const root = mkdtempSync(path.join(os.tmpdir(), `foreman-eval-${process.pid}-`));
+  const root = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-${process.pid}-`));
   try {
     return build(root, opts);
   } catch (error) {

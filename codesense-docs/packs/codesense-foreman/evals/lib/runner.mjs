@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
 import { claudeDriver, killGroups } from "./claude-driver.mjs";
 import { InfraError } from "./errors.mjs";
-import { fixtureFor } from "./fixture.mjs";
+import { TMP_PREFIX, fixtureFor } from "./fixture.mjs";
 import { CASE_IDS, packDir, runtimeOf } from "./floor.mjs";
 import { grade, loadCases, loadExtraCases } from "./graders.mjs";
 import { claudeJudge } from "./judge.mjs";
@@ -187,11 +187,11 @@ async function main(argv) {
   if (!Number.isInteger(k) || k < 1) return refuse("--k must be a whole number of at least 1");
   if (!(budget > 0 && budget <= BUDGET_USD)) return refuse(`--budget must be more than 0 and at most ${BUDGET_USD}`);
   // A stub's report is never evidence, so by default it goes to a temp dir, not evals/reports.
-  const out = flags.out ?? (real ? path.join(packDir, "evals", "reports") : mkdtempSync(path.join(os.tmpdir(), "foreman-eval-stub-")));
+  const out = flags.out ?? (real ? path.join(packDir, "evals", "reports") : mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-stub-`)));
   // FOREMAN_EVAL_CLAUDE names another CLI binary (the tests use a fake one).
   const bin = process.env.FOREMAN_EVAL_CLAUDE || "claude";
   // Transcripts stay on this machine, never in the repo: in FOREMAN_EVAL_LOGS when set.
-  const logDir = real ? process.env.FOREMAN_EVAL_LOGS || mkdtempSync(path.join(os.tmpdir(), "foreman-eval-logs-")) : undefined;
+  const logDir = real ? process.env.FOREMAN_EVAL_LOGS || mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-logs-`)) : undefined;
   // Each CLI runs in its own process group, outside the terminal's: end them with the runner.
   if (real) {
     process.on("exit", killGroups);

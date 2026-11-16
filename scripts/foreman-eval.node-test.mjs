@@ -21,7 +21,8 @@ import { stringify } from "yaml";
 
 const evals = new URL("../codesense-docs/packs/codesense-foreman/evals/", import.meta.url);
 const lib = (name) => import(new URL(`lib/${name}.mjs`, evals));
-const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH } = await lib("fixture");
+const { createFixture, fixtureFor, CARDS, CONFIG, GIT_ACCESS_PATH, TMP_PREFIX } =
+  await lib("fixture");
 const { loadCases, grade, scriptView } = await lib("graders");
 const { stubs } = await lib("stubs");
 const { runEval, InfraError } = await lib("runner");
@@ -34,7 +35,7 @@ const caseOf = (id) => cases.find((c) => c.id === id);
 const turnsOf = (id) => caseOf(id).input.turns;
 // A temp dir removed when the test ends, pass or fail.
 const tmp = (t) => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-test-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-test-`));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 };
@@ -213,9 +214,28 @@ test("fixture: an inherited GIT_DIR (as in a git hook) never reaches the real re
   }
 });
 
+test("fixture: no temp path has a foreman-* part, so the pack's worktree rules never match it", async () => {
+  // `//**/foreman-*/**` matches a foreman-* directory anywhere: a sandbox under one would open
+  // home, HOME, the gh shim and origin to the agent's edits.
+  const fx = await createFixture({ handoff: true });
+  try {
+    const parts = (p) => p.split(path.sep);
+    for (const p of [fx.root, fx.env.HOME, ...fx.env.PATH.split(path.delimiter).slice(0, 1)]) {
+      assert.ok(!parts(p).some((part) => part.startsWith("foreman-")), p);
+    }
+  } finally {
+    fx.teardown();
+  }
+  for (const name of readdirSync(new URL("lib/", evals))) {
+    const src = readFileSync(new URL(`lib/${name}`, evals), "utf8");
+    for (const m of src.matchAll(/mkdtempSync\(([^;]*)\)/g))
+      assert.ok(!/foreman-/.test(m[1]) && /TMP_PREFIX/.test(m[1]), `${name}: ${m[1]}`);
+  }
+});
+
 test("fixture: a failed setup removes its temp dir", async () => {
   // This process's fixtures only: other test files make fixtures at the same time.
-  const mine = (f) => f.startsWith(`foreman-eval-${process.pid}-`);
+  const mine = (f) => f.startsWith(`${TMP_PREFIX}-${process.pid}-`);
   const before = new Set(readdirSync(os.tmpdir()).filter(mine));
   await withEnv({ PATH: "/nonexistent" }, () => assert.rejects(createFixture()));
   const after = readdirSync(os.tmpdir()).filter((f) => mine(f) && !before.has(f));

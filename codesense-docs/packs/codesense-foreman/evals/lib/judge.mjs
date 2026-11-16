@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { jsonLines, runGroup } from "./claude-driver.mjs";
+import { TMP_PREFIX } from "./fixture.mjs";
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
 const JUDGE_CAP_USD = 0.5;
@@ -76,7 +77,7 @@ export function claudeJudge({ model = JUDGE_MODEL, bin = "claude", timeoutMs = J
       judgePrompt(caseDef, turns, replies),
     ];
     // An empty dir, so `--setting-sources local` finds no settings, hooks or env to load.
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "foreman-eval-judge-"));
+    const cwd = mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}-judge-`));
     let out;
     try {
       out = await runGroup(bin, args, { cwd, env, timeoutMs });
