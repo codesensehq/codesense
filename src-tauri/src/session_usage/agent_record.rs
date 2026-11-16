@@ -47,10 +47,10 @@ pub(crate) struct UsageHalf {
     pub report: UsageReport,
     /// What the session's rows that have a price add up to.
     pub priced_usd: f64,
-    /// The rest of its thread, oldest first: on a story, the handoff chain before this session
-    /// (the earlier sessions of the same saved agent and story); with no story, the other listed
-    /// no-story sessions of its saved agent, by the thread read's seat rule. Their usage and
-    /// commits count toward the record.
+    /// The rest of its thread, oldest first, by the thread read's seat rule: on a story, the
+    /// handoff chain before this session (the earlier sessions of the same saved agent and story)
+    /// less any concurrent live seat; with no story, the other listed no-story sessions of its
+    /// saved agent. Their usage and commits count toward the record.
     pub earlier: Vec<UsageHalf>,
 }
 
@@ -130,9 +130,14 @@ pub(crate) fn thread_sessions_in(
     thread_sessions(&UsageStore::open(&path)?, agent, story)
 }
 
-/// The earlier sessions of the same saved agent and story as `record`, oldest first. A session
-/// with no agent or no story (none, or blank) has no handoff chain.
-fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<String>, String> {
+/// The earlier sessions of the same saved agent and story as `record`, oldest first, less the
+/// concurrent live `seats` (by handle). A session with no agent or no story (none, or blank) has
+/// no handoff chain.
+fn earlier_sessions(
+    store: &UsageStore,
+    record: &SessionRecord,
+    seats: &[String],
+) -> Result<Vec<String>, String> {
     let (Some(agent), Some(story)) = (record.agent.as_ref(), record.story_id.as_deref()) else {
         return Ok(vec![]);
     };
@@ -144,7 +149,7 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
     let mut stmt = rusqlite::Connection::prepare(
         &store.conn,
         &format!(
-            "SELECT session_id FROM session_record
+            "SELECT session_id, handle FROM session_record
              WHERE {THREAD_MATCH} AND recorded_at_ms < ?3 AND session_id != ?4
              ORDER BY recorded_at_ms, session_id"
         ),
@@ -153,14 +158,24 @@ fn earlier_sessions(store: &UsageStore, record: &SessionRecord) -> Result<Vec<St
     let rows = stmt
         .query_map(
             rusqlite::params![story, key, record.recorded_at_ms, record.session_id],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .map_err(super::db_err)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(super::db_err)
+    let mut earlier = vec![];
+    for row in rows {
+        let (session_id, handle) = row.map_err(super::db_err)?;
+        let seat = Option::is_some_and(handle.as_deref(), |h| {
+            Iterator::any(&mut seats.iter(), |s| s == h)
+        });
+        if !seat {
+            Vec::push(&mut earlier, session_id);
+        }
+    }
+    Ok(earlier)
 }
 
 /// A no-story session's thread, by the thread read's rule: the other sessions of its saved agent
-/// with no story that the roster lists (`peers`, by handle), oldest first. Nothing else bounds a
+/// with no story that the roster lists and that count (`peers`, by handle), oldest first. Nothing else bounds a
 /// saved agent's no-story sessions (every one it ever launched), so only the listed ones count.
 fn listed_no_story(
     store: &UsageStore,
@@ -193,6 +208,21 @@ fn listed_no_story(
         }
     }
     Ok(Iterator::collect(Iterator::map(IntoIterator::into_iter(found), |(_, id)| id)))
+}
+
+/// The rest of `record`'s thread whose usage its record sums, oldest first, by the thread
+/// read's seat rule: on a story, its handoff chain less the concurrent live seats; with no
+/// story, the listed sessions that count.
+fn thread_members(
+    store: &UsageStore,
+    record: &SessionRecord,
+    peers: &ThreadPeers,
+) -> Result<Vec<String>, String> {
+    let earlier = earlier_sessions(store, record, &peers.seats)?;
+    if !std::vec::Vec::is_empty(&earlier) {
+        return Ok(earlier);
+    }
+    listed_no_story(store, record, &peers.counted)
 }
 
 /// One session's usage half, without its chain.
@@ -242,12 +272,7 @@ pub(crate) fn usage_half(
     let session_id = session_read::resolve_session(&store, None, &input)?.session_id;
     let mut half = half_of(home, &store, session_id, &launch_stories, scope)?;
     if let Some(record) = half.record.as_ref() {
-        // A story's chain is its handoff chain; a no-story session's is its listed thread.
-        let mut earlier = earlier_sessions(&store, record)?;
-        if std::vec::Vec::is_empty(&earlier) {
-            earlier = listed_no_story(&store, record, &peers.counted)?;
-        }
-        for earlier in earlier {
+        for earlier in thread_members(&store, record, peers)? {
             half.earlier.push(half_of(home, &store, earlier, &launch_stories, scope)?);
         }
     }
