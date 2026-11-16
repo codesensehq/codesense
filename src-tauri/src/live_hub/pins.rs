@@ -40,7 +40,7 @@ impl PinViews {
 /// carry neither (every id today: `/` and `@` stay as they are) keep their key. The page's
 /// `pinsViewKey` (`html-bridge.ts`) writes the same key.
 fn key_part(part: &str) -> String {
-    part.replace('%', "%25").replace(':', "%3A")
+    str::replace(&str::replace(part, "%", "%25"), ":", "%3A")
 }
 
 /// The view key of `thread`'s list in `team`'s store.

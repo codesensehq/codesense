@@ -596,7 +596,7 @@ pub fn pins_reorder(
             "messageIds must list every pinned message of the thread exactly once",
         ));
     }
-    if message_ids == live.as_slice() {
+    if message_ids == &live[..] {
         return Ok(false);
     }
     let mut order = message_ids.to_vec();
