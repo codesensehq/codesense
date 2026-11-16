@@ -32,6 +32,9 @@ pub const PAGES: &[Page] = &[
     },
 ];
 
+/// The Foreman the docs bundle ships, by its docs-team key.
+pub const FOREMAN_KEY: &str = "codesense/docs/getting-started/foreman-claude";
+
 /// The agents a page holding the capability may launch: the Foreman and the setup guide, one
 /// guide agent per runtime. The grant is defence in depth beside the page's hash, so a page
 /// cannot start any other agent.
@@ -238,7 +241,13 @@ mod tests {
 
     #[test]
     fn only_the_foreman_and_the_setup_guide_may_be_launched() {
-        assert!(agent_allowed(Some("foreman-claude")));
+        // The Foreman by the docs team's key only: a bare id resolves through the target team
+        // and the personal space first, so it could start any agent a team names so.
+        assert!(agent_allowed(Some(FOREMAN_KEY)));
+        assert_eq!(FOREMAN_KEY, "codesense/docs/getting-started/foreman-claude");
+        assert!(!agent_allowed(Some("foreman-claude")));
+        assert!(!agent_allowed(Some("acme/web/foreman-claude")));
+        assert!(!agent_allowed(Some("codesense/docs/other/foreman-claude")));
         for guide in ["guide-claude", "guide-codex", "guide-opencode"] {
             assert!(agent_allowed(Some(guide)), "{guide}");
         }
