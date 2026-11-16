@@ -1164,11 +1164,19 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn a_page_changed_after_mint_is_not_served_to_its_foreman_launch_grant() {
+    /// A frame holding the `foreman.launch` grant for the bundled page at `page` (a `PAGES`
+    /// path), placed under a temporary docs root with its shipped bytes.
+    fn foreman_launch_frame(
+        page: &str,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        crate::dashboard_stream::frame::FrameRecord,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("index.html");
-        std::fs::copy(crate::verbs::foreman_launch::shipped_page(), &path).unwrap();
+        let path = dir.path().join(page);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(crate::verbs::foreman_launch::shipped_at(page), &path).unwrap();
         let frames = crate::dashboard_stream::frame::FrameStore::default();
         let mut frame = frames.mint(
             9321,
@@ -1189,31 +1197,63 @@ mod tests {
         frame
             .effective_grant
             .push(crate::verbs::foreman_launch::CAPABILITY.into());
-        let serve = |frame: crate::dashboard_stream::frame::FrameRecord| {
-            let path = path.clone();
-            async move {
-                serve_frame_file(
-                    &path,
-                    &frame,
-                    &HeaderMap::new(),
-                    None,
-                    |_| String::new(),
-                    |_| Ok(()),
-                )
-                .await
-                .map(|_| ())
-            }
-        };
+        (dir, path, frame)
+    }
+
+    async fn serve_granted(
+        path: &std::path::Path,
+        frame: &crate::dashboard_stream::frame::FrameRecord,
+    ) -> Result<(), StatusCode> {
+        serve_frame_file(
+            path,
+            frame,
+            &HeaderMap::new(),
+            None,
+            |_| String::new(),
+            |_| Ok(()),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn a_page_changed_after_mint_is_not_served_to_its_foreman_launch_grant() {
+        let (_dir, path, mut frame) =
+            foreman_launch_frame(crate::verbs::foreman_launch::PAGES[0].path);
         // The bytes the grant was minted for load...
-        assert_eq!(serve(frame.clone()).await, Ok(()));
+        assert_eq!(serve_granted(&path, &frame).await, Ok(()));
         // ...but a reload after a local edit must not run the edited page holding the grant.
         let mut edited = std::fs::read(&path).unwrap();
         edited.extend_from_slice(b"<script>/* edited */</script>");
         std::fs::write(&path, edited).unwrap();
-        assert_eq!(serve(frame.clone()).await, Err(StatusCode::FORBIDDEN));
+        assert_eq!(
+            serve_granted(&path, &frame).await,
+            Err(StatusCode::FORBIDDEN)
+        );
         // A frame without the grant still serves the edited page.
         frame.effective_grant.clear();
-        assert_eq!(serve(frame).await, Ok(()));
+        assert_eq!(serve_granted(&path, &frame).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn another_bundled_page_is_not_served_to_a_foreman_launch_grant() {
+        let pages = crate::verbs::foreman_launch::PAGES;
+        for (own, other) in [(&pages[0], &pages[1]), (&pages[1], &pages[0])] {
+            let (_dir, path, frame) = foreman_launch_frame(own.path);
+            assert_eq!(serve_granted(&path, &frame).await, Ok(()), "{}", own.path);
+            // The other pinned page's bytes, swapped in at this page's place, are not this
+            // frame's page.
+            let swapped =
+                std::fs::read(crate::verbs::foreman_launch::shipped_at(other.path)).unwrap();
+            std::fs::write(&path, swapped).unwrap();
+            assert_eq!(
+                serve_granted(&path, &frame).await,
+                Err(StatusCode::FORBIDDEN),
+                "{} served as {}",
+                other.path,
+                own.path
+            );
+        }
     }
 
     #[test]
