@@ -26,7 +26,8 @@ use std::path::{Path, PathBuf};
 use super::org_slug::validate_org_slug;
 use super::path::{
     path_to_team_config_dir, path_to_team_content_dir, path_to_team_libraries_dir,
-    path_to_team_notes_dir, path_to_team_panes_dir, path_to_user_home,
+    path_to_team_notes_dir, path_to_team_panes_dir, path_to_user_home, CONFIG_DIR, LIBRARIES_DIR,
+    NOTES_DIR, PANES_DIR, TEAM_CONTENT_DIR,
 };
 use crate::content_engine::is_safe_logical_name;
 use crate::domain::Principal;
@@ -143,6 +144,18 @@ pub struct ScratchOrgSpace {
     /// `<repo>` — the team-layout leaf of the space.
     leaf: String,
 }
+
+/// The folders a space's layout creates under its root: one per
+/// [`ScratchOrgSpace`] accessor. Below a one-segment org's space these are its
+/// own; any other folder there is a `<slug>/<repo>` org's space.
+const SPACE_LAYOUT_DIRS: [&str; 6] = [
+    TEAM_CONTENT_DIR,
+    NOTES_DIR,
+    CONFIG_DIR,
+    PANES_DIR,
+    LIBRARIES_DIR,
+    ROUTINE_RUNS_DIR,
+];
 
 impl ScratchOrgSpace {
     fn at(
@@ -836,8 +849,15 @@ pub fn in_other_org_space(path: &Path, org_slug: &str) -> bool {
     let [first, space @ ..] = rest.as_slice() else {
         return false;
     };
+    if first != ORGS_DIR {
+        return false;
+    }
     let own: Vec<String> = org_slug.split('/').map(str::to_ascii_lowercase).collect();
-    first == ORGS_DIR && !space.starts_with(&own) && !own.starts_with(space)
+    let Some(inside) = space.strip_prefix(own.as_slice()) else {
+        return !own.starts_with(space);
+    };
+    // `orgs/<slug>/` of a one-segment org also holds every `<slug>/<repo>` org's space.
+    matches!(inside, [dir, _, ..] if own.len() == 1 && !SPACE_LAYOUT_DIRS.contains(&dir.as_str()))
 }
 
 /// `path`'s lowercased, lexically normalised components below

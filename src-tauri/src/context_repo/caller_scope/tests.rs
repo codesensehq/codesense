@@ -475,14 +475,30 @@ fn a_one_segment_org_keeps_its_own_private_space_only() {
     let own = space("solo");
     let other = space("other");
     let two_segment = space("acme/ctx");
-    let view = inheritance::team_view(&root, "solo", "core");
-    assert_eq!(view.admits_path(&own), Admit::Private);
-    assert_eq!(view.admits_path(&other), Admit::Denied);
-    assert_eq!(view.admits_path(&two_segment), Admit::Denied);
-    let scope = CallerScope::Team(view);
-    assert_eq!(
-        scope.existing(&other),
-        scope.existing(&other.with_file_name("missing.md"))
+    // Shares `orgs/solo/` with the caller's own space, but is another org's.
+    let under_own = space("solo/ctx");
+    let own_config = write_file(
+        &crate::context_repo::scratch_space::ensure_org_space(&f.home, &principal, "solo")
+            .unwrap()
+            .0
+            .config_dir()
+            .join("settings.yml"),
+        "settings",
     );
+    let view = inheritance::team_view(&root, "solo", "core");
+    for file in [&own, &own_config] {
+        assert_eq!(view.admits_path(file), Admit::Private, "{file:?}");
+    }
+    for file in [&other, &two_segment, &under_own] {
+        assert_eq!(view.admits_path(file), Admit::Denied, "{file:?}");
+    }
+    let scope = CallerScope::Team(view);
+    for file in [&other, &under_own] {
+        assert_eq!(
+            scope.existing(file),
+            scope.existing(&file.with_file_name("missing.md")),
+            "{file:?}"
+        );
+    }
     assert!(scope.existing(&own).is_ok());
 }
