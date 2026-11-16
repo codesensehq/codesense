@@ -897,12 +897,23 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "before": {
           "minimum": 1,
           "type": "integer"
         },
         "conversation": {
           "minLength": 1,
+          "type": "string"
+        },
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "storyId": {
           "type": "string"
         }
       },
