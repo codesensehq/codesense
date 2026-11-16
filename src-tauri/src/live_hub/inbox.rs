@@ -31,9 +31,8 @@ pub fn changed_count_teams(
     before: &[(Option<String>, Value)],
     after: &[(Option<String>, Value)],
 ) -> Vec<LaunchTeam> {
-    let team_of = |row: &Value| -> Option<LaunchTeam> {
-        serde_json::from_value(row.get("team")?.clone()).ok()
-    };
+    let team_of =
+        |row: &Value| -> Option<LaunchTeam> { serde_json::from_value(row["team"].clone()).ok() };
     let moved = after
         .iter()
         .filter(|(key, row)| !before.iter().any(|(k, r)| k == key && r == row))
@@ -233,8 +232,11 @@ impl InboxProjection {
         self.teams.contains_key(&team_key(team))
     }
     /// Every team the projection holds.
-    pub fn teams(&self) -> Vec<LaunchTeam> {
-        self.teams.values().map(|(team, _)| team.clone()).collect()
+    pub fn held_teams(&self) -> Vec<LaunchTeam> {
+        self.teams
+            .iter()
+            .map(|(_, (team, _))| team.clone())
+            .collect()
     }
     pub fn human_unread_total(&self) -> u32 {
         self.teams

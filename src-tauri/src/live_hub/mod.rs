@@ -2100,7 +2100,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     let notified_teams = if !notify_legacy {
         Vec::new()
     } else if had_pending || hydrated || renamed {
-        inbox.teams()
+        inbox.held_teams()
     } else {
         inbox::changed_count_teams(&counts_before, &counts)
     };
